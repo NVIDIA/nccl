@@ -16,21 +16,22 @@
 #include "param.h"
 #include "plugin.h"
 
+extern ncclEnv_t* getNcclEnv_v2(void* lib);
 extern ncclEnv_t* getNcclEnv_v1(void* lib);
 
 static void* envPluginLib = nullptr;
 static ncclEnv_t* ncclEnvPlugin = nullptr;
-extern ncclEnv_v1_t ncclIntEnv_v1;
+extern ncclEnv_v2_t ncclIntEnv_v2;
 
 #define EXT_ENV_PLUGIN 0
 #define INT_ENV_PLUGIN 1
 #define NUM_ENV_PLUGIN 2
-static ncclEnv_t *ncclEnvPlugins[NUM_ENV_PLUGIN] = { nullptr, &ncclIntEnv_v1 };
+static ncclEnv_t* ncclEnvPlugins[NUM_ENV_PLUGIN] = {nullptr, &ncclIntEnv_v2};
 
 enum {
-  envPluginLoadFailed  = -1,
-  envPluginLoadReady   =  0,
-  envPluginLoadSuccess =  1,
+  envPluginLoadFailed = -1,
+  envPluginLoadReady = 0,
+  envPluginLoadSuccess = 1,
 };
 static int envPluginStatus = envPluginLoadReady;
 
@@ -51,10 +52,13 @@ static ncclResult_t ncclEnvPluginLoad(void) {
     envName = ncclPluginLibPaths[ncclPluginTypeEnv];
   }
 
-  ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v1(envPluginLib);
-  if (nullptr == ncclEnvPlugins[EXT_ENV_PLUGIN]) {
-    INFO(NCCL_INIT, "External env plugin %s is unsupported", envName);
-    goto fail;
+  ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v2(envPluginLib);
+  if (ncclEnvPlugins[EXT_ENV_PLUGIN] == nullptr) {
+    ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v1(envPluginLib);
+    if (ncclEnvPlugins[EXT_ENV_PLUGIN] == nullptr) {
+      INFO(NCCL_INIT, "External env plugin %s is unsupported", envName);
+      goto fail;
+    }
   }
   INFO(NCCL_INIT, "Successfully loaded external env plugin %s", envName);
 
@@ -89,8 +93,9 @@ static bool initialized;
 ncclResult_t ncclEnvPluginInit(void) {
   initEnv();
   NCCLCHECK(ncclEnvPluginLoad());
-  ncclEnvPlugin = (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
-  NCCLCHECK(ncclEnvPlugin->init(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH, NCCL_SUFFIX));
+  ncclEnvPlugin =
+    (envPluginLoadSuccess == envPluginStatus) ? ncclEnvPlugins[EXT_ENV_PLUGIN] : ncclEnvPlugins[INT_ENV_PLUGIN];
+  NCCLCHECK(ncclEnvPlugin->init(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH, NCCL_SUFFIX, ncclDebugLog));
   atexit(ncclEnvPluginFinalize);
   COMPILER_ATOMIC_STORE(&initialized, true, std::memory_order_release);
   return ncclSuccess;

@@ -9,30 +9,34 @@
 #define _NCCL_DEVICE_GIN_GDAKI_DEVICE_HOST_COMMON_H_
 
 #include <linux/types.h>
+#include <stdint.h>
 
 // Compat with doca-gpunetio device code v2.0.0.
 #define NCCL_GIN_GDAKI_VERSION 200
 
 template <typename T>
 struct ncclGinGdakiGlobalGPUBufferTable {
-  T *buffer;
-  __be32 *rkeys;
+  T* buffer;
+  __be32* rkeys;
   __be32 lkey;
   unsigned int offset;
 };
 
 struct ncclGinGdakiGPUContext {
-  struct doca_gpu_dev_verbs_qp *gdqp;
-  struct doca_gpu_dev_verbs_qp *companion_gdqp;
+  struct doca_gpu_dev_verbs_qp* gdqp;
+  struct doca_gpu_dev_verbs_qp* companion_gdqp;
   struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> counters_table;
   struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> signals_table;
 
   // Local buffer we don't consume but is required for some operations.
   __be32 sink_buffer_lkey;
+
+  uint64_t* last_issued_get;  // per-peer (0 = no gets)
+  uint64_t* last_visible_get; // per-peer
 };
 
 struct ncclGinGdakiMemHandle {
-  __be32 *rkeys;
+  __be32* rkeys;
   __be32 lkey;
 };
 

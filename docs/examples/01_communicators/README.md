@@ -17,7 +17,9 @@ initialization patterns.
 ### [01_multiple_devices_single_process](01_multiple_devices_single_process/)
 **Multiple Devices Single Process**
 - **Pattern**: Single process manages all GPUs
-- **API**: `ncclCommInitAll` (no external coordination)
+- **API**:
+  - **C**: `ncclCommInitAll` (no external coordination)
+  - **Python (nccl4py)**: `nccl.Communicator.init_all()`
 - **Use case**: Simple single-node applications
 - **Key features**:
   - Simplest initialization method
@@ -25,9 +27,14 @@ initialization patterns.
   - Automatic rank assignment (0 to n-1)
   - Cannot span multiple nodes
 
-**Run command:**
+**Run command (C):**
 ```shell
-./01_multiple_devices_single_process/multiple_devices_single_process
+./01_multiple_devices_single_process/c/multiple_devices_single_process
+```
+
+**Run command (Python):**
+```shell
+python ./01_multiple_devices_single_process/python/multiple_devices_single_process.py
 ```
 
 ### [02_one_device_per_pthread](02_one_device_per_pthread/)
@@ -43,22 +50,29 @@ initialization patterns.
 
 **Run command:**
 ```shell
-[NTHREADS=n] ./02_one_device_per_pthread/one_device_per_pthread
+[NTHREADS=n] ./02_one_device_per_pthread/c/one_device_per_pthread
 ```
 
 ### [03_one_device_per_process_mpi](03_one_device_per_process_mpi/)
 **One Device per Process with MPI**
 - **Pattern**: One MPI process per GPU
-- **API**: `ncclCommInitRank` with MPI coordination
+- **API**:
+  - **C**: `ncclCommInitRank` with MPI coordination
+  - **Python**: `nccl.Communicator.init()` with `mpi4py`
 - **Use case**: Multi-node clusters, distributed training
 - **Key features**:
   - MPI broadcast for unique ID distribution
   - Process-to-GPU mapping by local MPI ranks
   - Scalable to multiple nodes
 
-**Run command:**
+**Run command (C):**
 ```shell
-mpirun -np <num_processes> ./03_one_device_per_process_mpi/one_device_per_process_mpi
+mpirun -np <num_processes> ./03_one_device_per_process_mpi/c/one_device_per_process_mpi
+```
+
+**Run command (Python):**
+```shell
+mpirun -np <num_processes> python ./03_one_device_per_process_mpi/python/one_device_per_process_mpi.py
 ```
 
 ## Choosing the Right Approach
@@ -95,10 +109,13 @@ make 02_one_device_per_pthread
 make 03_one_device_per_process_mpi
 
 # Test individual example
-cd 01_multiple_devices_single_process && make test
-cd 02_one_device_per_pthread && make test
-cd 03_one_device_per_process_mpi && make test
+cd 01_multiple_devices_single_process/c && make test
+cd 02_one_device_per_pthread/c && make test
+cd 03_one_device_per_process_mpi/c && make test
 ```
+
+### **Python**
+See the `python/README.md` in each example directory.
 
 ## References
 - [NVIDIA NCCL User Guide

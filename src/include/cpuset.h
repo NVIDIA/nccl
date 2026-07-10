@@ -60,12 +60,12 @@ static char* ncclCpusetToRangeStr(ncclAffinity* mask, char* str, size_t len) {
     }
     // End of a range, add comma between ranges
     if (!isSet && start != -1) {
-      if (cpu-1 == start) {
-        c += snprintf(str+c, len-c, "%s%d", c ? "," : "", start);
+      if (cpu - 1 == start) {
+        c += snprintf(str + c, len - c, "%s%d", c ? "," : "", start);
       } else {
-        c += snprintf(str+c, len-c, "%s%d-%d", c ? "," : "", start, cpu-1);
+        c += snprintf(str + c, len - c, "%s%d-%d", c ? "," : "", start, cpu - 1);
       }
-      if (c >= len-1) break;
+      if (c >= len - 1) break;
       start = -1;
     }
   }

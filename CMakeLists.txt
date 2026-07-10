@@ -239,9 +239,6 @@ else()
     add_definitions(-DDOCA_VERBS_USE_NET_WRAPPER)
     add_definitions(-DNCCL_GIN_PROXY_ENABLE=1)
 endif()
-if(EMIT_LLVM_IR)
-    add_definitions(-DEMIT_LLVM_IR=1)
-endif()
 
 # Library dependencies
 find_library(RT_LIBRARY NAMES rt)

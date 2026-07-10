@@ -1,0 +1,18 @@
+# Python build/cache artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C/CUDA extension build outputs
+*.so
+build/
+*.egg-info/
+
+# Test / coverage / hypothesis caches
+.pytest_cache/
+.coverage
+.hypothesis/
+
+# Local Dockerfile test-build logs
+build_logs/
+

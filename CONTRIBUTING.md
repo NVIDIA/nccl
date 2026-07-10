@@ -79,7 +79,7 @@ NCCL follows these coding conventions:
 
 ### General Guidelines
 - Use 2 spaces for indentation (no tabs)
-- Maximum line length: 100 characters
+- Maximum line length: 120 characters
 - Follow K&R brace style for C/CUDA code
 - Use clear, descriptive variable names
 

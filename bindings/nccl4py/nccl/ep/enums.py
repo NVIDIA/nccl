@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+
+"""Pure-Python enum definitions mirroring the NCCL EP C enums.
+
+Defined here (rather than re-exported from :mod:`nccl.bindings.nccl_ep`)
+so the public API does not depend on cybind's enum naming conventions and
+so each member can carry a docstring describing its semantics. Values mirror
+the corresponding C enums in ``ep_enums.h``.
+"""
+
+from enum import IntEnum
+
+__all__ = ["Algorithm", "Layout", "PassDir"]
+
+
+class Algorithm(IntEnum):
+    """EP communication algorithm, mirroring :c:type:`ncclEpAlgorithm_t`.
+
+    Set on :py:attr:`GroupConfig.algorithm` before calling
+    :py:meth:`Group.create` to select the dispatch/combine path.
+    """
+
+    LOW_LATENCY = 0
+    """Low-Latency (LL) algorithm. Tuned for minimal per-step latency."""
+
+    HIGH_THROUGHPUT = 1
+    """High-Throughput (HT) algorithm. Tuned for peak aggregate bandwidth."""
+
+
+class Layout(IntEnum):
+    """Receive-buffer layout for dispatch/combine, mirroring :c:type:`ncclEpLayout_t`.
+
+    Set on :py:attr:`GroupConfig.layout` before calling
+    :py:meth:`Group.create` to control the shape of dispatch output
+    tensors and the expected shape of combine input tensors.
+    """
+
+    UNSET = 0
+    """Zero-init sentinel — must be overridden before passing the config to
+    :py:meth:`Group.create_handle`. The library does not auto-resolve; leaving
+    this value triggers an assertion at handle-init time."""
+
+    EXPERT_MAJOR = 1
+    """LL only. ``recv_x`` shape:
+    ``[num_local_experts, max_tokens_per_rank * num_ranks, hidden]``.
+    Combine accumulates per-expert contributions on the receive side."""
+
+    RANK_MAJOR = 2
+    """LL only. ``recv_x`` shape:
+    ``[num_ranks, max_tokens_per_rank, hidden]``. Caller pre-reduces
+    across local experts before combine."""
+
+    FLAT = 3
+    """HT only. ``recv_x`` shape: ``[N(r), hidden]`` — a single
+    contiguous sequence of tokens with no rank or expert structure."""
+
+
+class PassDir(IntEnum):
+    """Pass direction for HT dispatch/combine, mirroring :c:type:`ncclEpPassDir_t`.
+
+    Set on :py:attr:`DispatchConfig.pass_direction` /
+    :py:attr:`CombineConfig.pass_direction` to select forward or
+    backward pass semantics. HT-only; LL rejects ``BWD``.
+    """
+
+    FWD = 0
+    """Forward pass (default)."""
+
+    BWD = 1
+    """Backward pass."""

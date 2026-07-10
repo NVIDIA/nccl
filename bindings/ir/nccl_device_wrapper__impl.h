@@ -1,7 +1,8 @@
 /*************************************************************************
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
  *
- * See LICENSE.txt for license information
+ * See LICENSE.txt for more license information
  ************************************************************************/
 #ifndef _NCCL_DEVICE_WRAPPER__IMPL_H_
 #define _NCCL_DEVICE_WRAPPER__IMPL_H_
@@ -10,10 +11,28 @@
  * NCCL Device API force instantiation and C style APIs for LLVM IR generation
  */
 
+#include "nccl_device.h"
 #include "nccl_device_wrapper.h"
 #include <new>
 
 #if NCCL_CHECK_CUDACC
+/* Session size getters */
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclLsaBarrierSession_C_size() { return sizeof(ncclLsaBarrierSession_C); }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclGinBarrierSession_C_size() { return sizeof(ncclGinBarrierSession_C); }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE size_t ncclBarrierSession_C_size()    { return sizeof(ncclBarrierSession_C); }
+
+/* ncclDevComm field accessors */
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_Rank(ncclDevComm const* comm)                 { return comm->rank; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_NRanks(ncclDevComm const* comm)               { return comm->nRanks; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_LsaRank(ncclDevComm const* comm)              { return comm->lsaRank; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE int                  ncclDevComm_LsaSize(ncclDevComm const* comm)              { return comm->lsaSize; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclLsaBarrierHandle ncclDevComm_LsaBarrier(ncclDevComm const* comm)            { return comm->lsaBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclGinBarrierHandle ncclDevComm_RailGinBarrier(ncclDevComm const* comm)        { return comm->railGinBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclLsaBarrierHandle ncclDevComm_HybridLsaBarrier(ncclDevComm const* comm)      { return comm->hybridLsaBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclGinBarrierHandle ncclDevComm_HybridRailGinBarrier(ncclDevComm const* comm)  { return comm->hybridRailGinBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclGinBarrierHandle ncclDevComm_WorldGinBarrier(ncclDevComm const* comm)       { return comm->worldGinBarrier; }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE ncclMultimemHandle   ncclDevComm_LsaMultimem(ncclDevComm const* comm)           { return comm->lsaMultimem; }
+
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void* ncclGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam tm, int peer) {
     return ncclGetPeerPointer(w, offset, tm, peer);
 }
@@ -82,6 +101,16 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinBarrierSessionInit(
     ncclGinBarrierHandle handle,
     uint32_t index) {
     ::new (&(session->bar)) ncclGinBarrierSession<ncclCoopAny>(coop, reinterpret_cast<ncclGin const&>(net), team, handle, index);
+}
+
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinBarrierSessionInitAllContexts(
+    ncclGinBarrierSession_C* session,
+    ncclCoopAny coop,
+    ncclDevComm const& comm,
+    ncclTeam team,
+    ncclGinBarrierHandle handle,
+    uint32_t index) {
+    ::new (&(session->bar)) ncclGinBarrierSession<ncclCoopAny>(coop, ncclGinAllContexts(comm), team, handle, index);
 }
 
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinBarrierSessionSync(

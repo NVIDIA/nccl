@@ -17,20 +17,21 @@ namespace nccl {
 namespace param {
 namespace parser {
 
-template <typename EnumT, size_t N>
+template <typename OptionT, size_t N>
 struct bitsetCtx {
-  ncclOptionSet<EnumT, N> options;
+  ncclOptionSet<OptionT, N> options;
   char delimiter;
 };
 
-template <typename EnumT, size_t N>
-ncclResult_t bitsetResolve(const void* ctx, const char* input,
-                           std::underlying_type_t<EnumT>& out) {
-  using ResultT = std::underlying_type_t<EnumT>;
+template <typename OptionT, typename ResultT, size_t N>
+ncclResult_t bitsetResolve(const void* ctx, const char* input, ResultT& out) {
   if (input == nullptr) return ncclInvalidArgument;
-  auto& bc = *static_cast<const bitsetCtx<EnumT, N>*>(ctx);
-  ResultT res = 0;
+  auto& bc = *static_cast<const bitsetCtx<OptionT, N>*>(ctx);
   std::string str(input);
+  // Support '^' prefix for negation: "^INIT,COLL" means all bits except INIT and COLL
+  bool invert = !str.empty() && str[0] == '^';
+  if (invert) str.erase(0, 1);
+  ResultT res = invert ? ~ResultT(0) : ResultT(0);
   size_t start = 0;
   while (start <= str.size()) {
     size_t end = str.find(bc.delimiter, start);
@@ -40,7 +41,11 @@ ncclResult_t bitsetResolve(const void* ctx, const char* input,
       bool found = false;
       for (const auto& opt : bc.options) {
         if (nccl::param::utils::iequals(opt.name, token)) {
-          res |= static_cast<ResultT>(opt.value); found = true; break;
+          ResultT mask = static_cast<ResultT>(opt.value);
+          if (invert) res &= ~mask;
+          else res |= mask;
+          found = true;
+          break;
         }
       }
       if (!found) return ncclInvalidArgument;
@@ -52,13 +57,14 @@ ncclResult_t bitsetResolve(const void* ctx, const char* input,
   return ncclSuccess;
 }
 
-template <typename EnumT, size_t N>
-bool bitsetValidate(const void*, const std::underlying_type_t<EnumT>&) { return true; }
+template <typename OptionT, typename ResultT, size_t N>
+bool bitsetValidate(const void*, const ResultT&) {
+  return true;
+}
 
-template <typename EnumT, size_t N>
-std::string bitsetToString(const void* ctx, const std::underlying_type_t<EnumT>& value) {
-  using ResultT = std::underlying_type_t<EnumT>;
-  auto& bc = *static_cast<const bitsetCtx<EnumT, N>*>(ctx);
+template <typename OptionT, typename ResultT, size_t N>
+std::string bitsetToString(const void* ctx, const ResultT& value) {
+  auto& bc = *static_cast<const bitsetCtx<OptionT, N>*>(ctx);
   std::string strResult;
   ResultT remaining = value;
 
@@ -70,11 +76,7 @@ std::string bitsetToString(const void* ctx, const std::underlying_type_t<EnumT>&
   }
 
   // Otherwise, decompose into individual bits
-  auto isSingleBit = [](ResultT v) -> bool {
-    using U = std::make_unsigned_t<ResultT>;
-    U uv = static_cast<U>(v);
-    return uv != 0 && (uv & (uv - 1)) == 0;
-  };
+  auto isSingleBit = [](ResultT v) -> bool { return v != 0 && (v & (v - 1)) == 0; };
   for (const auto& opt : bc.options) {
     ResultT optVal = static_cast<ResultT>(opt.value);
     if (!isSingleBit(optVal)) continue;  // skip composite aliases like MOST
@@ -92,20 +94,25 @@ std::string bitsetToString(const void* ctx, const std::underlying_type_t<EnumT>&
 } // namespace nccl
 
 // ncclParamBitsetOf: Create a parser for bitmask types
-// EnumT is the enum type used in options, ResultT is derived from its underlying type
-template <typename EnumT, size_t N>
-ncclParamParser<std::underlying_type_t<EnumT>> ncclParamBitsetOf(ncclOptionSet<EnumT, N> options,
-                                                                 char delimiter = ',') {
+// OptionT is the type used in options.
+// ResultT is the output type of resolve function. It is default to the unsigned version
+// of the enum's underlying type. This is required because a enum type (OptionT) variable
+// cannot do bit-wise operation.
+template <typename OptionT, typename ResultT = std::make_unsigned_t<OptionT>, size_t N>
+// template <typename ResultT, typename OptionT, size_t N>
+ncclParamParser<ResultT> ncclParamBitsetOf(ncclOptionSet<OptionT, N> options, char delimiter = ',') {
   using namespace nccl::param::parser;
-  auto ctx = std::make_shared<bitsetCtx<EnumT, N>>(
-    bitsetCtx<EnumT, N>{std::move(options), delimiter});
+  auto ctx = std::make_shared<bitsetCtx<OptionT, N>>(bitsetCtx<OptionT, N>{std::move(options), delimiter});
   std::string d = "Comma-separated list of:";
   for (const auto& opt : ctx->options) {
     d += "\n        ";
     d += opt.name;
-    if (opt.desc != nullptr) { d += " - "; d += opt.desc; }
+    if (opt.desc != nullptr) {
+      d += " - ";
+      d += opt.desc;
+    }
   }
-  return {bitsetResolve<EnumT, N>, bitsetValidate<EnumT, N>, bitsetToString<EnumT, N>,
+  return {bitsetResolve<OptionT, ResultT, N>, bitsetValidate<OptionT, ResultT, N>, bitsetToString<OptionT, ResultT, N>,
           std::move(ctx), std::move(d)};
 }
 

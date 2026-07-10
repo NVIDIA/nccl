@@ -4,7 +4,8 @@
 #include "net.h"
 #include "core.h"
 
-static ncclResult_t stubInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
+static ncclResult_t stubInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction,
+                             ncclProfilerCallback_t profFunction) {
   return ncclInternalError;
 }
 
@@ -21,7 +22,8 @@ static ncclResult_t stubListen(void* ctx, int dev, void* handle, void** listenCo
   return ncclInternalError;
 }
 
-static ncclResult_t stubConnect(void* ctx, int dev, void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) {
+static ncclResult_t stubConnect(void* ctx, int dev, void* handle, void** sendComm,
+                                ncclNetDeviceHandle_t** sendDevComm) {
   return ncclInternalError;
 }
 
@@ -33,7 +35,8 @@ static ncclResult_t stubRegMr(void* comm, void* data, size_t size, int type, voi
   return ncclInternalError;
 }
 
-static ncclResult_t stubRegMrDmaBuf(void* comm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle) {
+static ncclResult_t stubRegMrDmaBuf(void* comm, void* data, size_t size, int type, uint64_t offset, int fd,
+                                    void** mhandle) {
   return ncclInternalError;
 }
 
@@ -41,11 +44,13 @@ static ncclResult_t stubDeregMr(void* comm, void* mhandle) {
   return ncclInternalError;
 }
 
-static ncclResult_t stubIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request) {
+static ncclResult_t stubIsend(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle,
+                              void** request) {
   return ncclInternalError;
 }
 
-static ncclResult_t stubIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request) {
+static ncclResult_t stubIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles,
+                              void** phandles, void** request) {
   return ncclInternalError;
 }
 
@@ -90,26 +95,8 @@ static ncclResult_t stubSetNetAttr(void* ctx, ncclNetAttr_t* netAttr) {
 }
 
 ncclNet_t ncclNetSocket = {
-  "Socket (stub)",
-  stubInit,
-  stubDevices,
-  stubGetProperties,
-  stubListen,
-  stubConnect,
-  stubAccept,
-  stubRegMr,
-  NULL,
-  stubDeregMr,
-  stubIsend,
-  stubIrecv,
-  stubIflush,
-  stubTest,
-  stubCloseSend,
-  stubCloseRecv,
-  stubCloseListen,
-  stubGetDeviceMr,
-  stubIrecvConsumed,
-  stubMakeVDevice,
-  stubFinalize,
-  stubSetNetAttr
+  "Socket (stub)",   stubInit,        stubDevices,   stubGetProperties, stubListen,      stubConnect,
+  stubAccept,        stubRegMr,       NULL,          stubDeregMr,       stubIsend,       stubIrecv,
+  stubIflush,        stubTest,        stubCloseSend, stubCloseRecv,     stubCloseListen, stubGetDeviceMr,
+  stubIrecvConsumed, stubMakeVDevice, stubFinalize,  stubSetNetAttr
 };

@@ -81,7 +81,7 @@ typedef enum { ncclSuccess                 =  0,
 
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
-typedef struct ncclConfig_v22800 {
+typedef struct ncclConfig_v23000 {
   /* attributes that users should never touch. */
   size_t size;
   unsigned int magic;
@@ -104,6 +104,7 @@ typedef struct ncclConfig_v22800 {
   int graphUsageMode;
   int numRmaCtx;
   int maxP2pPeers;
+  int graphStreamOrdering;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -129,6 +130,7 @@ typedef struct ncclConfig_v22800 {
   NCCL_CONFIG_UNDEF_INT,                    /* graphUsageMode */        \
   NCCL_CONFIG_UNDEF_INT,                    /* numRmaCtx */             \
   NCCL_CONFIG_UNDEF_INT,                    /* maxP2pPeers */           \
+  NCCL_CONFIG_UNDEF_INT,                    /* graphStreamOrdering */   \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -752,60 +754,60 @@ ncclResult_t pncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
  *
  * Handles represents parameters and are opaque (internal details hidden).
  */
-typedef struct ncclParamHandle ncclParamHandle_t;
+typedef struct ncclParamHandle* ncclParamHandle_t;
 
 /*
  * Look up the parameter identified by key and store a handle to it in
  * out. The returned handle is owned by the parameter system and must not
  * be freed by the caller.
  */
-ncclResult_t ncclParamBind(ncclParamHandle_t** out, const char* key);
-ncclResult_t pncclParamBind(ncclParamHandle_t** out, const char* key);
+ncclResult_t ncclParamBind(ncclParamHandle_t* out, const char* key);
+ncclResult_t pncclParamBind(ncclParamHandle_t* out, const char* key);
 
 /*
  * Read the value of the parameter bound to h as the type of out.
  * Function names are suffixed with I/U and 8/16/32/64 for 8-, 16-, 32- and 64-bit
  * signed and unsigned integers.
  */
-ncclResult_t ncclParamGetI8(ncclParamHandle_t* h, int8_t* out);
-ncclResult_t pncclParamGetI8(ncclParamHandle_t* h, int8_t* out);
+ncclResult_t ncclParamGetI8(ncclParamHandle_t h, int8_t* out);
+ncclResult_t pncclParamGetI8(ncclParamHandle_t h, int8_t* out);
 
-ncclResult_t ncclParamGetI16(ncclParamHandle_t* h, int16_t* out);
-ncclResult_t pncclParamGetI16(ncclParamHandle_t* h, int16_t* out);
+ncclResult_t ncclParamGetI16(ncclParamHandle_t h, int16_t* out);
+ncclResult_t pncclParamGetI16(ncclParamHandle_t h, int16_t* out);
 
-ncclResult_t ncclParamGetI32(ncclParamHandle_t* h, int32_t* out);
-ncclResult_t pncclParamGetI32(ncclParamHandle_t* h, int32_t* out);
+ncclResult_t ncclParamGetI32(ncclParamHandle_t h, int32_t* out);
+ncclResult_t pncclParamGetI32(ncclParamHandle_t h, int32_t* out);
 
-ncclResult_t ncclParamGetI64(ncclParamHandle_t* h, int64_t* out);
-ncclResult_t pncclParamGetI64(ncclParamHandle_t* h, int64_t* out);
+ncclResult_t ncclParamGetI64(ncclParamHandle_t h, int64_t* out);
+ncclResult_t pncclParamGetI64(ncclParamHandle_t h, int64_t* out);
 
-ncclResult_t ncclParamGetU8(ncclParamHandle_t* h, uint8_t* out);
-ncclResult_t pncclParamGetU8(ncclParamHandle_t* h, uint8_t* out);
+ncclResult_t ncclParamGetU8(ncclParamHandle_t h, uint8_t* out);
+ncclResult_t pncclParamGetU8(ncclParamHandle_t h, uint8_t* out);
 
-ncclResult_t ncclParamGetU16(ncclParamHandle_t* h, uint16_t* out);
-ncclResult_t pncclParamGetU16(ncclParamHandle_t* h, uint16_t* out);
+ncclResult_t ncclParamGetU16(ncclParamHandle_t h, uint16_t* out);
+ncclResult_t pncclParamGetU16(ncclParamHandle_t h, uint16_t* out);
 
-ncclResult_t ncclParamGetU32(ncclParamHandle_t* h, uint32_t* out);
-ncclResult_t pncclParamGetU32(ncclParamHandle_t* h, uint32_t* out);
+ncclResult_t ncclParamGetU32(ncclParamHandle_t h, uint32_t* out);
+ncclResult_t pncclParamGetU32(ncclParamHandle_t h, uint32_t* out);
 
-ncclResult_t ncclParamGetU64(ncclParamHandle_t* h, uint64_t* out);
-ncclResult_t pncclParamGetU64(ncclParamHandle_t* h, uint64_t* out);
+ncclResult_t ncclParamGetU64(ncclParamHandle_t h, uint64_t* out);
+ncclResult_t pncclParamGetU64(ncclParamHandle_t h, uint64_t* out);
 
 /*
  * Read the value of the parameter bound to h as a string.
  * Returned pointer is owned by the parameter system and is valid until the
  * next ncclParamGetStr() call on the same thread.
  */
-ncclResult_t ncclParamGetStr(ncclParamHandle_t* h, const char** out);
-ncclResult_t pncclParamGetStr(ncclParamHandle_t* h, const char** out);
+ncclResult_t ncclParamGetStr(ncclParamHandle_t h, const char** out);
+ncclResult_t pncclParamGetStr(ncclParamHandle_t h, const char** out);
 
 /*
  * Read the value of the parameter bound to h as raw binary data.
  * The user needs to allocate a buffer for the result and the parameter value is copied
  * into user buffer as bytes.
  */
-ncclResult_t ncclParamGet(ncclParamHandle_t* h, void* out, int maxLen, int* len);
-ncclResult_t pncclParamGet(ncclParamHandle_t* h, void* out, int maxLen, int* len);
+ncclResult_t ncclParamGet(ncclParamHandle_t h, void* out, int maxLen, int* len);
+ncclResult_t pncclParamGet(ncclParamHandle_t h, void* out, int maxLen, int* len);
 
 /*
  * Key-based API (no handle required, typeless access, return value as string)

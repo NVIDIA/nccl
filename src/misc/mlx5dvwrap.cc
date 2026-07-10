@@ -22,16 +22,15 @@ static ncclResult_t initResult;
 struct ncclMlx5dvSymbols mlx5dvSymbols;
 
 ncclResult_t wrap_mlx5dv_symbols(void) {
-  std::call_once(initOnceFlag,
-               [](){ initResult = buildMlx5dvSymbols(&mlx5dvSymbols); });
+  std::call_once(initOnceFlag, []() { initResult = buildMlx5dvSymbols(&mlx5dvSymbols); });
   return initResult;
 }
 
 /* CHECK_NOT_NULL: helper macro to check for NULL symbol */
 #define CHECK_NOT_NULL(container, internal_name) \
   if (container.internal_name == NULL) { \
-     WARN("NET/MLX5: lib wrapper not initialized."); \
-     return ncclInternalError; \
+    WARN("NET/MLX5: lib wrapper not initialized."); \
+    return ncclInternalError; \
   }
 
 #define MLX5DV_PTR_CHECK_ERRNO(container, internal_name, call, retval, error_retval, name) \
@@ -52,7 +51,7 @@ ncclResult_t wrap_mlx5dv_symbols(void) {
   } \
   return ncclSuccess;
 
-bool wrap_mlx5dv_is_supported(struct ibv_device *device) {
+bool wrap_mlx5dv_is_supported(struct ibv_device* device) {
   if (mlx5dvSymbols.mlx5dv_internal_is_supported == NULL) {
     return 0;
   }
@@ -65,16 +64,21 @@ ncclResult_t wrap_mlx5dv_get_data_direct_sysfs_path(struct ibv_context* context,
   if (ret == 0) return ncclSuccess;
   /* ENODEV can happen if the devices is not data-direct but mlx5 is used. It's not an error*/
   if (ret == ENODEV) return ncclInvalidArgument;
-  INFO(NCCL_NET, "NET/MLX5: Call to mlx5dv_internal_get_data_direct_sysfs_path failed with error %s errno %d", strerror(ret), ret);
+  INFO(NCCL_NET, "NET/MLX5: Call to mlx5dv_internal_get_data_direct_sysfs_path failed with error %s errno %d",
+       strerror(ret), ret);
   return ncclSystemError;
 }
 
 /* DMA-BUF support */
-ncclResult_t wrap_mlx5dv_reg_dmabuf_mr(struct ibv_mr **ret, struct ibv_pd *pd, uint64_t offset, size_t length, uint64_t iova, int fd, int access, int mlx5_access) {
-  MLX5DV_PTR_CHECK_ERRNO(mlx5dvSymbols, mlx5dv_internal_reg_dmabuf_mr, mlx5dv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access, mlx5_access), *ret, NULL, "mlx5dv_reg_dmabuf_mr");
+ncclResult_t wrap_mlx5dv_reg_dmabuf_mr(struct ibv_mr** ret, struct ibv_pd* pd, uint64_t offset, size_t length,
+                                       uint64_t iova, int fd, int access, int mlx5_access) {
+  MLX5DV_PTR_CHECK_ERRNO(mlx5dvSymbols, mlx5dv_internal_reg_dmabuf_mr,
+                         mlx5dv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access, mlx5_access), *ret, NULL,
+                         "mlx5dv_reg_dmabuf_mr");
 }
 
-struct ibv_mr * wrap_direct_mlx5dv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t offset, size_t length, uint64_t iova, int fd, int access, int mlx5_access) {
+struct ibv_mr* wrap_direct_mlx5dv_reg_dmabuf_mr(struct ibv_pd* pd, uint64_t offset, size_t length, uint64_t iova,
+                                                int fd, int access, int mlx5_access) {
   if (mlx5dvSymbols.mlx5dv_internal_reg_dmabuf_mr == NULL) {
     errno = EOPNOTSUPP; // ncclIbDmaBufSupport() requires this errno being set
     return NULL;
@@ -82,11 +86,13 @@ struct ibv_mr * wrap_direct_mlx5dv_reg_dmabuf_mr(struct ibv_pd *pd, uint64_t off
   return mlx5dvSymbols.mlx5dv_internal_reg_dmabuf_mr(pd, offset, length, iova, fd, access, mlx5_access);
 }
 
-ncclResult_t wrap_mlx5dv_query_device(struct ibv_context *ctx_in, struct mlx5dv_context *attrs_out) {
-  MLX5DV_INT_CHECK_RET_ERRNO(mlx5dvSymbols, mlx5dv_internal_query_device, mlx5dv_internal_query_device(ctx_in, attrs_out), 0, "mlx5dv_query_device");
+ncclResult_t wrap_mlx5dv_query_device(struct ibv_context* ctx_in, struct mlx5dv_context* attrs_out) {
+  MLX5DV_INT_CHECK_RET_ERRNO(mlx5dvSymbols, mlx5dv_internal_query_device,
+                             mlx5dv_internal_query_device(ctx_in, attrs_out), 0, "mlx5dv_query_device");
 }
 
-struct ibv_qp *wrap_mlx5dv_create_qp(struct ibv_context *context, struct ibv_qp_init_attr_ex *qp_attr, struct mlx5dv_qp_init_attr *mlx5_qp_attr) {
+struct ibv_qp* wrap_mlx5dv_create_qp(struct ibv_context* context, struct ibv_qp_init_attr_ex* qp_attr,
+                                     struct mlx5dv_qp_init_attr* mlx5_qp_attr) {
   if (mlx5dvSymbols.mlx5dv_internal_create_qp == NULL) {
     return 0;
   }

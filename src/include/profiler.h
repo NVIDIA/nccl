@@ -22,15 +22,15 @@ struct ncclProxyConnector;
 
 struct ncclProfilerProxy {
   bool initialized;
-  struct ncclDevProfiler* workStarted/*[MAXCHANNELS]*/;
-  struct ncclDevProfiler* workCompleted/*[MAXCHANNELS]*/;
+  struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
+  struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
   uint64_t workCounter[MAXCHANNELS]; // host work counter
   struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
 };
 
 enum groupApiState {
-  ncclProfilerGroupApiStartStateReset   = 0,
+  ncclProfilerGroupApiStartStateReset = 0,
   ncclProfilerGroupApiStartStateStarted = 1,
   ncclProfilerGroupApiStartStateStopped = 2,
 };
@@ -40,10 +40,10 @@ typedef struct ncclProfilerApiState {
   int profilerGroupDepth;
   int eActivationMask;
   groupApiState state;
-  void *groupApiEventHandle;
+  void* groupApiEventHandle;
   // Tracks the latest API event handles for p2p/collectives
   void* p2pApiEventHandle;
-  void *collApiEventHandle;
+  void* collApiEventHandle;
 } ncclProfilerApiState_t;
 
 extern thread_local ncclProfilerApiState_t ncclProfilerApiState;
@@ -55,16 +55,16 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm);
 ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm);
 
 // Profiler Start/Stop/Record wrappers for ncclGroupStart and ncclGroupEnd API calls
-ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo *info, bool isGraphCaptured);
+ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphCaptured);
 ncclResult_t ncclProfilerStopGroupApiEvent();
 ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eState);
 
-//Profiler Start/Stop wrappers for P2p API calls
-ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo *info, bool isGraphCaptured);
+// Profiler Start/Stop wrappers for P2p API calls
+ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo* info, bool isGraphCaptured);
 ncclResult_t ncclProfilerStopP2pApiEvent();
 
-//Profiler Start/Stop wrappers for Collective API calls
-ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo *info, bool isGraphCaptured);
+// Profiler Start/Stop wrappers for Collective API calls
+ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo* info, bool isGraphCaptured);
 ncclResult_t ncclProfilerStopCollApiEvent();
 
 // Kernel Launch Start/Stop Event Wrappers
@@ -98,8 +98,9 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, ui
 
 // Record Event Wrappers
 ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, ncclProfilerEventState_t eState);
-ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId, ncclProfilerEventState_t eState);
-ncclResult_t ncclProfilerRecordProxyCtrlEventState(void*eHandle, int appended, ncclProfilerEventState_t eState);
+ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId,
+                                                   ncclProfilerEventState_t eState);
+ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, ncclProfilerEventState_t eState);
 
 // Profiler utility functions
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
@@ -120,9 +121,12 @@ struct ncclCeBatchOpsParams;
 // CE profiler event start/stop functions (simple wrappers that call plugin callbacks)
 ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream);
 ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream);
-ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream, void** ceSyncHandle);
+ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream,
+                                          void** ceSyncHandle);
 ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHandle, cudaStream_t stream);
-ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, struct ncclCeBatchOpsParams* params, cudaStream_t stream, void** ceBatchHandle);
+ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
+                                           struct ncclCeBatchOpsParams* params, cudaStream_t stream,
+                                           void** ceBatchHandle);
 ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream);
 
 #endif

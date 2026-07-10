@@ -136,7 +136,7 @@ struct rasMsg {
       int nDeadPeers;
       struct rasPeerInfo peers[0]; // Variable length.
       // The peers array is followed by:
-      //union ncclSocketAddress deadPeers[0]; // Variable length.
+      // union ncclSocketAddress deadPeers[0]; // Variable length.
     } peersUpdate;
     struct {
       int protocol; // Protocol version, sent to the client.
@@ -154,14 +154,14 @@ struct rasMsg {
 static inline size_t rasCollDataLength(rasCollectiveType type) {
   struct rasCollRequest* data;
   switch (type) {
-    case RAS_BC_DEADPEER:
-      return offsetof(struct rasCollRequest, deadPeer) + sizeof(data->deadPeer);
-    case RAS_COLL_CONNS:
-      return offsetof(struct rasCollRequest, conns) + sizeof(data->conns);
-    case RAS_COLL_COMMS:
-      return offsetof(struct rasCollRequest, comms) + sizeof(data->comms);
-    case RAS_MSG_NONE:
-      return 0;
+  case RAS_BC_DEADPEER:
+    return offsetof(struct rasCollRequest, deadPeer) + sizeof(data->deadPeer);
+  case RAS_COLL_CONNS:
+    return offsetof(struct rasCollRequest, conns) + sizeof(data->conns);
+  case RAS_COLL_COMMS:
+    return offsetof(struct rasCollRequest, comms) + sizeof(data->comms);
+  case RAS_MSG_NONE:
+    return 0;
   };
   return 0;
 }
@@ -170,18 +170,18 @@ static inline size_t rasCollDataLength(rasCollectiveType type) {
 static inline size_t rasMsgLength(rasMsgType type, rasCollectiveType collType = RAS_MSG_NONE) {
   struct rasMsg* msg;
   switch (type) {
-    case RAS_MSG_CONNINIT:
-      return offsetof(struct rasMsg, connInit) + sizeof(msg->connInit);
-    case RAS_MSG_CONNINITACK:
-      return offsetof(struct rasMsg, connInitAck) + sizeof(msg->connInitAck);
-    case RAS_MSG_KEEPALIVE:
-      return offsetof(struct rasMsg, keepAlive) + sizeof(msg->keepAlive);
-    case RAS_MSG_PEERSUPDATE:
-      return offsetof(struct rasMsg, peersUpdate) + sizeof(msg->peersUpdate);
-    case RAS_MSG_COLLREQ:
-      return offsetof(struct rasMsg, collReq) + rasCollDataLength(collType);
-    case RAS_MSG_COLLRESP:
-      return offsetof(struct rasMsg, collResp) + sizeof(msg->collResp);
+  case RAS_MSG_CONNINIT:
+    return offsetof(struct rasMsg, connInit) + sizeof(msg->connInit);
+  case RAS_MSG_CONNINITACK:
+    return offsetof(struct rasMsg, connInitAck) + sizeof(msg->connInitAck);
+  case RAS_MSG_KEEPALIVE:
+    return offsetof(struct rasMsg, keepAlive) + sizeof(msg->keepAlive);
+  case RAS_MSG_PEERSUPDATE:
+    return offsetof(struct rasMsg, peersUpdate) + sizeof(msg->peersUpdate);
+  case RAS_MSG_COLLREQ:
+    return offsetof(struct rasMsg, collReq) + rasCollDataLength(collType);
+  case RAS_MSG_COLLRESP:
+    return offsetof(struct rasMsg, collResp) + sizeof(msg->collResp);
   };
   return 0;
 }
@@ -189,45 +189,50 @@ static inline size_t rasMsgLength(rasMsgType type, rasCollectiveType collType = 
 // How much to enlarge any RAS array by if we run out of space.
 #define RAS_INCREMENT 4
 
+// Magic file descriptor number when we want poll() to ignore an entry.  Anything negative would do, but
+// I didn't want to use -1 because it has a special meaning for us.
+#define POLL_FD_IGNORE -2
+
 // Our clock has nanosecond resolution.
 #define CLOCK_UNITS_PER_SEC (1000000000LL)
 
 // Keep-alive messages are sent no sooner than a second after the last message was sent down a particular connection.
-#define RAS_KEEPALIVE_INTERVAL (1*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_KEEPALIVE_INTERVAL (1 * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // If no message arrives in 5 seconds via a particular connection that uses keep-alive messages, generate a warning
 // and try alternative connections.
-#define RAS_KEEPALIVE_TIMEOUT_WARN (5*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_KEEPALIVE_TIMEOUT_WARN (5 * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // Abort a socket that uses keep-alive messages if no message arrives in 20 seconds.
 // We will try to re-establish communication via that connection (until RAS_PEER_DEAD_TIMEOUT).
 #define RAS_KEEPALIVE_TIMEOUT_ERROR RAS_STUCK_TIMEOUT
 
 // Retry connecting on failing sockets (ECONNREFUSED, etc.) once a second.
-#define RAS_CONNECT_RETRY (1*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_CONNECT_RETRY (1 * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // If we can't connect in 5 seconds, we generate a warning and try alternative connections.
 #define RAS_CONNECT_WARN RAS_KEEPALIVE_TIMEOUT_WARN
 
 // Abort a busy socket (one we are trying to send on, or one that was being established) if there's been
 // no sign of progress in 20 second.  We will try to re-establish communication (up to RAS_PEER_DEAD_TIMEOUT).
-#define RAS_STUCK_TIMEOUT (20*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_STUCK_TIMEOUT (20 * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // Terminate ad-hoc connections that have not been used in 60 seconds.
-#define RAS_IDLE_TIMEOUT (60*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_IDLE_TIMEOUT (60 * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // If the socket is closed by peer within 5 seconds from the idle timeout, do not attempt to re-establish.
-#define RAS_IDLE_GRACE_PERIOD (5*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_IDLE_GRACE_PERIOD (5 * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // Declare a peer as dead and don't retry communicating with it if we couldn't reach it for 60 seconds.
-#define RAS_PEER_DEAD_TIMEOUT (60*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_PEER_DEAD_TIMEOUT (60 * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // Abort a leg of a collective operation if the response takes more than 5 seconds to arrive *and* one of the
 // connections experiences delays.
-#define RAS_COLLECTIVE_LEG_TIMEOUT (RAS_COLLECTIVE_LEG_TIMEOUT_SEC*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_COLLECTIVE_LEG_TIMEOUT (RAS_COLLECTIVE_LEG_TIMEOUT_SEC * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // Abort a whole collective operation after at most RAS_COLLECTIVE_LEG_TIMEOUT+RAS_COLLECTIVE_EXTRA_TIMEOUT (10s).
-#define RAS_COLLECTIVE_EXTRA_TIMEOUT (RAS_COLLECTIVE_EXTRA_TIMEOUT_SEC*CLOCK_UNITS_PER_SEC*ncclParamRasTimeoutFactor())
+#define RAS_COLLECTIVE_EXTRA_TIMEOUT \
+  (RAS_COLLECTIVE_EXTRA_TIMEOUT_SEC * CLOCK_UNITS_PER_SEC * ncclParamRasTimeoutFactor())
 
 // Structure used for tracking the progress of sending a RAS message.
 struct rasMsgMeta {
@@ -508,15 +513,14 @@ struct rasClient {
   struct rasCollective* coll;
 };
 
-
 // ras.cc
 extern struct pollfd* rasPfds;
 extern struct ncclSocket rasNetListeningSocket;
 extern std::mutex ncclCommsMutex;
 extern struct ncclComm** ncclComms;
 extern int nNcclComms;
-extern  bool ncclCommsSorted;
-extern char rasLine[SOCKET_NAME_MAXLEN+1];
+extern bool ncclCommsSorted;
+extern char rasLine[SOCKET_NAME_MAXLEN + 1];
 
 int64_t ncclParamRasTimeoutFactor();
 ncclResult_t rasMsgAlloc(struct rasMsg** msg, size_t msgLen);
@@ -528,13 +532,12 @@ ncclResult_t rasMsgHandle(struct rasMsg* msg, struct rasSocket* sock);
 void rasMsgHandleBCDeadPeer(struct rasCollRequest** pReq, size_t* pReqLen, bool* pDone);
 ncclResult_t rasGetNewPollEntry(int* index);
 
-
 // rasnet.cc
 extern struct rasLink rasNextLink, rasPrevLink;
 extern struct rasConnection* rasConnsHead;
 extern struct rasConnection* rasConnsTail;
-extern struct rasSocket *rasSocketsHead;
-extern struct rasSocket *rasSocketsTail;
+extern struct rasSocket* rasSocketsHead;
+extern struct rasSocket* rasSocketsTail;
 
 ncclResult_t getNewConnEntry(struct rasConnection** pConn);
 ncclResult_t rasConnCreate(const union ncclSocketAddress* addr, struct rasConnection** pConn);
@@ -551,7 +554,6 @@ ncclResult_t rasMsgHandleKeepAlive(const struct rasMsg* msg, struct rasSocket* s
 ncclResult_t rasLinkAddFallback(struct rasLink* link, const struct rasConnection* conn);
 ncclResult_t rasLinkConnUpdate(struct rasLink* link, struct rasConnection* conn, int peerIdx);
 void rasNetTerminate();
-
 
 // peers.cc
 extern struct rasPeerInfo* rasPeers;
@@ -573,7 +575,6 @@ int ncclSocketsCompare(const void* p1, const void* p2);
 bool ncclSocketsSameNode(const union ncclSocketAddress* a1, const union ncclSocketAddress* a2);
 void rasPeersTerminate();
 
-
 // collectives.cc
 extern struct rasCollective* rasCollectivesHead;
 extern struct rasCollective* rasCollectivesTail;
@@ -587,7 +588,6 @@ void rasCollsPurgeConn(struct rasConnection* conn);
 void rasCollFree(struct rasCollective* coll);
 void rasCollsHandleTimeouts(int64_t now, int64_t* nextWakeup);
 void rasCollectivesTerminate();
-
 
 // client_support.cc
 extern int rasClientListeningSocket;

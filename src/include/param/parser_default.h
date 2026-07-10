@@ -21,9 +21,13 @@
 // Primary template - catch all for unsupported types
 template <typename T>
 struct ncclParamParserDefault {
-  static ncclResult_t resolve(const char*, T&) { return ncclInvalidArgument; }
+  static ncclResult_t resolve(const char*, T&) {
+    return ncclInvalidArgument;
+  }
 
-  static bool validate(const T&) { return false; }
+  static bool validate(const T&) {
+    return false;
+  }
 
   static std::string toString(const T&) {
     return "<unsupported>";
@@ -39,12 +43,20 @@ struct ncclParamParserDefault<bool> {
     if (input == nullptr) return ncclInvalidArgument;
     std::string s(input);
     using nccl::param::utils::iequals;
-    if (s == "1" || iequals(s, "T") || iequals(s, "TRUE"))  { out = true;  return ncclSuccess; }
-    if (s == "0" || iequals(s, "F") || iequals(s, "FALSE")) { out = false; return ncclSuccess; }
+    if (s == "1" || iequals(s, "T") || iequals(s, "TRUE")) {
+      out = true;
+      return ncclSuccess;
+    }
+    if (s == "0" || iequals(s, "F") || iequals(s, "FALSE")) {
+      out = false;
+      return ncclSuccess;
+    }
     return ncclInvalidArgument;
   }
 
-  static bool validate(const bool&) { return true; }
+  static bool validate(const bool&) {
+    return true;
+  }
 
   static std::string toString(const bool& value) {
     return value ? "TRUE" : "FALSE";
@@ -63,7 +75,9 @@ struct ncclParamParserDefault<const char*> {
     return ncclSuccess;
   }
 
-  static bool validate(const char* const&) { return true; }
+  static bool validate(const char* const&) {
+    return true;
+  }
 
   static std::string toString(const char* const& value) {
     return value ? std::string(value) : std::string();
@@ -81,13 +95,11 @@ struct ncclIntegerParser {
     errno = 0;
     if NCCL_PARAM_IF_CONSTEXPR (std::is_signed<T>::value) {
       long long val = std::strtoll(input, &endPtr, 10);
-      if (endPtr == input || *endPtr != '\0' || errno == ERANGE || errno == EINVAL)
-        return ncclInvalidArgument;
+      if (endPtr == input || *endPtr != '\0' || errno == ERANGE || errno == EINVAL) return ncclInvalidArgument;
       out = static_cast<T>(val);
     } else {
       unsigned long long val = std::strtoull(input, &endPtr, 10);
-      if (endPtr == input || *endPtr != '\0' || errno == ERANGE || errno == EINVAL)
-        return ncclInvalidArgument;
+      if (endPtr == input || *endPtr != '\0' || errno == ERANGE || errno == EINVAL) return ncclInvalidArgument;
       out = static_cast<T>(val);
     }
     return ncclSuccess;
@@ -105,14 +117,22 @@ struct ncclIntegerParser {
 };
 
 // Explicit specializations for integer types
-template <> struct ncclParamParserDefault<int8_t>   : ncclIntegerParser<int8_t> {};
-template <> struct ncclParamParserDefault<int16_t>  : ncclIntegerParser<int16_t> {};
-template <> struct ncclParamParserDefault<int32_t>  : ncclIntegerParser<int32_t> {};
-template <> struct ncclParamParserDefault<int64_t>  : ncclIntegerParser<int64_t> {};
-template <> struct ncclParamParserDefault<uint8_t>  : ncclIntegerParser<uint8_t> {};
-template <> struct ncclParamParserDefault<uint16_t> : ncclIntegerParser<uint16_t> {};
-template <> struct ncclParamParserDefault<uint32_t> : ncclIntegerParser<uint32_t> {};
-template <> struct ncclParamParserDefault<uint64_t> : ncclIntegerParser<uint64_t> {};
+template <>
+struct ncclParamParserDefault<int8_t> : ncclIntegerParser<int8_t> {};
+template <>
+struct ncclParamParserDefault<int16_t> : ncclIntegerParser<int16_t> {};
+template <>
+struct ncclParamParserDefault<int32_t> : ncclIntegerParser<int32_t> {};
+template <>
+struct ncclParamParserDefault<int64_t> : ncclIntegerParser<int64_t> {};
+template <>
+struct ncclParamParserDefault<uint8_t> : ncclIntegerParser<uint8_t> {};
+template <>
+struct ncclParamParserDefault<uint16_t> : ncclIntegerParser<uint16_t> {};
+template <>
+struct ncclParamParserDefault<uint32_t> : ncclIntegerParser<uint32_t> {};
+template <>
+struct ncclParamParserDefault<uint64_t> : ncclIntegerParser<uint64_t> {};
 
 // ============================================================================
 // nccl::param::parser — adapt static methods to function-pointer signatures
@@ -137,7 +157,10 @@ std::string defaultToString(const void*, const T& val) {
 }
 
 template <typename T>
-struct boundedCtx { T lower; T upper; };
+struct boundedCtx {
+  T lower;
+  T upper;
+};
 
 template <typename T>
 bool boundedValidate(const void* ctx, const T& val) {
@@ -155,13 +178,8 @@ bool boundedValidate(const void* ctx, const T& val) {
 template <typename T>
 const ncclParamParser<T>& ncclParamDefault() {
   using namespace nccl::param::parser;
-  static const ncclParamParser<T> instance{
-    defaultResolve<T>,
-    defaultValidate<T>,
-    defaultToString<T>,
-    nullptr,
-    ncclParamParserDefault<T>::desc
-  };
+  static const ncclParamParser<T> instance{defaultResolve<T>, defaultValidate<T>, defaultToString<T>, nullptr,
+                                           ncclParamParserDefault<T>::desc};
   return instance;
 }
 
@@ -175,10 +193,8 @@ template <typename T>
 ncclParamParser<T> ncclParamBounded(T lower, T upper) {
   using namespace nccl::param::parser;
   auto ctx = std::make_shared<boundedCtx<T>>(boundedCtx<T>{lower, upper});
-  std::string d = "Integer in range [" + std::to_string(lower) + ", " +
-                  std::to_string(upper) + "]";
-  return {defaultResolve<T>, boundedValidate<T>, defaultToString<T>,
-          std::move(ctx), std::move(d)};
+  std::string d = "Integer in range [" + std::to_string(lower) + ", " + std::to_string(upper) + "]";
+  return {defaultResolve<T>, boundedValidate<T>, defaultToString<T>, std::move(ctx), std::move(d)};
 }
 
 template <typename T>

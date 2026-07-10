@@ -14,10 +14,18 @@
 #include "env.h"
 #include "tuner.h"
 #include "gin/gin_host_win_stub.h"
+#include "rma.h"
 #include "device.h"
 
 #include <cstring>
 #include <cstdlib>
+#include <mutex>
+
+/* Cached socket transport device counts (populated during ncclNetInit) */
+static int winNetPhysDev = 0;
+static int winNetVirtDev = -1;  /* NCCL_UNDEF_DEV_COUNT */
+static bool winNetInitialized = false;
+static std::mutex winNetInitMutex;
 
 /* --------------------------------------------------------------------------
  * RAS (Linux-only) stubs
@@ -45,8 +53,23 @@ ncclResult_t ncclRasCommFini(const struct ncclComm* comm) {
 ncclResult_t ncclNetInit(struct ncclComm* comm) {
   comm->ncclNet = &ncclNetSocket;
   comm->ncclCollNet = nullptr;
-  comm->netContext = nullptr;
   comm->netPluginIndex = -1;
+
+  // Initialize the socket transport to enumerate network interfaces.
+  ncclNetCommConfig_t commConfig = {};
+  commConfig.trafficClass = NCCL_NET_TRAFFIC_CLASS_UNDEF;
+  NCCLCHECK(comm->ncclNet->init(&comm->netContext, comm->commHash, &commConfig, ncclDebugLog, NULL));
+
+  {
+    std::lock_guard<std::mutex> lock(winNetInitMutex);
+    if (!winNetInitialized) {
+      int ndev = 0;
+      NCCLCHECK(comm->ncclNet->devices(&ndev));
+      winNetPhysDev = ndev;
+      winNetInitialized = true;
+    }
+  }
+
   return ncclSuccess;
 }
 
@@ -60,8 +83,7 @@ ncclResult_t ncclNetInitFromParent(struct ncclComm* comm, struct ncclComm* paren
 }
 
 ncclResult_t ncclNetFinalize(struct ncclComm* comm) {
-  if (comm->ncclNet && comm->netContext)
-    NCCLCHECK(comm->ncclNet->finalize(comm->netContext));
+  if (comm->ncclNet && comm->netContext) NCCLCHECK(comm->ncclNet->finalize(comm->netContext));
   return ncclSuccess;
 }
 
@@ -91,14 +113,14 @@ const char* ncclEnvPluginGetEnv(const char* name) {
  * -------------------------------------------------------------------------- */
 ncclResult_t ncclNetGetDevCount(int netPluginIndex, int* nPhysDev, int* nVirtDev) {
   (void)netPluginIndex;
-  *nPhysDev = 0;
-  *nVirtDev = 0;
+  *nPhysDev = winNetPhysDev;
+  *nVirtDev = winNetVirtDev;
   return ncclSuccess;
 }
 
 ncclResult_t ncclNetSetVirtDevCount(int netPluginIndex, int nVirtDev) {
   (void)netPluginIndex;
-  (void)nVirtDev;
+  winNetVirtDev = nVirtDev;
   return ncclSuccess;
 }
 
@@ -116,17 +138,12 @@ ncclResult_t ncclCollNetSetVirtDevCount(int netPluginIndex, int nVirtDev) {
 }
 
 /* --------------------------------------------------------------------------
- * GIN additional stubs (getGlobalGinType, ConnectOnce, Register, etc.)
+ * GIN additional stubs (GetGinType, ConnectOnce, Register, etc.)
  * -------------------------------------------------------------------------- */
-ncclResult_t getGlobalGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
-  (void)comm;
-  *ginType = (ncclGinType_t)0;  /* NCCL_GIN_TYPE_NONE */
-  return ncclSuccess;
-}
 
 /* GIN requirement/create stubs (implemented in gin_barrier.cc and gin_scratch.cc on Linux only) */
 ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, int nBarriers,
-                                            ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) {
+                                             ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) {
   (void)comm;
   (void)team;
   (void)nBarriers;
@@ -135,8 +152,8 @@ ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, i
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinOutboxCreateRequirement(int nBlocks, int size_log2,
-                                            ncclGinOutboxHandle* outHandle, ncclDevResourceRequirements_t* outReq) {
+ncclResult_t ncclGinOutboxCreateRequirement(int nBlocks, int size_log2, ncclGinOutboxHandle* outHandle,
+                                            ncclDevResourceRequirements_t* outReq) {
   (void)nBlocks;
   (void)size_log2;
   (void)outHandle;
@@ -154,7 +171,13 @@ ncclResult_t ncclGinInboxA2ACreateRequirement(ncclTeam peers, int nBlocks, int s
   return ncclSuccess;
 }
 
-ncclResult_t getGlobalRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
+ncclResult_t ncclGetGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
+  (void)comm;
+  *ginType = (ncclGinType_t)0;  /* NCCL_GIN_TYPE_NONE */
+  return ncclSuccess;
+}
+
+ncclResult_t ncclGetRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
   (void)comm;
   *ginType = (ncclGinType_t)0;  /* NCCL_GIN_TYPE_NONE */
   return ncclSuccess;
@@ -165,7 +188,8 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevComm* devComm) {
+ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
+                                 struct ncclDevComm* devComm) {
   (void)comm;
   (void)reqs;
   (void)devComm;
@@ -180,8 +204,8 @@ ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const*
 
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS],
-                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags,
-                             bool multiSegment, int memType) {
+                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags, bool multiSegment,
+                             int memType) {
   (void)comm;
   (void)address;
   (void)size;
@@ -240,9 +264,8 @@ int64_t ncclParamGinEnable(void) {
 /* --------------------------------------------------------------------------
  * Profiler plugin stubs and globals
  * -------------------------------------------------------------------------- */
-thread_local ncclProfilerApiState_t ncclProfilerApiState = {
-  0, 0, ncclProfilerGroupApiStartStateReset, nullptr, nullptr, nullptr
-};
+thread_local ncclProfilerApiState_t ncclProfilerApiState = {0,       0,       ncclProfilerGroupApiStartStateReset,
+                                                            nullptr, nullptr, nullptr};
 
 int ncclProfilerEventMask = 0;
 
@@ -396,7 +419,8 @@ ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* 
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId, ncclProfilerEventState_t eState) {
+ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId,
+                                                   ncclProfilerEventState_t eState) {
   (void)sub;
   (void)args;
   (void)stepId;
@@ -432,7 +456,8 @@ ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCol
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream, void** ceSyncHandle) {
+ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream,
+                                          void** ceSyncHandle) {
   (void)comm;
   (void)args;
   (void)stream;
@@ -447,7 +472,9 @@ ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHand
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, struct ncclCeBatchOpsParams* params, cudaStream_t stream, void** ceBatchHandle) {
+ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
+                                           struct ncclCeBatchOpsParams* params, cudaStream_t stream,
+                                           void** ceBatchHandle) {
   (void)comm;
   (void)args;
   (void)params;
@@ -502,6 +529,29 @@ ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* paren
 }
 
 ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
+  (void)comm;
+  return ncclSuccess;
+}
+
+/* --------------------------------------------------------------------------
+ * RMA stubs
+ * -------------------------------------------------------------------------- */
+ncclResult_t ncclRmaInit(struct ncclComm* comm) {
+  (void)comm;
+  return ncclSuccess;
+}
+ncclResult_t ncclRmaInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
+  (void)comm;
+  (void)parent;
+  return ncclSuccess;
+}
+ncclResult_t ncclRmaGetDevCount(int rmaPluginIndex, int* nPhysDev, int* nVirtDev) {
+  (void)rmaPluginIndex;
+  if (nPhysDev) *nPhysDev = 0;
+  if (nVirtDev) *nVirtDev = -1;
+  return ncclSuccess;
+}
+ncclResult_t ncclRmaFinalize(struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;
 }

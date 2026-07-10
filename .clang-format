@@ -1,0 +1,113 @@
+Language: Cpp
+BasedOnStyle: Google
+
+# NCCL only have ~2% lines longer than 120
+ColumnLimit: 120
+
+# Blank lines
+MaxEmptyLinesToKeep: 1
+KeepEmptyLines:
+  AtStartOfFile: false
+
+# Indentation Sizes
+IndentWidth: 2
+ContinuationIndentWidth: 2
+# align public:/private: with struct/class
+AccessModifierOffset: -2
+ConstructorInitializerIndentWidth: 2
+UseTab: Never
+
+# Brace style: K&R (Google default — same line)
+BreakBeforeBraces: Attach
+
+# case at same indent level as switch
+IndentCaseLabels: false
+# add extra indentation for compound stmt in case block
+IndentCaseBlocks: true
+
+# Pointer: type-side (int*, not int *)
+PointerAlignment: Left
+
+# Don't align macro backslash, avoids unnecessary reformatting
+AlignEscapedNewlines: DontAlign
+
+# Allow One-liners
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortEnumsOnASingleLine: false
+
+# Do not allow clang-format to add or remove braces in control statements
+# This help preserving developer's intention on braces
+InsertBraces: false
+RemoveBracesLLVM: false
+
+# template<> -> template <>
+SpaceAfterTemplateKeyword: true
+
+# Namespace bodies: indented (majority of codebase uses indentation inside namespaces)
+NamespaceIndentation: None
+
+## Line Breaking and Wrapping behaviors
+# When args don't fit on one line, break after ( and indent args by ContinuationIndentWidth
+AlignAfterOpenBracket: true
+BreakBeforeCloseBracketBracedList: true
+BreakBeforeInlineASMColon: OnlyMultiline
+AlwaysBreakBeforeMultilineStrings: false
+# pack arguments and parameters tightly
+BinPackArguments: true
+BinPackParameters: BinPack
+PackConstructorInitializers: BinPack
+# binary operators trailing on previous line
+BreakBeforeBinaryOperators: None
+# ? : operators trailing on previous line and never break before ?
+BreakBeforeTernaryOperators: false
+# template <> always on its own line in declaration
+BreakTemplateDeclarations: Yes
+# Penalty tuning
+# increase penalty for early breaking at the opening parenthesis,
+# making BinPack behavior nicely and less likely to break after the opening parenthesis
+PenaltyBreakOpenParenthesis: 33
+
+# AllowAllArgumentsOnNextLine: true
+# AllowAllParametersOfDeclarationOnNextLine: true
+
+# Preprocessor directives: keep at column 0
+IndentPPDirectives: None
+
+# Do not sort or regroup include
+IncludeBlocks: Preserve
+SortIncludes: false
+
+# Don't align other things, reducing unnecessary reformatting
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+
+# Only reindent comments, do not reflow comments — preserve existing line breaks in comments
+ReflowComments: IndentOnly
+# Trailing inline comments: leave them where they are (don't reposition)
+SpacesBeforeTrailingComments: 1
+AlignTrailingComments:
+  AlignPPAndNotPP: false
+  Kind: Leave # we don't want unnecessarily aligning the all the trailing comments, but Leave option has a bug right now
+
+# struct { int a:1 };
+BitFieldColonSpacing: None
+
+IndentExternBlock: NoIndent
+
+SortUsingDeclarations: Never
+
+# Allow turn-off formatting of oneline or next line with comment start with `// FORMAT-OFF`.
+OneLineFormatOffRegex: ^(// FORMAT-OFF:?)
+
+# Teach clang-format that these user-defined NVML types are types, not variables,
+# so pointer alignment (PointerAlignment: Left) is applied correctly when they appear
+# as a single named pointer parameter in a macro argument, e.g. (Type *name).
+TypeNames:
+- nvmlConfComputeSystemState_t
+- nvmlSystemConfComputeSettings_t
+
+WhitespaceSensitiveMacros:
+- STR
+- STR2

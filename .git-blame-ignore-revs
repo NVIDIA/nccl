@@ -1,0 +1,53 @@
+# Do `git blame --ignore-revs-file .git-blame-ignore-revs` to filter out formatting commits.
+# You can create git command alias for it as
+#   `git config --global alias.bli 'blame --ignore-revs-file .git-blame-ignore-revs'`
+# Then use `git bli` to do git blame with the ignore file.
+#
+# You can also set a per-repo config for blame to use the ignore file
+#   `git config blame.ignoreRevsFile .git-blame-ignore-revs`
+# This will make `git blame` always use the ignore file if run in the repo or its worktree.
+
+# Manual format cleanup
+
+# [Manual] Replace #pragma unroll with NVCC_PRAGMA_UNROLL macros
+9fcb8e72573eab784abdbfb80833aefc9cf6ac7a
+
+# [Manual] Moving trailing comments to newlines
+0f900e1bb7806fcc4252301cf7977d3d68beb0e2
+
+# [Manual] move trailing comment on braces to newline
+8f93c896f77b6bbdb9e6543c02a46bae7f383631
+
+# [Manual] Remove unnecessary semicolons
+dcc4eac2a5a301a3e8bf3bc10c3252d22383f5f2
+
+# [Manual] Guard hand-formatted codes from clang-format
+64632aac5a3157d0de49a66f912d54598ac8ff2a
+
+# [Manual] Disable clang-format for some codes
+c18643fb59301bb50a1f69a4e1723fe073b7a22b
+
+# [Manual] Remove trailing semicolon from ALIGN_SIZE macro
+a0f382ae4eb3be32851e579098ebb0023481ffd6
+
+# [Manual] Adding braces to long single line control statements
+9ec1b126071f4c525f3017a0c0f7c791711b8760
+
+# [Manual] Clean up nesting control statements
+d4ff2c08ca1c187493d409a86f39393dd7e466bb
+
+# [Manual] Add braces for nested single-line control statements
+a1234caf1174d761558a978b4cb66f17955a164c
+
+# [Manual] Wrap long comment lines to avoid clang-format bug
+754e024b2e27c6c00e54b2be6ee233f04d61072e
+
+# [Auto] Reformat src/ with clang-format
+50bf0bca1a6b88b2a3e3cebf41f3b827fc9fb19e
+
+# [Manual] One time post reformat cleanup
+f4bf55d0033915b030380a8e1733b390235dbae6
+
+# [Manual] One time post formatting fix
+a3ce94021e982212cc9c5af7fe74979ac77eddf5
+

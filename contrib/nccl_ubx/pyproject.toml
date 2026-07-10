@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "torch>=2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ubx"
+version = "1.1.0"
+description = "UB-X (Ultra Bandwidth X) — low-latency NVLink collectives library + nccl-tests-compatible bench (SM 9.0+)"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = [
+    "torch>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff",
+]
+
+# Both the core `ubx` package (root) and the in-tree `ubx_bench` benchmark
+# package (under bench/) are installed by `pip install -e .`. The bench
+# is kept as a sibling package rather than a sub-namespace so its CLI
+# (`python -m ubx_bench`) and import path stay independent of the core
+# library.
+[tool.setuptools.packages.find]
+where = [".", "bench"]
+include = ["ubx*", "ubx_bench*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_cuda: test requires a CUDA GPU",
+    "requires_sm9: test requires SM 9.0+ (Hopper/Blackwell)",
+    "large_memory: test allocates a large GPU pool (>32 GiB); skip on small-memory GPUs",
+]

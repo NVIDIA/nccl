@@ -6,8 +6,12 @@
 #
 .PHONY: all clean
 
+EMIT_LLVM_IR ?= 0
+
 default: src.build
+ifneq ($(EMIT_LLVM_IR), 0)
 default: ir.build
+endif
 
 install: src.install
 BUILDDIR ?= $(abspath ./build)

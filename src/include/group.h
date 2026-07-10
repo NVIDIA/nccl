@@ -21,25 +21,26 @@ void ncclGroupCommJoin(struct ncclComm* comm, int type);
 void ncclGroupCommPreconnect(struct ncclComm* comm);
 ncclResult_t ncclGroupCommLeave(struct ncclComm* comm);
 ncclResult_t ncclGroupJobAbort(struct ncclGroupJob* groupJob);
-ncclResult_t ncclGroupJobComplete(struct ncclGroupJob *groupJob);
+ncclResult_t ncclGroupJobComplete(struct ncclGroupJob* groupJob);
 
-typedef ncclResult_t(*ncclInitFunc_t)(ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, int cudaDev);
+typedef ncclResult_t (*ncclInitFunc_t)(ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, int cudaDev);
 
-ncclResult_t ncclAsyncInit(ncclInitFunc_t func, ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, int cudaDev);
+ncclResult_t ncclAsyncInit(ncclInitFunc_t func, ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank,
+                           int cudaDev);
 
 typedef enum ncclGroupJobState {
   ncclGroupJobRunning = 0,
-  ncclGroupJobDone    = 1,
-  ncclGroupJobJoined  = 2,
+  ncclGroupJobDone = 1,
+  ncclGroupJobJoined = 2,
 } ncclGroupJobState_t;
 
 struct ncclAsyncJob {
   struct ncclAsyncJob* next;
   std::thread thread;
   ncclResult_t result;
-  ncclResult_t(*func)(struct ncclAsyncJob*);
-  void(*undo)(struct ncclAsyncJob*);
-  void(*destructor)(void*);
+  ncclResult_t (*func)(struct ncclAsyncJob*);
+  void (*undo)(struct ncclAsyncJob*);
+  void (*destructor)(void*);
   ncclGroupJobState_t state;
   uint32_t* abortFlag; /* point to comm abortFlag */
   uint32_t* abortFlagDev; /* point to comm abortFlagDev */
@@ -56,20 +57,16 @@ struct ncclAsyncJob {
   }
 };
 
-ncclResult_t ncclAsyncLaunch(
-  struct ncclAsyncJob* job,
-  ncclResult_t(*func)(struct ncclAsyncJob*),
-  void(*undo)(struct ncclAsyncJob*),
-  void(*destructor)(void*), ncclComm_t comm
-);
+ncclResult_t ncclAsyncLaunch(struct ncclAsyncJob* job, ncclResult_t (*func)(struct ncclAsyncJob*),
+                             void (*undo)(struct ncclAsyncJob*), void (*destructor)(void*), ncclComm_t comm);
 
 struct ncclGroupJob {
   struct ncclAsyncJob base;
   int groupRefCount;
   bool nonBlockingInit;
   bool joined;
-  struct ncclComm *groupCommHead[ncclGroupTaskTypeNum];
-  struct ncclComm *groupCommPreconnectHead;
+  struct ncclComm* groupCommHead[ncclGroupTaskTypeNum];
+  struct ncclComm* groupCommPreconnectHead;
   ncclResult_t groupError;
   bool abortFlag;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncJobs;
@@ -110,8 +107,7 @@ inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
     // the users program order yet insures siblings occur consecutively. This
     // is required by doLaunches() in "group.cc".
     struct ncclComm** pp = &ncclGroupCommHead[type];
-    while (*pp != nullptr && comm->intraComm0 != (*pp)->intraComm0)
-      pp = &(*pp)->groupNext[type];
+    while (*pp != nullptr && comm->intraComm0 != (*pp)->intraComm0) pp = &(*pp)->groupNext[type];
 
     // didn't find its clique, we need to insert it with ascending order based on commHash
     if (*pp == nullptr) {

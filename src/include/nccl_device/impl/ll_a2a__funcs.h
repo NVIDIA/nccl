@@ -12,138 +12,127 @@
 #include "../utility.h"
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
-NCCL_DEVICE_INLINE ncclLLA2ASession<Coop>::ncclLLA2ASession(
-    Coop coop, ncclDevComm const& comm, ncclTeam team,
-    ncclLLA2AHandle handle, uint32_t block, int maxElts,
-    bool multimem, ncclMultimemHandle mmHandle
-  ):
-  ncclLLA2ASession_internal<Coop>{
-    coop, comm, team, handle, (int)block, /*pitch=*/maxElts,
-    multimem, mmHandle, /*epoch=*/0, /*slotsOffset=*/0
-  } {
+template <typename Coop>
+NCCL_DEVICE_INLINE ncclLLA2ASession<Coop>::ncclLLA2ASession(Coop coop, ncclDevComm const& comm, ncclTeam team,
+                                                            ncclLLA2AHandle handle, uint32_t block, int maxElts,
+                                                            bool multimem, ncclMultimemHandle mmHandle)
+  : ncclLLA2ASession_internal<Coop>{coop,     comm,     team,        handle,           (int)block, /*pitch=*/maxElts,
+                                    multimem, mmHandle, /*epoch=*/0, /*slotsOffset=*/0} {
   uint4* line = (uint4*)ncclGetResourceBufferLocalPointer(comm, handle.bufHandle);
-  line += block*(1 + 2*handle.nSlots);
+  line += block * (1 + 2 * handle.nSlots);
   this->epoch = line->x + 2;
   this->slotsOffset = this->calcSlotOffset();
 }
 #endif
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
+template <typename Coop>
 NCCL_DEVICE_INLINE ncclLLA2ASession<Coop>::~ncclLLA2ASession() {
   uint4* line = (uint4*)ncclGetResourceBufferLocalPointer(this->comm, this->handle.bufHandle);
-  line += this->block*(1 + 2*this->handle.nSlots);
+  line += this->block * (1 + 2 * this->handle.nSlots);
   if (this->coop.thread_rank() == 0) line->x = this->epoch - 2;
   this->coop.sync();
 }
 #endif
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
-template<typename T>
+template <typename Coop>
+template <typename T>
 NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::send(int peer, int elt, T data) {
   using nccl::utility::divUp;
-  union { T tmp; uint32_t u32[divUp(sizeof(T), 8)][2]; };
+  union {
+    T tmp;
+    uint32_t u32[divUp(sizeof(T), 8)][2];
+  };
   tmp = data;
   uint4* buf = (uint4*)ncclGetResourceBufferPeerPointer(this->comm, this->handle.bufHandle, this->team, peer);
   buf += this->slotsOffset + elt;
-  #pragma unroll
-  for (int u=0; u < divUp(sizeof(T), 8); u++) {
-    #if __CUDA_ARCH__ >= 700
-      asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
-        "l"(buf + u*this->pitch),
-        "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-        : "memory"
-      );
-    #else
-      asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::
-        "l"(buf + u*this->pitch),
-        "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-        : "memory"
-      );
-    #endif
+  NVCC_PRAGMA_UNROLL_AUTO
+  for (int u = 0; u < divUp(sizeof(T), 8); u++) {
+#if __CUDA_ARCH__ >= 700
+    asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(buf + u * this->pitch), "r"(u32[u][0]),
+                 "r"(u32[u][1]), "r"(this->epoch)
+                 : "memory");
+#else
+    asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(buf + u * this->pitch), "r"(u32[u][0]), "r"(u32[u][1]),
+                 "r"(this->epoch)
+                 : "memory");
+#endif
   }
 }
 #endif
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
-template<typename T>
+template <typename Coop>
+template <typename T>
 NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::bcast(int elt, T data) {
   using nccl::utility::divUp;
   if (this->multimem) {
-    union { T tmp; uint32_t u32[divUp(sizeof(T),8)][2]; };
+    union {
+      T tmp;
+      uint32_t u32[divUp(sizeof(T), 8)][2];
+    };
     tmp = data;
     uint4* bufmc = (uint4*)ncclGetResourceBufferMultimemPointer(this->comm, this->handle.bufHandle, this->mmHandle);
     bufmc += this->slotsOffset + elt;
-    #pragma unroll
-    for (int u=0; u < divUp(sizeof(T), 8); u++) {
-      #if __CUDA_ARCH__ >= 700
-        asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
-          "l"(bufmc + this->pitch*u),
-          "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-          : "memory"
-        );
-      #else
-        asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::
-          "l"(bufmc + this->pitch*u),
-          "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-          : "memory"
-        );
-      #endif
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int u = 0; u < divUp(sizeof(T), 8); u++) {
+#if __CUDA_ARCH__ >= 700
+      asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(bufmc + this->pitch * u), "r"(u32[u][0]),
+                   "r"(u32[u][1]), "r"(this->epoch)
+                   : "memory");
+#else
+      asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(bufmc + this->pitch * u), "r"(u32[u][0]),
+                   "r"(u32[u][1]), "r"(this->epoch)
+                   : "memory");
+#endif
     }
   } else {
-    union { T tmp; uint32_t u32[divUp(sizeof(T), 8)][2]; };
+    union {
+      T tmp;
+      uint32_t u32[divUp(sizeof(T), 8)][2];
+    };
     tmp = data;
     int dr = 0;
     int r = this->team.rank;
-    #pragma unroll 1
-    for (; dr+8 <= this->team.nRanks; dr += 8) {
-      #pragma unroll
-      for (int ur=0; ur < 8; ur++) {
+    NVCC_PRAGMA_UNROLL_DISABLED
+    for (; dr + 8 <= this->team.nRanks; dr += 8) {
+      NVCC_PRAGMA_UNROLL_AUTO
+      for (int ur = 0; ur < 8; ur++) {
         uint4* buf = (uint4*)ncclGetResourceBufferPeerPointer(this->comm, this->handle.bufHandle, this->team, r);
         buf += this->slotsOffset + elt;
-        #pragma unroll
-        for (int u=0; u < divUp(sizeof(T),8); u++) {
-          #if __CUDA_ARCH__ >= 700
-            asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
-              "l"(buf + u*this->pitch),
-              "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-              : "memory"
-            );
-          #else
-            asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::
-              "l"(buf + u*this->pitch),
-              "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-              : "memory"
-            );
-          #endif
+        NVCC_PRAGMA_UNROLL_AUTO
+        for (int u = 0; u < divUp(sizeof(T), 8); u++) {
+#if __CUDA_ARCH__ >= 700
+          asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(buf + u * this->pitch), "r"(u32[u][0]),
+                       "r"(u32[u][1]), "r"(this->epoch)
+                       : "memory");
+#else
+          asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(buf + u * this->pitch), "r"(u32[u][0]),
+                       "r"(u32[u][1]), "r"(this->epoch)
+                       : "memory");
+#endif
         }
         r += 1;
         if (r == this->team.nRanks) r = 0;
       }
     }
-    #pragma unroll
-    for (int ur=0; ur < 8; ur++, dr++) {
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int ur = 0; ur < 8; ur++, dr++) {
       if (dr == this->team.nRanks) break;
       uint4* buf = (uint4*)ncclGetResourceBufferPeerPointer(this->comm, this->handle.bufHandle, this->team, r);
       buf += this->slotsOffset + elt;
-      #pragma unroll
-      for (int u=0; u < divUp(sizeof(T),8); u++) {
-        #if __CUDA_ARCH__ >= 700
-          asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::
-            "l"(buf + u*this->pitch),
-            "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-            : "memory"
-          );
-        #else
-          asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::
-              "l"(buf + u*this->pitch),
-              "r"(u32[u][0]), "r"(u32[u][1]), "r"(this->epoch)
-              : "memory"
-            );
-        #endif
+      NVCC_PRAGMA_UNROLL_AUTO
+      for (int u = 0; u < divUp(sizeof(T), 8); u++) {
+#if __CUDA_ARCH__ >= 700
+        asm volatile("st.relaxed.sys.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(buf + u * this->pitch), "r"(u32[u][0]),
+                     "r"(u32[u][1]), "r"(this->epoch)
+                     : "memory");
+#else
+        asm volatile("st.volatile.v4.u32 [%0],{%1,%3,%2,%3};" ::"l"(buf + u * this->pitch), "r"(u32[u][0]),
+                     "r"(u32[u][1]), "r"(this->epoch)
+                     : "memory");
+#endif
       }
       r += 1;
       if (r == this->team.nRanks) r = 0;
@@ -153,8 +142,8 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::bcast(int elt, T data) {
 #endif
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
-template<typename T>
+template <typename Coop>
+template <typename T>
 NCCL_DEVICE_INLINE T ncclLLA2ASession<Coop>::recv(int elt) {
   T ret[1];
   this->template recvUnrolled</*MinEltCount=*/1, /*MaxEltCount=*/1>(elt, 1, 0, ret);
@@ -163,57 +152,47 @@ NCCL_DEVICE_INLINE T ncclLLA2ASession<Coop>::recv(int elt) {
 #endif
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
-template<int MinEltCount, int MaxEltCount, typename T>
-NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int eltCount, int eltStride, T(&elts)[MaxEltCount]) {
+template <typename Coop>
+template <int MinEltCount, int MaxEltCount, typename T>
+NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int eltCount, int eltStride,
+                                                             T (&elts)[MaxEltCount]) {
   using nccl::utility::divUp;
   using nccl::utility::testAbort;
   uint4* buf = (uint4*)ncclGetResourceBufferLocalPointer(this->comm, this->handle.bufHandle);
   buf += this->slotsOffset + eltStart;
   uint32_t steps = 0;
   uint4 tmp[MaxEltCount][divUp(sizeof(T), 8)];
-  #pragma unroll 1
+  NVCC_PRAGMA_UNROLL_DISABLED
   while (!testAbort(this->comm.abortFlag, steps)) {
-    #pragma unroll
-    for (int u=0; u < MaxEltCount; u++) {
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int u = 0; u < MaxEltCount; u++) {
       if (u < MinEltCount || u < eltCount) {
-        #if __CUDA_ARCH__ >= 700
-          #if __CUDA_ARCH__ == 900
-            #pragma unroll
-            for (int v=0; v < divUp(sizeof(T), 8); v++) {
-              asm volatile("ld.acquire.sys.v4.u32 {%0,%1,%2,%3},[%4];"
-                : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w)
-                : "l"(buf + u*eltStride + v*this->pitch)
-                : "memory");
-            }
-          #else
-            #pragma unroll
-            for (int v=0; v < divUp(sizeof(T), 8); v++) {
-              asm volatile("ld.relaxed.sys.v4.u32 {%0,%1,%2,%3},[%4];"
-                : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w)
-                : "l"(buf + u*eltStride + v*this->pitch)
-                : "memory");
-            }
-          #endif
-        #else // __CUDA_ARCH__ >= 700
-          #pragma unroll
-          for (int v=0; v < divUp(sizeof(T), 8); v++) {
-            asm volatile("ld.volatile.v4.u32 {%0,%1,%2,%3},[%4];"
-              : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w)
-              : "l"(buf + u*eltStride + v*this->pitch)
-              : "memory");
-          }
-        #endif
+#if __CUDA_ARCH__ >= 700
+        NVCC_PRAGMA_UNROLL_AUTO
+        for (int v = 0; v < divUp(sizeof(T), 8); v++) {
+          asm volatile("ld.relaxed.sys.v4.u32 {%0,%1,%2,%3},[%4];"
+                       : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w)
+                       : "l"(buf + u * eltStride + v * this->pitch)
+                       : "memory");
+        }
+#else // __CUDA_ARCH__ >= 700
+        NVCC_PRAGMA_UNROLL_AUTO
+        for (int v = 0; v < divUp(sizeof(T), 8); v++) {
+          asm volatile("ld.volatile.v4.u32 {%0,%1,%2,%3},[%4];"
+                       : "=r"(tmp[u][v].x), "=r"(tmp[u][v].y), "=r"(tmp[u][v].z), "=r"(tmp[u][v].w)
+                       : "l"(buf + u * eltStride + v * this->pitch)
+                       : "memory");
+        }
+#endif
       }
     }
     bool okAll = true;
-    #pragma unroll
-    for (int u=0; u < MaxEltCount; u++) {
-      #pragma unroll
-      for (int v=0; v < divUp(sizeof(T), 8); v++) {
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int u = 0; u < MaxEltCount; u++) {
+      NVCC_PRAGMA_UNROLL_AUTO
+      for (int v = 0; v < divUp(sizeof(T), 8); v++) {
         if (u < MinEltCount || u < eltCount) {
-          bool ok = tmp[u][v].y == this->epoch &&
-                    tmp[u][v].w == this->epoch;
+          bool ok = tmp[u][v].y == this->epoch && tmp[u][v].w == this->epoch;
           okAll &= ok;
         }
       }
@@ -221,12 +200,15 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
     if (__builtin_expect(okAll, true)) break;
   }
 
-  #pragma unroll
-  for (int u=0; u < MaxEltCount; u++) {
+  NVCC_PRAGMA_UNROLL_AUTO
+  for (int u = 0; u < MaxEltCount; u++) {
     if (MinEltCount <= u && u == eltCount) break;
-    union { T val; uint32_t u32[divUp(sizeof(T), 8)][2]; };
-    #pragma unroll
-    for (int v=0; v < divUp(sizeof(T), 8); v++) {
+    union {
+      T val;
+      uint32_t u32[divUp(sizeof(T), 8)][2];
+    };
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int v = 0; v < divUp(sizeof(T), 8); v++) {
       u32[v][0] = tmp[u][v].x;
       u32[v][1] = tmp[u][v].z;
     }
@@ -236,31 +218,31 @@ NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::recvUnrolled(int eltStart, int e
 #endif
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
-template<int Unroll, typename Elt, typename EltToAcc, typename Reduce>
-NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
-    int eltStart, int eltCount, int eltStride, EltToAcc eltToAcc, Reduce reduce
-  ) -> decltype(eltToAcc(nccl::utility::declval<Elt>())) {
+template <typename Coop>
+template <int Unroll, typename Elt, typename EltToAcc, typename Reduce>
+NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(int eltStart, int eltCount, int eltStride, EltToAcc eltToAcc,
+                                                           Reduce reduce)
+  -> decltype(eltToAcc(nccl::utility::declval<Elt>())) {
   using Acc = decltype(eltToAcc(nccl::utility::declval<Elt>()));
   Acc acc;
   int i = 0;
-  #pragma unroll 1
-  for (; i+Unroll <= eltCount; i += Unroll) {
+  NVCC_PRAGMA_UNROLL_DISABLED
+  for (; i + Unroll <= eltCount; i += Unroll) {
     Elt got[Unroll];
-    this->template recvUnrolled</*Min=*/Unroll>(eltStart + i*eltStride, Unroll, eltStride, got);
+    this->template recvUnrolled</*Min=*/Unroll>(eltStart + i * eltStride, Unroll, eltStride, got);
     Acc acc0 = eltToAcc(got[0]);
-    acc = i==0 ? acc0 : reduce(acc, acc0);
-    #pragma unroll
-    for (int j=1; j < Unroll; j++) acc = reduce(acc, eltToAcc(got[j]));
+    acc = i == 0 ? acc0 : reduce(acc, acc0);
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int j = 1; j < Unroll; j++) acc = reduce(acc, eltToAcc(got[j]));
   }
   if (i < eltCount) {
     Elt got[Unroll];
-    this->template recvUnrolled</*Min=*/1>(eltStart + i*eltStride, eltCount-i, eltStride, got);
+    this->template recvUnrolled</*Min=*/1>(eltStart + i * eltStride, eltCount - i, eltStride, got);
     Acc acc0 = eltToAcc(got[0]);
-    acc = i==0 ? acc0 : reduce(acc, acc0);
-    #pragma unroll
-    for (int j=1; j < Unroll-1; j++) {
-      if (i+j < eltCount) acc = reduce(acc, eltToAcc(got[j]));
+    acc = i == 0 ? acc0 : reduce(acc, acc0);
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int j = 1; j < Unroll - 1; j++) {
+      if (i + j < eltCount) acc = reduce(acc, eltToAcc(got[j]));
     }
   }
   return acc;
@@ -268,14 +250,14 @@ NCCL_DEVICE_INLINE auto ncclLLA2ASession<Coop>::recvReduce(
 #endif
 
 #if NCCL_CHECK_CUDACC
-template<typename Coop>
+template <typename Coop>
 NCCL_DEVICE_INLINE void ncclLLA2ASession<Coop>::endEpoch(Coop) {
   if (__builtin_expect(this->epoch >= -2u, false)) {
     this->coop.sync();
     uint4* buf = (uint4*)ncclGetResourceBufferLocalPointer(this->comm, this->handle.bufHandle);
     buf += this->slotsOffset;
-    #pragma unroll 4
-    for (int i=this->coop.thread_rank(); i < this->handle.nSlots; i += this->coop.size()) {
+    NVCC_PRAGMA_UNROLL(4)
+    for (int i = this->coop.thread_rank(); i < this->handle.nSlots; i += this->coop.size()) {
       buf[i] = uint4{0, 0, 0, 0};
     }
   }

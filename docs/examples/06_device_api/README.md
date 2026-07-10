@@ -55,51 +55,40 @@ enabling users to perform inter-GPU communication within their own kernels.
 *Dependencies* : pthread or MPI
 
 ### Why the Device API?
-The device API allows NCCL communication within CUDA kernels, fusing communication and computation steps:
-```cpp
-// Host:
-// 1) Create device communicator + requirements
-// 2) Register symmetric memory windows for peer access (send + recv)
-ncclDevComm devComm;
-ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
-NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
-NCCLCHECK(ncclCommWindowRegister(comm, d_sendbuff, size_bytes, &send_win, NCCL_WIN_COLL_SYMMETRIC));
-NCCLCHECK(ncclCommWindowRegister(comm, d_recvbuff, size_bytes, &recv_win, NCCL_WIN_COLL_SYMMETRIC));
-
-// Device:
-// - Use LSA barriers for cross-GPU synchronization
-// - Access peers via symmetric windows (ncclGetLsaPointer); reduce in-kernel
-simpleAllReduceKernel<<<NCCL_DEVICE_CTA_COUNT, NCCL_DEVICE_THREADS_PER_CTA, 0, stream>>>(
-    send_win, 0, recv_win, 0, count, devComm);
-```
+The device API allows NCCL communication within CUDA kernels, fusing
+communication and computation steps. This eliminates host-device synchronization
+bottlenecks and enables lower-latency collective operations. See each example's
+`c/README.md` for detailed code walkthroughs.
 
 ### Checking for Device API and GIN Support
 
-To check for the required Device API and GIN support, the communicator properties are queried via `ncclCommQueryProperties`:
+These examples require communicator support for the relevant device-side
+capabilities. The C/CUDA examples check communicator properties with
+`ncclCommQueryProperties` before launching the device kernels:
 
 ```cpp
 ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
 NCCLCHECK(ncclCommQueryProperties(comm, &props));
 
-// Check for Device API support
 if (!props.deviceApiSupport) {
     printf("ERROR: communicator does not support Device API!\n");
     // Exit gracefully...
 }
 
-// Check for GIN support (ginType should not be NCCL_GIN_TYPE_NONE)
+// GIN-based examples also require network support.
 if (props.ginType == NCCL_GIN_TYPE_NONE) {
     printf("ERROR: communicator does not support GIN!\n");
     // Exit gracefully...
 }
 
-// For pure LSA examples, ensure a single team where all ranks can access each other
+// Pure LSA examples require a single LSA team.
 if (props.nLsaTeams != 1) {
     printf("ERROR: expected 1 LSA team for pure LSA example!\n");
     // Exit gracefully...
 }
 ```
+
+Note: These examples are C/CUDA-only as they demonstrate GPU kernel programming.
 
 ## Building
 
@@ -114,15 +103,15 @@ make 03_alltoall_hybrid
 ### **Individual Examples**
 ```shell
 # Build and run the device API AllReduce
-cd 01_allreduce_lsa && make
+cd 01_allreduce_lsa/c && make
 ./allreduce_lsa
 
 # Build and run the Pure GIN AlltoAll example
-cd 02_alltoall_gin && make
-./allreduce_gin
+cd 02_alltoall_gin/c && make
+./alltoall_gin
 
 # Build and run the Hybrid AlltoAll example
-cd 03_alltoall_hybrid && make
+cd 03_alltoall_hybrid/c && make
 ./alltoall_hybrid
 ```
 

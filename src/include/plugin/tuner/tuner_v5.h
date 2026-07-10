@@ -23,15 +23,14 @@ typedef struct {
 #define NCCL_NUM_TUNING_SCALES_V5 3
 
 typedef struct {
-  double baseLatencies [NCCL_NUM_ALGORITHMS_V5][NCCL_NUM_PROTOCOLS_V5];
-  double hwLatencies [NCCL_NUM_HW_LINKS_V5][NCCL_NUM_ALGORITHMS_V5][NCCL_NUM_PROTOCOLS_V5];
+  double baseLatencies[NCCL_NUM_ALGORITHMS_V5][NCCL_NUM_PROTOCOLS_V5];
+  double hwLatencies[NCCL_NUM_HW_LINKS_V5][NCCL_NUM_ALGORITHMS_V5][NCCL_NUM_PROTOCOLS_V5];
 
-  double llMaxBws [NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
-  double perChMaxRingLL128Bws [NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
-  double perChMaxTreeLL128Bws [NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
-  double perChMaxTreeBws [NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
-  double perChMaxNVLSTreeBws [NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
-
+  double llMaxBws[NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
+  double perChMaxRingLL128Bws[NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
+  double perChMaxTreeLL128Bws[NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
+  double perChMaxTreeBws[NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
+  double perChMaxNVLSTreeBws[NCCL_NUM_COMPCAPS_V5][NCCL_NUM_TUNING_SCALES_V5];
 
 } ncclTunerConstants_v5_t;
 
@@ -52,7 +51,7 @@ typedef struct {
   // Input/Output:
   //   - constants: tuner constants
   ncclResult_t (*init)(void** ctx, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction,
-                      ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_v5_t* constants);
+                       ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_v5_t* constants);
 
   // Gets info (algo, protocol, number of ctas and threads) for a given collective.
   // Inputs:
@@ -76,9 +75,8 @@ typedef struct {
   // Also, the plugin is allowed to not set any output, or set only the
   // algorithm and protocol, but not only the algorithm or only the protocol.
   // Unset fields will be set automatically by NCCL.
-  ncclResult_t (*getCollInfo)(void* context, ncclFunc_t collType, size_t nBytes,
-                              int numPipeOps, float** collCostTable, int numAlgo, int numProto,
-                              int regBuff, int* nChannels);
+  ncclResult_t (*getCollInfo)(void* context, ncclFunc_t collType, size_t nBytes, int numPipeOps, float** collCostTable,
+                              int numAlgo, int numProto, int regBuff, int* nChannels);
 
   // Terminates the plugin and cleans up any resources that the plugin allocated.
   // context: tuner context object

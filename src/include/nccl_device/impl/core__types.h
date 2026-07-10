@@ -12,7 +12,7 @@
 #include <cuda.h>
 /* Minimal types instead of nccl_device/gin/gin_device_host_common.h (GIN is Linux-only) */
 #define NCCL_GIN_MAX_CONNECTIONS 4
-typedef void *ncclGinWindow_t;
+typedef void* ncclGinWindow_t;
 #else
 #include "nccl_device/gin/gin_device_host_common.h"
 #endif
@@ -37,17 +37,17 @@ struct ncclWindow_vidmem {
   int numSegments;
 };
 
-// Inlined resource-window. This is a subset of ncclWindow_vidmem with only fields
-// used for resource-buffer addressing. Same size as ncclWindow_vidmem for backward
-// compatibility.
-struct ncclResourceWindow_vidmem {
+// Inlined resource-window. A subset of ncclWindow_vidmem with only the fields used
+// for resource-buffer addressing. lsaFlatBase / stride4G / mcOffset4K stay at the same
+// offsets they have inside ncclWindow_vidmem for byte-level compatibility.
+typedef struct ncclResourceWindow_vidmem {
   char reserved1[8];
   char* lsaFlatBase;
   char reserved2[8];
   uint32_t stride4G;
   uint32_t mcOffset4K;
-  char reserved3[40];
-};
+  char reserved3[32];  // NOTE: shrunk from 40 in 2.30u1 to reclaim 8 bytes
+} ncclResourceWindow_vidmem_t;
 
 struct ncclMultimemHandle {
   void* mcBasePtr;

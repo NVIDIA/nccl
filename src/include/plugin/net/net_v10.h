@@ -20,7 +20,6 @@ typedef struct {
   int trafficClass;
 } ncclNetCommConfig_v10_t;
 
-
 typedef struct {
   char* name;                      // Used mostly for logging.
   char* pciPath;                   // Path to the PCI device in /sys.
@@ -59,7 +58,8 @@ typedef struct {
   // should return successfully with sendComm == NULL with the expectation that
   // it will be called again until sendComm != NULL.
   // If *sendDevComm points to a valid object, then NCCL is requesting device offload for this connection
-  ncclResult_t (*connect)(int dev, ncclNetCommConfig_v10_t* config, void* handle, void** sendComm, ncclNetDeviceHandle_v10_t** sendDevComm);
+  ncclResult_t (*connect)(int dev, ncclNetCommConfig_v10_t* config, void* handle, void** sendComm,
+                          ncclNetDeviceHandle_v10_t** sendDevComm);
   // Finalize connection establishment after remote peer has called connect.
   // This call must not block for the connection to be established, and instead
   // should return successfully with recvComm == NULL with the expectation that
@@ -77,7 +77,8 @@ typedef struct {
   ncclResult_t (*isend)(void* sendComm, void* data, size_t size, int tag, void* mhandle, void* phandle, void** request);
   // Asynchronous recv from a peer.
   // May return request == NULL if the call cannot be performed (or would block)
-  ncclResult_t (*irecv)(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles, void** request);
+  ncclResult_t (*irecv)(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles,
+                        void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request);
@@ -129,19 +130,19 @@ typedef struct {
   // Register/Deregister memory. Type is either NCCL_PTR_HOST or NCCL_PTR_CUDA.
   ncclResult_t (*regMr)(void* collComm, void* data, size_t size, int type, void** mhandle);
   /* DMA-BUF support */
-  ncclResult_t (*regMrDmaBuf)(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd, void** mhandle);
+  ncclResult_t (*regMrDmaBuf)(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd,
+                              void** mhandle);
   ncclResult_t (*deregMr)(void* collComm, void* mhandle);
   // Performs an asynchronous allreduce operation on the collective group.
   // May return request == NULL if the call cannot be performed (or would block).
-  ncclResult_t (*iallreduce)(void* collComm, void* sendData, void* recvData, size_t count,
-      ncclDataType_t dataType, ncclRedOp_t redOp, void* sendMhandle, void* recvMhandle, void** request);
+  ncclResult_t (*iallreduce)(void* collComm, void* sendData, void* recvData, size_t count, ncclDataType_t dataType,
+                             ncclRedOp_t redOp, void* sendMhandle, void* recvMhandle, void** request);
   ncclResult_t (*iallgather)(void* collComm, void* sendData, int nRecvParts, ncclNetSGE_v10_t* recvParts,
-                             size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
-                             void* sendMhandle, void** request);
+                             size_t bytesPerRank, size_t windowOffset, size_t windowBytes, void* sendMhandle,
+                             void** request);
   ncclResult_t (*ireducescatter)(void* collComm, int nSendParts, ncclNetSGE_v10_t* sendParts, void* recvData,
-                                 size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
-                                 ncclDataType_t dataType, ncclRedOp_t redOp,
-                                 void* recvMhandle, void** request);
+                                 size_t bytesPerRank, size_t windowOffset, size_t windowBytes, ncclDataType_t dataType,
+                                 ncclRedOp_t redOp, void* recvMhandle, void** request);
   // Perform a flush/fence to make sure all data received with NCCL_PTR_CUDA is
   // visible to the GPU
   ncclResult_t (*iflush)(void* collComm, void* data, int size, void* mhandle, void** request);

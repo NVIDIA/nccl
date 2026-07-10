@@ -60,6 +60,16 @@ $ make pkg.txz.build
 $ ls build/pkg/txz/
 ```
 
+Python wheel :
+```shell
+$ # Install uv to create the Python wheel (uv manages Python deps in a venv)
+$ # See: https://docs.astral.sh/uv/getting-started/installation/
+$ curl -LsSf https://astral.sh/uv/install.sh | sh
+$ # Build NCCL Python wheel (this also builds the .txz archive as an intermediate)
+$ make pkg.python_wheel.build
+$ ls build/pkg/python_wheel/
+```
+
 ## Tests
 
 Tests for NCCL are maintained separately at https://github.com/nvidia/nccl-tests.

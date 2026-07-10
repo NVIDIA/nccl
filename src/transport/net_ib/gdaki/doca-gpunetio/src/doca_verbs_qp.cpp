@@ -2468,8 +2468,9 @@ doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *ver
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (!doca_internal_utils_next_power_of_two(max_rd_atomic)) {
-        DOCA_LOG(LOG_ERR, "Failed to set max_rd_atomic (%d) as it is not a power of 2",
+    if (!doca_internal_utils_is_power_of_two(max_rd_atomic)) {
+        DOCA_LOG(LOG_ERR,
+                 "Failed to set max_rd_atomic (%d) as it is less than 1 or not a power of 2",
                  max_rd_atomic);
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -2486,8 +2487,9 @@ doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (!doca_internal_utils_next_power_of_two(max_dest_rd_atomic)) {
-        DOCA_LOG(LOG_ERR, "Failed to set max_dest_rd_atomic (%d) as it is not a power of 2",
+    if (!doca_internal_utils_is_power_of_two(max_dest_rd_atomic)) {
+        DOCA_LOG(LOG_ERR,
+                 "Failed to set max_dest_rd_atomic (%d) as it is less than 1 or not a power of 2",
                  max_dest_rd_atomic);
         return DOCA_ERROR_INVALID_VALUE;
     }

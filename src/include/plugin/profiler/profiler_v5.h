@@ -121,7 +121,8 @@ typedef struct {
   //  - logfn          : logger function
   // Output
   //  - eActivationMask: bitmask of active events set by the plugin
-  ncclResult_t (*init)(void** context, uint64_t commId, int* eActivationMask, const char* commName, int nNodes, int nranks, int rank, ncclDebugLogger_t logfn);
+  ncclResult_t (*init)(void** context, uint64_t commId, int* eActivationMask, const char* commName, int nNodes,
+                       int nranks, int rank, ncclDebugLogger_t logfn);
 
   // startEvent - initialize and start a new event for the supplied event descriptor inside the eventset
   // Input
@@ -141,7 +142,8 @@ typedef struct {
   //  - eHandle   : handle to event object created through startEvent
   //  - eStateArgs: optional argument used to capture event attribute updates associated with the state transition
   //  - eState    : event state transition
-  ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v5_t eState, ncclProfilerEventStateArgs_v5_t* eStateArgs);
+  ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v5_t eState,
+                                   ncclProfilerEventStateArgs_v5_t* eStateArgs);
 
   // finalize - finalize the profiler plugin
   // Input

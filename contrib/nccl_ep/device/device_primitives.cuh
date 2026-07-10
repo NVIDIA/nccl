@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "include/common.hpp"
+#include "common.hpp"
 
 //==============================================================================
 // Macros
@@ -162,6 +162,12 @@ __device__ __forceinline__ void memory_fence_cta() {
     asm volatile("fence.acq_rel.cta;":: : "memory");
 }
 
+// Drains async-proxy (TMA) stores into the generic memory path. Caller must be
+// the thread that issued the cp.async.bulk, after cp_async_bulk_wait_group.
+__device__ __forceinline__ void fence_proxy_async() {
+    asm volatile("fence.proxy.async;" ::: "memory");
+}
+
 //==============================================================================
 // Load Operations - Volatile
 //==============================================================================
@@ -187,6 +193,25 @@ __device__ __forceinline__ int64_t ld_volatile_global(const int64_t *ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(const uint64_t *ptr) {
     int64_t ret;
     asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
+    return ret;
+}
+
+//==============================================================================
+// Load Operations - Relaxed (system scope)
+//==============================================================================
+
+__device__ __forceinline__ uint32_t ld_relaxed_sys_global(const uint32_t* ptr) {
+    uint32_t ret;
+    asm volatile("ld.relaxed.sys.global.u32 %0, [%1];" : "=r"(ret) : "l"(ptr) : "memory");
+    return ret;
+}
+
+__device__ __forceinline__ uint64_t ld_relaxed_gpu_global(const uint64_t* ptr) {
+    uint64_t ret;
+    asm volatile("ld.relaxed.gpu.global.b64 %0, [%1];"
+                 : "=l"(ret)
+                 : "l"(__cvta_generic_to_global(ptr))
+                 : "memory");
     return ret;
 }
 
@@ -327,6 +352,13 @@ __device__ __forceinline__ void st_relaxed_sys_global(const int *ptr, int val) {
     asm volatile("st.relaxed.sys.global.s32 [%0], %1;"::"l"(ptr), "r"(val) : "memory");
 }
 
+__device__ __forceinline__ void st_relaxed_gpu_global(uint64_t* ptr, uint64_t val) {
+    asm volatile("st.relaxed.gpu.global.b64 [%0], %1;"
+                 :
+                 : "l"(__cvta_generic_to_global(ptr)), "l"(val)
+                 : "memory");
+}
+
 __device__ __forceinline__ void st_na_relaxed(const uint8_t *ptr, uint8_t val) {
     asm volatile("st.relaxed.gpu.global.L1::no_allocate.b8 [%0], %1;" : : "l"(ptr), "h"(static_cast<uint16_t>(val)));
 }
@@ -412,6 +444,20 @@ __device__ __forceinline__ int atomic_add_release_global(const int* ptr, int val
     int ret;
     asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;" : "=r"(ret) : "l"(ptr), "r"(value));
     return ret;
+}
+
+__device__ __forceinline__ int atomic_add_acqrel_global(const int* ptr, int value) {
+    int ret;
+    asm volatile("atom.acq_rel.gpu.global.add.u32 %0, [%1], %2;" : "=r"(ret) : "l"(ptr), "r"(value));
+    return ret;
+}
+
+// Fire-and-forget release-add at system scope (no return value).
+__device__ __forceinline__ void red_add_release_sys_global(uint32_t* ptr, uint32_t value) {
+    asm volatile("red.release.sys.global.add.u32 [%0], %1;"
+                 :
+                 : "l"(__cvta_generic_to_global(ptr)), "r"(value)
+                 : "memory");
 }
 
 __forceinline__ __device__ int atomic_cas_cta_acquire(int* addr, int x, int y) {

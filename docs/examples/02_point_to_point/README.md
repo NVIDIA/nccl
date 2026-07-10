@@ -33,16 +33,10 @@ another
 *Addresses* : Individual transfers between two ranks
 *Dependencies* : A functional NCCL library and its dependencies
 
-### Why `ncclCommInitAll` here?
-For single-node collective examples we use `ncclCommInitAll` as it creates a
-clique of communicators in one call.
-
-```c
-// Initialize all GPUs in one call
-ncclComm_t* comms;
-int num_gpus;
-NCCLCHECK(ncclCommInitAll(comms, num_gpus, NULL));
-```
+### Communicator initialization
+For single-node examples, communicators for all GPUs are created in one call:
+- **C**: `ncclCommInitAll(comms, num_gpus, NULL)`
+- **Python**: `nccl.Communicator.init_all()`
 
 ## Building
 
@@ -55,9 +49,12 @@ make 01_ring_pattern
 ### **Individual Examples**
 ```shell
 # Build and run the ring pattern
-cd 01_ring_pattern && make
+cd 01_ring_pattern/c && make
 ./ring_pattern
 ```
+
+### **Python**
+See the `python/README.md` in each example directory.
 
 ## References
 - [NCCL User Guide:

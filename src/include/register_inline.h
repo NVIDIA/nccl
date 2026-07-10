@@ -14,9 +14,9 @@
 static inline ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, size_t size, struct ncclReg** outReg) {
   struct ncclRegCache* cache = &comm->regCache;
   *outReg = NULL;
-  for (int slot=0; /*true*/; slot++) {
+  for (int slot = 0; /*true*/; slot++) {
     if (slot == cache->population) return ncclSuccess;
-    struct ncclReg *reg = cache->slots[slot];
+    struct ncclReg* reg = cache->slots[slot];
     if ((uintptr_t)data < reg->begAddr) return ncclSuccess;
     if ((uintptr_t)data + size <= reg->endAddr) {
       *outReg = reg;
@@ -24,6 +24,5 @@ static inline ncclResult_t ncclRegFind(struct ncclComm* comm, const void* data, 
     }
   }
 }
-
 
 #endif

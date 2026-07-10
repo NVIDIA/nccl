@@ -1,0 +1,20 @@
+{
+    "train": {
+        "num_gpus": 64,
+        "tp_size": 2,
+        "cp_size": 2,
+        "ep_size": 16,
+        "pp_size": 4,
+        "fsdp_size": 1,
+        "dp_size": 1
+    },
+    "generation": {
+        "num_gpus": 64,
+        "tp_size": 8,
+        "cp_size": 1,
+        "ep_size": 1,
+        "pp_size": 1,
+        "fsdp_size": 1,
+        "dp_size": 8
+    }
+}

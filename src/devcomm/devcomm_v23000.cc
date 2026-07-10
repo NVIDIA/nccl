@@ -8,7 +8,8 @@
 #include "dev_runtime.h"
 
 struct ncclDevCommCompat ncclDevCommCompat_v23000 = {
-  NCCL_VERSION(2, 30, 0), NCCL_VERSION_CODE, // minVersion, maxVersion
+  NCCL_VERSION(2, 30, 0),
+  NCCL_VERSION_CODE, // minVersion, maxVersion
   nullptr,                                   // commPropertiesFilter
   nullptr,                                   // devCommRequirementsFilter
   nullptr,                                   // devCommCopyNewToOld

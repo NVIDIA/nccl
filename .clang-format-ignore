@@ -1,0 +1,26 @@
+# ignore codes from external projects
+src/include/nvtx3/**
+src/transport/net_ib/gdaki/doca-gpunetio/**
+src/include/gdrwrap.h
+src/include/mlx5/mlx5dvcore.h
+src/include/ibvcore.h
+
+# ignore special files
+src/nccl.h.in
+
+# ignore generated codes
+build/**
+
+# ignore all other directories to avoid accidentally reformatting them
+bindings/**
+contrib/**
+cmake/**
+docs/**
+github/**
+maint/**
+makefile/**
+ompi/**
+pkg/**
+plugins/**
+share/**
+test/**

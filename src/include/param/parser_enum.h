@@ -22,13 +22,18 @@ ncclResult_t oneOfResolve(const void* ctx, const char* input, T& out) {
   std::string token = nccl::param::utils::trim(std::string(input));
   if (token.empty()) return ncclInvalidArgument;
   for (const auto& opt : opts) {
-    if (nccl::param::utils::iequals(opt.name, token)) { out = opt.value; return ncclSuccess; }
+    if (nccl::param::utils::iequals(opt.name, token)) {
+      out = opt.value;
+      return ncclSuccess;
+    }
   }
   return ncclInvalidArgument;
 }
 
 template <typename T, size_t N>
-bool oneOfValidate(const void*, const T&) { return true; }
+bool oneOfValidate(const void*, const T&) {
+  return true;
+}
 
 template <typename T, size_t N>
 std::string oneOfToString(const void* ctx, const T& value) {
@@ -52,10 +57,12 @@ ncclParamParser<T> ncclParamOneOf(ncclOptionSet<T, N> options) {
   for (const auto& opt : *ctx) {
     d += "\n        ";
     d += opt.name;
-    if (opt.desc != nullptr) { d += " - "; d += opt.desc; }
+    if (opt.desc != nullptr) {
+      d += " - ";
+      d += opt.desc;
+    }
   }
-  return {oneOfResolve<T, N>, oneOfValidate<T, N>, oneOfToString<T, N>,
-          std::move(ctx), std::move(d)};
+  return {oneOfResolve<T, N>, oneOfValidate<T, N>, oneOfToString<T, N>, std::move(ctx), std::move(d)};
 }
 
 #endif /* PARAM_PARSER_ENUM_H_INCLUDED */

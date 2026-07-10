@@ -11,17 +11,19 @@
 #include "nccl.h"
 
 typedef void* ncclShmHandle_t;
-ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr, int refcount, ncclShmHandle_t* handle);
+ncclResult_t ncclShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr,
+                         int refcount, ncclShmHandle_t* handle);
 ncclResult_t ncclShmClose(ncclShmHandle_t handle);
 ncclResult_t ncclShmUnlink(ncclShmHandle_t handle);
 
 struct ncclShmemCollBuff {
-  size_t *cnt[2];
-  void *ptr[2];
+  size_t* cnt[2];
+  void* ptr[2];
   int round;
   size_t maxTypeSize;
 };
 
-ncclResult_t ncclShmemAllgather(struct ncclComm *comm, struct ncclShmemCollBuff *shmem, void *sendbuff, void *recvbuff, size_t typeSize);
+ncclResult_t ncclShmemAllgather(struct ncclComm* comm, struct ncclShmemCollBuff* shmem, void* sendbuff, void* recvbuff,
+                                size_t typeSize);
 
 #endif

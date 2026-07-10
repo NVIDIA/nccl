@@ -226,6 +226,10 @@ enum ibv_port_cap_flags {
 	IBV_PORT_IP_BASED_GIDS			= 1 << 26,
 };
 
+enum ibv_query_port_flags {
+	IBV_QPF_GRH_REQUIRED = 1 << 0,
+};
+
 struct ibv_port_attr {
 	enum ibv_port_state	state;
 	enum ibv_mtu		max_mtu;
@@ -272,6 +276,8 @@ enum ibv_event_type {
 	IBV_EVENT_QP_LAST_WQE_REACHED,
 	IBV_EVENT_CLIENT_REREGISTER,
 	IBV_EVENT_GID_CHANGE,
+	IBV_EVENT_WQ_FATAL,
+	IBV_EVENT_DEVICE_SPEED_CHANGE,
 
 	/* new experimental events start here leaving enough
 	 * room for 14 events which should be enough

@@ -5,7 +5,9 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
-#ifndef NCCL_HOSTLIB_ONLY
+#ifndef _NCCL_DEVICE_H_
+#define _NCCL_DEVICE_H_
+
 #include "nccl_device/coop.h"
 #include "nccl_device/impl/barrier__funcs.h"
 #include "nccl_device/impl/comm__funcs.h"
@@ -18,18 +20,5 @@
 #endif
 #include "nccl_device/impl/ptr__funcs.h"
 #include "nccl_device/impl/reduce_copy__funcs.h"
-#else
-// Include the types and declaration if NCCL_HOSTLIB_ONLY is defined
-#include "nccl_device/coop.h"
-#include "nccl_device/core.h"
-#include "nccl_device/ll_a2a.h"
-#include "nccl_device/barrier.h"
-#include "nccl_device/ptr.h"
-#include "nccl_device/reduce_copy.h"
-#include "nccl_device/impl/comm__types.h"
-#include "nccl_device/impl/core__types.h"
-#include "nccl_device/impl/ll_a2a__types.h"
-#include "nccl_device/impl/barrier__types.h"
-#include "nccl_device/impl/ptr__types.h"
-#include "nccl_device/impl/reduce_copy__types.h"
-#endif
+
+#endif // _NCCL_DEVICE_H_

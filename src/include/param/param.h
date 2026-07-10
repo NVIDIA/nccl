@@ -35,15 +35,15 @@
 // Note: NCCL_DEFINE_PARAM is not designed to be put inside of a namespace. This can be
 // changed if there is a need.
 #define DEFINE_NCCL_PARAM(name, type, key, default, flags, parser, desc) \
-  namespace key_guards { struct guard_##key {}; }; \
-  NCCL_PARAM_COMPILER_EXPORT_SYMBOL extern constexpr char name##Key[] = #key; \
-  NCCL_PARAM_COMPILER_EXPORT_SYMBOL ncclParam<type> name{name##Key, default, parser, #type, flags, \
-                                                         desc};
+  namespace key_guards { \
+  struct guard_##key {}; \
+  }; \
+  extern constexpr char name##Key[] = #key; \
+  ncclParam<type> name{name##Key, default, parser, #type, flags, desc};
 
 // Usage: USE_NCCL_PARAM(name, type)
 // name and type must match the DEFINE_NCCL_PARAM.
-#define USE_NCCL_PARAM(name, type) \
-  extern ncclParam<type> name;
+#define USE_NCCL_PARAM(name, type) extern ncclParam<type> name;
 
 // ============================================================================
 // ncclParam Template
@@ -68,16 +68,15 @@ struct ncclParam : public ncclParamInterface {
 
   ~ncclParam() override = default;
 
-  ncclParam(const char* key, T defVal, ncclParamParser<T> parser = {},
-            const char* typeStr = "", uint64_t flags = NCCL_PARAM_FLAG_NONE,
-            const char* desc = "")
-    : info({ncclParamTypeIdOf<T>(), flags, typeStr, key, desc}),
-      defaultValue(defVal), value(defVal), parser(std::move(parser)) {
-      if (!this->parser) {
-        this->parser = ncclParamDefault<T>();
-      }
-      ncclParamRegistry::add(info.key, info, this);
+  ncclParam(const char* key, T defVal, ncclParamParser<T> parser = {}, const char* typeStr = "",
+            uint64_t flags = NCCL_PARAM_FLAG_NONE, const char* desc = "")
+    : info({ncclParamTypeIdOf<T>(), flags, typeStr, key, desc}), defaultValue(defVal), value(defVal),
+      parser(std::move(parser)) {
+    if (!this->parser) {
+      this->parser = ncclParamDefault<T>();
     }
+    ncclParamRegistry::add(info.key, info, this);
+  }
 
   // Prevent copy/move assignment
   ncclParam& operator=(const ncclParam&) = delete;
@@ -151,7 +150,9 @@ private:
 
   // Load value from environment variable via EnvPlugin chain
   void loadValue() {
-    const char* envPluginValue = ncclParamEnvPluginGet(info.key);
+    // Special params with NO_ENVPLUGIN_INIT flag do not try init EnvPlugin
+    bool tryEnvPluginInit = !(info.flags & NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT);
+    const char* envPluginValue = ncclParamEnvPluginGet(info.key, tryEnvPluginInit);
     if (envPluginValue != nullptr) {
       T resolvedValue;
       ncclResult_t resolved = parser.resolve(envPluginValue, resolvedValue);
@@ -183,7 +184,9 @@ inline const char* ncclParam<const char*>::operator()() {
 
 template <>
 inline void ncclParam<const char*>::loadValue() {
-  const char* envPluginValue = ncclParamEnvPluginGet(info.key);
+  // Special params with NO_ENVPLUGIN_INIT flag do not try init EnvPlugin
+  bool tryEnvPluginInit = !(info.flags & NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT);
+  const char* envPluginValue = ncclParamEnvPluginGet(info.key, tryEnvPluginInit);
   if (envPluginValue != nullptr) {
     cstrData = envPluginValue;
     value = cstrData.c_str();

@@ -8,6 +8,7 @@ include ../makefiles/common.mk
 include ../makefiles/version.mk
 
 ##### src files
+# The only public headers are nccl.h and nccl_device.h. Any changes to this list should be discussed widely.
 INCEXPORTS  := nccl.h nccl_device.h \
 	$(patsubst include/%,%,$(wildcard include/nccl_device/*.h include/nccl_device/*/*.h include/nccl_device/*/*/*.h))
 
@@ -19,7 +20,7 @@ endif
 
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
-	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
+	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
 	$(wildcard graph/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(TRANSPORT_CC) \
@@ -29,6 +30,7 @@ LIBSRCFILES := \
 	$(wildcard plugin/*.cc) \
 	$(wildcard plugin/net/*.cc) \
 	$(wildcard plugin/gin/*.cc) \
+	$(wildcard plugin/rma/*.cc) \
 	$(wildcard plugin/tuner/*.cc) \
 	$(wildcard plugin/profiler/*.cc) \
 	$(wildcard plugin/env/*.cc) \
@@ -43,9 +45,9 @@ BINSRCFILES := ras/client.cc
 PARAMBINSRCFILES := param/ncclparam.cc
 
 ifeq ($(NCCL_OS_LINUX), 1)
-	LIBSRCFILES += os/linux.cc os/linux_ipcsocket.cc
+	LIBSRCFILES += os/linux.cc os/linux_ipcsocket.cc os/linux_socket_pair.cc
 else ifeq ($(NCCL_OS_WINDOWS), 1)
-	LIBSRCFILES += os/windows.cc os/windows_ipcsocket.cc
+	LIBSRCFILES += os/windows.cc os/windows_ipcsocket.cc os/windows_socket_pair.cc
 endif
 
 ifneq ($(NVTX), 0)
@@ -200,6 +202,11 @@ $(INCDIR)/nccl_device/gin/gdaki/%.h: include/nccl_device/gin/gdaki/%.h
 	mkdir -p $(INCDIR)/nccl_device/gin/gdaki
 	install -m 644 $< $@
 
+$(INCDIR)/nccl_device/gin/gpi/%.h: include/nccl_device/gin/gpi/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)/nccl_device/gin/gpi
+	install -m 644 $< $@
+
 $(INCDIR)/nccl_device/gin/proxy/%.h: include/nccl_device/gin/proxy/%.h
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(INCDIR)/nccl_device/gin/proxy
@@ -228,8 +235,8 @@ $(PKGDIR)/%.pc : %.pc
 $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
-	@$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -M $< > $(@:%.o=%.d.tmp)
+	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include -Iinclude -I$(INCPLUGIN) $(CXXFLAGS) -I$(DOCA_HOME)/include -c $< -o $@
+	@$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include -Iinclude -I$(INCPLUGIN) $(CXXFLAGS) -I$(DOCA_HOME)/include -MM $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)
@@ -241,7 +248,7 @@ $(DOCA_OBJDIR)/%.o : $(DOCA_HOME)/src/%.cpp
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
 	$(CXX) -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -c $< -o $@
-	@$(CXX) -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -M $< > $(@:%.o=%.d.tmp)
+	@$(CXX) -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -MM $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)

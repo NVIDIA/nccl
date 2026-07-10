@@ -16,23 +16,20 @@
    (order) == std::memory_order_release ? __ATOMIC_RELEASE : \
    (order) == std::memory_order_acq_rel ? __ATOMIC_ACQ_REL : \
    (order) == std::memory_order_seq_cst ? __ATOMIC_SEQ_CST : \
-   __ATOMIC_SEQ_CST)
+                                          __ATOMIC_SEQ_CST)
 
-#define COMPILER_ATOMIC_LOAD(ptr, order) \
-  __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
-#define COMPILER_ATOMIC_LOAD_DEST(ptr, dest, order) do { \
-  __atomic_load((ptr), (dest), NCCL_CONVERT_ORDER(order)); \
-} while(0)
-#define COMPILER_ATOMIC_STORE(ptr, val, order) \
-  __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
-#define COMPILER_ATOMIC_LOAD_32(ptr, order) \
-  __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
-#define COMPILER_ATOMIC_STORE_32(ptr, val, order) \
-  __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
-#define COMPILER_ATOMIC_EXCHANGE(ptr, val, order) \
-  __atomic_exchange_n((ptr), (val), NCCL_CONVERT_ORDER(order))
+#define COMPILER_ATOMIC_LOAD(ptr, order) __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
+#define COMPILER_ATOMIC_LOAD_DEST(ptr, dest, order) \
+  do { \
+    __atomic_load((ptr), (dest), NCCL_CONVERT_ORDER(order)); \
+  } while (0)
+#define COMPILER_ATOMIC_STORE(ptr, val, order) __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
+#define COMPILER_ATOMIC_LOAD_32(ptr, order) __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
+#define COMPILER_ATOMIC_STORE_32(ptr, val, order) __atomic_store_n((ptr), (val), NCCL_CONVERT_ORDER(order))
+#define COMPILER_ATOMIC_EXCHANGE(ptr, val, order) __atomic_exchange_n((ptr), (val), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_COMPARE_EXCHANGE(ptr, expected, desired, success_order, failure_order) \
-  __atomic_compare_exchange_n((ptr), (expected), (desired), true, NCCL_CONVERT_ORDER(success_order), NCCL_CONVERT_ORDER(failure_order))
+  __atomic_compare_exchange_n((ptr), (expected), (desired), true, NCCL_CONVERT_ORDER(success_order), \
+                              NCCL_CONVERT_ORDER(failure_order))
 
 #define COMPILER_ATOMIC_FETCH_ADD(ptr, val, order) __atomic_fetch_add((ptr), (val), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_ADD_FETCH(ptr, val, order) __atomic_add_fetch((ptr), (val), NCCL_CONVERT_ORDER(order))

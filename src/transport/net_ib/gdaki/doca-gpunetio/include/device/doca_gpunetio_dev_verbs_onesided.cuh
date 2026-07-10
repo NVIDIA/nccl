@@ -64,7 +64,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_thread(
 
     base_wqe_idx =
         doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
-#pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
@@ -296,7 +296,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_thread(
     base_wqe_idx =
         doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks + 1, code_opt);
 
-#pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
@@ -575,7 +575,7 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_thread(
         base_wqe_idx =
             doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
 
-#pragma unroll 1
+    NVCC_PRAGMA_UNROLL_DISABLED
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE

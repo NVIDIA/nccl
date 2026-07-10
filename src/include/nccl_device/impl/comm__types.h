@@ -37,7 +37,9 @@ struct ncclDevComm {
   ncclDevCommWindowTable_t windowTable;
 
   ncclWindow_t resourceWindow;
-  struct ncclResourceWindow_vidmem resourceWindow_inlined;
+  ncclResourceWindow_vidmem_t resourceWindow_inlined;
+
+  ncclGinBarrierHandle_t hybridWorldGinBarrier;
 
   ncclMultimemHandle_t lsaMultimem;
   ncclLsaBarrierHandle_t lsaBarrier;
@@ -50,7 +52,9 @@ struct ncclDevComm {
   int ginCounterCount;
   uint64_t* ginSignalShadows;
   uint32_t ginContextCount;
-  bool ginIsRailed; // Whether the GIN connections are railed
+  bool ginConnectionsRailed;
+  bool ginStrongLegacySignals;
+  bool ginContextsRailed;
 
   // FT related
   uint32_t* abortFlag;

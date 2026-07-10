@@ -13,6 +13,7 @@
 enum ncclPluginType {
   ncclPluginTypeNet,
   ncclPluginTypeGin,
+  ncclPluginTypeRma,
   ncclPluginTypeTuner,
   ncclPluginTypeProfiler,
   ncclPluginTypeEnv,
@@ -20,12 +21,15 @@ enum ncclPluginType {
 
 void* ncclOpenNetPluginLib(const char* name);
 void* ncclOpenGinPluginLib(const char* name);
+void* ncclOpenRmaPluginLib(const char* name);
 void* ncclOpenTunerPluginLib(const char* name);
 void* ncclOpenProfilerPluginLib(const char* name);
 void* ncclOpenEnvPluginLib(const char* name);
 void* ncclGetNetPluginLib(enum ncclPluginType type);
+void* ncclGetGinPluginLib(enum ncclPluginType type);
 ncclResult_t ncclClosePluginLib(void* handle, enum ncclPluginType type);
 
 extern char* ncclPluginLibPaths[];
+const char* ncclGetPluginLibName(enum ncclPluginType type);
 
 #endif

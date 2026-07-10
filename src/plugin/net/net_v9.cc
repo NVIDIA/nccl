@@ -50,30 +50,27 @@ static ncclResult_t ncclNet_getProperties(int dev, ncclNetProperties_t* props) {
 }
 
 static ncclResult_t ncclNet_isend(void* sendComm, void* data, size_t size, int tag, void* mhandle,
-    void* pHandle __attribute__((unused)),
-    void** request) {
+                                  void* pHandle __attribute__((unused)), void** request) {
   return ncclNet_v9->isend(sendComm, data, size, tag, mhandle, request);
 }
 
 static ncclResult_t ncclNet_irecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles,
-    void** pHandles __attribute__((unused)),
-    void** request) {
+                                  void** pHandles __attribute__((unused)), void** request) {
   return ncclNet_v9->irecv(recvComm, n, data, sizes, tags, mhandles, request);
 }
 
-static ncclResult_t ncclNet_listen(void* ctx __attribute__((unused)),
-    int dev, void* handle, void** listenComm) {
+static ncclResult_t ncclNet_listen(void* ctx __attribute__((unused)), int dev, void* handle, void** listenComm) {
   return ncclNet_v9->listen(dev, handle, listenComm);
 }
 
-static ncclResult_t ncclNet_connect(void* ctx __attribute__((unused)),
-    int dev,
-    void* handle, void** sendComm, ncclNetDeviceHandle_t** sendDevComm) {
+static ncclResult_t ncclNet_connect(void* ctx __attribute__((unused)), int dev, void* handle, void** sendComm,
+                                    ncclNetDeviceHandle_t** sendDevComm) {
   return ncclNet_v9->connect(dev, handle, sendComm, sendDevComm);
 }
 
 static ncclResult_t ncclNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
-  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to NCCL_NET_MAX_DEVS_PER_NIC_V11 for v9 plugins.
+  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to
+  // NCCL_NET_MAX_DEVS_PER_NIC_V11 for v9 plugins.
   return ncclNet_v9->makeVDevice(d, (ncclNetVDeviceProps_v9_t*)props);
 }
 
@@ -108,29 +105,29 @@ static ncclResult_t ncclCollNet_getProperties(int dev, ncclNetProperties_t* prop
   return ncclSuccess;
 }
 
-static ncclResult_t ncclCollNet_listen(void* ctx __attribute__((unused)),
-    int d, void* handle, void** listenComm) {
+static ncclResult_t ncclCollNet_listen(void* ctx __attribute__((unused)), int d, void* handle, void** listenComm) {
   return ncclCollNet_v9->listen(d, handle, listenComm);
 }
 
 static ncclResult_t ncclCollNet_iallgather(void* collComm, void* sendData, int nRecvParts, ncclNetSGE_t* recvParts,
-                             size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
-                             void* sendMhandle, void** request) {
+                                           size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
+                                           void* sendMhandle, void** request) {
   return ncclCollNet_v9->iallgather(collComm, sendData, nRecvParts, (ncclNetSGE_v9_t*)recvParts, bytesPerRank,
-                             windowOffset, windowBytes, sendMhandle, request);
+                                    windowOffset, windowBytes, sendMhandle, request);
 }
 
 static ncclResult_t ncclCollNet_ireducescatter(void* collComm, int nSendParts, ncclNetSGE_t* sendParts, void* recvData,
-                                 size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
-                                 ncclDataType_t dataType, ncclRedOp_t redOp,
-                                 void* recvMhandle, void** request) {
+                                               size_t bytesPerRank, size_t windowOffset, size_t windowBytes,
+                                               ncclDataType_t dataType, ncclRedOp_t redOp, void* recvMhandle,
+                                               void** request) {
   return ncclCollNet_v9->ireducescatter(collComm, nSendParts, (ncclNetSGE_v9_t*)sendParts, recvData, bytesPerRank,
-                                 windowOffset, windowBytes, dataType, redOp, recvMhandle, request);
+                                        windowOffset, windowBytes, dataType, redOp, recvMhandle, request);
 }
 
 static ncclResult_t ncclCollNet_makeVDevice(int* d, ncclNetVDeviceProps_t* props) {
-  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to NCCL_NET_MAX_DEVS_PER_NIC_V11 for v9 plugins.
-  return ncclCollNet_v9->makeVDevice(d, (ncclNetVDeviceProps_v9_t *)props);
+  // Safe cast: devs[] is at the end of the struct and NCCL limits ndevs to
+  // NCCL_NET_MAX_DEVS_PER_NIC_V11 for v9 plugins.
+  return ncclCollNet_v9->makeVDevice(d, (ncclNetVDeviceProps_v9_t*)props);
 }
 
 static ncclResult_t ncclCollNet_finalize(void* ctx __attribute__((unused))) {
@@ -138,10 +135,9 @@ static ncclResult_t ncclCollNet_finalize(void* ctx __attribute__((unused))) {
   return ncclSuccess;
 }
 
-static ncclResult_t ncclNet_init(void** ctx __attribute__((unused)),
-    uint64_t commId __attribute__((unused)),
-    ncclNetCommConfig_t* config __attribute__((unused)),
-    ncclDebugLogger_t logfn, ncclProfilerCallback_t proffn) {
+static ncclResult_t ncclNet_init(void** ctx __attribute__((unused)), uint64_t commId __attribute__((unused)),
+                                 ncclNetCommConfig_t* config __attribute__((unused)), ncclDebugLogger_t logfn,
+                                 ncclProfilerCallback_t proffn) {
   // before ncclNet_v11 the net plugin was initialized only once. With ncclNet_v11 this is no longer the case.
   // The compat layer preserves the ncclNet_v9 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
@@ -177,16 +173,16 @@ ncclNet_t* getNcclNet_v9(void* lib) {
   if (ncclNet_v9) {
     ncclNet.name = ncclNet_v9->name;
     ncclNet.init = ncclNet_init;
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded net plugin %s (v9)", ncclNet_v9->name);
+    INFO(NCCL_INIT | NCCL_NET, "NET/Plugin: Loaded net plugin %s (v9)", ncclNet_v9->name);
     return &ncclNet;
   }
   return nullptr;
 }
 
-static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)),
-    uint64_t commId __attribute__((unused)),
-    ncclDebugLogger_t logfn) {
-  // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is no longer the case.
+static ncclResult_t ncclCollNet_init(void** ctx __attribute__((unused)), uint64_t commId __attribute__((unused)),
+                                     ncclDebugLogger_t logfn) {
+  // before ncclCollNet_v11 the collnet plugin was initialized only once. With ncclCollNet_v11 this is
+  // no longer the case.
   // The compat layer preserves the ncclCollNet_v9 behavior using a refCount to track the number of times the plugin
   // is initialized, and avoid initializing it multiple times.
   if (refCount[COLLNET_INDEX]) goto exit;
@@ -218,7 +214,7 @@ ncclCollNet_t* getNcclCollNet_v9(void* lib) {
   if (ncclCollNet_v9) {
     ncclCollNet.name = ncclCollNet_v9->name;
     ncclCollNet.init = ncclCollNet_init;
-    INFO(NCCL_INIT|NCCL_NET, "NET/Plugin: Loaded collnet plugin %s (v9)", ncclCollNet_v9->name);
+    INFO(NCCL_INIT | NCCL_NET, "NET/Plugin: Loaded collnet plugin %s (v9)", ncclCollNet_v9->name);
     return &ncclCollNet;
   }
   return nullptr;

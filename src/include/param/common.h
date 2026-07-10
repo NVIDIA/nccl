@@ -20,11 +20,14 @@ extern "C" {
 #endif
 
 typedef enum {
-  NCCL_PARAM_FLAG_NONE       = 0,
-  NCCL_PARAM_FLAG_PUBLISHED  = 1ULL << 0, // public parameters in NCCL doc
+  NCCL_PARAM_FLAG_NONE = 0,
+  NCCL_PARAM_FLAG_PUBLISHED = 1ULL << 0, // public parameters in NCCL doc
   NCCL_PARAM_FLAG_DEPRECATED = 1ULL << 1,
-  NCCL_PARAM_FLAG_CACHED     = 1ULL << 2, // value cached, subsequent change has no effect
-  NCCL_PARAM_FLAG_UNUSED     = 1ULL << 3 // parameter has no effect
+  NCCL_PARAM_FLAG_CACHED = 1ULL << 2, // value cached, subsequent change has no effect
+  NCCL_PARAM_FLAG_UNUSED = 1ULL << 3, // parameter has no effect
+  NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT = 1ULL << 4 // special params that do not attempt to init
+                                                // the EnvPlugin if it has not been initialized.
+                                                // It will fallback to std::get_env().
 } ncclParamFlag_t;
 
 // Type IDs for param info. non-integers, non-boolean and non-const-char* is mapped to RAW type.

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.30.0. Do not modify it directly.
+# This code was automatically generated with version 2.30.4. Do not modify it directly.
 
 
 from libc.stdint cimport int64_t, uint8_t, uint32_t, uint64_t
@@ -22,7 +22,8 @@ ctypedef enum ncclResult_t "ncclResult_t":
     ncclInvalidUsage "ncclInvalidUsage" = 5
     ncclRemoteError "ncclRemoteError" = 6
     ncclInProgress "ncclInProgress" = 7
-    ncclNumResults "ncclNumResults" = 8
+    ncclTimeout "ncclTimeout" = 8
+    ncclNumResults "ncclNumResults" = 9
     _NCCLRESULT_T_INTERNAL_LOADING_ERROR "_NCCLRESULT_T_INTERNAL_LOADING_ERROR" = -42
 
 ctypedef enum ncclCommMemStat_t "ncclCommMemStat_t":
@@ -89,12 +90,19 @@ cdef extern from *:
 
 
 ctypedef uint32_t ncclDevResourceHandle_t 'ncclDevResourceHandle_t'
+
 ctypedef uint32_t ncclGinSignal_t 'ncclGinSignal_t'
+
 ctypedef uint32_t ncclGinCounter_t 'ncclGinCounter_t'
+
 ctypedef void* ncclComm_t 'ncclComm_t'
+
 ctypedef void* ncclWindow_t 'ncclWindow_t'
+
+ctypedef void* ncclParamHandle_t 'ncclParamHandle_t'
+
 ctypedef void* ncclDevCommWindowTable_t 'ncclDevCommWindowTable_t'
-ctypedef void* ncclGinWindow_t 'ncclGinWindow_t'
+
 ctypedef struct ncclUniqueId 'ncclUniqueId':
     char internal[128]
 
@@ -155,6 +163,14 @@ ctypedef struct ncclTeam_t 'ncclTeam_t':
 ctypedef struct ncclMultimemHandle_t 'ncclMultimemHandle_t':
     void* mcBasePtr
 
+ctypedef struct ncclResourceWindow_vidmem_t 'ncclResourceWindow_vidmem_t':
+    char reserved1[8]
+    char* lsaFlatBase
+    char reserved2[8]
+    uint32_t stride4G
+    uint32_t mcOffset4K
+    char reserved3[40]
+
 ctypedef struct ncclLsaBarrierHandle_t 'ncclLsaBarrierHandle_t':
     ncclDevResourceHandle_t bufHandle
     int nBarriers
@@ -173,16 +189,6 @@ ctypedef struct ncclDevResourceRequirements_t 'ncclDevResourceRequirements_t':
     ncclGinSignal_t* outGinSignalStart
     ncclGinCounter_t* outGinCounterStart
 
-ctypedef struct ncclWindow_vidmem_t 'ncclWindow_vidmem_t':
-    void* winHost
-    char* lsaFlatBase
-    int lsaRank
-    int worldRank
-    uint32_t stride4G
-    uint32_t mcOffset4K
-    uint32_t ginOffset4K
-    ncclGinWindow_t ginWins[4]
-
 ctypedef struct ncclTeamRequirements_t 'ncclTeamRequirements_t':
     void* next
     ncclTeam_t team
@@ -190,6 +196,8 @@ ctypedef struct ncclTeamRequirements_t 'ncclTeamRequirements_t':
     ncclMultimemHandle_t* outMultimemHandle
 
 ctypedef struct ncclDevComm_t 'ncclDevComm_t':
+    unsigned int magic
+    unsigned int version
     int rank
     int nRanks
     uint32_t nRanks_rcp32
@@ -198,20 +206,17 @@ ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     uint32_t lsaSize_rcp32
     ncclDevCommWindowTable_t windowTable
     ncclWindow_t resourceWindow
-    ncclWindow_vidmem_t resourceWindow_inlined
+    ncclResourceWindow_vidmem_t resourceWindow_inlined
     ncclMultimemHandle_t lsaMultimem
     ncclLsaBarrierHandle_t lsaBarrier
     ncclGinBarrierHandle_t railGinBarrier
     uint8_t ginConnectionCount
     uint8_t ginNetDeviceTypes[4]
     void* ginHandles[4]
-    uint32_t ginSignalBase
     int ginSignalCount
-    uint32_t ginCounterBase
     int ginCounterCount
     uint64_t* ginSignalShadows
     uint32_t ginContextCount
-    uint32_t ginContextBase
     uint8_t ginIsRailed
     uint32_t* abortFlag
     ncclLsaBarrierHandle_t hybridLsaBarrier
@@ -237,8 +242,8 @@ ctypedef struct ncclDevCommRequirements_t 'ncclDevCommRequirements_t':
     ncclGinConnectionType_t ginConnectionType
     uint8_t ginExclusiveContexts
     int ginQueueDepth
+    int ginTrafficClass
     int worldGinBarrierCount
-
 
 
 ###############################################################################

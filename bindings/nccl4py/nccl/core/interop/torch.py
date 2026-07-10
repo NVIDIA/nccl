@@ -3,8 +3,7 @@
 #
 # See LICENSE.txt for more license information
 
-"""
-PyTorch interoperability for NCCL4Py.
+"""PyTorch interoperability for NCCL4Py.
 
 This module provides utilities for creating PyTorch tensors backed by NCCL-allocated
 memory, enabling zero-copy integration between NCCL operations and PyTorch workflows.
@@ -16,20 +15,7 @@ import numpy as np
 from typing import Literal
 
 from nccl.core.buffer import mem_alloc
-from nccl.core.typing import (
-    NcclInvalid,
-    NcclDataType,
-    FLOAT16,
-    FLOAT32,
-    FLOAT64,
-    INT8,
-    INT32,
-    INT64,
-    UINT8,
-    BFLOAT16,
-    FLOAT8E4M3,
-    FLOAT8E5M2,
-)
+from nccl.core.typing import NcclInvalid, NcclDataType
 
 __all__ = ["empty", "resolve_tensor"]
 
@@ -43,101 +29,70 @@ except ImportError:
 
 
 def _to_nccl_dtype(torch_dtype) -> NcclDataType:
-    """
-    Converts PyTorch dtype to NcclDataType.
+    """Converts a PyTorch dtype to NcclDataType.
+
+    torch.bool is mapped to UINT8 for convenience. float8_e4m3fn and
+    float8_e5m2 are supported on PyTorch 2.1+; uint32 and uint64 on
+    PyTorch 2.3+.
 
     Args:
-        - torch_dtype (torch.dtype): PyTorch data type.
+        torch_dtype: PyTorch data type to convert.
 
     Returns:
-        ``NcclDataType``: Corresponding NCCL data type (global constant).
+        Corresponding NcclDataType global constant.
 
     Raises:
-        - ``ModuleNotFoundError``: If PyTorch is not installed.
-        - ``NcclInvalid``: If torch_dtype has no NCCL equivalent.
+        ModuleNotFoundError: If PyTorch is not installed.
+        NcclInvalid: If torch_dtype has no NCCL equivalent (complex,
+            int16/short, or quantized types are explicitly unsupported).
     """
     if not _torch_enabled:
         raise ModuleNotFoundError("PyTorch is not installed")
 
     _torch_to_nccl = {
-        # Float types (all NCCL-supported)
-        torch.float16: FLOAT16,
-        torch.half: FLOAT16,  # Alias
-        torch.float32: FLOAT32,
-        torch.float: FLOAT32,  # Alias
-        torch.float64: FLOAT64,
-        torch.double: FLOAT64,  # Alias
-        torch.bfloat16: BFLOAT16,
-        # Signed integer types
-        torch.int8: INT8,
-        torch.int32: INT32,
-        torch.int64: INT64,
-        torch.long: INT64,  # Alias
-        # Unsigned types
-        torch.uint8: UINT8,
-        torch.bool: UINT8,  # Map bool to uint8 for convenience
+        torch.float16: NcclDataType.FLOAT16,
+        torch.float32: NcclDataType.FLOAT32,
+        torch.float64: NcclDataType.FLOAT64,
+        torch.bfloat16: NcclDataType.BFLOAT16,
+        torch.int8: NcclDataType.INT8,
+        torch.int32: NcclDataType.INT32,
+        torch.int64: NcclDataType.INT64,
+        torch.uint8: NcclDataType.UINT8,
+        torch.bool: NcclDataType.UINT8,  # NCCL has no bool; map to its natural byte-width.
     }
-
-    # Add float8 types if available (PyTorch 2.1+)
+    # PyTorch 2.1+ float8 types.
     if hasattr(torch, "float8_e4m3fn"):
-        _torch_to_nccl[torch.float8_e4m3fn] = FLOAT8E4M3
+        _torch_to_nccl[torch.float8_e4m3fn] = NcclDataType.FLOAT8E4M3
     if hasattr(torch, "float8_e5m2"):
-        _torch_to_nccl[torch.float8_e5m2] = FLOAT8E5M2
+        _torch_to_nccl[torch.float8_e5m2] = NcclDataType.FLOAT8E5M2
+    # PyTorch 2.3+ unsigned ints.
+    if hasattr(torch, "uint32"):
+        _torch_to_nccl[torch.uint32] = NcclDataType.UINT32
+    if hasattr(torch, "uint64"):
+        _torch_to_nccl[torch.uint64] = NcclDataType.UINT64
 
-    # Explicitly unsupported PyTorch dtypes (no NCCL equivalent)
-    _unsupported_dtypes = set()
-
-    # Integer types not in NCCL
-    if hasattr(torch, "int16"):
-        _unsupported_dtypes.add(torch.int16)
-    if hasattr(torch, "short"):
-        _unsupported_dtypes.add(torch.short)
-
-    # Complex types (NCCL doesn't support)
-    if hasattr(torch, "complex64"):
-        _unsupported_dtypes.add(torch.complex64)
-        _unsupported_dtypes.add(torch.cfloat)
-    if hasattr(torch, "complex128"):
-        _unsupported_dtypes.add(torch.complex128)
-        _unsupported_dtypes.add(torch.cdouble)
-
-    # Quantized types (NCCL doesn't support)
-    for qtype in ["qint8", "quint8", "qint32", "quint4x2", "quint2x4"]:
-        if hasattr(torch, qtype):
-            _unsupported_dtypes.add(getattr(torch, qtype))
-
-    # Check if dtype is explicitly unsupported
-    if torch_dtype in _unsupported_dtypes:
-        raise NcclInvalid(
-            f"Unsupported data type: torch dtype {torch_dtype} has no NCCL equivalent. "
-            f"NCCL does not support complex, int16, or quantized types."
-        )
-
-    # Check if dtype is supported
-    if torch_dtype in _torch_to_nccl:
+    try:
         return _torch_to_nccl[torch_dtype]
-    else:
-        # Unknown dtype - list what we do support
-        supported_list = [str(dt) for dt in sorted(_torch_to_nccl.keys(), key=str)]
+    except KeyError:
         raise NcclInvalid(
-            f"Unknown torch dtype {torch_dtype}. "
-            f"Supported types: {', '.join(supported_list[:12])}..."
-        )
+            f"Unsupported torch dtype {torch_dtype} has no NCCL equivalent. "
+            f"NCCL does not support complex, int16, or quantized types."
+        ) from None
 
 
 def _parse_device(device: torch.device | int | str | None) -> int:
-    """
-    Parses device specification into device index.
+    """Parses a device specification into a CUDA device index.
 
     Args:
-        - device (torch.device | int | str, optional): Device specification.
+        device: Device specification (torch.device, int, or str), or
+            ``None`` to use the current CUDA device.
 
     Returns:
-        ``int``: CUDA device index.
+        CUDA device index.
 
     Raises:
-        - ``ModuleNotFoundError``: If PyTorch is not installed.
-        - ``NcclInvalid``: If device is not a CUDA device.
+        ModuleNotFoundError: If PyTorch is not installed.
+        NcclInvalid: If device does not refer to a CUDA device.
     """
     if not _torch_enabled:
         raise ModuleNotFoundError("PyTorch is not installed")
@@ -162,20 +117,19 @@ def _parse_device(device: torch.device | int | str | None) -> int:
 def _allocate_nccl_tensor(
     shape: tuple[int, ...], dtype: torch.dtype, device: int, morder: str
 ) -> torch.Tensor:
-    """
-    Allocates NCCL-backed tensor with specified parameters.
+    """Allocates an NCCL-backed PyTorch tensor.
 
     Args:
-        - shape (tuple[int, ...]): Shape of tensor.
-        - dtype (torch.dtype): Data type.
-        - device (int): CUDA device index.
-        - morder (str): Memory order ("C" or "F").
+        shape: Shape of the tensor.
+        dtype: PyTorch data type.
+        device: CUDA device index.
+        morder: Memory order, 'C' (row-major) or 'F' (column-major).
 
     Returns:
-        ``torch.Tensor``: Allocated tensor with NCCL-backed memory.
+        Allocated tensor backed by NCCL-managed memory.
 
     Raises:
-        - ``ModuleNotFoundError``: If PyTorch is not installed.
+        ModuleNotFoundError: If PyTorch is not installed.
     """
     if not _torch_enabled:
         raise ModuleNotFoundError("PyTorch is not installed")
@@ -209,30 +163,37 @@ def empty(
     device: torch.device | int | str | None = None,
     morder: Literal["C", "F"] = "C",
 ) -> torch.Tensor:
-    """
-    Creates an uninitialized PyTorch tensor backed by NCCL-allocated memory.
+    """Creates an uninitialized PyTorch tensor backed by NCCL-allocated memory.
 
-    Returns a tensor filled with uninitialized data using NCCL's memory allocator.
-    This provides a PyTorch-compatible interface while using NCCL's memory allocator
-    for efficient GPU memory management in distributed scenarios.
+    Returns a tensor filled with uninitialized data using NCCL's memory
+    allocator. This provides a PyTorch-compatible interface while using NCCL's
+    memory allocator for efficient GPU memory management in distributed
+    scenarios. Unlike torch.empty, the underlying memory is allocated through
+    NCCL.
+
+    Memory is automatically freed when the tensor is garbage collected; no
+    explicit free call is required. For zero-copy optimization, register the
+    tensor using :py:meth:`~nccl.core.Communicator.register_buffer` or
+    :py:meth:`~nccl.core.Communicator.register_window`.
 
     Args:
-        - *size (int...): A sequence of integers defining the shape of the output tensor. Can be a variable number of arguments or a collection like a list or tuple.
-        - dtype (torch.dtype, optional): The desired data type of returned tensor. If None, uses global default (see ``torch.set_default_dtype()``). Defaults to None.
-        - device (torch.device | int | str, optional): The device of the constructed tensor. If None, uses the current CUDA device. Defaults to None.
-        - morder (Literal["C", "F"], optional): Memory layout - "C" for row-major (C-style), "F" for column-major (Fortran-style). Defaults to "C".
+        *size: A sequence of integers defining the shape of the output
+            tensor. Can be a variable number of arguments or a single
+            list/tuple.
+        dtype: Desired data type of the tensor. If ``None``, uses
+            torch.get_default_dtype(). Defaults to ``None``.
+        device: Device of the tensor. If ``None``, uses the current CUDA
+            device. Defaults to ``None``.
+        morder: Memory layout. 'C' for row-major (C-style), 'F' for
+            column-major (Fortran-style). Defaults to 'C'.
 
     Returns:
-        ``torch.Tensor``: An uninitialized PyTorch tensor backed by NCCL-allocated memory.
+        An uninitialized PyTorch tensor backed by NCCL-allocated memory.
 
     Raises:
-        - ``NcclInvalid``: If morder is invalid (must be "C" or "F"), or device is not a CUDA device.
-        - ``ModuleNotFoundError``: If PyTorch is not installed.
-
-    Notes:
-        - Unlike ``torch.empty()``, this allocates memory using NCCL's memory allocator.
-        - For zero-copy optimization, register using ``Communicator.register_buffer()`` or ``Communicator.register_window()``.
-        - Memory is automatically freed when the tensor is garbage collected. No explicit free call is required.
+        NcclInvalid: If morder is not 'C' or 'F', or device is not a CUDA
+            device.
+        ModuleNotFoundError: If PyTorch is not installed.
     """
     if not _torch_enabled:
         raise ModuleNotFoundError("PyTorch is not installed")
@@ -261,14 +222,19 @@ def empty(
 
 
 def resolve_tensor(tensor: torch.Tensor) -> tuple[int, int, NcclDataType, int]:
-    """
-    Resolves a PyTorch tensor to a tuple of (ptr, count, dtype, device_id).
+    """Resolves a PyTorch tensor to its NCCL buffer descriptor.
 
     Args:
-        - tensor (torch.Tensor): PyTorch tensor to resolve.
+        tensor: PyTorch tensor to resolve.
 
     Returns:
-        ``tuple[int, int, NcclDataType, int]``: Tuple of (ptr, count, dtype, device_id).
+        Tuple of (ptr, count, dtype, device_id): device pointer, element
+        count, NCCL data type, and CUDA device ID.
+
+    Raises:
+        ModuleNotFoundError: If PyTorch is not installed.
+        NcclInvalid: If tensor is not a PyTorch tensor or its dtype has no
+            NCCL equivalent.
     """
     if not _torch_enabled:
         raise ModuleNotFoundError("PyTorch is not installed")

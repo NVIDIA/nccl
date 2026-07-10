@@ -32,16 +32,10 @@ verification.
 *Addresses* : Most commonly used collective algorithms
 *Dependencies* : A functional NCCL library and its dependencies
 
-### Why `ncclCommInitAll` here?
-For single-node collective examples we use `ncclCommInitAll` as it creates a
-clique of communicators in one call.
-
-```c
-// Initialize all GPUs in one call
-ncclComm_t* comms;
-int num_gpus;
-NCCLCHECK(ncclCommInitAll(comms, num_gpus, NULL));
-```
+### Communicator initialization
+For single-node examples, communicators for all GPUs are created in one call:
+- **C**: `ncclCommInitAll(comms, num_gpus, NULL)`
+- **Python**: `nccl.Communicator.init_all()`
 
 A more advanced setup using MPI to initialize communicators across multiple
 nodes is shown in
@@ -58,9 +52,12 @@ make 01_allreduce
 ### **Individual Examples**
 ```shell
 # Build and run AllReduce
-cd 01_allreduce && make
+cd 01_allreduce/c && make
 ./allreduce
 ```
+
+### **Python**
+See the `python/README.md` in each example directory.
 
 ## References
 - [NCCL User Guide:

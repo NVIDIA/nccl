@@ -15,26 +15,15 @@
 
 #if defined(NCCL_OS_LINUX)
 #ifdef PROFAPI
-#define NCCL_API(ret, func, args...)        \
-    extern "C"                              \
-    __attribute__ ((visibility("default"))) \
-    __attribute__ ((alias(#func)))          \
-    ret p##func (args);                     \
-    extern "C"                              \
-    __attribute__ ((visibility("default"))) \
-    __attribute__ ((weak))                  \
-    ret func(args)
+#define NCCL_API(ret, func, args...) \
+  extern "C" __attribute__((visibility("default"))) __attribute__((alias(#func))) ret p##func(args); \
+  extern "C" __attribute__((visibility("default"))) __attribute__((weak)) ret func(args)
 #else
-#define NCCL_API(ret, func, args...)        \
-    extern "C"                              \
-    __attribute__ ((visibility("default"))) \
-    ret func(args)
+#define NCCL_API(ret, func, args...) extern "C" __attribute__((visibility("default"))) ret func(args)
 #endif // end PROFAPI
 #else
 /* Windows and other non-Linux: use standard variadic macro (no visibility attribute) */
-#define NCCL_API(ret, func, ...)            \
-    extern "C"                              \
-    ret func(__VA_ARGS__)
+#define NCCL_API(ret, func, ...) extern "C" ret func(__VA_ARGS__)
 #endif // end NCCL_OS_LINUX
 
 #include "debug.h"

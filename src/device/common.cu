@@ -13,7 +13,7 @@
 
 __shared__ ncclShmemData ncclShmem;
 #if __CUDA_ARCH__ < 700
-  __shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize()*(NCCL_MAX_NTHREADS/WARP_SIZE)/sizeof(ulong2)];
+__shared__ ulong2 ncclShmemPerWarp[ncclShmemScratchWarpSize() * (NCCL_MAX_NTHREADS / WARP_SIZE) / sizeof(ulong2)];
 #endif
 
 struct RunWorkNop {

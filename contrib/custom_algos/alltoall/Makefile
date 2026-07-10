@@ -1,0 +1,58 @@
+# custom_algos: LSA AllToAll custom kernel sample
+#
+# Build with:
+#   make -C contrib/custom_algos/alltoall MPI=1
+#
+# Requires NCCL to be built first:
+#   make src.build
+#
+# Optional variables:
+#   MPI_HOME    — path to MPI installation (default: detected from mpicc)
+#   CUDA_HOME   — path to CUDA installation (default: /usr/local/cuda)
+#   DEBUG=1     — enable debug build (-O0 -G -g)
+
+include ../../../makefiles/common.mk
+
+BUILDDIR  ?= $(abspath ../../../build)
+DST_DIR   := $(BUILDDIR)/test/custom_algos/alltoall
+
+# Include paths:
+#   - NCCL public headers (nccl.h, nccl_device.h, etc.) from build/include
+#   - NCCL device API inline implementations from build/include/nccl_device
+#     and src/include (needed transitively by nccl_device.h)
+#   - Current directory (lsa_simple_alltoall_kernel.cuh)
+INCFLAGS := \
+    -I. \
+    -I$(BUILDDIR)/include \
+    -I$(BUILDDIR)/include/nccl_device \
+    -I../../../src/include
+
+NVCUFLAGS := $(NVCC_GENCODE) $(INCFLAGS) \
+    --expt-relaxed-constexpr \
+    --compiler-options "-fPIC" \
+    -ccbin $(CXX) $(CXXSTD)
+
+.PHONY: all clean
+
+ifeq ($(MPI), 1)
+MPI_HOME    ?= $(shell mpicc --showme:prefix 2>/dev/null || echo /usr/local/mpi)
+MPI_CFLAGS  := -I$(MPI_HOME)/include
+MPI_LDFLAGS := -L$(MPI_HOME)/lib -lmpi
+
+LDFLAGS := -L$(BUILDDIR)/lib -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda
+
+all: $(DST_DIR)/custom_algos
+
+$(DST_DIR)/custom_algos: main.cu lsa_simple_alltoall_kernel.cuh lsa_poison_alltoall_kernel.cuh
+	@mkdir -p $(DST_DIR)
+	@printf "Compiling+linking custom_algos\n"
+	$(NVCC) $(NVCUFLAGS) $(MPI_CFLAGS) $< -o $@ $(LDFLAGS)
+	@printf "Built: $@\n"
+
+else
+all:
+	@echo "Skipping custom_algos (MPI not enabled). Build with: make MPI=1"
+endif
+
+clean:
+	rm -rf $(DST_DIR)

@@ -20,6 +20,13 @@ ncclResult_t ncclRunDiagnostics(ncclComm* comm);
 int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outputSize,
                      bool* outputTruncated = nullptr);
 
+// Same as ncclDiagChildRun, but additionally invokes `onLine` for every output line while the child is
+// still running, so callers can react to child milestones (e.g. a server announcing its listen
+// socket) before the child exits.
+typedef void (*ncclDiagChildLineFn)(const char* line, void* ctx);
+int ncclDiagChildRunStream(const char* command, int timeoutSec, char* output, int outputSize,
+                           ncclDiagChildLineFn onLine, void* onLineCtx, bool* outputTruncated = nullptr);
+
 #endif // NCCL_OS_LINUX
 
 #endif // NCCL_DIAGNOSTICS_H_

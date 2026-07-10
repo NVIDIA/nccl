@@ -17,6 +17,7 @@
 #include "diagnostics/p2p.h"
 #include "graph.h"
 #include "graph/topo.h"
+#include "diagnostics/ib_write_bw.h"
 #include "param.h"
 
 #include <algorithm>
@@ -31,7 +32,12 @@ NCCL_PARAM(Diagnostics, "RUN_DIAGNOSTICS", 0);
 
 #define CHILD_KILL_GRACE_SEC 2 // `timeout -k`: SIGKILL this long after the initial SIGTERM
 
-int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outputSize, bool* outputTruncated) {
+// Runs `command` under `timeout` + `stdbuf -oL` and streams its combined output: the child stays
+// line-buffered, so `onLine` fires for each line as the child emits it (or for partial lines
+// longer than the read buffer), letting callers react to child milestones (e.g. a benchmark
+// server announcing its listen socket) while the child is still running.
+int ncclDiagChildRunStream(const char* command, int timeoutSec, char* output, int outputSize,
+                           ncclDiagChildLineFn onLine, void* onLineCtx, bool* outputTruncated) {
   if (output != nullptr && outputSize > 0) output[0] = '\0';
   if (outputTruncated != nullptr) *outputTruncated = false;
   if (command == nullptr || timeoutSec < 1) return -1;
@@ -46,19 +52,24 @@ int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outp
 
   int used = 0;
   char buffer[4096];
-  size_t got;
-  while ((got = fread(buffer, 1, sizeof(buffer), stream)) > 0) {
+  while (fgets(buffer, sizeof(buffer), stream) != nullptr) {
+    if (onLine != nullptr) onLine(buffer, onLineCtx);
+    int got = static_cast<int>(strlen(buffer));
     int copy = 0;
     if (output != nullptr && used + 1 < outputSize) {
-      copy = std::min(static_cast<int>(got), outputSize - used - 1);
+      copy = std::min(got, outputSize - used - 1);
       memcpy(output + used, buffer, copy);
       used += copy;
       output[used] = '\0';
     }
-    if (outputTruncated != nullptr && copy < (int)got) *outputTruncated = true;
+    if (outputTruncated != nullptr && copy < got) *outputTruncated = true;
   }
   int status = pclose(stream);
   return (status >= 0 && WIFEXITED(status)) ? WEXITSTATUS(status) : -1;
+}
+
+int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outputSize, bool* outputTruncated) {
+  return ncclDiagChildRunStream(command, timeoutSec, output, outputSize, nullptr, nullptr, outputTruncated);
 }
 
 static ncclResult_t ncclDiagDetectTransportMask(struct ncclComm* comm, unsigned int* outUnionMask) {
@@ -71,21 +82,22 @@ static ncclResult_t ncclDiagDetectTransportMask(struct ncclComm* comm, unsigned 
   if (comm->topo != nullptr) {
     ncclTopoRankToIndex(comm->topo, comm->rank, &myGpuIdx, false);
   }
+  // We can only classify a peer's transport if we have a trustworthy local topology anchored on our
+  // own GPU. Without it (topo absent, or our own GPU missing) "peer not found" tells us nothing --
+  // it must NOT be read as "reached over the network", or it would spuriously assert an IB path.
+  bool haveTopo = comm->topo != nullptr && myGpuIdx >= 0;
 
   for (int peer = 0; peer < comm->nRanks; peer++) {
-    int t = PATH_DIS;
+    int t;
     if (peer == comm->rank) {
       t = PATH_LOC;
+    } else if (!haveTopo) {
+      t = PATH_DIS; // undetermined: no local topology to classify against
     } else {
       int peerGpuIdx = -1;
-      if (comm->topo != nullptr) {
-        ncclTopoRankToIndex(comm->topo, peer, &peerGpuIdx, false);
-      }
-      if (myGpuIdx < 0 || peerGpuIdx < 0) {
-        t = PATH_NET;
-      } else {
-        t = comm->topo->nodes[GPU].nodes[myGpuIdx].paths[GPU][peerGpuIdx].type;
-      }
+      ncclTopoRankToIndex(comm->topo, peer, &peerGpuIdx, false);
+      // A peer absent from our valid local topology is off-node, i.e. reached over the network.
+      t = peerGpuIdx < 0 ? PATH_NET : comm->topo->nodes[GPU].nodes[myGpuIdx].paths[GPU][peerGpuIdx].type;
     }
     if (t < 0 || t > PATH_DIS) t = PATH_DIS;
     localPathMask |= 1u << t;
@@ -115,6 +127,16 @@ ncclResult_t ncclRunDiagnostics(struct ncclComm* comm) {
   unsigned int transportMask = 0;
   r = ncclDiagDetectTransportMask(comm, &transportMask);
   if (comm->rank == 0 && r != ncclSuccess) DIAG_PRINT("NCCL DIAG [INFO] transport detect returned %d", r);
+
+  // Only exercise ib_write_bw when the communicator uses the network transport across at least two
+  // hosts (nNodes counts hosts not connected via MNNVL). The union mask is allgathered and nNodes is
+  // identical everywhere, so every rank makes the same decision and stays in lockstep for the
+  // check's collectives.
+  if ((transportMask & (1u << PATH_NET)) && comm->nNodes >= 2) {
+    ncclDiagRunIbWriteBw(comm);
+  } else if (comm->rank == 0) {
+    DIAG_PRINT("NCCL DIAG [OK] net bw: skipped (single host or no network transport)");
+  }
 
   r = ncclDiagP2pRun(comm);
   if (comm->rank == 0 && r != ncclSuccess) DIAG_PRINT("NCCL DIAG [INFO] p2p: check returned %d", r);

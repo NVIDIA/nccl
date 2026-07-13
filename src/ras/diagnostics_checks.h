@@ -30,5 +30,17 @@ ncclResult_t rasDiagnosticsNcclEnvCollectLocal(const struct rasDiagnosticsContex
                                                struct rasDiagnosticsLocalData* data);
 ncclResult_t rasDiagnosticsNcclEnvSummarize(const struct rasDiagnosticsContext* ctx,
                                             const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
+ncclResult_t rasDiagnosticsRdmaTopoCollectLocal(const struct rasDiagnosticsContext* ctx,
+                                                struct rasDiagnosticsLocalData* data);
+ncclResult_t rasDiagnosticsRdmaTopoSummarize(
+  const struct rasDiagnosticsContext* ctx, const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
+ncclResult_t rasDiagnosticsIommuCollectLocal(const struct rasDiagnosticsContext* ctx,
+                                             struct rasDiagnosticsLocalData* data);
+ncclResult_t rasDiagnosticsIommuSummarize(const struct rasDiagnosticsContext* ctx,
+                                          const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
+ncclResult_t rasDiagnosticsAtsCollectLocal(const struct rasDiagnosticsContext* ctx,
+                                           struct rasDiagnosticsLocalData* data);
+ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
+                                        const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
 
 #endif // NCCL_RAS_DIAGNOSTICS_CHECKS_H_

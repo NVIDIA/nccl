@@ -31,8 +31,9 @@ NCCL_PARAM(Diagnostics, "RUN_DIAGNOSTICS", 0);
 
 #define CHILD_KILL_GRACE_SEC 2 // `timeout -k`: SIGKILL this long after the initial SIGTERM
 
-int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outputSize) {
+int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outputSize, bool* outputTruncated) {
   if (output != nullptr && outputSize > 0) output[0] = '\0';
+  if (outputTruncated != nullptr) *outputTruncated = false;
   if (command == nullptr || timeoutSec < 1) return -1;
 
   char wrapped[2048];
@@ -47,12 +48,14 @@ int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outp
   char buffer[4096];
   size_t got;
   while ((got = fread(buffer, 1, sizeof(buffer), stream)) > 0) {
+    int copy = 0;
     if (output != nullptr && used + 1 < outputSize) {
-      int copy = std::min(static_cast<int>(got), outputSize - used - 1);
+      copy = std::min(static_cast<int>(got), outputSize - used - 1);
       memcpy(output + used, buffer, copy);
       used += copy;
       output[used] = '\0';
     }
+    if (outputTruncated != nullptr && copy < (int)got) *outputTruncated = true;
   }
   int status = pclose(stream);
   return (status >= 0 && WIFEXITED(status)) ? WEXITSTATUS(status) : -1;

@@ -16,7 +16,9 @@ ncclResult_t ncclRunDiagnostics(ncclComm* comm);
 
 // Run one external tool to completion for a diagnostics check. `command` is a tool
 // invocation (e.g. "ib_write_bw -d mlx5_0 ..."); it will run with a timeout and get killed afterwards.
-int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outputSize);
+// If provided, `outputTruncated` reports whether output exceeded the caller's buffer.
+int ncclDiagChildRun(const char* command, int timeoutSec, char* output, int outputSize,
+                     bool* outputTruncated = nullptr);
 
 #endif // NCCL_OS_LINUX
 

@@ -67,6 +67,9 @@ static const struct rasDiagnosticsCheck rasDiagnosticsChecks[RAS_DIAG_CHECK_COUN
   {RAS_DIAG_CHECK_ECC, rasDiagnosticsEccCollectLocal, rasDiagnosticsEccSummarize},
   {RAS_DIAG_CHECK_NVLINK, rasDiagnosticsNvLinkCollectLocal, rasDiagnosticsNvLinkSummarize},
   {RAS_DIAG_CHECK_NCCL_ENV, rasDiagnosticsNcclEnvCollectLocal, rasDiagnosticsNcclEnvSummarize},
+  {RAS_DIAG_CHECK_RDMA_TOPO, rasDiagnosticsRdmaTopoCollectLocal, rasDiagnosticsRdmaTopoSummarize},
+  {RAS_DIAG_CHECK_IOMMU_MODE, rasDiagnosticsIommuCollectLocal, rasDiagnosticsIommuSummarize},
+  {RAS_DIAG_CHECK_ATS, rasDiagnosticsAtsCollectLocal, rasDiagnosticsAtsSummarize},
 };
 
 static ncclResult_t rasDiagnosticsSummarizePeerPayloads(

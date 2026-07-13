@@ -27,6 +27,9 @@ struct ncclProfilerProxy {
   uint64_t workCounter[MAXCHANNELS]; // host work counter
   struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
+  // Optional device-side profiler hook 
+  void* devHook; // ncclProfilerDevHook_t (device fn ptr)
+  void* devCtx;  // opaque device context passed to the hook
 };
 
 enum groupApiState {
@@ -53,6 +56,9 @@ extern int ncclProfilerEventMask;
 // Plugin Init/Finalize Wrappers
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm);
 ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm);
+
+// Device-side profiler hook
+ncclResult_t ncclProfilerDevGetHook(int device, void** devHook, void** devCtx);
 
 // Profiler Start/Stop/Record wrappers for ncclGroupStart and ncclGroupEnd API calls
 ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphCaptured);

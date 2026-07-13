@@ -354,7 +354,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
           }
           continue;
         }
-        for (int port_num = 1; port_num <= devAttr.phys_port_cnt; port_num++) {
+        for (int port_num = 1; port_num <= devAttr.phys_port_cnt && ncclNIbDevs < MAX_IB_DEVS; port_num++) {
           struct ibv_port_attr portAttr;
           if (ncclSuccess != wrap_ibv_query_port(context, port_num, &portAttr)) {
             WARN("NET/IB : Unable to query port_num %d", port_num);
@@ -394,7 +394,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               }
             }
           }
-          for (int dev = devOffset; dev < devCount; ++dev) {
+          for (int dev = devOffset; dev < devCount && ncclNIbDevs < MAX_IB_DEVS; ++dev) {
             ncclIbDevs[ncclNIbDevs].device = d;
             ncclIbDevs[ncclNIbDevs].ibProvider = ibProvider;
             ncclIbDevs[ncclNIbDevs].guid = devAttr.sys_image_guid;
@@ -464,6 +464,10 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       if (devices && (ncclSuccess != wrap_ibv_free_device_list(devices))) {
         ret = ncclInternalError;
         goto fail;
+      }
+      if (ncclNIbDevs >= MAX_IB_DEVS) {
+        WARN("NET/IB : Reached MAX_IB_DEVS=%d IB devices; any additional ports are not used. "
+             "Use NCCL_IB_HCA to select which devices NCCL should use.", MAX_IB_DEVS);
       }
     }
     if (ncclNIbDevs == 0) {

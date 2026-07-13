@@ -826,11 +826,10 @@ For each GPU, NCCL detects automatically available network devices, taking into 
 Value accepted
 ^^^^^^^^^^^^^^
 
-If set to ``AUTO`` (default), NCCL also takes into account the other GPUs in the same communicator in order to assign network devices.
+By default, NCCL assigns each GPU to network devices by considering the set of available devices, as well as other GPUs in the same communicator.
 In specific scenarios, this policy might lead to different GPUs from different communicators sharing the same network devices, and therefore impacts performance.
 
 If set to ``MAX:N``, NCCL uses up to N of the network devices available to each GPU.
-This is intended to be used when device sharing happens with ``AUTO`` and impacts the performance.
 
 If set to ``ALL``, NCCL will use all the available network devices for each GPU, disregarding other GPUs.
 

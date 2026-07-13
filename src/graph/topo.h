@@ -14,6 +14,7 @@
 #include "net.h"
 #include "os.h"
 #include "nvmlwrap.h"
+#include <map>
 
 #define LOC_BW 5000.0
 #define MLOPART_LOC_BW 2618.0
@@ -90,6 +91,7 @@ struct ncclTopoLinkList {
 };
 
 #define NCCL_TOPO_UNDEF (-1)
+#define NCCL_TOPO_UNDEF_BIT (0x1 << 16)
 
 #define NCCL_TOPO_ID_LOCAL_ID_MASK 0x00ffffffffffffff
 #define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
@@ -137,8 +139,8 @@ struct ncclTopoNode {
       int collSupport;
       int maxChannels;
       int localGpu;
-      int16_t railId;
-      int16_t planeId;
+      int railId;
+      int planeId;
     } net;
     struct {
       int arch;
@@ -161,6 +163,10 @@ struct ncclTopoNode {
 struct ncclTopoNodeSet {
   int count;
   struct ncclTopoNode nodes[NCCL_TOPO_MAX_NODES];
+};
+
+struct ncclTopoNetRailKeyList {
+  std::map<uint64_t, int> keys;
 };
 
 struct ncclTopoSystem {
@@ -213,6 +219,9 @@ struct ncclTopoNetInfo {
   ncclResult_t (*getProperties)(int, ncclNetProperties_t*);
   ncclResult_t (*makeVDevice)(int*, ncclNetVDeviceProps_t*);
   ncclResult_t (*devices)(int*);
+
+  // system-wide list of unique rail keys
+  struct ncclTopoNetRailKeyList* railKeyList;
 };
 
 ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct ncclTopoNetInfo* net);

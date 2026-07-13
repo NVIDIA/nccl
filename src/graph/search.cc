@@ -613,24 +613,19 @@ static bool ncclTopoMnnvlRailPerHost(struct ncclTopoSystem* system) {
 static bool ncclTopoSearchCheckNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph,
                                    struct ncclTopoNode* startNet, int n, int step) {
   struct ncclTopoNode* net = system->nodes[NET].nodes + n;
-  // always forbid connections between different networking planes (if both planes are defined).
-  if (net->net.planeId != NCCL_TOPO_UNDEF && startNet->net.planeId != NCCL_TOPO_UNDEF &&
-      net->net.planeId != startNet->net.planeId) {
-    return false;
-  }
+  // Always forbid connections between different networking planes
+  if (net->net.planeId != startNet->net.planeId) return false;
+
   if (graph->pattern == NCCL_TOPO_PATTERN_TREE && net->id != startNet->id) return false; // Trees are symmetric
   if (graph->pattern == NCCL_TOPO_PATTERN_RING && graph->crossNic == 2) {
     if (graph->nChannels & 1 && net->id != graph->inter[(graph->nChannels - 1) * 2]) return false;
   } else if (graph->crossNic == 0) {
-    if (net->net.railId != NCCL_TOPO_UNDEF && startNet->net.railId != NCCL_TOPO_UNDEF) {
-      if (net->net.railId != startNet->net.railId) return false;
-    } else if (ncclTopoMnnvlRailPerHost(system) &&
-               NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id)) {
-      // Different hosts in an MNNVL system: rail are per host and identified with the PCI id.
-      if (net->net.pciId != startNet->net.pciId || net->net.port != startNet->net.port) return false;
-    } else {
-      if (net->net.asic != startNet->net.asic || net->net.port != startNet->net.port) return false;
-    }
+    // Different hosts have the same rails.
+    // If the user did not ask for MNNVL rail per host, we need to ensure that the system IDs are matching as well.
+    if (net->net.railId != startNet->net.railId) return false;
+    if ((net->net.railId & NCCL_TOPO_UNDEF_BIT) && !ncclTopoMnnvlRailPerHost(system) &&
+        NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id))
+      return false;
   }
   if (graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE && step != 0 &&
       net->id != graph->inter[graph->nChannels * 2 + 1]) {
@@ -1061,7 +1056,7 @@ ncclResult_t ncclTopoGetXmlFromGraph(struct ncclTopoGraph* graph, struct ncclTop
   NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedintra", graph->bwIntra));
   NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedinter", graph->bwInter));
   NCCLCHECK(xmlSetAttrFloat(xmlGraph, "latencyinter", graph->latencyInter));
-  const char* str;
+  const char* str = NULL;
   NCCLCHECK(kvConvertToStr(graph->typeIntra, &str, kvDictLinkType));
   NCCLCHECK(xmlSetAttr(xmlGraph, "typeintra", str));
   NCCLCHECK(kvConvertToStr(graph->typeInter, &str, kvDictLinkType));

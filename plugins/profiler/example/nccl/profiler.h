@@ -84,7 +84,9 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v3_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v4_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v5_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
+typedef ncclProfilerEventState_t ncclProfilerEventState_v7_t;
 
+#include "profiler_v7.h"
 #include "profiler_v6.h"
 #include "profiler_v5.h"
 #include "profiler_v4.h"
@@ -93,10 +95,11 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
 #include "profiler_v1.h"
 #include "profiler_net.h"
 
-// Use v6 as default to support CE events
-// v5 and earlier versions are still supported for backward compatibility
-typedef ncclProfiler_v6_t ncclProfiler_t;
-typedef ncclProfilerEventDescr_v6_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventStateArgs_v6_t ncclProfilerEventStateArgs_t;
+// Use v7 as default: v6 event descriptor/state args plus the optional device
+// profiler hook getter. v6 and earlier are still supported for backward
+// compatibility.
+typedef ncclProfiler_v7_t ncclProfiler_t;
+typedef ncclProfilerEventDescr_v7_t ncclProfilerEventDescr_t;
+typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_t;
 
 #endif // end include guard

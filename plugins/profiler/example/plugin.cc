@@ -17,6 +17,9 @@
 #include "print_event.h"
 #include "profiler_plugin_ce.h"
 
+extern "C" ncclResult_t exampleProfilerGetDeviceHook(int cudaDev, void** devHook, void** devCtx);
+extern "C" void exampleProfilerDrainDeviceHook(void);
+
 #define __hidden __attribute__ ((visibility("hidden")))
 
 static int initialized;             // initialization counter for profiler
@@ -451,6 +454,7 @@ __hidden ncclResult_t exampleProfilerFinalize(void* context) {
   if (__atomic_sub_fetch(&initialized, 1, __ATOMIC_RELAXED) == 0) {
     finalizeGlobalProfiler(fh);
     freeDeferredContexts();
+    exampleProfilerDrainDeviceHook(); 
   }
 
   if (fh) fprintf(fh, "{}]\n");
@@ -1140,3 +1144,13 @@ ncclProfiler_v6_t ncclProfiler_v6 = {
   exampleProfilerFinalize,
 };
 
+// adds the optional device-side profiler hook (see plugin_dev.cu).
+ncclProfiler_v7_t ncclProfiler_v7 = {
+  "Example-profiler-v7",
+  exampleProfilerInit,
+  exampleProfilerStartEvent_v6,
+  exampleProfilerStopEvent_v6,
+  exampleProfilerRecordEventState_v6,
+  exampleProfilerFinalize,
+  exampleProfilerGetDeviceHook,
+};

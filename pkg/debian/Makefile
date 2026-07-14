@@ -36,16 +36,16 @@ clean:
 $(DEBPREPDIR)/% : %.in
 	@printf "Generating %-35s > %s\n" $< $@
 	mkdir -p $(DEBPREPDIR)
-	sed -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
-	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
-	    -e "s/\$${nccl:Patch}/$(NCCL_PATCH)/g" \
-	    -e "s/\$${nccl:Suffix}/$(NCCL_SUFFIX)/g" \
-	    -e "s/\$${cuda:Major}/$(CUDA_MAJOR)/g" \
-	    -e "s/\$${cuda:Minor}/$(CUDA_MINOR)/g" \
-	    -e "s/\$${pkg:Revision}/$(PKG_REVISION)/g" \
-	    -e "s/\$${pkg:Timestamp}/$(PKG_TIMESTAMP)/g" \
-	    -e "s/\$${pkg:Arch}/$(PKG_ARCH)/g" \
-	    -e "s/\$${pkg:MultiArch}/$(PKG_MULTIARCH)/g" \
+	sed -e "s/@NCCL_MAJOR@/$(NCCL_MAJOR)/g" \
+	    -e "s/@NCCL_MINOR@/$(NCCL_MINOR)/g" \
+	    -e "s/@NCCL_PATCH@/$(NCCL_PATCH)/g" \
+	    -e "s/@NCCL_SUFFIX@/$(NCCL_SUFFIX)/g" \
+	    -e "s/@CUDA_MAJOR@/$(CUDA_MAJOR)/g" \
+	    -e "s/@CUDA_MINOR@/$(CUDA_MINOR)/g" \
+	    -e "s/@PKG_REVISION@/$(PKG_REVISION)/g" \
+	    -e "s/@PKG_TIMESTAMP@/$(PKG_TIMESTAMP)/g" \
+	    -e "s/@PKG_ARCH@/$(PKG_ARCH)/g" \
+	    -e "s/@PKG_MULTIARCH@/$(PKG_MULTIARCH)/g" \
 	    $< > $@
 
 $(DEBPREPDIR)/% : %

@@ -8,18 +8,6 @@ string(REGEX REPLACE ".*NCCL_MINOR[ ]*:=[ ]*([0-9]+).*" "\\1" NCCL_MINOR "${VERS
 string(REGEX REPLACE ".*NCCL_PATCH[ ]*:=[ ]*([0-9]+).*" "\\1" NCCL_PATCH "${VERSION_CONTENT}")
 string(REGEX REPLACE ".*NCCL_SUFFIX[ ]*:=[ ]*([a-zA-Z0-9]*).*" "\\1" NCCL_SUFFIX "${VERSION_CONTENT}")
 string(REGEX REPLACE ".*PKG_REVISION[ ]*:=[ ]*([0-9]+).*" "\\1" PKG_REVISION "${VERSION_CONTENT}")
-math(EXPR NCCL_VERSION_CODE "(${NCCL_MAJOR} * 10000) + (${NCCL_MINOR} * 100) + ${NCCL_PATCH}")
-
-# Make version information available to C++ source files
-add_compile_definitions(
-    NCCL_USE_CMAKE
-    NCCL_MAJOR=${NCCL_MAJOR}
-    NCCL_MINOR=${NCCL_MINOR}
-    NCCL_PATCH=${NCCL_PATCH}
-    NCCL_VERSION_CODE=${NCCL_VERSION_CODE}
-)
-
-set(ENV{NCCL_USE_CMAKE} "1")
 
 project(NCCL VERSION ${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}
         LANGUAGES CUDA CXX C)

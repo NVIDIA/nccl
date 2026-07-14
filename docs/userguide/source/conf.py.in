@@ -26,9 +26,9 @@ project = u'NCCL'
 copyright = u'2020-2026, NVIDIA Corporation'
 author = u'NVIDIA Corporation'
 
-version_long = u'${nccl:Major}.${nccl:Minor}.${nccl:Patch}'
+version_long = u'@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@'
 
-version_short = u'${nccl:Major}.${nccl:Minor}'
+version_short = u'@NCCL_MAJOR@.@NCCL_MINOR@'
 
 version = "<a href=\"https://docs.nvidia.com/deeplearning/sdk/nccl-archived/index.html\">"+str(version_short)+"</a>"
 release = str(version_long)

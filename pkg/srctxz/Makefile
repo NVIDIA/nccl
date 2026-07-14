@@ -16,7 +16,6 @@ TXZGEN     := $(TXZGEN_IN:.in=)
 TXZTARGETS := $(patsubst %, $(TXZPREPDIR)/%, $(TXZGEN))
 
 PKG_REVISION   ?= 3
-PKG_ARCH       := $(shell uname -m)
 
 prep: $(TXZTARGETS)
 
@@ -33,9 +32,9 @@ clean:
 $(TXZPREPDIR)/% : %.in
 	@printf "Generating %-35s > %s\n" $< $@
 	mkdir -p $(TXZPREPDIR)
-	sed -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
-	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
-	    -e "s/\$${nccl:Patch}/$(NCCL_PATCH)/g" \
-	    -e "s/\$${nccl:Suffix}/$(NCCL_SUFFIX)/g" \
-	    -e "s/\$${pkg:Revision}/$(PKG_REVISION)/g" \
+	sed -e "s/@NCCL_MAJOR@/$(NCCL_MAJOR)/g" \
+	    -e "s/@NCCL_MINOR@/$(NCCL_MINOR)/g" \
+	    -e "s/@NCCL_PATCH@/$(NCCL_PATCH)/g" \
+	    -e "s/@NCCL_SUFFIX@/$(NCCL_SUFFIX)/g" \
+	    -e "s/@PKG_REVISION@/$(PKG_REVISION)/g" \
 	    $< > $@

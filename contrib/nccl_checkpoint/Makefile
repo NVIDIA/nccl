@@ -49,14 +49,12 @@ KV_TEST := $(BINDIR)/kv_sanity_test
 all: $(SHIM_SO) $(KV_TEST)
 
 $(NCCL_HEADER): $(NCCL_SRC)/nccl.h.in $(NCCL_SRC)/../makefiles/version.mk
-	@$(eval NCCL_VERSION := $(shell printf "%d%02d%02d" $(NCCL_MAJOR) $(NCCL_MINOR) $(NCCL_PATCH)))
 	@mkdir -p $(dir $@)
 	@printf "Generating %-35s > %s\n" $< $@
-	sed -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
-	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
-	    -e "s/\$${nccl:Patch}/$(NCCL_PATCH)/g" \
-	    -e "s/\$${nccl:Suffix}/$(NCCL_SUFFIX)/g" \
-	    -e "s/\$${nccl:Version}/$(NCCL_VERSION)/g" \
+	sed -e "s/@NCCL_MAJOR@/$(NCCL_MAJOR)/g" \
+	    -e "s/@NCCL_MINOR@/$(NCCL_MINOR)/g" \
+	    -e "s/@NCCL_PATCH@/$(NCCL_PATCH)/g" \
+	    -e "s/@NCCL_SUFFIX@/$(NCCL_SUFFIX)/g" \
 	    $< > $@
 
 $(SHIM_AUTO): $(SHIM_HEADERS) gen_shim.py

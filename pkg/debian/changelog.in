@@ -1,5 +1,5 @@
-nccl (${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}-${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}) trusty; urgency=medium
+nccl (@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@@NCCL_SUFFIX@-@PKG_REVISION@+cuda@CUDA_MAJOR@.@CUDA_MINOR@) trusty; urgency=medium
 
   * Automatic Debian package from build
 
- -- cudatools <cudatools@nvidia.com>  ${pkg:Timestamp}
+ -- cudatools <cudatools@nvidia.com>  @PKG_TIMESTAMP@

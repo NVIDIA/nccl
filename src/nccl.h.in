@@ -17,13 +17,13 @@
 #include <cuda_fp8.h>
 #endif
 
-#define NCCL_MAJOR ${nccl:Major}
-#define NCCL_MINOR ${nccl:Minor}
-#define NCCL_PATCH ${nccl:Patch}
-#define NCCL_SUFFIX "${nccl:Suffix}"
+#define NCCL_MAJOR @NCCL_MAJOR@
+#define NCCL_MINOR @NCCL_MINOR@
+#define NCCL_PATCH @NCCL_PATCH@
+#define NCCL_SUFFIX "@NCCL_SUFFIX@"
 
-#define NCCL_VERSION_CODE ${nccl:Version}
 #define NCCL_VERSION(X,Y,Z) (((X) <= 2 && (Y) <= 8) ? (X) * 1000 + (Y) * 100 + (Z) : (X) * 10000 + (Y) * 100 + (Z))
+#define NCCL_VERSION_CODE NCCL_VERSION(NCCL_MAJOR, NCCL_MINOR, NCCL_PATCH)
 
 #ifdef __cplusplus
 extern "C" {

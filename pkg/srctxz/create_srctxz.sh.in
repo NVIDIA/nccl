@@ -22,11 +22,11 @@ if [ "`git status -s | wc -l`" != "0" ]; then
 fi
 
 cd ..
-NCCL_MAJOR=${nccl:Major}
-NCCL_MINOR=${nccl:Minor}
-NCCL_PATCH=${nccl:Patch}
-NCCL_SUFFIX=${nccl:Suffix}
-NCCL_BUILD=${pkg:Revision}
+NCCL_MAJOR=@NCCL_MAJOR@
+NCCL_MINOR=@NCCL_MINOR@
+NCCL_PATCH=@NCCL_PATCH@
+NCCL_SUFFIX=@NCCL_SUFFIX@
+NCCL_BUILD=@PKG_REVISION@
 
 NCCLNAME="nccl-src_${NCCL_MAJOR}.${NCCL_MINOR}.${NCCL_PATCH}${NCCL_SUFFIX}-${NCCL_BUILD}"
 

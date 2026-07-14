@@ -1,2 +1,2 @@
-lib/libnccl.so.${nccl:Major} /usr/lib/${pkg:MultiArch}
-lib/libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch} /usr/lib/${pkg:MultiArch}
+lib/libnccl.so.@NCCL_MAJOR@ /usr/lib/@PKG_MULTIARCH@
+lib/libnccl.so.@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@ /usr/lib/@PKG_MULTIARCH@

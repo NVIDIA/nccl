@@ -29,6 +29,7 @@ if(CUDARTLIB STREQUAL "cudart_static")
 endif()
 
 # Configure pkg-config file
+set(NCCL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.pc.in
     ${CMAKE_BINARY_DIR}/lib/pkgconfig/nccl.pc
@@ -116,11 +117,10 @@ target_include_directories(nccl
     ${NCCL_PRIVATE_INCLUDES}
 )
 
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/include/nccl.h
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/include
-    COMMAND ${CMAKE_COMMAND} -DNCCL_MAJOR=${NCCL_MAJOR} -DNCCL_MINOR=${NCCL_MINOR} -DNCCL_PATCH=${NCCL_PATCH} -DNCCL_SUFFIX=${NCCL_SUFFIX} -DNCCL_VERSION_CODE=${NCCL_VERSION_CODE} -DINPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in -DOUTPUT_FILE=${CMAKE_BINARY_DIR}/include/nccl.h -P ${CMAKE_CURRENT_SOURCE_DIR}/generate_header.cmake
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in ${CMAKE_CURRENT_SOURCE_DIR}/generate_header.cmake
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/nccl.h.in
+    ${CMAKE_BINARY_DIR}/include/nccl.h
+    @ONLY
 )
 
 file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)

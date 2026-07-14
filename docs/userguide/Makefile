@@ -23,14 +23,9 @@ $(DOCPREPDIR)/% : $(DOCSRC)/%
 $(DOCPREPDIR)/% : $(DOCSRC)/%.in ../../makefiles/version.mk
 	@printf "Generating %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	sed -e "s/\$${nccl:Major}/$(NCCL_MAJOR)/g" \
-	    -e "s/\$${nccl:Minor}/$(NCCL_MINOR)/g" \
-	    -e "s/\$${nccl:Patch}/$(NCCL_PATCH)/g" \
-	    -e "s/\$${nccl:Suffix}/$(NCCL_SUFFIX)/g" \
-	    -e "s/\$${cuda:Major}/$(CUDA_MAJOR)/g" \
-	    -e "s/\$${cuda:Minor}/$(CUDA_MINOR)/g" \
-	    -e "s/\$${pkg:Revision}/$(PKG_REVISION)/g" \
-	    -e "s/\$${pkg:Arch}/$(PKG_ARCH)/g" \
+	sed -e "s/@NCCL_MAJOR@/$(NCCL_MAJOR)/g" \
+	    -e "s/@NCCL_MINOR@/$(NCCL_MINOR)/g" \
+	    -e "s/@NCCL_PATCH@/$(NCCL_PATCH)/g" \
 	    $< > $@
 
 

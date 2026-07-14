@@ -1,10 +1,10 @@
-prefix=${nccl:Prefix}
+prefix=@NCCL_PREFIX@
 exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include
 
 Name: nccl
 Description: Optimized primitives for collective multi-GPU communication
-Version: ${nccl:Major}.${nccl:Minor}.${nccl:Patch}
+Version: @NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@
 Libs: -L${libdir} -lnccl
 Cflags: -I${includedir}

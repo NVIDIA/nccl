@@ -1,13 +1,10 @@
 # TXZ package building for NCCL
 
-find_program(SED_EXECUTABLE sed)
-
 # Set package directories
 set(TXZPREPDIR "${CMAKE_BINARY_DIR}/txz")
 set(PKGDIR "${CMAKE_BINARY_DIR}/pkg/txz")
 set(TXZGEN_IN create_txz.sh.in)
 set(TXZGEN create_txz.sh)
-set(TXZTARGETS ${TXZPREPDIR}/${TXZGEN})
 
 # Get package architecture
 set(PKG_ARCH ${CMAKE_HOST_SYSTEM_PROCESSOR})
@@ -19,19 +16,11 @@ add_custom_target(txz_prep ALL
   COMMENT "Preparing TXZ package files"
 )
 
-# Generate create_txz.sh from template
-add_custom_command(
-  TARGET txz_prep
-  COMMAND ${SED_EXECUTABLE} -e 's/\\$$\{nccl:Major\}/${NCCL_MAJOR}/g'
-                            -e 's/\\$$\{nccl:Minor\}/${NCCL_MINOR}/g'
-                            -e 's/\\$$\{nccl:Patch\}/${NCCL_PATCH}/g'
-                            -e 's/\\$$\{nccl:Suffix\}/${NCCL_SUFFIX}/g'
-                            -e 's/\\$$\{cuda:Major\}/${CUDA_MAJOR}/g'
-                            -e 's/\\$$\{cuda:Minor\}/${CUDA_MINOR}/g'
-                            -e 's/\\$$\{pkg:Revision\}/${PKG_REVISION}/g'
-                            -e 's/\\$$\{pkg:Arch\}/${PKG_ARCH}/g'
-            ${CMAKE_CURRENT_SOURCE_DIR}/${TXZGEN_IN} > ${TXZPREPDIR}/${TXZGEN}
-  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${TXZGEN_IN}
+# Generate create_txz.sh from its template.
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/${TXZGEN_IN}
+  ${TXZPREPDIR}/${TXZGEN}
+  @ONLY
 )
 
 # Build the package
@@ -46,7 +35,6 @@ add_custom_target(txz_build
 
 # Custom target for cleaning txz package
 add_custom_target(txz_clean
-  COMMAND ${CMAKE_COMMAND} -E remove_directory ${TXZPREPDIR}
   COMMAND ${CMAKE_COMMAND} -E remove_directory ${PKGDIR}
   COMMENT "Cleaning TXZ package build files"
 )

@@ -1,12 +1,12 @@
 Name:           libnccl
-Version:        ${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}
-Release:        ${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}
+Version:        @NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@@NCCL_SUFFIX@
+Release:        @PKG_REVISION@+cuda@CUDA_MAJOR@.@CUDA_MINOR@
 Summary:        NVIDIA Collective Communication Library (NCCL) Runtime
 
 Group:          Development/Libraries
 License:        Apache-2.0
 URL:            http://developer.nvidia.com/nccl
-Source0:        nccl_${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}-${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}_${pkg:Arch}.txz
+Source0:        nccl_@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@@NCCL_SUFFIX@-@PKG_REVISION@+cuda@CUDA_MAJOR@.@CUDA_MINOR@_@PKG_ARCH@.txz
 Requires(pre,preun): /sbin/ldconfig
 
 %description
@@ -20,7 +20,7 @@ sockets.
 %package devel
 Summary:        NVIDIA Collective Communication Library (NCCL) Runtime
 Group:          Development/Libraries
-Requires:       libnccl >= ${nccl:Major}.${nccl:Minor}.${nccl:Patch}
+Requires:       libnccl >= @NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@
 %description devel
 NCCL development files
 
@@ -33,7 +33,7 @@ NCCL static library
 %define debug_package %{nil}
 
 %prep
-%setup -n nccl_${nccl:Major}.${nccl:Minor}.${nccl:Patch}${nccl:Suffix}-${pkg:Revision}+cuda${cuda:Major}.${cuda:Minor}_${pkg:Arch} -q
+%setup -n nccl_@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@@NCCL_SUFFIX@-@PKG_REVISION@+cuda@CUDA_MAJOR@.@CUDA_MINOR@_@PKG_ARCH@ -q
 
 %build
 
@@ -41,15 +41,15 @@ NCCL static library
 rm -rf $RPM_BUILD_ROOT
 install -m 755 -d $RPM_BUILD_ROOT
 install -m 755 -d $RPM_BUILD_ROOT/%{_libdir}
-install -m 755 lib/libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch} $RPM_BUILD_ROOT/%{_libdir}
-ln -s libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch} $RPM_BUILD_ROOT/%{_libdir}/libnccl.so.${nccl:Major}
+install -m 755 lib/libnccl.so.@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@ $RPM_BUILD_ROOT/%{_libdir}
+ln -s libnccl.so.@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@ $RPM_BUILD_ROOT/%{_libdir}/libnccl.so.@NCCL_MAJOR@
 
 # devel
 install -m 755 -d $RPM_BUILD_ROOT/%{_bindir}
 install -m 755 -d $RPM_BUILD_ROOT/%{_includedir}
 cp -a include/* $RPM_BUILD_ROOT/%{_includedir}/
 install -m 755 bin/ncclras $RPM_BUILD_ROOT/%{_bindir}
-ln -s libnccl.so.${nccl:Major} $RPM_BUILD_ROOT/%{_libdir}/libnccl.so
+ln -s libnccl.so.@NCCL_MAJOR@ $RPM_BUILD_ROOT/%{_libdir}/libnccl.so
 
 # static
 install -m 644 lib/libnccl_static.a $RPM_BUILD_ROOT/%{_libdir}
@@ -78,7 +78,7 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %doc LICENSE.txt
 %defattr(-,root,root,-)
-%{_libdir}/libnccl.so.${nccl:Major}
-%{_libdir}/libnccl.so.${nccl:Major}.${nccl:Minor}.${nccl:Patch}
+%{_libdir}/libnccl.so.@NCCL_MAJOR@
+%{_libdir}/libnccl.so.@NCCL_MAJOR@.@NCCL_MINOR@.@NCCL_PATCH@
 
 %changelog

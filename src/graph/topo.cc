@@ -398,15 +398,24 @@ ncclResult_t ncclTopoGetMinNetBw(struct ncclTopoSystem* system, int rank, float*
   return ncclSuccess;
 }
 
+static ncclResult_t ncclTopoGetPluginDev(struct ncclXmlNode* xmlNet, const char* attr, int* dev) {
+  NCCLCHECK(xmlGetAttrIntDefault(xmlNet, attr, dev, -1));
+  // Topology files created before plugin-specific indices were introduced only have "dev".
+  if (*dev == -1 && strcmp(attr, "dev") != 0) NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", dev));
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* system, struct ncclTopoNode* nic,
                             int systemId) {
-  int dev;
-  NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
+  int dev, collDev;
+  NCCLCHECK(ncclTopoGetPluginDev(xmlNet, "dev", &dev));
+  NCCLCHECK(ncclTopoGetPluginDev(xmlNet, "cdev", &collDev));
 
   int64_t netId = NCCL_TOPO_ID(systemId, dev);
   struct ncclTopoNode* net;
   NCCLCHECK(ncclTopoCreateNode(system, &net, NET, netId));
   net->net.dev = dev;
+  net->net.collDev = collDev;
   const char* str;
   // if not guid is present use the net->id unique id instead, which will be unique within the node/NVLD
   NCCLCHECK(xmlGetAttr(xmlNet, "guid", &str));
@@ -448,7 +457,7 @@ ncclResult_t ncclTopoAddNet(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
 ncclResult_t ncclTopoAddGin(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* system, struct ncclTopoNode* nic,
                             int systemId) {
   int dev;
-  NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
+  NCCLCHECK(ncclTopoGetPluginDev(xmlNet, "gdev", &dev));
 
   int64_t netId = NCCL_TOPO_ID(systemId, dev);
   struct ncclTopoNode* net;
@@ -468,7 +477,7 @@ ncclResult_t ncclTopoAddGin(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* s
 ncclResult_t ncclTopoAddRma(struct ncclXmlNode* xmlNet, struct ncclTopoSystem* system, struct ncclTopoNode* nic,
                             int systemId) {
   int dev;
-  NCCLCHECK(xmlGetAttrInt(xmlNet, "dev", &dev));
+  NCCLCHECK(ncclTopoGetPluginDev(xmlNet, "rdev", &dev));
 
   int64_t netId = NCCL_TOPO_ID(systemId, dev);
   struct ncclTopoNode* net;
@@ -490,20 +499,19 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
   for (int s = 0; s < xmlNic->nSubs; s++) {
     struct ncclXmlNode* xmlNet = xmlNic->subs[s];
     if (strcmp(xmlNet->name, "net") != 0) continue;
-    int index;
-    NCCLCHECK(xmlGetAttrIndex(xmlNet, "dev", &index));
-    // This means that the "dev" attribute wasn't set on this net xml node. That means it should not be added to
-    // the system topology graph
-    if (index == -1) continue;
 
-    // Backward compatibility: net withouh "net" attr is a net dev, net without a "gin" is not a gin dev
+    // Backward compatibility: a net without "net" is a NET device. Plugin-specific indices fall back to "dev".
     int net = 0, gin = 0, rma = 0;
     NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "net", &net, 1));
     NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "gin", &gin, 0));
     NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "rma", &rma, 0));
-    if (net) NCCLCHECK(ncclTopoAddNet(xmlNet, system, nic, systemId));
-    if (gin) NCCLCHECK(ncclTopoAddGin(xmlNet, system, nic, systemId));
-    if (rma) NCCLCHECK(ncclTopoAddRma(xmlNet, system, nic, systemId));
+    int devIndex, ginDevIndex, rmaDevIndex;
+    NCCLCHECK(xmlGetAttrIndex(xmlNet, "dev", &devIndex));
+    NCCLCHECK(xmlGetAttrIndex(xmlNet, "gdev", &ginDevIndex));
+    NCCLCHECK(xmlGetAttrIndex(xmlNet, "rdev", &rmaDevIndex));
+    if (net && devIndex != -1) NCCLCHECK(ncclTopoAddNet(xmlNet, system, nic, systemId));
+    if (gin && (ginDevIndex != -1 || devIndex != -1)) NCCLCHECK(ncclTopoAddGin(xmlNet, system, nic, systemId));
+    if (rma && (rmaDevIndex != -1 || devIndex != -1)) NCCLCHECK(ncclTopoAddRma(xmlNet, system, nic, systemId));
   }
   return ncclSuccess;
 }
@@ -1615,6 +1623,7 @@ out:
 
 static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIndex, struct ncclTopoNetInfo* netInfo,
                                          int virtualNics) {
+  const char* devAttr = netInfo->gin ? "gdev" : netInfo->rma ? "rdev" : netInfo->coll ? "cdev" : "dev";
   for (int n = startIndex; n < endIndex; n++) {
     ncclNetProperties_t props;
     NCCLCHECK(netInfo->getProperties(n, &props));
@@ -1636,11 +1645,11 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
 
     NCCLCHECK(xmlSetAttrInt(netNode, "keep", 1));
     int dev;
-    xmlGetAttrIntDefault(netNode, "dev", &dev, -1);
+    NCCLCHECK(xmlGetAttrIntDefault(netNode, devAttr, &dev, -1));
     if (dev != -1 && dev != n) {
-      INFO(NCCL_GRAPH, "TOPO/NET : Changing %s dev index from %d to %d", netInfo->name, dev, n);
+      INFO(NCCL_GRAPH, "TOPO/NET : Changing %s %s index from %d to %d", netInfo->name, devAttr, dev, n);
     }
-    NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
+    NCCLCHECK(xmlSetAttrInt(netNode, devAttr, n));
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
@@ -1665,16 +1674,23 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     if (netInfo->gin) NCCLCHECK(xmlInitAttrInt(netNode, "gin", netInfo->gin));
     if (netInfo->rma) NCCLCHECK(xmlInitAttrInt(netNode, "rma", netInfo->rma));
 
-    const char *keepAttr, *ginAttr, *rmaAttr;
+    const char *keepAttr, *ginAttr, *rmaAttr, *devValue, *ginDevValue, *rmaDevValue, *collDevValue;
     NCCLCHECK(xmlGetAttr(netNode, "net", &netAttr));
     NCCLCHECK(xmlGetAttr(netNode, "gin", &ginAttr));
     NCCLCHECK(xmlGetAttr(netNode, "rma", &rmaAttr));
     NCCLCHECK(xmlGetAttr(netNode, "coll", &colAttr));
     NCCLCHECK(xmlGetAttr(netNode, "keep", &keepAttr));
+    NCCLCHECK(xmlGetAttr(netNode, "dev", &devValue));
+    NCCLCHECK(xmlGetAttr(netNode, "gdev", &ginDevValue));
+    NCCLCHECK(xmlGetAttr(netNode, "rdev", &rmaDevValue));
+    NCCLCHECK(xmlGetAttr(netNode, "cdev", &collDevValue));
     INFO(
       NCCL_GRAPH,
-      "ncclTopoPopulateNics : Filled %s in topo with pciPath=%s net=%s gin=%s rma=%s keep=%s coll=%s rail=%d plane=%d",
-      props.name, props.pciPath, netAttr, ginAttr, rmaAttr, keepAttr, colAttr, props.railId, props.planeId);
+      "ncclTopoPopulateNics : Filled %s in topo with pciPath=%s net=%s/%s gin=%s/%s rma=%s/%s coll=%s/%s keep=%s "
+      "rail=%d plane=%d",
+      props.name, props.pciPath, netAttr, devValue ? devValue : "-", ginAttr ? ginAttr : "0",
+      ginDevValue ? ginDevValue : "-", rmaAttr ? rmaAttr : "0", rmaDevValue ? rmaDevValue : "-",
+      colAttr ? colAttr : "0", collDevValue ? collDevValue : "-", keepAttr, props.railId, props.planeId);
   }
 
   return ncclSuccess;
@@ -1682,6 +1698,7 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
 
 static ncclResult_t ncclTopoUpdateVNics(ncclXml* xml, struct ncclTopoNetInfo* net, int nPhysicalNics,
                                         int nVirtualNics) {
+  const char* typeAttr = net->gin ? "gin" : net->rma ? "rma" : net->coll ? "coll" : "net";
   for (int n = nPhysicalNics; n < nPhysicalNics + nVirtualNics; n++) {
     ncclNetProperties_t vProps;
     NCCLCHECK(net->getProperties(n, &vProps));
@@ -1691,14 +1708,15 @@ static ncclResult_t ncclTopoUpdateVNics(ncclXml* xml, struct ncclTopoNetInfo* ne
       struct ncclXmlNode* physNetNode = NULL;
       NCCLCHECK(xmlFindTagKv(xml, "net", &physNetNode, "name", physProps.name));
       if (physNetNode) {
-        NCCLCHECK(xmlSetAttrInt(physNetNode, net->net ? "net" : (net->gin ? "gin" : "coll"), 0));
+        NCCLCHECK(xmlSetAttrInt(physNetNode, typeAttr, 0));
         // net is always present (see ncclTopoPopulateNics).
-        int net = 0, gin = 0, coll = 0;
+        int net = 0, gin = 0, rma = 0, coll = 0;
         NCCLCHECK(xmlGetAttrInt(physNetNode, "net", &net));
         NCCLCHECK(xmlGetAttrIntDefault(physNetNode, "gin", &gin, 0));
+        NCCLCHECK(xmlGetAttrIntDefault(physNetNode, "rma", &rma, 0));
         NCCLCHECK(xmlGetAttrIntDefault(physNetNode, "coll", &coll, 0));
         // Set "keep = 0" only if no plugin is using the physical device
-        if (net == 0 && gin == 0 && coll == 0) NCCLCHECK(xmlSetAttrInt(physNetNode, "keep", 0));
+        if (net == 0 && gin == 0 && rma == 0 && coll == 0) NCCLCHECK(xmlSetAttrInt(physNetNode, "keep", 0));
       }
     }
   }

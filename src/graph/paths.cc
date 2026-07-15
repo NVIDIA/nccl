@@ -572,11 +572,12 @@ ncclResult_t ncclTopoIsGdrAvail(struct ncclTopoSystem* system, int rank, bool* a
 NCCL_PARAM(NetForceFlush, "NET_FORCE_FLUSH", 0);
 
 // Based on the system topology, determine whether an explicit iflush is needed on the GDR recv path.
-ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int64_t netId, int netDev, int rank,
+ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int64_t netId, int netDev, int rank, bool collNet,
                                enum ncclTopoFlushType* flush) {
   *flush = ncclTopoFlushAlways;
   ncclNetProperties_t props;
-  NCCLCHECK(comm->ncclNet->getProperties(netDev, &props));
+  if (collNet) NCCLCHECK(comm->ncclCollNet->getProperties(netDev, &props));
+  else NCCLCHECK(comm->ncclNet->getProperties(netDev, &props));
   if (props.forceFlush == 1 || ncclParamNetForceFlush()) return ncclSuccess;
   int g;
   struct ncclTopoSystem* system = comm->topo;

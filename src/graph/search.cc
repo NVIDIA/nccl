@@ -1411,7 +1411,7 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
     } else {
       NCCLCHECK(getNvlsNetDev(comm, graph, channelId, &netId));
     }
-    NCCLCHECK(ncclTopoIdToNetDev(comm->topo, netId, &netDev));
+    NCCLCHECK(ncclTopoIdToNetDev(comm->topo, netId, graph->collNet, &netDev));
     if (dev) *dev = netDev;
     if (id) *id = netId;
     NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, netId, proxyRank));

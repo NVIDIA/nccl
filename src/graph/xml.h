@@ -20,7 +20,7 @@
 
 // A few constraints to make the implementation easy
 #define MAX_STR_LEN 255
-#define MAX_ATTR_COUNT 16
+#define MAX_ATTR_COUNT 20 // NET nodes store independent indices for each network plugin API.
 #define MAX_SUBS 640
 
 #define NODE_TYPE_NONE 0

@@ -120,7 +120,8 @@ struct ncclTopoNode {
       int nGpus; // number of GPU partitions attached to this DEV node
     } dev;
     struct {
-      int dev; // Plugin dev number
+      int dev;     // NET plugin dev number
+      int collDev; // CollNet plugin dev number
       uint64_t pciId;
       uint64_t asic;
       int port;
@@ -258,11 +259,11 @@ static ncclResult_t ncclTopoDevToRank(struct ncclTopoSystem* system, int systemI
 
 extern struct kvDict nicPathKvList[];
 
-static ncclResult_t ncclTopoIdToNetDev(struct ncclTopoSystem* system, int64_t id, int* netDev) {
+static ncclResult_t ncclTopoIdToNetDev(struct ncclTopoSystem* system, int64_t id, bool collNet, int* netDev) {
   *netDev = -1;
   for (int i = 0; i < system->nodes[NET].count; i++) {
     if (system->nodes[NET].nodes[i].id == id) {
-      *netDev = system->nodes[NET].nodes[i].net.dev;
+      *netDev = collNet ? system->nodes[NET].nodes[i].net.collDev : system->nodes[NET].nodes[i].net.dev;
       return ncclSuccess;
     }
   }

@@ -21,7 +21,7 @@
 #define MAX_CHANNELS                     64
 
 // Bump when ncclProfiler_t alias changes to a new interface version.
-#define NCCL_PROFILER_INTERFACE_VERSION 5
+#define NCCL_PROFILER_INTERFACE_VERSION 7
 
 #define INS_CHK(call)                                                   \
   do {                                                                  \
@@ -154,6 +154,7 @@ struct inspectorCompletedOpInfo {
   const char* algo;   // coll only (nullptr for P2P)
   const char* proto;  // coll only (nullptr for P2P)
   int peer;           // P2P only (unused for coll)
+  uint64_t userTag;   // per-call user profiler tag (0 == untagged)
   struct inspectorEventTrkOpInfo evtTrk;
 };
 
@@ -244,6 +245,7 @@ struct inspectorCollInfo {
   const char* algo;
   const char* proto;
   uint64_t sn;
+  uint64_t userTag;   // per-call user profiler tag (0 == untagged)
   size_t msgSizeBytes;
   uint64_t tsStartUsec;
   uint64_t tsCompletedUsec;
@@ -261,6 +263,7 @@ struct inspectorP2pInfo {
   struct inspectorCommInfo *commInfo;
   const char* func;
   uint64_t sn;
+  uint64_t userTag;   // per-call user profiler tag (0 == untagged)
   size_t msgSizeBytes;
   uint64_t tsStartUsec;
   uint64_t tsCompletedUsec;

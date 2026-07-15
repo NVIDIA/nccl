@@ -130,6 +130,10 @@ bool ncclCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_
   return true;
 }
 
+bool ncclCeUseMCSync(struct ncclComm* comm) {
+  return comm->nvlsSupport && ncclTeamLsa(comm).nRanks > 2 && !comm->p2pCrossClique;
+}
+
 ncclResult_t ncclPrepMCSync(struct ncclComm* comm, bool isComplete, CUstreamBatchMemOpParams* batchParams,
                             size_t* opIdx, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
@@ -237,9 +241,9 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream, struct nc
   uint32_t* readyPtrs = (uint32_t*)comm->ceColl.baseUCSymReadyPtr;
   uint32_t* completePtrs = (uint32_t*)comm->ceColl.baseUCSymComplPtr;
 
-  // Allocate enough slots for all possible ops
-  // For cross-clique, NVLS multicast isn't available across cliques - use unicast sync instead
-  bool useMCSync = comm->nvlsSupport && !comm->p2pCrossClique;
+  // Allocate enough slots for all possible ops. LSA multicast is only enabled
+  // for teams where NCCL's symmetric-kernel path also enables it.
+  bool useMCSync = ncclCeUseMCSync(comm);
   size_t batchSize = (useMCSync ? NCCL_CE_SYNC_OPS_PER_RANK_MC : NCCL_CE_SYNC_OPS_PER_RANK_UC) * lsaSize;
   size_t opIdx = 0;
   CUstreamBatchMemOpParams* batchParams = nullptr;
@@ -1431,7 +1435,7 @@ ncclResult_t scheduleCeCollTaskToPlan(struct ncclComm* comm, struct ncclKernelPl
       INFO(NCCL_TUNING, "%s [Hierarchical CE]: %ld Bytes -> RMA proxy + CE", ncclFuncToString(task->func),
            task->count * ncclTypeSize(task->datatype));
     } else {
-      const char* nvlsSync = comm->nvlsSupport ? "; CE synchronization with NVLS" : "";
+      const char* nvlsSync = ncclCeUseMCSync(comm) ? "; CE synchronization with NVLS" : "";
       INFO(NCCL_TUNING, "%s [Copy Engine]: %ld Bytes -> cudaMemcpy%s", ncclFuncToString(task->func),
            task->count * ncclTypeSize(task->datatype), nvlsSync);
     }

@@ -64,6 +64,8 @@ struct ncclCeBatchOpsParams {
 bool ncclCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                      ncclSymRegType_t winRegType);
 
+bool ncclCeUseMCSync(struct ncclComm* comm);
+
 bool ncclHierCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                          ncclSymRegType_t winRegType);
 

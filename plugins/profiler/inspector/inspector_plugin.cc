@@ -246,7 +246,7 @@ static void inspectorPluginP2pInfoCleanup(struct inspectorP2pInfo *p2pInfo) {
  *
  *   struct inspectorCollInfo **collInfo - pointer to output
  *   collective info struct.
- *   ncclProfilerEventDescr_t *eDescr - event descriptor.
+ *   ncclProfilerEventDescr_v7_t *eDescr - event descriptor.
  *
  * Output:
  *   collInfo is set to the new collective info struct.
@@ -255,7 +255,7 @@ static void inspectorPluginP2pInfoCleanup(struct inspectorP2pInfo *p2pInfo) {
  *   None.
  */
 static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
-                                        ncclProfilerEventDescr_t *eDescr,
+                                        ncclProfilerEventDescr_v7_t *eDescr,
                                         struct inspectorCommInfo *commInfo) {
   struct inspectorCollInfo *collInfoPtr = inspectorEventPoolAllocColl();
   if (collInfoPtr == nullptr) {
@@ -264,6 +264,7 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
     return;
   }
   collInfoPtr->type = ncclProfileColl;
+  collInfoPtr->userTag = eDescr->coll.userTag;
   collInfoPtr->refCount = 0;
   inspectorPluginCollInfoRef(collInfoPtr); //self ref; no locks needed
   collInfoPtr->func = eDescr->coll.func;
@@ -290,7 +291,7 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
 }
 
 static void inspectorPluginP2pInfoInit(struct inspectorP2pInfo **p2pInfo,
-                                       ncclProfilerEventDescr_t *eDescr,
+                                       ncclProfilerEventDescr_v7_t *eDescr,
                                        struct inspectorCommInfo *commInfo) {
   struct inspectorP2pInfo *p2pInfoPtr = inspectorEventPoolAllocP2p();
   if (p2pInfoPtr == nullptr) {
@@ -299,6 +300,7 @@ static void inspectorPluginP2pInfoInit(struct inspectorP2pInfo **p2pInfo,
     return;
   }
   p2pInfoPtr->type = ncclProfileP2p;
+  p2pInfoPtr->userTag = eDescr->p2p.userTag;
   p2pInfoPtr->refCount = 0;
   inspectorPluginP2pInfoRef(p2pInfoPtr); // self ref
   p2pInfoPtr->func = eDescr->p2p.func;
@@ -335,7 +337,7 @@ static void inspectorPluginP2pInfoInit(struct inspectorP2pInfo **p2pInfo,
  * Input:
  *   struct inspectorKernelChInfo **kernelChInfo - pointer to output
  *   kernel channel info struct.
- *   ncclProfilerEventDescr_t *eDescr - event descriptor.
+ *   ncclProfilerEventDescr_v7_t *eDescr - event descriptor.
  *
  * Output:
  *
@@ -359,7 +361,7 @@ static struct inspectorP2pInfo* getKernelChP2pInfo(struct inspectorKernelChInfo 
 }
 
 static void inspectorPluginKernelChInfoInitColl(struct inspectorKernelChInfo **kernelChInfo,
-                                                ncclProfilerEventDescr_t *eDescr,
+                                                ncclProfilerEventDescr_v7_t *eDescr,
                                                 struct inspectorCollInfo *collInfo) {
   inspectorLockWr(&collInfo->guard);
   struct inspectorEventTraceInfo *krnlEvtTrk =
@@ -389,7 +391,7 @@ static void inspectorPluginKernelChInfoInitColl(struct inspectorKernelChInfo **k
 }
 
 static void inspectorPluginKernelChInfoInitP2p(struct inspectorKernelChInfo **kernelChInfo,
-                                               ncclProfilerEventDescr_t *eDescr,
+                                               ncclProfilerEventDescr_v7_t *eDescr,
                                                struct inspectorP2pInfo *p2pInfo) {
   inspectorLockWr(&p2pInfo->guard);
   struct inspectorEventTraceInfo *krnlEvtTrk =
@@ -419,7 +421,7 @@ static void inspectorPluginKernelChInfoInitP2p(struct inspectorKernelChInfo **ke
 }
 
 static void inspectorPluginKernelChInfoInit(struct inspectorKernelChInfo **kernelChInfo,
-                                            ncclProfilerEventDescr_t *eDescr) {
+                                            ncclProfilerEventDescr_v7_t *eDescr) {
   if (eDescr->parentObj) {
     uint64_t parentType = *(uint64_t*)eDescr->parentObj;
     if (parentType == ncclProfileColl) {
@@ -436,7 +438,7 @@ static void inspectorPluginKernelChInfoInit(struct inspectorKernelChInfo **kerne
   }
 }
 
-static bool inspectorShouldTrackColl(const ncclProfilerEventDescr_t* eDescr) {
+static bool inspectorShouldTrackColl(const ncclProfilerEventDescr_v7_t* eDescr) {
   if (!eDescr) {
     return false;
   }
@@ -454,7 +456,7 @@ static bool inspectorShouldTrackColl(const ncclProfilerEventDescr_t* eDescr) {
   return msgSizeBytes >= ncclInspectorDumpMinSizeBytes;
 }
 
-static bool inspectorShouldTrackP2p(const ncclProfilerEventDescr_t* eDescr) {
+static bool inspectorShouldTrackP2p(const ncclProfilerEventDescr_v7_t* eDescr) {
   if (!eDescr) {
     return false;
   }
@@ -483,7 +485,7 @@ static bool inspectorShouldTrackP2p(const ncclProfilerEventDescr_t* eDescr) {
  * Input:
  *   void* context - plugin context.
  *   void** eHandle - pointer to event handle output.
- *   ncclProfilerEventDescr_t* eDescr - event descriptor.
+ *   ncclProfilerEventDescr_v7_t* eDescr - event descriptor.
  *
  * Output:
  *   eHandle is set to the new event structure.
@@ -494,12 +496,12 @@ static bool inspectorShouldTrackP2p(const ncclProfilerEventDescr_t* eDescr) {
  */
 __hidden ncclResult_t inspectorPluginStartEvent(void* context,
                                                 void** eHandle,
-                                                ncclProfilerEventDescr_t* eDescr) {
+                                                ncclProfilerEventDescr_v7_t* eDescr) {
+  *eHandle = nullptr;
   if (context == nullptr || eDescr == nullptr) {
     INFO(NCCL_INIT, "Profiler/Plugin: context/eDescr NULL for start event %s", __func__);
     return ncclSuccess;
   }
-  *eHandle = nullptr;
   if (eDescr->type == ncclProfileColl) {
     if (!inspectorShouldTrackColl(eDescr)) return ncclSuccess;
     struct inspectorCollInfo *collEvent = nullptr;
@@ -817,7 +819,8 @@ __hidden ncclResult_t inspectorPluginRecordEventState(void* eHandle,
   return ncclSuccess;
 }
 
-ncclProfiler_t ncclProfiler_v5 = {
+// Inspector requires profiler v7; older NCCL libraries cannot load this plugin.
+ncclProfiler_v7_t ncclProfiler_v7 = {
   "Inspector",
   inspectorPluginInit,
   inspectorPluginStartEvent,

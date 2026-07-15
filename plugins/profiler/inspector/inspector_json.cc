@@ -1,6 +1,8 @@
 #include "inspector_json.h"
 #include "inspector_ring.h"
 
+#include <inttypes.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <vector>
 
@@ -58,7 +60,7 @@ static inspectorResult_t inspectorCommInfoHeader(jsonFileOutput* jfo,
 static inspectorResult_t inspectorCommInfoMetaHeader(jsonFileOutput* jfo) {
   JSON_CHK(jsonStartObject(jfo));
   {
-    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.2"));
+    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.3"));
     JSON_CHK(jsonKey(jfo, "git_rev")); JSON_CHK(jsonStr(jfo, get_git_version_info()));
     JSON_CHK(jsonKey(jfo, "rec_mechanism")); JSON_CHK(jsonStr(jfo, "nccl_profiler_interface"));
     JSON_CHK(jsonKey(jfo, "dump_timestamp_us")); JSON_CHK(jsonUint64(jfo, inspectorGetTime()));
@@ -213,6 +215,13 @@ static inline inspectorResult_t inspectorCompletedColl(jsonFileOutput* jfo,
 
     JSON_CHK(jsonKey(jfo, "coll_sn")); JSON_CHK(jsonUint64(jfo, op->sn));
 
+    // Emit the user tag as a decimal string: it is an opaque 64-bit value and
+    // JSON consumers that parse numbers as doubles (e.g. JavaScript) would lose
+    // precision above 2^53 and corrupt downstream value-to-name mapping.
+    char collUserTag[21];
+    snprintf(collUserTag, sizeof(collUserTag), "%" PRIu64, op->userTag);
+    JSON_CHK(jsonKey(jfo, "coll_user_tag")); JSON_CHK(jsonStr(jfo, collUserTag));
+
     JSON_CHK(jsonKey(jfo, "coll_msg_size_bytes")); JSON_CHK(jsonUint64(jfo, op->msgSizeBytes));
 
     JSON_CHK(jsonKey(jfo, "coll_exec_time_us")); JSON_CHK(jsonUint64(jfo, op->execTimeUsecs));
@@ -239,6 +248,11 @@ static inline inspectorResult_t inspectorCompletedP2p(jsonFileOutput* jfo,
     JSON_CHK(jsonKey(jfo, "p2p")); JSON_CHK(jsonStr(jfo, ncclFuncToString(op->func)));
 
     JSON_CHK(jsonKey(jfo, "p2p_sn")); JSON_CHK(jsonUint64(jfo, op->sn));
+
+    // See coll_user_tag: emit as a decimal string to avoid double-precision loss.
+    char p2pUserTag[21];
+    snprintf(p2pUserTag, sizeof(p2pUserTag), "%" PRIu64, op->userTag);
+    JSON_CHK(jsonKey(jfo, "p2p_user_tag")); JSON_CHK(jsonStr(jfo, p2pUserTag));
 
     JSON_CHK(jsonKey(jfo, "p2p_peer")); JSON_CHK(jsonInt(jfo, op->peer));
 

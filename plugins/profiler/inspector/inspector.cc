@@ -1661,6 +1661,7 @@ void inspectorUpdateCollPerf(struct inspectorCompletedOpInfo *completedOp,
     calculateMaxKernelExecTimeUsecs(collInfo, &completedOp->timingSource);
   completedOp->algo = collInfo->algo;
   completedOp->proto = collInfo->proto;
+  completedOp->userTag = collInfo->userTag;
   completedOp->evtTrk = collInfo->collEvtTrk;
 }
 
@@ -1741,6 +1742,7 @@ void inspectorUpdateP2pPerf(struct inspectorCompletedOpInfo *completedOp,
       ? p2pInfo->tsCompletedUsec : inspectorGetTime();
   completedOp->msgSizeBytes = p2pInfo->msgSizeBytes;
   completedOp->peer = p2pInfo->peer;
+  completedOp->userTag = p2pInfo->userTag;
   completedOp->execTimeUsecs =
     calculateMaxKernelExecTimeUsecsP2p(p2pInfo, &completedOp->timingSource);
   completedOp->evtTrk = p2pInfo->p2pEvtTrk;

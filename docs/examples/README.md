@@ -125,6 +125,30 @@ cd docs/examples
 make NCCL_HOME=<path-to-nccl> [MPI=1]
 ```
 
+From the repository root, each C/CUDA example is also an independent top-level
+CMake project. CMake 3.18 or later is required. Pass the NCCL build tree or
+installation prefix as `-DNCCL_ROOT=<path-to-nccl>`:
+
+```shell
+cmake -S docs/examples/<category>/<example>/c -B build/example \
+  -DNCCL_ROOT=<path-to-nccl>
+cmake --build build/example
+```
+
+The complete C/CUDA example suite can be built from `docs/examples`. The
+aggregate project defaults to CUDA architecture 90 because the Multimem
+example requires SM 9.0 or later. Set `CMAKE_CUDA_ARCHITECTURES` or
+`CUDAARCHS` to override that default. Add `-DNCCLExamples_USE_MPI=ON` to
+include the MPI-only communicator and enable MPI coordination in the other
+examples.
+
+```shell
+cmake -S docs/examples -B build/examples \
+  -DNCCL_ROOT=<path-to-nccl> \
+  -DNCCLExamples_USE_MPI=ON
+cmake --build build/examples
+```
+
 Python examples are run from the corresponding example's `python/` directory.
 Each Python README includes exact setup and run instructions. In most cases the
 workflow is:
@@ -154,7 +178,7 @@ the top-level requirements).
 ### Build Stage
 Users can use these optional variables to choose which libraries are used to
 build these examples:
-- `NCCL_HOME=<path>`: Local base directory of a NCCL installation.
+- `NCCL_HOME=<path>`: NCCL build or installation prefix.
 - `MPI` : [0,1] Build the examples with MPI support.
 - `MPI_HOME=<path>` : Local base directory of a MPI installation.
 - `CUDA_HOME=<path>` : Local base directory of a CUDA installation.

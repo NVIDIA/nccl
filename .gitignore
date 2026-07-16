@@ -9,6 +9,8 @@ junits/
 /plugins/net/example/*.so
 /plugins/mixed/example/*.so
 /plugins/net/mock/*.so
+/plugins/profiler/inspector/*.so
+/plugins/profiler/inspector/version.cc
 *.gcov
 /coverage/
 tags

@@ -61,7 +61,7 @@ static inline uint32_t ncclGdcPinFlag(enum ncclTopoFlushType flush) {
   if (flush == ncclTopoFlushC2c && ncclGdrPinV2Available()) return GDR_PIN_FLAG_FORCE_PCIE;
   return GDR_PIN_FLAG_DEFAULT;
 }
-ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int64_t netId, int netDev, int rank,
+ncclResult_t ncclTopoNeedFlush(struct ncclComm* comm, int64_t netId, int netDev, int rank, bool collNet,
                                enum ncclTopoFlushType* flush);
 ncclResult_t ncclTopoGetMinNetBw(struct ncclTopoSystem* system, int rank, float* bw);
 ncclResult_t ncclTopoIsGdrAvail(struct ncclTopoSystem* system, int rank, bool* avail);

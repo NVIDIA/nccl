@@ -1488,6 +1488,11 @@ fail:
 static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
   if (state->opsPool == NULL) {
+    if (proxyState->tpLocalnRanks > NCCL_MAX_LOCAL_RANKS) {
+      WARN("Proxy operations pool supports at most %d local ranks, but %d are required", NCCL_MAX_LOCAL_RANKS,
+           proxyState->tpLocalnRanks);
+      return ncclInternalError;
+    }
     int size = sizeof(struct ncclProxyOpsPool);
     struct ncclProxyOpsPool* pool = NULL;
 

@@ -71,7 +71,9 @@ enum ncclCuMemHostState {
   ncclCuMemHostDisabled = 1,
   ncclCuMemHostEnabled = 2
 };
-static int ncclCuMemHostProbeCache[NCCL_MAX_LOCAL_RANKS] = {};
+// This cache is indexed by CUDA device ordinal, not by NCCL local rank.
+static constexpr int ncclCuMemHostProbeCacheSize = 144;
+static int ncclCuMemHostProbeCache[ncclCuMemHostProbeCacheSize] = {};
 #endif
 
 // Return whether the CUDA version and NCCL_CUMEM_HOST_ENABLE policy allow
@@ -99,7 +101,7 @@ bool ncclCuMemHostEnable() {
 #else
   int cudaDev;
   if (!CUDASUCCESS(cudaGetDevice(&cudaDev))) return false;
-  if (cudaDev < 0 || cudaDev >= NCCL_MAX_LOCAL_RANKS) return false;
+  if (cudaDev < 0 || cudaDev >= ncclCuMemHostProbeCacheSize) return false;
   int state = COMPILER_ATOMIC_LOAD(&ncclCuMemHostProbeCache[cudaDev], std::memory_order_relaxed);
   if (state != ncclCuMemHostUninitialized) return state == ncclCuMemHostEnabled;
   // ret is only used by CHECKGOTO and is not returned.

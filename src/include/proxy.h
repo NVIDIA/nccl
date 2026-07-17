@@ -218,14 +218,17 @@ struct ncclProxyArgs {
 // p2p work contains a send and recv proxy op hence the 2x before it.
 #define MAX_OPS_PER_PEER (2 * MAXCHANNELS * 2 * NCCL_MAX_DEV_WORK_P2P_PER_BATCH)
 
+// This pool is shared across processes and may be mapped at different virtual addresses.
+// The operation and free-list arrays follow the header; offsets locate them in each mapping.
 struct ncclProxyOpsPool {
-  struct ncclProxyOp ops[MAX_OPS_PER_PEER * NCCL_MAX_LOCAL_RANKS];
   volatile int nextOps;
   volatile int nextOpsEnd;
-  volatile int freeOps[NCCL_MAX_LOCAL_RANKS];
+  int localRanks;
   int syncObjectsInitialized;
   std::mutex mutex;
   std::condition_variable cond;
+  size_t opsOffset;
+  size_t freeOpsOffset;
 };
 
 // Profiler handles sit inside both this pool and the ncclProxyArgs pool, which
@@ -273,7 +276,11 @@ struct ncclProxyProgressState {
   // Used by main threads to send work to progress thread
   struct ncclProxyOpsPool* opsPool;
   ncclShmHandle_t handle;
+  size_t opsPoolSize;
   char opsPoolShmSuffix[16];
+  // Per-local-rank scratch used only by the progress thread.
+  int* freeOp;
+  int* freeOpEnd;
 
   std::thread thread;
   std::atomic<int> stop{0};

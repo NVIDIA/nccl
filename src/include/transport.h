@@ -221,12 +221,10 @@ ncclResult_t ncclRegisterP2pNetBuffer(
   struct ncclComm* comm, void* userbuff, size_t size, struct ncclConnector* conn, int* regFlag, void** handle,
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue);
 ncclResult_t ncclRegisterCollBuffers(
-  struct ncclComm* comm, struct ncclTaskColl* info, void* outRegBufSend[NCCL_MAX_LOCAL_RANKS],
-  void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS],
+  struct ncclComm* comm, struct ncclTaskColl* info, void** outRegBufSend, void** outRegBufRecv,
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, bool* regNeedConnect);
 ncclResult_t ncclRegisterCollNvlsBuffers(
-  struct ncclComm* comm, struct ncclTaskColl* info, void* outRegBufSend[NCCL_MAX_LOCAL_RANKS],
-  void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS],
+  struct ncclComm* comm, struct ncclTaskColl* info, void** outRegBufSend, void** outRegBufRecv,
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, bool* regNeedConnect);
 ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, ncclFunc_t func, int* recChannels);
 

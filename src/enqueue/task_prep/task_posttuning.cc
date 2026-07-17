@@ -276,9 +276,8 @@ static ncclResult_t applyTuningToCollTask(struct ncclComm* comm, struct ncclTask
   return ncclSuccess;
 }
 
-static ncclResult_t registerCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task,
-                                        void* regBufSend[NCCL_MAX_LOCAL_RANKS], void* regBufRecv[NCCL_MAX_LOCAL_RANKS],
-                                        bool* regNeedConnect) {
+static ncclResult_t registerCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task, void** regBufSend,
+                                        void** regBufRecv, bool* regNeedConnect) {
   struct ncclKernelPlanner* planner = &comm->planner;
 
   *regNeedConnect = true;
@@ -286,9 +285,8 @@ static ncclResult_t registerCollBuffers(struct ncclComm* comm, struct ncclTaskCo
   return ncclSuccess;
 }
 
-static ncclResult_t registerNvlsCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task,
-                                            void* regBufSend[NCCL_MAX_LOCAL_RANKS],
-                                            void* regBufRecv[NCCL_MAX_LOCAL_RANKS], bool* regNeedConnect) {
+static ncclResult_t registerNvlsCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task, void** regBufSend,
+                                            void** regBufRecv, bool* regNeedConnect) {
   struct ncclKernelPlanner* planner = &comm->planner;
 
   *regNeedConnect = true;
@@ -298,7 +296,7 @@ static ncclResult_t registerNvlsCollBuffers(struct ncclComm* comm, struct ncclTa
 }
 
 static ncclResult_t enqueueCollWork(struct ncclComm* comm, struct ncclKernelPlanner* planner, struct ncclTaskColl* task,
-                                    void* regBufSend[NCCL_MAX_LOCAL_RANKS], void* regBufRecv[NCCL_MAX_LOCAL_RANKS],
+                                    void* regBufSend, void* regBufRecv,
                                     struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next>* workQueue) {
   struct ncclDevWorkColl devWork = {};
   struct ncclWorkList* workNode = nullptr;
@@ -325,8 +323,8 @@ static ncclResult_t enqueueCollWork(struct ncclComm* comm, struct ncclKernelPlan
   if (task->regBufType & NCCL_NVLS_REG_BUFFER) {
     struct ncclDevWorkCollReg workReg = {};
     workReg.coll = devWork;
-    workReg.dnInputs[0] = regBufSend[0];
-    workReg.dnOutputs[0] = regBufRecv[0];
+    workReg.dnInputs[0] = regBufSend;
+    workReg.dnOutputs[0] = regBufRecv;
     workNode = ncclMemoryStackAllocInlineArray<ncclWorkList, ncclDevWorkCollReg>(&comm->memScoped, 1);
     workNode->workType = ncclDevWorkTypeCollReg;
     workNode->size = sizeof(struct ncclDevWorkCollReg);
@@ -425,12 +423,12 @@ static ncclResult_t preSchedLegacyTasks(
     if (tInfo->tuningOut.algo == NCCL_ALGO_NVLS || tInfo->tuningOut.algo == NCCL_ALGO_NVLS_TREE) {
       struct ncclTaskColl* task =
         ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
-      void* regBufSend[NCCL_MAX_LOCAL_RANKS];
-      void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
+      void* regBufSend = nullptr;
+      void* regBufRecv = nullptr;
       bool regNeedConnect = true;
 
       NCCLCHECK(applyTuningToCollTask(comm, tInfo, task));
-      NCCLCHECK(registerNvlsCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
+      NCCLCHECK(registerNvlsCollBuffers(comm, task, &regBufSend, &regBufRecv, &regNeedConnect));
       NCCLCHECK(recordAlgoNeedConnect(comm, tInfo->tuningOut.algo, regNeedConnect, algoNeedConnect, &needConnect));
       int kind = 2 * task->isCollnet + task->isNvls;
       NCCLCHECK(enqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
@@ -453,12 +451,12 @@ static ncclResult_t preSchedLegacyTasks(
 
     struct ncclTaskColl* task =
       ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
-    void* regBufSend[NCCL_MAX_LOCAL_RANKS];
-    void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
+    void* regBufSend = nullptr;
+    void* regBufRecv = nullptr;
     bool regNeedConnect = true;
 
     NCCLCHECK(applyTuningToCollTask(comm, tInfo, task));
-    NCCLCHECK(registerCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
+    NCCLCHECK(registerCollBuffers(comm, task, &regBufSend, &regBufRecv, &regNeedConnect));
     int kind = 2 * task->isCollnet + task->isNvls;
     NCCLCHECK(enqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
     planner->nTasksColl += 1;
@@ -495,8 +493,8 @@ static ncclResult_t enqueueBroadcastTask(struct ncclComm* comm, struct ncclTaskT
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* task =
     ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
-  void* regBufSend[NCCL_MAX_LOCAL_RANKS];
-  void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
+  void* regBufSend = nullptr;
+  void* regBufRecv = nullptr;
   bool regNeedConnect = true;
   int collNetSupport = 0;
   int nvlsTransportEnabled = 0;
@@ -541,7 +539,7 @@ static ncclResult_t enqueueBroadcastTask(struct ncclComm* comm, struct ncclTaskT
   }
   if (task->protocol == NCCL_PROTO_LL) task->trafficBytes *= 4;
 
-  NCCLCHECK(registerCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
+  NCCLCHECK(registerCollBuffers(comm, task, &regBufSend, &regBufRecv, &regNeedConnect));
   NCCLCHECK(enqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &planner->collWorkQueue));
   planner->nTasksColl += 1;
   ncclIntruQueueEnqueue(&planner->collTaskQueue, task);

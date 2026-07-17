@@ -452,10 +452,11 @@ cleanup:
 
 ncclResult_t ncclTransportCollNetCheck(struct ncclComm* comm, int collNetSetupFail) {
   // AllGather collNet setup results
-  int allGatherFailures[NCCL_MAX_LOCAL_RANKS] = {0};
+  ncclUniqueArrayPtr<int> allGatherFailures{nullptr};
+  NCCLCHECK(ncclCalloc(allGatherFailures, comm->localRanks));
   allGatherFailures[comm->localRank] = collNetSetupFail;
   NCCLCHECK(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
-                                        allGatherFailures, sizeof(int)));
+                                        allGatherFailures.get(), sizeof(int)));
   for (int i = 0; i < comm->localRanks; i++) {
     if (allGatherFailures[i] != 0) {
       collNetSetupFail = 1;

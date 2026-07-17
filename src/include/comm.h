@@ -87,8 +87,6 @@ enum helperThreadState {
   ThreadStop
 };
 
-#define NCCL_IPC_POOL_SIZE (2 * NCCL_MAX_LOCAL_RANKS * NCCL_MAX_OPS)
-
 struct ncclUserRedOp {
   int freeNext; // -1=allocated, otherwise index of next free entry in array
   ncclDataType_t datatype;

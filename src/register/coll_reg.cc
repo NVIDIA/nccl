@@ -59,9 +59,31 @@ static ncclResult_t registerCheckP2PConnection(struct ncclComm* comm, struct ncc
   return ncclSuccess;
 }
 
+static ncclResult_t registerAddPeerRank(int peer, ncclUniqueArrayPtr<int>* peerRanks, int* nPeers, int* peerCapacity,
+                                        int nRanks) {
+  for (int p = 0; p < *nPeers; ++p) {
+    if (peerRanks->get()[p] == peer) return ncclSuccess;
+  }
+
+  if (*nPeers >= nRanks) {
+    WARN("Too many distinct IPC registration peers for %d communicator ranks", nRanks);
+    return ncclInternalError;
+  }
+  if (*nPeers == *peerCapacity) {
+    constexpr int initialCapacity = 16;
+    int newCapacity = std::min(nRanks, *peerCapacity == 0 ? initialCapacity : 2 * *peerCapacity);
+    int* ranks = peerRanks->release();
+    ncclResult_t result = ncclRealloc(&ranks, *peerCapacity, newCapacity);
+    peerRanks->reset(ranks);
+    NCCLCHECK(result);
+    *peerCapacity = newCapacity;
+  }
+  peerRanks->get()[(*nPeers)++] = peer;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclRegisterCollNvlsBuffers(
-  struct ncclComm* comm, struct ncclTaskColl* info, void* outRegBufSend[NCCL_MAX_LOCAL_RANKS],
-  void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS],
+  struct ncclComm* comm, struct ncclTaskColl* info, void** outRegBufSend, void** outRegBufRecv,
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, bool* regNeedConnect) {
   ncclResult_t result = ncclSuccess;
 
@@ -147,10 +169,10 @@ exit:
 }
 
 ncclResult_t ncclRegisterCollBuffers(
-  struct ncclComm* comm, struct ncclTaskColl* info, void* outRegBufSend[NCCL_MAX_LOCAL_RANKS],
-  void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS],
+  struct ncclComm* comm, struct ncclTaskColl* info, void** outRegBufSend, void** outRegBufRecv,
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, bool* regNeedConnect) {
   ncclResult_t result = ncclSuccess;
+  ncclUniqueArrayPtr<int> peerRanks{nullptr};
 
   info->regBufType = NCCL_REGULAR_BUFFER;
   *regNeedConnect = true;
@@ -230,13 +252,12 @@ ncclResult_t ncclRegisterCollBuffers(
       goto exit;
     if (info->func == ncclFuncAllGather && info->algorithm == NCCL_ALGO_PAT) goto exit;
 
-    int peerRanks[NCCL_MAX_LOCAL_RANKS];
     int nPeers = 0;
+    int peerCapacity = 0;
     size_t elementSize = ncclTypeSize(info->datatype);
     size_t sendbuffSize = elementSize * ncclFuncSendCount(info->func, comm->nRanks, info->count);
     size_t recvbuffSize = elementSize * ncclFuncRecvCount(info->func, comm->nRanks, info->count);
     int regBufFlag = 0;
-    memset(peerRanks, 0xff, sizeof(int) * NCCL_MAX_LOCAL_RANKS);
 
     if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT) {
       struct ncclChannel* channel = comm->channels;
@@ -253,14 +274,7 @@ ncclResult_t ncclRegisterCollBuffers(
               NCCLCHECK(registerCheckP2PConnection(comm, peerConn, &comm->graphs[NCCL_ALGO_COLLNET_DIRECT], peer,
                                                    &needReg));
               if (needReg) {
-                bool found = false;
-                for (int p = 0; p < nPeers; ++p) {
-                  if (peerRanks[p] == peer) {
-                    found = true;
-                    break;
-                  }
-                }
-                if (!found) peerRanks[nPeers++] = peer;
+                NCCLCHECK(registerAddPeerRank(peer, &peerRanks, &nPeers, &peerCapacity, comm->nRanks));
               }
             }
           }
@@ -268,20 +282,22 @@ ncclResult_t ncclRegisterCollBuffers(
 
         if (nPeers > 0) {
           if (comm->planner.persistent && ncclParamGraphRegister()) {
-            ncclIpcGraphRegisterBuffer(comm, info->sendbuff, sendbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
+            ncclIpcGraphRegisterBuffer(comm, info->sendbuff, sendbuffSize, peerRanks.get(), nPeers, NCCL_IPC_COLLECTIVE,
                                        &ipcSendRegFlag, &info->sendbuffOffset, &info->sendbuffRmtAddrs, cleanupQueue,
                                        &info->nCleanupQueueElts);
-            ncclIpcGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
+            ncclIpcGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks.get(), nPeers, NCCL_IPC_COLLECTIVE,
                                        &ipcRecvRegFlag, &info->recvbuffOffset, &info->recvbuffRmtAddrs, cleanupQueue,
                                        &info->nCleanupQueueElts);
           }
           if (ncclParamLocalRegister()) {
             if (!ipcSendRegFlag)
-              ncclIpcLocalRegisterBuffer(comm, info->sendbuff, sendbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
-                                         &ipcSendRegFlag, &info->sendbuffOffset, &info->sendbuffRmtAddrs);
+              ncclIpcLocalRegisterBuffer(comm, info->sendbuff, sendbuffSize, peerRanks.get(), nPeers,
+                                         NCCL_IPC_COLLECTIVE, &ipcSendRegFlag, &info->sendbuffOffset,
+                                         &info->sendbuffRmtAddrs);
             if (!ipcRecvRegFlag)
-              ncclIpcLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
-                                         &ipcRecvRegFlag, &info->recvbuffOffset, &info->recvbuffRmtAddrs);
+              ncclIpcLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks.get(), nPeers,
+                                         NCCL_IPC_COLLECTIVE, &ipcRecvRegFlag, &info->recvbuffOffset,
+                                         &info->recvbuffRmtAddrs);
           }
         }
 
@@ -382,25 +398,18 @@ ncclResult_t ncclRegisterCollBuffers(
             }
           }
           if (peerConn->conn.flags & (NCCL_P2P_READ | NCCL_P2P_WRITE)) {
-            bool found = false;
-            for (int p = 0; p < nPeers; ++p) {
-              if (peerRanks[p] == peer) {
-                found = true;
-                break;
-              }
-            }
-            if (!found) peerRanks[nPeers++] = peer;
+            NCCLCHECK(registerAddPeerRank(peer, &peerRanks, &nPeers, &peerCapacity, comm->nRanks));
           }
         }
       }
       if (nPeers > 0 && comm->isAllDirectP2p) {
         if (comm->planner.persistent && ncclParamGraphRegister()) {
-          ncclIpcGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
+          ncclIpcGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks.get(), nPeers, NCCL_IPC_COLLECTIVE,
                                      &regBufFlag, &info->recvbuffOffset, &info->recvbuffRmtAddrs, cleanupQueue,
                                      &info->nCleanupQueueElts);
         }
         if (!regBufFlag && ncclParamLocalRegister()) {
-          ncclIpcLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
+          ncclIpcLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks.get(), nPeers, NCCL_IPC_COLLECTIVE,
                                      &regBufFlag, &info->recvbuffOffset, &info->recvbuffRmtAddrs);
         }
       }
@@ -488,25 +497,18 @@ ncclResult_t ncclRegisterCollBuffers(
             NCCLCHECK(registerCheckP2PConnection(comm, recvConn, &comm->graphs[info->algorithm], peer, &peerNeedReg));
 
             if (peerNeedReg) {
-              bool found = false;
-              for (int pindex = 0; pindex < nPeers; ++pindex) {
-                if (peerRanks[pindex] == peer) {
-                  found = true;
-                  break;
-                }
-              }
-              if (!found) peerRanks[nPeers++] = peer;
+              NCCLCHECK(registerAddPeerRank(peer, &peerRanks, &nPeers, &peerCapacity, comm->nRanks));
             }
           }
         }
         if (nPeers > 0) {
           if (comm->planner.persistent && ncclParamGraphRegister()) {
-            ncclIpcGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
+            ncclIpcGraphRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks.get(), nPeers, NCCL_IPC_COLLECTIVE,
                                        &regBufFlag, &info->recvbuffOffset, &info->recvbuffRmtAddrs, cleanupQueue,
                                        &info->nCleanupQueueElts);
           }
           if (!regBufFlag && ncclParamLocalRegister()) {
-            ncclIpcLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks, nPeers, NCCL_IPC_COLLECTIVE,
+            ncclIpcLocalRegisterBuffer(comm, info->recvbuff, recvbuffSize, peerRanks.get(), nPeers, NCCL_IPC_COLLECTIVE,
                                        &regBufFlag, &info->recvbuffOffset, &info->recvbuffRmtAddrs);
           }
         }

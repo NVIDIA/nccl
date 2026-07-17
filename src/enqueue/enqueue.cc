@@ -354,8 +354,8 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
   task = ncclIntruQueueHead(&planner->collTaskQueue);
   while (task != nullptr) {
     // Build a ncclDevWorkColl[Reg?] struct for each task.
-    void* regBufSend[NCCL_MAX_LOCAL_RANKS];
-    void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
+    void* regBufSend = nullptr;
+    void* regBufRecv = nullptr;
     bool regNeedConnect = true;
     struct ncclWorkList* workNode = NULL;
     struct ncclDevWorkColl devWork = {};
@@ -364,7 +364,7 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
       workNode = ncclIntruQueueDequeue(&planner->tmpCollWorkQueue);
       goto next;
     }
-    ncclRegisterCollBuffers(comm, task, regBufSend, regBufRecv, &planner->collCleanupQueue, &regNeedConnect);
+    ncclRegisterCollBuffers(comm, task, &regBufSend, &regBufRecv, &planner->collCleanupQueue, &regNeedConnect);
 
     devWork.sendbuff = (void*)task->sendbuff;
     devWork.recvbuff = (void*)task->recvbuff;
@@ -387,8 +387,8 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
       struct ncclDevWorkCollReg workReg = {};
       workReg.coll = devWork; // C++ struct assignment
       /* NVLS only has one send and recv buffer registered */
-      workReg.dnInputs[0] = regBufSend[0];
-      workReg.dnOutputs[0] = regBufRecv[0];
+      workReg.dnInputs[0] = regBufSend;
+      workReg.dnOutputs[0] = regBufRecv;
       workNode = ncclMemoryStackAllocInlineArray<ncclWorkList, ncclDevWorkCollReg>(&comm->memScoped, 1);
       workNode->workType = ncclDevWorkTypeCollReg;
       workNode->size = sizeof(struct ncclDevWorkCollReg);
@@ -569,10 +569,10 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
   task = ncclIntruQueueHead(&planner->collTaskQueue);
   while (task != nullptr) {
     // Build a ncclDevWorkColl[Reg?] struct for each task.
-    void* regBufSend[NCCL_MAX_LOCAL_RANKS];
-    void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
+    void* regBufSend = nullptr;
+    void* regBufRecv = nullptr;
     bool regNeedConnect = true;
-    ncclRegisterCollNvlsBuffers(comm, task, regBufSend, regBufRecv, &planner->collCleanupQueue, &regNeedConnect);
+    ncclRegisterCollNvlsBuffers(comm, task, &regBufSend, &regBufRecv, &planner->collCleanupQueue, &regNeedConnect);
 
     if (comm->runtimeConn && comm->initAlgoChannels[task->algorithm] == false) {
       if (task->algorithm == NCCL_ALGO_NVLS_TREE && comm->initAlgoChannels[NCCL_ALGO_NVLS] == false &&
@@ -610,8 +610,8 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
         struct ncclDevWorkCollReg workReg = {};
         workReg.coll = devWork; // C++ struct assignment
         /* NVLS only has one send and recv buffer registered */
-        workReg.dnInputs[0] = regBufSend[0];
-        workReg.dnOutputs[0] = regBufRecv[0];
+        workReg.dnInputs[0] = regBufSend;
+        workReg.dnOutputs[0] = regBufRecv;
         workNode = ncclMemoryStackAllocInlineArray<ncclWorkList, ncclDevWorkCollReg>(&comm->memScoped, 1);
         workNode->workType = ncclDevWorkTypeCollReg;
         workNode->size = sizeof(struct ncclDevWorkCollReg);

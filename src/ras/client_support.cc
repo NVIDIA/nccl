@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include <cstdarg>
+#include <climits>
 #include <cstddef>
 #include <ctime>
 
@@ -753,7 +754,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   int totalGpus, totalNodes, firstNGpusNode, firstNGpusGlobal, firstNPeersGlobal;
   bool consistentNGpusNode, consistentNGpusGlobal, consistentNPeersGlobal;
   int firstIdx, nPeers;
-  struct rasValCount valCounts[NCCL_MAX_LOCAL_RANKS];
+  struct rasValCount* valCounts = nullptr;
   int nValCounts;
 
   TRACE(NCCL_RAS, "RAS: rasClientRunInit: starting");
@@ -835,6 +836,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
       // but of a group of peers, so calculating it is more involved.  We store the value in a temporary auxRasPeers
       // array.
       NCCLCHECKGOTO(ncclCalloc(&auxRasPeers, nRasPeers), ret, fail);
+      NCCLCHECKGOTO(ncclCalloc(&valCounts, nRasPeers), ret, fail);
 
       firstIdx = 0;
       nPeers = 0;
@@ -1022,6 +1024,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
   TRACE(NCCL_RAS, "RAS: rasClientRunInit: scheduling RAS_COLL_COMMS and finishing");
 exit:
   free(auxRasPeers);
+  free(valCounts);
   return ret;
 fail:
   goto exit;
@@ -1326,7 +1329,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
       struct rasAuxCommRank* auxRank = auxCommRanks + rankIdx;
       if (rankIdx == 0) {
         auxComm->nPeers = auxComm->nNodes = 1;
-        auxComm->ranksPerNodeMin = NCCL_MAX_LOCAL_RANKS;
+        auxComm->ranksPerNodeMin = INT_MAX;
         auxComm->ranksPerNodeMax = 0;
         memcpy(auxComm->firstCollOpCounts, auxRank->rank->collOpCounts, sizeof(auxComm->firstCollOpCounts));
         nRanks = 1;
@@ -1427,7 +1430,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     int ranksPerNodeMin, ranksPerNodeMax;
     int ranksTotal;
 
-    ranksPerNodeMin = NCCL_MAX_LOCAL_RANKS;
+    ranksPerNodeMin = INT_MAX;
     ranksPerNodeMax = 0;
     memset(peerNvmlDevs, '\0', coll->nPeers * sizeof(*peerNvmlDevs));
     // We don't group comms by ranksPerNodeMin/Max, so the values may differ between comms in one group.

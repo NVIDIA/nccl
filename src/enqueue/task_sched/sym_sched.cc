@@ -17,6 +17,7 @@
 #include "sym_kernels.h"
 #include "enqueue/task_sched.h"
 #include "enqueue/task_pretuning.h"
+#include "enqueue/sched_profiler.h"
 #include <algorithm>
 #include <cuda_fp16.h>
 #if defined(__CUDA_FP8_TYPES_EXIST__)
@@ -39,12 +40,14 @@ struct ncclSymSchedKernelPlan {
   size_t kernelArgsSize;
   int nChannels;
   int threadPerBlock;
+  struct ncclSchedProfilerLaunch* profiler; // nullptr unless the launch is profiled
 };
 
 struct ncclSymSchedKernelTaskQueue {
   struct ncclSymSchedKernelTaskQueue* next;
   int symKernelId;
   int maxChannels;
+  bool captured;
   struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> taskQueue;
   struct ncclSymSchedKernelPlan* kernelPlans;
 };
@@ -64,6 +67,7 @@ struct ncclSymSchedPlan {
 
 struct symSchedKernelPlanFreeArg {
   struct ncclSymkDevWorkArgs* kernelSymArgs;
+  struct ncclSchedProfilerLaunch* profiler;
 };
 
 static ncclDevRedOp_t symSchedRedOp(ncclRedOp_t redOp, ncclDevRedOp_t devRedOp) {
@@ -231,6 +235,7 @@ static ncclResult_t symSchedEnqueueKernelTask(
   subQueue = ncclMemoryStackAlloc<struct ncclSymSchedKernelTaskQueue>(&comm->memScoped);
   subQueue->symKernelId = symKernelId;
   subQueue->maxChannels = maxChannels;
+  subQueue->captured = streamPlan->captured;
   subQueue->kernelPlans = nullptr;
   subQueue->next = nullptr;
   ncclIntruQueueConstruct(&subQueue->taskQueue);
@@ -254,7 +259,7 @@ static int symSchedCountKernelBatch(
   size_t workArgsBytes = comm->workArgsBytes;
 
   auto fits = [&](int nWorks) {
-    return ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(maxChannels, nWorks) <= workArgsBytes;
+    return ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(maxChannels, nWorks, ncclProfilerPluginLoaded()) <= workArgsBytes;
   };
 
   if (fits(nElems)) return nElems;
@@ -311,6 +316,14 @@ static ncclResult_t symSchedBuildKernelPlan(
   struct ncclSymSchedKernelPlan* kernelPlan = nullptr;
   struct ncclTaskTuningInfo* taskInfo = nullptr;
   ncclSymkKernelId kernelId = (ncclSymkKernelId)kernelTaskQueue->symKernelId;
+  struct ncclSchedProfilerLaunch* profiler = nullptr;
+  // Profiling requested = plugin loaded and the call's mask has ncclProfileKernelCh.
+  // Device-side instrumentation is eager-only: the args buffer is snapshotted at launch,
+  // so the mirrored counters cannot advance across graph replays. Under capture the clean
+  // kernel runs and only the host-side group/coll events are replayed.
+  int eActivationMask = headTask->raw->profiler.eActivationMask;
+  bool profilingRequested = ncclProfilerPluginLoaded() && (eActivationMask & ncclProfileKernelCh);
+  bool profilerEnabled = profilingRequested && !kernelTaskQueue->captured;
 
   {
     struct ncclTaskTuningInfo* task = headTask;
@@ -329,15 +342,28 @@ static ncclResult_t symSchedBuildKernelPlan(
     int kernelIndex = ncclSymkGetKernelIndex(kernelId, headOpDev.op, datatype);
     int maxDynamicSmem = ncclSymkKernelMaxDynamicSmem[kernelIndex];
     kernelPlan->threadPerBlock = maxnWarps * WARP_SIZE;
-    kernelPlan->kernelFn = ncclSymkKernelList[kernelIndex];
+    kernelPlan->kernelFn = (profilerEnabled && ncclSymkKernelListProfile[kernelIndex] != nullptr) ?
+                             ncclSymkKernelListProfile[kernelIndex] :
+                             ncclSymkKernelList[kernelIndex];
     kernelPlan->kernelDynSmem = (1 & ncclSymkDynamicSmemKernelMask() >> (int)kernelId) ? maxDynamicSmem : 0;
-    kernelPlan->kernelArgsSize = ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(totalChannels, nWorks);
+    kernelPlan->kernelArgsSize = ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(totalChannels, nWorks, profilerEnabled);
     NCCLCHECKGOTO(ncclCalloc((char**)&argsBuf, kernelPlan->kernelArgsSize), ret, fail);
     kernelPlan->kernelSymArgs = argsBuf;
+    kernelPlan->profiler = nullptr;
 
     argsBuf->nMaxChannels = totalChannels;
     argsBuf->maxDynamicSmem = maxDynamicSmem;
-    argsBuf->profilerMode = ncclDevProfilerModeNone;
+    // KernelCh-only launches leave the phase bit clear, so the profile variant skips the
+    // phase stamps and their fence at runtime.
+    argsBuf->profilerMode =
+      profilerEnabled ? ncclProfilerDeviceMode(eActivationMask) : (uint8_t)ncclDevProfilerModeNone;
+
+    if (profilingRequested) {
+      NCCLCHECKGOTO(ncclSchedProfilerLaunchCreate(comm, kernelTaskQueue->captured, headTask, nWorks, &profiler), ret,
+                    fail);
+      profiler->symArgs = argsBuf;
+      kernelPlan->profiler = profiler;
+    }
     workRangePtr = ncclSymkGetWorkRange(argsBuf);
     workBufPtr = ncclSymkGetWorks(argsBuf, totalChannels);
   }
@@ -353,6 +379,7 @@ static ncclResult_t symSchedBuildKernelPlan(
     taskInfo = ncclIntruQueueDequeue(&kernelTaskQueue->taskQueue);
     count = taskInfo->raw->coll.count;
     NCCLCHECKGOTO(symSchedMakeDevWorkFromTuningInfo(comm, taskInfo, &devWork), ret, fail);
+    ncclSchedProfilerLaunchAddTask(profiler, taskInfo);
     symSchedFreeTuningInfoRaw(comm, taskInfo);
     taskInfo = nullptr;
 
@@ -405,6 +432,7 @@ static ncclResult_t symSchedBuildKernelPlan(
 
   memcpy(&argsBuf->kcomm, &comm->symkState.kcomm, sizeof(comm->symkState.kcomm));
   kernelPlan->nChannels = curChannel;
+  if (profiler != nullptr) profiler->symChannels = curChannel;
 
   if (comm->rank == 0) {
     INFO(NCCL_TUNING, "%s [Symmetric]: %ld Bytes -> Kernel %s nchannels %d nthreads %d nWorks %d",
@@ -421,6 +449,7 @@ exit:
 fail:
   if (taskInfo != nullptr) symSchedFreeTuningInfoRaw(comm, taskInfo);
   if (argsBuf != nullptr) free(argsBuf);
+  ncclSchedProfilerLaunchDestroy(profiler);
   goto exit;
 }
 
@@ -491,6 +520,9 @@ static ncclResult_t symSchedLaunchKernel(
   int driverVersion = 0;
 
   if (launchEventOut) *launchEventOut = nullptr;
+
+  // Nothing to unwind if this fails, so return directly (a goto here would cross initializers).
+  NCCLCHECK(ncclProfilerSchedPreLaunch(kernelPlan->profiler, launchStream));
 
   void* extra[] = {
     CU_LAUNCH_PARAM_BUFFER_POINTER, kernelPlan->kernelSymArgs,
@@ -574,12 +606,14 @@ static ncclResult_t symSchedLaunchKernel(
   }
 
 do_return:
+  (void)ncclProfilerSchedPostLaunch(kernelPlan->profiler);
   return ret;
 }
 
 static void CUDART_CB symSchedKernelPlanDestructor(void* arg_) {
   struct symSchedKernelPlanFreeArg* arg = (struct symSchedKernelPlanFreeArg*)arg_;
   free(arg->kernelSymArgs);
+  ncclSchedProfilerLaunchDestroy(arg->profiler);
   free(arg);
 }
 
@@ -619,6 +653,11 @@ static ncclResult_t launchSymStreamPlan(
         launchEventOut = implicitOrder != ncclImplicitOrderNone &&
           kernelPlan->next == nullptr && kernelTaskQueue->next == nullptr ? &launchEvent : nullptr;
         NCCLCHECKGOTO(symSchedLaunchKernel(comm, streamPlan, kernelPlan, implicitOrder, launchEventOut), ret, fail);
+        // A captured launch emits its group/coll events on every replay.
+        if (kernelPlan->profiler != nullptr && streamPlan->captured) {
+          CUDACHECKGOTO(cudaLaunchHostFunc(launchStream, ncclSchedProfilerReplayCallback, kernelPlan->profiler), ret,
+                        fail);
+        }
       }
     }
 
@@ -640,6 +679,7 @@ static ncclResult_t launchSymStreamPlan(
           struct symSchedKernelPlanFreeArg* freeArg = nullptr;
           NCCLCHECKGOTO(ncclCalloc(&freeArg, 1), ret, fail);
           freeArg->kernelSymArgs = kernelPlan->kernelSymArgs;
+          freeArg->profiler = kernelPlan->profiler;
           ret = ncclCudaGraphAddDestructor(
               streamPlan->graph, symSchedKernelPlanDestructor, (void*)freeArg);
           if (ret != ncclSuccess) {
@@ -647,6 +687,7 @@ static ncclResult_t launchSymStreamPlan(
             goto fail;
           }
           kernelPlan->kernelSymArgs = nullptr;
+          kernelPlan->profiler = nullptr;
         }
       }
     } else {
@@ -656,6 +697,8 @@ static ncclResult_t launchSymStreamPlan(
              kernelPlan != nullptr; kernelPlan = kernelPlan->next) {
           free(kernelPlan->kernelSymArgs);
           kernelPlan->kernelSymArgs = nullptr;
+          ncclSchedProfilerLaunchDestroy(kernelPlan->profiler);
+          kernelPlan->profiler = nullptr;
         }
       }
     }
@@ -720,7 +763,7 @@ ncclResult_t ncclScheduleSymTasks(
   if (ncclIntruQueueEmpty(queue)) return ncclSuccess;
 
   NCCLCHECK(ncclDevrInitOnce(comm));
-  assert(comm->workArgsBytes >= ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(MAXCHANNELS, 1));
+  assert(comm->workArgsBytes >= ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(MAXCHANNELS, 1, ncclProfilerPluginLoaded()));
 
   struct ncclSymSchedPlan symPlan = {};
   NCCLCHECK(scheduleSymTasks(comm, queue, &symPlan));

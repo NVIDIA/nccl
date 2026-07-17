@@ -586,8 +586,36 @@ fail:
   goto exit;
 }
 
-static ncclResult_t rmaSchedCePutLaunchPersist(
-    struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan, cudaStream_t stream) {
+// Profiler args for one CE launch of RMA tasks. The CE batches it issues report as
+// ncclProfileCeBatch children of a ncclProfileCeColl event describing the whole launch,
+// parented to the API event of the first task. Wait launches carry no payload.
+static void rmaSchedCeCollArgsInit(ncclFunc_t func, struct ncclCeCollArgs* args) {
+  memset(args, 0, sizeof(*args));
+  args->func = func;
+  args->rootRank = -1;
+  args->datatype = ncclInt8;
+  args->eltSize = 1;
+}
+
+static void rmaSchedCeCollArgsAddQueue(
+  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue, struct ncclCeCollArgs* args) {
+  struct ncclTaskTuningInfo* head = ncclIntruQueueHead(queue);
+  if (head == nullptr) return;
+  if (args->apiEventHandle == nullptr) {
+    args->apiEventHandle = head->raw->profiler.apiEventHandle;
+    args->userTag = head->raw->profiler.userTag;
+    if (args->func == ncclFuncPutSignal) {
+      args->datatype = head->raw->rma.rmaOp.putSignal.datatype;
+      args->eltSize = ncclTypeSize(args->datatype);
+    }
+  }
+  for (struct ncclTaskTuningInfo* t = head; t != nullptr; t = t->next) {
+    args->nElts += args->func == ncclFuncPutSignal ? t->raw->rma.rmaOp.putSignal.count : 1;
+  }
+}
+
+static ncclResult_t rmaSchedCePutLaunchPersist(struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan,
+                                               cudaStream_t stream, struct ncclCeCollArgs* profArgs) {
   ncclResult_t ret = ncclSuccess;
   int nRmaCtx = comm->config.numRmaCtx;
   int nRmaTasksCe = 0;
@@ -679,8 +707,8 @@ static ncclResult_t rmaSchedCePutLaunchPersist(
           signalParams.numOps++;
         }
 
-        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream), ret, fail);
-        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream), ret, fail);
+        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream, profArgs), ret, fail);
+        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream, profArgs), ret, fail);
       }
     }
   }
@@ -706,8 +734,8 @@ struct rmaSchedCeOp {
   ncclSignalMode_t signalMode;
 };
 
-static ncclResult_t rmaSchedCePutLaunchNonPersist(
-    struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan, cudaStream_t stream) {
+static ncclResult_t rmaSchedCePutLaunchNonPersist(struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan,
+                                                  cudaStream_t stream, struct ncclCeCollArgs* profArgs) {
   ncclResult_t ret = ncclSuccess;
   int nRmaCtx = comm->config.numRmaCtx;
   int lsaSize = comm->devrState.lsaTeamSize;
@@ -879,8 +907,8 @@ static ncclResult_t rmaSchedCePutLaunchNonPersist(
     if (nSeqStageOps > 0) {
       NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, nSeqStageOps, seqStageOps), ret, fail);
     }
-    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream), ret, fail);
-    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream, profArgs), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream, profArgs), ret, fail);
     nActivePeers = nNextActivePeers;
   }
 
@@ -917,8 +945,18 @@ static ncclResult_t rmaSchedCePutLaunch(
     return ncclInternalError;
   }
 
-  if (streamPlan->captured) return rmaSchedCePutLaunchPersist(comm, streamPlan, stream);
-  return rmaSchedCePutLaunchNonPersist(comm, streamPlan, stream);
+  ncclResult_t ret = ncclSuccess;
+  struct ncclCeCollArgs profArgs;
+  rmaSchedCeCollArgsInit(ncclFuncPutSignal, &profArgs);
+  for (int ctx = 0; ctx < nRmaCtx; ctx++) rmaSchedCeCollArgsAddQueue(&streamPlan->ctxPlans[ctx].putSignalCE, &profArgs);
+  NCCLCHECK(ncclProfilerStartCeCollEvent(comm, &profArgs, stream));
+  if (streamPlan->captured) {
+    ret = rmaSchedCePutLaunchPersist(comm, streamPlan, stream, &profArgs);
+  } else {
+    ret = rmaSchedCePutLaunchNonPersist(comm, streamPlan, stream, &profArgs);
+  }
+  ncclProfilerStopCeCollEvent(comm, &profArgs, stream);
+  return ret;
 }
 
 static ncclResult_t rmaSchedCeWaitLaunch(
@@ -930,6 +968,7 @@ static ncclResult_t rmaSchedCeWaitLaunch(
   ncclResult_t ret = ncclSuccess;
   CUstreamBatchMemOpParams* batchParams = nullptr;
   struct ncclCeBatchOpsParams ceParams = {};
+  struct ncclCeCollArgs profArgs;
   int nElems = queue->nElems;
   cudaStream_t stream = streamPlan->stream;
   bool captured = streamPlan->captured;
@@ -940,6 +979,10 @@ static ncclResult_t rmaSchedCeWaitLaunch(
     WARN("RMA CE is not initialized");
     return ncclInternalError;
   }
+
+  rmaSchedCeCollArgsInit(ncclFuncWaitSignal, &profArgs);
+  rmaSchedCeCollArgsAddQueue(queue, &profArgs);
+  NCCLCHECK(ncclProfilerStartCeCollEvent(comm, &profArgs, stream));
 
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
   int lsaSize = comm->devrState.lsaTeamSize;
@@ -1009,13 +1052,14 @@ static ncclResult_t rmaSchedCeWaitLaunch(
           ceParams.dsts[ceParams.numOps]  = peerAck;
           ceParams.sizes[ceParams.numOps] = sizeof(uint64_t);
           ceParams.numOps++;
-          NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &ceParams, stream), ret, fail);
+          NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &ceParams, stream, &profArgs), ret, fail);
         }
       }
     }
   }
 
 exit:
+  ncclProfilerStopCeCollEvent(comm, &profArgs, stream);
   if (batchParams) free(batchParams);
   ncclCeFreeBatchOpsParams(&ceParams);
   return ret;

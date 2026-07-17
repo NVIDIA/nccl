@@ -166,6 +166,19 @@ ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan);
 ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan);
 ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan);
 
+// Launch events for the rearch schedulers (enqueue/task_sched), keyed by an
+// ncclSchedProfilerLaunch (enqueue/sched_profiler.h). Both accept a null launch.
+struct ncclSchedProfilerLaunch;
+// Before the driver launch: reserve the sym KernelCh counters in the kernel args, start
+// ncclProfileKernelLaunch, and for an eager launch start ncclProfileGroup and the
+// ncclProfileColl events and post the KernelCh work. A captured launch starts only the
+// KernelLaunch event here; its group and collective events are emitted per replay by
+// ncclSchedProfilerReplayCallback.
+ncclResult_t ncclProfilerSchedPreLaunch(struct ncclSchedProfilerLaunch* launch, cudaStream_t stream);
+// After the driver launch: stop every event PreLaunch started.
+ncclResult_t ncclProfilerSchedPostLaunch(struct ncclSchedProfilerLaunch* launch);
+// One replay of a captured launch: the group and collective events, start to stop.
+ncclResult_t ncclProfilerSchedReplay(struct ncclSchedProfilerLaunch* launch);
 // Proxy Op Start/Stop Event Wrappers
 ncclResult_t ncclProfilerStartProxyOpEvent(int sub, struct ncclProxyArgs* args);
 ncclResult_t ncclProfilerStopProxyOpEvent(int sub, struct ncclProxyArgs* args);

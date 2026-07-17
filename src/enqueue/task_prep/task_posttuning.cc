@@ -363,6 +363,18 @@ static ncclResult_t postTuneLegacyTasks(
   bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
   struct ncclKernelPlanner* planner = &comm->planner;
 
+  // Buffer registration below gates graph registration on planner->persistent, so establish it
+  // here; the legacy launcher only sets it later in ncclLaunchPrepare.
+  planner->persistent = ncclCudaGraphValid(planner->capturingGraph);
+
+  // Bin tasks (and their work) by scheduling kind = 2*isCollnet + isNvls, then concatenate into
+  // the planner queues in ascending kind order. scheduleCollTasksToPlan restarts channel assignment
+  // on every kind change, so interleaved kinds (e.g. standard and collnet) would imbalance channels.
+  // Mirrors legacy ncclPrepareTasks (collBins[isCollnet][isNvls]). collTaskQueue and collWorkQueue
+  // are consumed in lockstep, so both are binned and concatenated identically.
+  struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next> taskBins[4] = {};
+  struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next> workBins[4] = {};
+
   memset(algoNeedConnect, 0, sizeof(algoNeedConnect));
 
   for (struct ncclTaskTuningInfo* tInfo = ncclIntruQueueHead(legacyTaskQueue); tInfo != nullptr; tInfo = tInfo->next) {
@@ -377,9 +389,10 @@ static ncclResult_t postTuneLegacyTasks(
       NCCLCHECK(postTuneLegacyRegisterNvlsCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
       NCCLCHECK(postTuneLegacyRecordAlgoNeedConnect(comm, tInfo->tuningOut.algo, regNeedConnect, algoNeedConnect,
                                                     &needConnect));
-      NCCLCHECK(postTuneLegacyEnqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &planner->collWorkQueue));
+      int kind = 2 * task->isCollnet + task->isNvls;
+      NCCLCHECK(postTuneLegacyEnqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
       planner->nTasksColl += 1;
-      ncclIntruQueueEnqueue(&planner->collTaskQueue, task);
+      ncclIntruQueueEnqueue(&taskBins[kind], task);
     } else {
       bool regNeedConnect = true;
       NCCLCHECK(postTuneLegacyRecordAlgoNeedConnect(comm, tInfo->tuningOut.algo, regNeedConnect, algoNeedConnect,
@@ -404,9 +417,17 @@ static ncclResult_t postTuneLegacyTasks(
 
     NCCLCHECK(applyTuningToCollTask(comm, tInfo, task));
     NCCLCHECK(postTuneLegacyRegisterCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
-    NCCLCHECK(postTuneLegacyEnqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &planner->collWorkQueue));
+    int kind = 2 * task->isCollnet + task->isNvls;
+    NCCLCHECK(postTuneLegacyEnqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
     planner->nTasksColl += 1;
-    ncclIntruQueueEnqueue(&planner->collTaskQueue, task);
+    ncclIntruQueueEnqueue(&taskBins[kind], task);
+  }
+
+  // Concatenate the per-kind bins in ascending kind order (isCollnet outer, isNvls inner) so that
+  // same-kind tasks -- and their matching work nodes -- stay contiguous and in lockstep.
+  for (int kind = 0; kind < 4; kind++) {
+    ncclIntruQueueTransfer(&planner->collTaskQueue, &taskBins[kind]);
+    ncclIntruQueueTransfer(&planner->collWorkQueue, &workBins[kind]);
   }
 
   for (struct ncclTaskTuningInfo* tInfo = ncclIntruQueueHead(legacyTaskQueue); tInfo != nullptr; tInfo = tInfo->next) {
@@ -428,8 +449,7 @@ static ncclResult_t postTuneAllGatherVEnsureRingConnected(struct ncclComm* comm)
 }
 
 static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
-                                                           int root,
-                                                           struct ncclRawTaskAllGatherVBcast* bcast) {
+                                                           int root, struct ncclRawTaskAllGatherVBcast* bcast) {
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* task =
     ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);

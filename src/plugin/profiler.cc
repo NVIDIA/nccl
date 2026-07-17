@@ -11,6 +11,7 @@
 #include "utils.h"
 #include "proxy.h"
 #include "profiler.h"
+#include "enqueue/sched_profiler.h"
 #include "transport.h"
 #include "plugin.h"
 #include "compiler.h"
@@ -2220,6 +2221,125 @@ ncclResult_t ncclProfilerPostPlanWork(struct ncclComm* comm, struct ncclKernelPl
     p2pt = p2pt->next;
   }
 
+  return ncclSuccess;
+}
+
+// ---- Rearch scheduler launches (see ncclSchedProfilerLaunch) ----
+
+static void profilerSchedReserveSymCounters(struct ncclSchedProfilerLaunch* launch) {
+  struct ncclComm* comm = launch->comm;
+  if (!ncclProfilerPluginLoaded() || comm->profiler.profilerThread == nullptr) return;
+  if (launch->symArgs == nullptr || !launch->symArgs->profilerMode) return;
+  if (!(launch->eActivationMask & ncclProfileKernelCh)) return;
+  uint64_t* counters = ncclSymkGetProfilerCounters(launch->symArgs);
+  for (int c = 0; c < launch->symChannels; c++) counters[c] = ++comm->profiler.symWorkCounter[c];
+}
+
+static void profilerSchedStartCollEvent(struct ncclSchedProfilerLaunch* launch, struct ncclSchedProfilerTask* t,
+                                        bool headTask) {
+  struct ncclComm* comm = launch->comm;
+  int enable = t->api.eActivationMask & (ncclProfileColl | ncclProfileProxyOp | ncclProfileProxyStep |
+                                         ncclProfileKernelCh | ncclProfileNetPlugin);
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && enable) {
+    ncclProfilerEventDescr_t eDescr = {0};
+    eDescr.type = ncclProfileColl;
+    eDescr.rank = comm->rank;
+    eDescr.coll.seqNumber = comm->seqNumber[t->func];
+    eDescr.coll.func = ncclFuncToString(t->func);
+    eDescr.coll.sendBuff = t->sendbuff;
+    eDescr.coll.recvBuff = t->recvbuff;
+    eDescr.coll.count = t->count;
+    eDescr.coll.root = t->root;
+    eDescr.coll.datatype = ncclDatatypeToString(t->datatype);
+    eDescr.coll.nWarps = t->nWarps;
+    eDescr.coll.userTag = t->api.userTag;
+    if (launch->symArgs != nullptr) {
+      // A sym launch spans all its channels; advertise the count on the head task (as the
+      // legacy path does) and report the kernel variant in place of algo/proto.
+      eDescr.coll.nChannels = headTask ? (uint8_t)launch->symChannels : 0;
+      eDescr.coll.isSymColl = true;
+      const char* variant = ncclSymkKernelIdToString(t->symKernelId);
+      eDescr.coll.kernelVariant = variant;
+      const char* underscore = strchr(variant, '_');
+      eDescr.coll.algo = underscore ? underscore + 1 : variant;
+      eDescr.coll.proto = "";
+    } else {
+      eDescr.coll.nChannels = t->nChannels;
+      eDescr.coll.algo = ncclAlgoToString(t->algo);
+      eDescr.coll.proto = ncclProtoToString(t->proto);
+    }
+    profilerStart(comm->profilerContext, &t->eventHandle, &eDescr, &t->api.apiEventHandle, &launch->groupEventHandle);
+  }
+  // comm->seqNumber also feeds RAS, so it advances even without a plugin. Graph-captured
+  // collectives are excluded for the same reason as in ncclProfilerStartTaskEvents, unless
+  // KernelCh events keep every rank's count consistent.
+  if (!launch->captured || (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
+                            (profilerLive(&launch->groupEventHandle) || profilerLive(&t->api.apiEventHandle)) &&
+                            (t->api.eActivationMask & ncclProfileKernelCh)))
+    COMPILER_ATOMIC_FETCH_ADD(&comm->seqNumber[t->func], 1ULL, std::memory_order_relaxed);
+}
+
+// Group event, collective events and the KernelCh work posts for one launch.
+static ncclResult_t profilerSchedStartTaskEvents(struct ncclSchedProfilerLaunch* launch) {
+  struct ncclComm* comm = launch->comm;
+  int groupMask = ncclProfileGroup | ncclProfileColl | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep |
+                  ncclProfileKernelCh | ncclProfileNetPlugin;
+
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (launch->eActivationMask & groupMask)) {
+    ncclProfilerEventDescr_t eDescr = {0};
+    eDescr.type = ncclProfileGroup;
+    profilerStart(comm->profilerContext, &launch->groupEventHandle, &eDescr, nullptr, nullptr);
+  }
+  for (int i = 0; i < launch->nTasks; i++) profilerSchedStartCollEvent(launch, &launch->tasks[i], i == 0);
+
+  // KernelCh: the sym kernel advances one counter per channel for the whole launch, so the
+  // ops are posted once per channel against the head task, mirroring the legacy sym plan.
+  if (launch->symArgs != nullptr && launch->symArgs->profilerMode && launch->nTasks > 0 && ncclProfilerPluginLoaded() &&
+      comm->profiler.profilerThread != nullptr && (launch->eActivationMask & ncclProfileKernelCh)) {
+    uint64_t* counters = ncclSymkGetProfilerCounters(launch->symArgs);
+    for (int c = 0; c < launch->symChannels; c++) {
+      profilerEnqueueOp(comm->profiler.profilerThread, comm, c, counters[c], launch->eActivationMask,
+                        launch->tasks[0].eventHandle, /*sym=*/true);
+    }
+  }
+  return ncclSuccess;
+}
+
+// profilerStop clears each handle: a replay re-creates them, keeping start/stop balanced.
+static ncclResult_t profilerSchedStopTaskEvents(struct ncclSchedProfilerLaunch* launch) {
+  for (int i = 0; i < launch->nTasks; i++) profilerStop(&launch->tasks[i].eventHandle);
+  profilerStop(&launch->groupEventHandle);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerSchedPreLaunch(struct ncclSchedProfilerLaunch* launch, cudaStream_t stream) {
+  if (launch == nullptr) return ncclSuccess;
+  // Counters go into the args buffer before the driver snapshots it.
+  profilerSchedReserveSymCounters(launch);
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (launch->eActivationMask & ncclProfileKernelLaunch)) {
+    ncclProfilerEventDescr_t eDescr = {0};
+    eDescr.type = ncclProfileKernelLaunch;
+    eDescr.rank = launch->comm->rank;
+    eDescr.kernelLaunch.stream = (void*)stream;
+    profilerStart(launch->comm->profilerContext, &launch->kernelLaunchEventHandle, &eDescr,
+                  &launch->groupApiEventHandle, nullptr);
+  }
+  // A captured launch emits its task events per replay instead (ncclProfilerSchedReplay).
+  if (!launch->captured) NCCLCHECK(profilerSchedStartTaskEvents(launch));
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerSchedPostLaunch(struct ncclSchedProfilerLaunch* launch) {
+  if (launch == nullptr) return ncclSuccess;
+  profilerStop(&launch->kernelLaunchEventHandle);
+  if (!launch->captured) NCCLCHECK(profilerSchedStopTaskEvents(launch));
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerSchedReplay(struct ncclSchedProfilerLaunch* launch) {
+  if (launch == nullptr) return ncclSuccess;
+  NCCLCHECK(profilerSchedStartTaskEvents(launch));
+  NCCLCHECK(profilerSchedStopTaskEvents(launch));
   return ncclSuccess;
 }
 

@@ -2127,23 +2127,32 @@ ncclResult_t ncclLaunchFinish(struct ncclComm* comm) {
 /* Enqueueing system : computation of kernel and proxy operations parameters */
 /*****************************************************************************/
 
-ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, struct ncclTaskColl* info, int* collNetSupport) {
+static ncclResult_t getCollNetSupport(struct ncclComm* comm, ncclFunc_t func, ncclRedOp_t opHost, ncclDevRedOp_t opDev,
+                                      ncclDataType_t datatype, int* collNetSupport) {
   // Translate ncclAvg and PreMulSum
-  ncclRedOp_t netOp = info->opHost;
-  if (info->opDev.op == ncclDevPreMulSum || info->opDev.op == ncclDevSumPostDiv) {
+  ncclRedOp_t netOp = opHost;
+  if (opDev == ncclDevPreMulSum || opDev == ncclDevSumPostDiv) {
     netOp = ncclSum;
   }
   *collNetSupport = comm->config.collnetEnable;
-  switch (info->func) {
+  switch (func) {
   case ncclFuncAllReduce:
   case ncclFuncReduce:
   case ncclFuncReduceScatter:
-    *collNetSupport &= comm->collNetSupportMatrix[netOp][info->datatype];
+    *collNetSupport &= comm->collNetSupportMatrix[netOp][datatype];
     break;
   default:
     break;
   }
   return ncclSuccess;
+}
+
+ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, struct ncclTaskColl* info, int* collNetSupport) {
+  return getCollNetSupport(comm, info->func, info->opHost, info->opDev.op, info->datatype, collNetSupport);
+}
+
+ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, const struct ncclRawTaskColl* raw, int* collNetSupport) {
+  return getCollNetSupport(comm, raw->func, raw->opHost, raw->opDev.op, raw->datatype, collNetSupport);
 }
 
 ncclResult_t ncclGetRegBuff(struct ncclComm* comm, struct ncclTaskColl* info, int* regBuff) {
@@ -3206,6 +3215,58 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
   return ncclSuccess;
 }
 
+// Starts and stops one ncclProfileP2pApi event for a send or recv that a collective lowers to,
+// recording its handle so the lowered task can be parented to it.
+static ncclResult_t rawTaskP2pApiEvent(struct ncclInfo* info, ncclFunc_t func, bool isGraphCaptured,
+                                       struct ncclProfilerEventRef* handle) {
+  info->coll = func;
+  NCCLCHECK(ncclProfilerStartP2pApiEvent(info, isGraphCaptured));
+  *handle = ncclProfilerApiState.p2pApiEventHandle;
+  NCCLCHECK(ncclProfilerStopP2pApiEvent());
+  return ncclSuccess;
+}
+
+// AlltoAll, Scatter and Gather are lowered to send/recv tasks by task classification, which may
+// run on another thread. The legacy path emits one ncclProfileP2pApi event per lowered task at
+// API time; do the same here and keep the handles on the raw task, in the order classification
+// lowers the tasks (see classifyCollToP2pTasks), so each lowered task gets its own parent.
+static ncclResult_t rawTaskP2pApiEvents(struct ncclComm* comm, struct ncclInfo* info, struct ncclRawTask* t) {
+  t->coll.p2pApiEventHandles = nullptr;
+  t->coll.nP2pApiEvents = 0;
+  if (!ncclProfilerPluginLoaded()) return ncclSuccess;
+
+  ncclFunc_t collAPI = info->coll;
+  int nRanks = comm->nRanks;
+  bool isRoot = comm->rank == info->root;
+  int n = collAPI == ncclFuncAlltoAll ? 2 * nRanks : (isRoot ? nRanks + 1 : 1);
+  bool isGraphCaptured = ncclCudaGraphValid(comm->planner.capturingGraph);
+  struct ncclProfilerEventRef* handles = ncclMemoryStackAlloc<struct ncclProfilerEventRef>(&comm->memScoped, n);
+  int i = 0;
+  ncclResult_t ret = ncclSuccess;
+
+  if (collAPI == ncclFuncAlltoAll) {
+    for (int r = 0; r < nRanks && ret == ncclSuccess; r++) {
+      ret = rawTaskP2pApiEvent(info, ncclFuncSend, isGraphCaptured, &handles[i++]);
+      if (ret == ncclSuccess) ret = rawTaskP2pApiEvent(info, ncclFuncRecv, isGraphCaptured, &handles[i++]);
+    }
+  } else if (collAPI == ncclFuncGather) {
+    ret = rawTaskP2pApiEvent(info, ncclFuncSend, isGraphCaptured, &handles[i++]);
+    for (int r = 0; isRoot && r < nRanks && ret == ncclSuccess; r++) {
+      ret = rawTaskP2pApiEvent(info, ncclFuncRecv, isGraphCaptured, &handles[i++]);
+    }
+  } else { // Scatter
+    for (int r = 0; isRoot && r < nRanks && ret == ncclSuccess; r++) {
+      ret = rawTaskP2pApiEvent(info, ncclFuncSend, isGraphCaptured, &handles[i++]);
+    }
+    if (ret == ncclSuccess) ret = rawTaskP2pApiEvent(info, ncclFuncRecv, isGraphCaptured, &handles[i++]);
+  }
+  info->coll = collAPI;
+  NCCLCHECK(ret);
+  t->coll.p2pApiEventHandles = handles;
+  t->coll.nP2pApiEvents = i;
+  return ncclSuccess;
+}
+
 // TODO(raw task): move this raw task capture implementation into raw_task.cc
 // once the remaining enqueue-local profiler and red-op dependencies are split.
 static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) {
@@ -3419,6 +3480,11 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     t->coll.opDev = opDev;
     t->coll.stream = info->stream;
     t->coll.algMask = algMask;
+    t->coll.p2pApiEventHandles = nullptr;
+    t->coll.nP2pApiEvents = 0;
+    if (info->coll == ncclFuncAlltoAll || info->coll == ncclFuncScatter || info->coll == ncclFuncGather) {
+      NCCLCHECK(rawTaskP2pApiEvents(comm, info, t));
+    }
     if (info->coll == ncclFuncBroadcast) {
       ncclIntruQueueEnqueue(&(*rtq->bcastQueue)[info->root], t);
     } else {

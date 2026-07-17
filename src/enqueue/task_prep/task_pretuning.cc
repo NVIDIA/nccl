@@ -64,6 +64,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   }
   in->nBytes = ncclTypeSize(in->datatype) * ncclFuncMaxSendRecvCount(in->func, comm->nRanks, in->count);
 
+  NCCLCHECK(ncclGetCollNetSupport(comm, raw, &in->collNetSupport));
+
   NCCLCHECK(ncclDevrFindWindow(comm, raw->sendbuff, &sendWin));
   NCCLCHECK(ncclDevrFindWindow(comm, raw->recvbuff, &recvWin));
   in->winRegType = ncclSymSendNonregRecvNonreg;
@@ -73,7 +75,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   in->ceAvailable = ncclCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
   in->hierCeAvailable =
     ncclHierCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
-  in->nvlsSupport = ncclNvlsTransportEnabled(comm) && (ncclNvlsSupported(raw->opDev.op, raw->datatype) || raw->func == ncclFuncAllGather);
+  in->nvlsSupport = ncclNvlsTransportEnabled(comm) &&
+                    (ncclNvlsSupported(raw->opDev.op, raw->datatype) || raw->func == ncclFuncAllGather);
   {
     size_t inputOff = sendWin ? (uintptr_t)raw->sendbuff - (uintptr_t)sendWin->userPtr : (uintptr_t)raw->sendbuff;
     size_t outputOff = recvWin ? (uintptr_t)raw->recvbuff - (uintptr_t)recvWin->userPtr : (uintptr_t)raw->recvbuff;

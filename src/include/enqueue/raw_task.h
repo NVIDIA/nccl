@@ -38,6 +38,11 @@ struct ncclRawTaskColl {
   struct ncclDevRedOpFull opDev;
   cudaStream_t stream;
   uint64_t algMask;
+  // AlltoAll/Scatter/Gather are lowered to send/recv tasks during classification. Their
+  // ncclProfileP2pApi events are emitted at API time, one per lowered task in lowering order,
+  // and handed out here; nullptr when no profiler plugin is loaded.
+  struct ncclProfilerEventRef* p2pApiEventHandles;
+  int nP2pApiEvents;
 };
 
 // Per-root contribution stored when merging broadcasts into an AllGatherV.

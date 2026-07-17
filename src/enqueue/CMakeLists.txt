@@ -7,6 +7,7 @@ set(ENQUEUE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/task_prep/task_classify.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_prep/task_posttuning.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/task_sched.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/sched_profiler.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/sym_sched.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/legacy_sched.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/allgatherv_sched.cc

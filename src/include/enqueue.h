@@ -70,6 +70,7 @@ static inline bool ncclAllGatherIsInPlace(const void* sendbuff, const void* recv
 }
 
 ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, struct ncclTaskColl* task, int* collNetSupport);
+ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, const struct ncclRawTaskColl* raw, int* collNetSupport);
 ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* task, int collNetSupport, int nvlsSupport,
                              int numPipeOps, ncclSimInfo_t* simInfo = NULL);
 bool ncclTestBudget(struct ncclKernelPlanBudget* budget, int nWorkBatches, ssize_t nWorkBytes);

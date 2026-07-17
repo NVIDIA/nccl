@@ -434,6 +434,22 @@ void ncclProfilerReserveSymCounters(struct ncclComm* comm, struct ncclKernelPlan
   (void)plan;
 }
 
+ncclResult_t ncclProfilerSchedPreLaunch(struct ncclSchedProfilerLaunch* launch, cudaStream_t stream) {
+  (void)launch;
+  (void)stream;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerSchedPostLaunch(struct ncclSchedProfilerLaunch* launch) {
+  (void)launch;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerSchedReplay(struct ncclSchedProfilerLaunch* launch) {
+  (void)launch;
+  return ncclSuccess;
+}
+
 /* CE profiler stubs (ncclCeCollArgs / ncclCeBatchOpsParams forward-declared in profiler.h) */
 ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   (void)comm;

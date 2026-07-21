@@ -280,13 +280,13 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
 
   // Allocate contexts
   int nContextsTotal = reqs->ginContextCount;
-  devComm->ginContextCount = nContextsTotal;
   devComm->ginConnectionCount = backend->ginCommCount;
   if (!reqs->ginExclusiveContexts) {
     // TODO: check if a shared devComm in the list could match our requirements.
   }
 
   nContextsTotal = ROUNDUP(nContextsTotal, backend->ginCommCount);
+  devComm->ginContextCount = nContextsTotal;
   int nContextsPerComm = nContextsTotal / backend->ginCommCount;
   INFO(NCCL_INIT,
        "devCommCreate: creating %d contexts: %d GIN connections with %d contexts each (%d contexts total requested)",

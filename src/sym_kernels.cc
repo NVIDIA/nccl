@@ -178,6 +178,13 @@ static void queryModel(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes,
   }
 }
 
+static int blackwellRsLdBlocks(struct ncclComm* comm, size_t nBytes) {
+  if (comm->cudaArch < 1000 || comm->cudaArch >= 1100 || comm->nNodes != 1) return 0;
+  if (comm->nRanks == 2 && nBytes >= (size_t(2) << 20)) return ncclSymkMaxBlocks;
+  if (comm->nRanks == 4 && nBytes >= (size_t(4) << 20)) return ncclSymkMaxBlocks;
+  return 0;
+}
+
 #define NCCL_NVLINK_BW_IDX_HOPPER 0
 #define NCCL_NVLINK_BW_IDX_BLACKWELL 1
 #define NCCL_NVLINK_BW_IDX_NUM 2
@@ -597,11 +604,23 @@ bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedO
 }
 
 ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                                size_t nEltsTotal, size_t nEltsMax, int nWorks, ncclSymRegType_t winRegType,
-                                float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks, int* nWarps, bool* forced) {
+                                size_t nEltsTotal, size_t nEltsTotalRaw, size_t nEltsMax, int nWorks,
+                                ncclSymRegType_t winRegType, float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks,
+                                int* nWarps, bool* forced) {
   uint32_t kmask = ncclSymkMask(comm, coll, red, ty, nEltsMax);
 
   *forced = !(kernelMask_user() == (1 << (int)ncclSymkKernelId_Count) - 1);
+  size_t nBytes = nEltsTotal * ncclTypeSize(ty);
+  // Scheduler cells are rounded up; use the raw size so padding cannot cross a measured threshold early.
+  size_t nBytesRaw = nEltsTotalRaw * ncclTypeSize(ty);
+  uint32_t rsLdMask = 1 << ncclSymkKernelId_ReduceScatter_LD;
+  bool hasRegisteredRsInput = winRegType == ncclSymSendRegRecvReg || winRegType == ncclSymSendRegRecvNonreg;
+  int rsLdBlocks = blackwellRsLdBlocks(comm, nBytesRaw);
+  bool preferRsLd = comm->config.CTAPolicy == NCCL_CTA_POLICY_DEFAULT && !*forced && ncclParamSymCTAs() <= 0 &&
+                    hasRegisteredRsInput && nWorks == 1 && coll == ncclFuncReduceScatter && red == ncclDevSum &&
+                    rsLdBlocks > 0 && comm->config.minCTAs <= rsLdBlocks && rsLdBlocks <= comm->config.maxCTAs &&
+                    (kmask & rsLdMask);
+  if (preferRsLd) kmask = rsLdMask;
   // We currently don't support grouping for LL kernels.
   if (nWorks > 1) kmask &= ~kernelMask_LL;
 
@@ -617,7 +636,6 @@ ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   ncclSymkKernelId bestKernel = ncclSymkKernelId_Count;
   float bestTime = 1.e30f;
   int bestBlocks = 999;
-  size_t nBytes = nEltsTotal * ncclTypeSize(ty);
 
   constexpr float smPenalty = .025f; // 2.5% percent increase in time per SM
   uint32_t kmaskRemain = kmask;
@@ -632,6 +650,7 @@ ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*nc
       bestBlocks = kBlocks;
     }
   }
+  if (preferRsLd) bestBlocks = rsLdBlocks;
 
   *kernelId = bestKernel;
   *estTimeUs = kmask == 0 || kernelMask_user() == (1 << ncclSymkKernelId_Count) - 1 ? bestTime : 0.0f;

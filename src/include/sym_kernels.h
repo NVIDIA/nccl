@@ -128,8 +128,9 @@ ncclResult_t ncclSymkFinalize(struct ncclComm* comm);
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                        size_t nElts);
 ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                                size_t nEltsTotal, size_t nEltsMax, int nWorks, ncclSymRegType_t winRegType,
-                                float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks, int* nWarps, bool* forced);
+                                size_t nEltsTotal, size_t nEltsTotalRaw, size_t nEltsMax, int nWorks,
+                                ncclSymRegType_t winRegType, float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks,
+                                int* nWarps, bool* forced);
 
 ncclResult_t ncclSymkMakeDevWork(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclSymkDevWork* outDevWork);
 

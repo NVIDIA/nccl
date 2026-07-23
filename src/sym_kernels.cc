@@ -166,16 +166,26 @@ static double model(double busBytes, double baseLat, int nSMs, double smBw, doub
 
 // Given the kernel and bytes, return the minimum number of blocks to run on such that
 // perf is 99% of running at max blocks, and return the estimate runtime for that
-// block count.
+// block count. If nBlocksOverride is nonzero, return the estimate for that block count.
 static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks);
-static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks);
+static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, int nBlocksOverride,
+                           float* timeUs, int* nBlocks);
 
-static void queryModel(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
+static void queryModel(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, int nBlocksOverride, float* timeUs,
+                       int* nBlocks) {
   if (kernelMask_Gin >> k & 1) {
     queryModel_gin(comm, k, nBytes, timeUs, nBlocks);
   } else {
-    queryModel_lsa(comm, k, nBytes, timeUs, nBlocks);
+    queryModel_lsa(comm, k, nBytes, nBlocksOverride, timeUs, nBlocks);
   }
+}
+
+// GB200/GB300 measurements show LD at the 64-CTA limit winning from these output-per-rank sizes.
+static int blackwellRsLdBlocks(struct ncclComm* comm, size_t nBytes) {
+  if (comm->cudaArch < 1000 || comm->cudaArch >= 1100 || comm->nNodes != 1) return 0;
+  if (comm->nRanks == 2 && nBytes >= (size_t(2) << 20)) return ncclSymkMaxBlocks;
+  if (comm->nRanks == 4 && nBytes >= (size_t(4) << 20)) return ncclSymkMaxBlocks;
+  return 0;
 }
 
 #define NCCL_NVLINK_BW_IDX_HOPPER 0
@@ -335,7 +345,8 @@ static void queryModel_gin(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
   }
 }
 
-static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, float* timeUs, int* nBlocks) {
+static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBytes, int nBlocksOverride,
+                           float* timeUs, int* nBlocks) {
   constexpr double LL_BusFactor = 9; // 2X the bytes, plus some processing, plus no unrolling
 
   int nRanks = comm->nRanks;
@@ -403,6 +414,7 @@ static void queryModel_lsa(struct ncclComm* comm, ncclSymkKernelId k, size_t nBy
 
   int nUserCTAs = std::min<int>(ncclSymkMaxBlocks, ncclParamSymCTAs());
   if (nUserCTAs > 0) nMinBlocks = nMaxBlocks = nUserCTAs;
+  if (nBlocksOverride > 0) nMinBlocks = nMaxBlocks = nBlocksOverride;
 
   bool isLL = kernelMask_LL >> k & 1;
   bool isAG = kernelMask_AG >> k & 1;
@@ -597,11 +609,23 @@ bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedO
 }
 
 ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                                size_t nEltsTotal, size_t nEltsMax, int nWorks, ncclSymRegType_t winRegType,
-                                float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks, int* nWarps, bool* forced) {
+                                size_t nEltsTotal, size_t nEltsTotalRaw, size_t nEltsMax, int nWorks,
+                                ncclSymRegType_t winRegType, float* estTimeUs, ncclSymkKernelId* kernelId, int* nBlocks,
+                                int* nWarps, bool* forced) {
   uint32_t kmask = ncclSymkMask(comm, coll, red, ty, nEltsMax);
 
   *forced = !(kernelMask_user() == (1 << (int)ncclSymkKernelId_Count) - 1);
+  size_t nBytes = nEltsTotal * ncclTypeSize(ty);
+  // Scheduler cells are rounded up; use the raw size so padding cannot cross a measured threshold early.
+  size_t nBytesRaw = nEltsTotalRaw * ncclTypeSize(ty);
+  uint32_t rsLdMask = 1 << ncclSymkKernelId_ReduceScatter_LD;
+  bool hasRegisteredRsInput = winRegType == ncclSymSendRegRecvReg || winRegType == ncclSymSendRegRecvNonreg;
+  int rsLdBlocks = blackwellRsLdBlocks(comm, nBytesRaw);
+  bool preferRsLd = comm->config.CTAPolicy == NCCL_CTA_POLICY_DEFAULT && !*forced && ncclParamSymCTAs() <= 0 &&
+                    hasRegisteredRsInput && nWorks == 1 && coll == ncclFuncReduceScatter && red == ncclDevSum &&
+                    rsLdBlocks > 0 && comm->config.minCTAs <= rsLdBlocks && rsLdBlocks <= comm->config.maxCTAs &&
+                    (kmask & rsLdMask);
+  if (preferRsLd) kmask = rsLdMask;
   // We currently don't support grouping for LL kernels.
   if (nWorks > 1) kmask &= ~kernelMask_LL;
 
@@ -617,7 +641,6 @@ ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   ncclSymkKernelId bestKernel = ncclSymkKernelId_Count;
   float bestTime = 1.e30f;
   int bestBlocks = 999;
-  size_t nBytes = nEltsTotal * ncclTypeSize(ty);
 
   constexpr float smPenalty = .025f; // 2.5% percent increase in time per SM
   uint32_t kmaskRemain = kmask;
@@ -625,14 +648,13 @@ ncclResult_t ncclSymkPickKernel(struct ncclComm* comm, ncclFunc_t coll, int /*nc
     ncclSymkKernelId k = (ncclSymkKernelId)popFirstOneBit(&kmaskRemain);
     float kTime;
     int kBlocks;
-    queryModel(comm, k, nBytes, &kTime, &kBlocks);
+    queryModel(comm, k, nBytes, preferRsLd ? rsLdBlocks : 0, &kTime, &kBlocks);
     if (kTime * (1.0f + smPenalty * kBlocks) < bestTime * (1.0f + smPenalty * bestBlocks)) {
       bestKernel = k;
       bestTime = kTime;
       bestBlocks = kBlocks;
     }
   }
-
   *kernelId = bestKernel;
   *estTimeUs = kmask == 0 || kernelMask_user() == (1 << ncclSymkKernelId_Count) - 1 ? bestTime : 0.0f;
   *nBlocks = bestBlocks;

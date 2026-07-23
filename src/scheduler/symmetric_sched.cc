@@ -123,7 +123,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       int nWarps = 0;
       int nWorks = 0;
       float estTimeUs = 1.e18;
-      size_t countTotal = 0, countMax = 0;
+      size_t countTotal = 0, countTotalRaw = 0, countMax = 0;
       struct ncclTaskColl* headTask = task;
       size_t cellCount = NCCL_SYM_KERNEL_CELL_SIZE / ncclTypeSize(headTask->datatype);
       bool forced = false;
@@ -132,6 +132,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       while (task != nullptr) {
         size_t count;
         nWorks++;
+        countTotalRaw += task->count;
         count = alignUp(task->count, cellCount);
         countTotal += count;
         if (count > countMax) countMax = count;
@@ -141,8 +142,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         }
         task = task->next;
       }
-      NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, symkOp, headTask->datatype, countTotal, countMax, nWorks,
-                                   headTask->winRegType, &estTimeUs, &kernelId, &nChannels, &nWarps, &forced));
+      NCCLCHECK(ncclSymkPickKernel(comm, headTask->func, symkOp, headTask->datatype, countTotal, countTotalRaw,
+                                   countMax, nWorks, headTask->winRegType, &estTimeUs, &kernelId, &nChannels, &nWarps,
+                                   &forced));
       task = headTask;
       bool isLLKernel = (1 << kernelId) & ncclSymkLLKernelMask();
       bool isOneThreadMultiGpus = comm->intraRanks > 1 && !ncclParamSingleProcMemRegEnable();

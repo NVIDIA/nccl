@@ -9,6 +9,7 @@
  * See LICENSE.txt for more license information.
  */
 
+#include <atomic>
 #include <cooperative_groups.h>
 #include "nccl_device.h"
 #include "device_primitives.cuh"
@@ -18,6 +19,36 @@ namespace cg = cooperative_groups;
 namespace nccl_ep {
 
 namespace internode_ll {
+
+// ---- generation-tagged P2P signaling --------------------------------------
+// The LL count/flag protocol double-buffers signal slots and polls for a
+// nonzero value. Signal VALUES are not generation-tagged, so a signal left
+// over from the previous use of the same parity buffer (2 calls earlier) is
+// indistinguishable from a fresh one whenever the workload repeats (fixed
+// token counts; flags are constant 1). If any rank falls one full parity
+// cycle behind, its peers consume the stale signals and race further ahead,
+// desynchronizing the pipeline until it wedges (observed on GB200 NVL72 as
+// systematic receive timeouts). Tag every P2P signal with a per-op
+// generation and poll for the exact generation to make stale signals inert.
+// Prototype note: generation state is process-global; a per-group slot in
+// the workspace would be the productized form.
+__device__ unsigned dLLDispGen;
+__device__ unsigned dLLCombGen;
+static std::atomic<unsigned> gLLDispGenCtr{0};
+static std::atomic<unsigned> gLLCombGenCtr{0};
+// Pinned staging slots so the per-launch gen stamp is a cheap async DMA
+// rather than a pageable-memcpy stall.
+static unsigned* llGenSlots() {
+    static unsigned* slots = [] {
+        unsigned* p = nullptr;
+        EP_HOST_ASSERT(cudaHostAlloc(&p, 2048 * sizeof(unsigned), cudaHostAllocDefault) == cudaSuccess);
+        return p;
+    }();
+    return slots;
+}
+__host__ __device__ __forceinline__ unsigned llGenValue(unsigned c) {
+    return (c - 1u) % 0x7fffu + 1u;  // in [1, 0x7fff], never 0
+}
 // Mask convention: 1 = active, 0 = masked/failed. nullptr means masking disabled.
 template <bool useWarpSync = false>
 __forceinline__ __device__ bool isRankMasked(int* rankMask, int rank) {
@@ -370,7 +401,9 @@ __forceinline__ __device__ void sendExpertCount(
                     ncclGin_None{},  // no counter
                     ncclCoopThread());
         } else {
-            st_release_sys_global(reinterpret_cast<int*>(dstP2pPtr), -numTokensSent - 1);
+            // generation-tagged count: (gen << 16) | (numTokensSent + 1)
+            st_release_sys_global(reinterpret_cast<int*>(dstP2pPtr),
+                (int)(((dLLDispGen & 0x7fffu) << 16) | ((unsigned)(numTokensSent + 1) & 0xffffu)));
         }
     }
 }
@@ -415,12 +448,16 @@ __forceinline__ __device__ int waitForRecvTokensRelaxed(
             net.resetSignal(signalId);
             numRecvTokens = -(int)curValue;
         } else {
-            // TODO: Double check that we can rely on this + __threadfence_system() in dispatch?
-            // to ensure consistency on "another" SM that's going to access the data buffer protected by this atomic
-            while ((numRecvTokens = ld_acquire_sys_global((recvCntBuf + rankLaneIdx * numRanks + srcRank))) ==
-                       0                                                               // data not arrived
+            // generation-tagged poll: only the CURRENT generation's count is accepted;
+            // stale counts from a previous use of this parity buffer are inert.
+            const unsigned expGen = dLLDispGen & 0x7fffu;
+            int rawCnt;
+            while (((unsigned)(rawCnt = ld_acquire_sys_global((recvCntBuf + rankLaneIdx * numRanks + srcRank))) >> 16)
+                       != expGen                                               // not this generation
                    && (waitRecvCost = clock64() - startTime) <= timeoutCycles  // not timeout
                   );
+            if (((unsigned)rawCnt >> 16) == expGen)
+                numRecvTokens = -((rawCnt & 0xffff) - 1) - 1;  // legacy negative encoding for shared tail
         }
     }
 
@@ -1029,6 +1066,18 @@ void dispatch(const void* inData,
     const auto numSms = ceil_div(numExperts, numWarpGroups);
     EP_HOST_ASSERT(numTopk <= kNumMaxTopK);
 
+    {   // generation stamp (stream-ordered; SEND launch advances, RECV-only reuses)
+        unsigned ctr = (phases & LOW_LATENCY_SEND_PHASE)
+            ? gLLDispGenCtr.fetch_add(1, std::memory_order_relaxed) + 1
+            : gLLDispGenCtr.load(std::memory_order_relaxed);
+        unsigned gen = llGenValue(ctr);
+        unsigned* slot = &llGenSlots()[(ctr % 1024)];
+        *slot = gen;
+        auto err = cudaMemcpyToSymbolAsync(dLLDispGen, slot, sizeof(unsigned), 0,
+                                           cudaMemcpyHostToDevice, stream);
+        EP_HOST_ASSERT(err == cudaSuccess);
+    }
+
     // Workspace checks
     // rankCountersBase is used to track the number of tokens sent & received by each rank.
     // expertDone is used to track the number of tokens sent to each expert.
@@ -1320,7 +1369,9 @@ __forceinline__ __device__ void sendFinishFlag(
                     ncclGin_None{},  // no counter
                     ncclCoopThread());
         } else {
-            st_release_sys_global(reinterpret_cast<int*>(dstP2pPtr), 1);
+            // generation-tagged flag: (gen << 16) | 1
+            st_release_sys_global(reinterpret_cast<int*>(dstP2pPtr),
+                (int)(((dLLCombGen & 0x7fffu) << 16) | 1u));
         }
     }
 }
@@ -1359,7 +1410,8 @@ __forceinline__ __device__ void waitForRecvFlag(
             );
             net.resetSignal(signalsBase + responsibleExpertIdx);
         } else {
-            while (ld_acquire_sys_global(recvFlagBuf + responsibleExpertIdx) == 0  // recv not ready
+            const unsigned expGenF = dLLCombGen & 0x7fffu;
+            while (((unsigned)ld_acquire_sys_global(recvFlagBuf + responsibleExpertIdx) >> 16) != expGenF  // not this generation
                    && (waitRecvCost = clock64() - startTime) <= timeoutCycles   // not timeout
             );
         }
@@ -1995,6 +2047,18 @@ void combine(const void* inData,
     const auto numWarps = numWarpGroups * numWarpsPerGroup;
     const auto numSms = max(ceil_div(numExperts, numWarpGroups),
                              numRecvPerSm == 0 ? 1 : ceil_div(numCombinedTokens, numRecvPerSm));
+
+    {   // generation stamp (see dispatch)
+        unsigned ctr = (phases & LOW_LATENCY_SEND_PHASE)
+            ? gLLCombGenCtr.fetch_add(1, std::memory_order_relaxed) + 1
+            : gLLCombGenCtr.load(std::memory_order_relaxed);
+        unsigned gen = llGenValue(ctr);
+        unsigned* slot = &llGenSlots()[1024 + (ctr % 1024)];
+        *slot = gen;
+        auto err = cudaMemcpyToSymbolAsync(dLLCombGen, slot, sizeof(unsigned), 0,
+                                           cudaMemcpyHostToDevice, stream);
+        EP_HOST_ASSERT(err == cudaSuccess);
+    }
 
     // Check workspace
     auto atomicCleanFlag = static_cast<int*>(workspace);

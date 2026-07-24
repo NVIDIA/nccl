@@ -80,6 +80,7 @@ The table below records the benchmark results shared during this discussion. Thi
 - throughput unit: `GB/s`
 - operation mode: inplace
 
+
 ### Inplace Bus Bandwidth Table (`GB/s`)
 
 | Output size | [SM] Cpu-Proxy AllGather (NVIDIA) | [SM-Free] HCE-Direct AllGather (NVIDIA) | [SM-Free] HCE-Ring AllGather (BD) |

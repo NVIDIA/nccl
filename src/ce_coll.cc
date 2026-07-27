@@ -35,6 +35,8 @@ static const uint32_t GRAPH_SYNC_VALUE = 1;
 static const uint32_t CE_COLL_INTRA_BATCH_SYNC_FREQ = 8;
 // Message threshold for intra-batch synchronization
 static const uint64_t CE_COLL_INTRA_BATCH_SYNC_MSG_THRESHOLD = 512 * 1024 * 1024;
+// cudaMemcpyBatchAsync supports CUDA graph capture starting with CUDA 13.5.
+static const int CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION = 13050;
 
 // Maximum size of a single sub-chunk for hierarchical collective
 static constexpr size_t HIER_COLL_MAX_CHUNK_SIZE = 64 * 1024 * 1024;
@@ -487,16 +489,12 @@ fail:
 ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsParams* params, cudaStream_t stream,
                                   struct ncclCeCollArgs* profilerArgs) {
   ncclResult_t ret = ncclSuccess;
-  bool capturing;
   int driverVersion;
   int64_t chunkSizeParam = ncclParamCeChunkSize();
   size_t ceChunkSize = chunkSizeParam > 0 ? (size_t)chunkSizeParam : 0;
   void* ceBatchHandle = NULL;
-
-  // cudaMemcpyBatchAsync does not accept the legacy null stream (e.g. PyTorch null stream).
-  // Fall back to cudaMemcpyAsync per-op when stream is NULL.
-  bool isLegacyStream;
-  NCCLCHECKGOTO(ncclCudaStreamIsLegacyNull(stream, &isLegacyStream), ret, fail);
+  bool capturing = ncclCudaGraphValid(comm->planner.capturingGraph);
+  bool isLegacyStream = false;
 
   // Start CE batch profiling (no-op if profilerArgs is nullptr)
   NCCLCHECKGOTO(ncclProfilerStartCeBatchEvent(comm, profilerArgs, params, stream, &ceBatchHandle), ret, fail);
@@ -504,14 +502,24 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
   // Check if there are any operations to perform
   if (params->numOps == 0) goto exit;
 
-  // Check if we are in a CUDA graph capture
-  capturing = ncclCudaGraphValid(comm->planner.capturingGraph);
-
   NCCLCHECKGOTO(ncclCudaDriverVersion(&driverVersion), ret, fail);
+  if (capturing) {
+    // cudaStreamGetId is not capture-safe.
+    isLegacyStream = stream == NULL || stream == cudaStreamLegacy;
+  } else {
+    NCCLCHECKGOTO(ncclCudaStreamIsLegacyNull(stream, &isLegacyStream), ret, fail);
+  }
 
-  //--------------Graph capture / legacy stream--------------
-  // cudaMemcpyBatchAsync is not supported during CUDA graph capture or with legacy stream
-  if (capturing || isLegacyStream) {
+  if (comm->rank == 0 && capturing && !isLegacyStream && CUDART_VERSION >= 12080 &&
+      driverVersion >= CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION) {
+    static int reported = 0;
+    if (COMPILER_ATOMIC_EXCHANGE(&reported, 1, std::memory_order_relaxed) == 0)
+      INFO(NCCL_INIT, "cudaMemcpyBatchAsync enabled under graph capture");
+  }
+
+  // Fall back during capture on older drivers or with a legacy stream.
+  if ((capturing && (CUDART_VERSION < 12080 || driverVersion < CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION)) ||
+      isLegacyStream) {
     for (int i = 0; i < params->numOps; i++) {
       CUDACHECKGOTO(cudaMemcpyAsync((void*)params->dsts[i], (void*)params->srcs[i], params->sizes[i],
                                     cudaMemcpyDeviceToDevice, stream),
@@ -527,12 +535,10 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
         ((params->numOps + comm->ceColl.intraBatchSyncFreq - 1) / comm->ceColl.intraBatchSyncFreq) % 2 == 0) {
       NCCLCHECKGOTO(ncclMemOpSync(comm, stream, profilerArgs), ret, fail);
     }
-  }
-  //--------------No graph capture / not legacy stream--------------
-  else {
+  } else {
     if (CUDART_VERSION >= 12080 && driverVersion >= 12080) {
 #if CUDART_VERSION >= 12080
-      // For CUDA 12.8+, use batch memory copy for better performance
+      // Use batch copy when supported for this stream and capture state.
       params->attrs[0] = {};
       params->attrs[0].srcAccessOrder = cudaMemcpySrcAccessOrderStream;
       if (ncclParamCeMemcpyOverlapEnable()) {

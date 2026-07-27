@@ -36,10 +36,20 @@ static constexpr size_t HIER_COLL_MAX_CHUNK_SIZE = 64 * 1024 * 1024;
 // Alignment of hierarchical-collective sub-chunks. Shared by the chunk-plan
 // builder and the chunk-width computation, which must agree on it.
 static constexpr size_t HIER_COLL_CHUNK_ALIGN = 8 * 1024;
+
+// --------------------------------------------------------------------
+// Hierarchical CE AllGather: Ring selection and chunking
+// --------------------------------------------------------------------
+
 // The retained ring implementation only changes chunking once messages are
 // clearly bandwidth-dominated.
 static constexpr size_t HIER_COLL_AG_RING_HALF_AWARE_THRESHOLD = 128 * 1024 * 1024;
 static constexpr size_t HIER_COLL_AG_RING_MIN_HALF_AWARE_CHUNK = 8 * 1024 * 1024;
+
+// Ring is opt-in in this MR: a positive value enables it, while zero or a
+// negative value keeps the Direct path. The stacked tuning MR gives -1 its
+// automatic-selection semantics.
+NCCL_PARAM(HierCeCollAgRailRingEnable, "HIER_CE_COLL_AG_RAIL_RING_ENABLE", -1);
 
 // Minimum per-peer transfer size (bytes) for the hierarchical CE collectives to
 // distribute their inter-node rail traffic across multiple internal RMA
@@ -52,7 +62,6 @@ static constexpr size_t HIER_COLL_AG_RING_MIN_HALF_AWARE_CHUNK = 8 * 1024 * 1024
 // NCCL tuning variables, it must be set identically on all ranks.
 NCCL_PARAM(RmaMultiCtxThreshold, "RMA_MULTI_CTX_THRESHOLD", -1);
 static constexpr int64_t HIER_COLL_MULTI_CTX_THRESHOLD_DEFAULT = 4 * 1024 * 1024;
-NCCL_PARAM(EnableHceAgRing, "ENABLE_HCE_AG_RING", 0);
 
 // Number of internal RMA contexts used by hierarchical CE collectives.
 // Values above NCCL_NUM_RMA_INT_CTX are clamped.
@@ -2071,7 +2080,13 @@ fail:
 }
 
 ncclResult_t ncclHierCeAllGather(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream) {
-  if (ncclParamEnableHceAgRing() != 0) return ncclHierCeAllGatherRing(comm, plan, stream);
+  size_t perRankBytes = plan->ceCollArgs->nElts * plan->ceCollArgs->eltSize;
+  bool useRing = ncclParamHierCeCollAgRailRingEnable() > 0;
+  const char* railAlgo = useRing ? "Ring" : "Direct";
+  if (comm->rank == 0)
+    INFO(NCCL_TUNING, "AllGather [Hierarchical CE]: %zu Bytes -> Rail %s RMA proxy + CE", perRankBytes, railAlgo);
+
+  if (useRing) return ncclHierCeAllGatherRing(comm, plan, stream);
   return ncclHierCeAllGatherDirect(comm, plan, stream);
 }
 
@@ -2429,10 +2444,9 @@ ncclResult_t scheduleCeCollTaskToPlan(struct ncclComm* comm, struct ncclKernelPl
 
   if (comm->rank == 0) {
     if (!ncclDevrIsOneLsaTeam(comm)) {
-      const int hceRingMode = task->func == ncclFuncAllGather ? ncclParamEnableHceAgRing() : 0;
-      const char* hierPath = hceRingMode != 0 ? "RMA proxy ring + CE" : "RMA proxy + CE";
-      INFO(NCCL_TUNING, "%s [Hierarchical CE]: %ld Bytes -> %s", ncclFuncToString(task->func),
-           task->count * ncclTypeSize(task->datatype), hierPath);
+      if (task->func != ncclFuncAllGather)
+        INFO(NCCL_TUNING, "%s [Hierarchical CE]: %ld Bytes -> RMA proxy + CE", ncclFuncToString(task->func),
+             task->count * ncclTypeSize(task->datatype));
     } else {
       const char* nvlsSync = comm->symkState.hasLsaMultimem ? "; CE synchronization with NVLS" : "";
       INFO(NCCL_TUNING, "%s [Copy Engine]: %ld Bytes -> cudaMemcpy%s", ncclFuncToString(task->func),

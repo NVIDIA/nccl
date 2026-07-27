@@ -57,6 +57,9 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
     memset(&baseComm->qps[i].rtsAttr, 0, sizeof(baseComm->qps[i].rtsAttr));
   }
   baseComm->nqps = -1;
+  baseComm->dataPathPolicy = ncclIbDataPathActiveActive;
+  baseComm->primaryDevIndex = -1;
+  baseComm->standbyDevIndex = -1;
   baseComm->splitDataOnQps = ncclParamIbSplitDataOnQps();
   baseComm->nDataQps = -1;
   baseComm->isSend = isSend;

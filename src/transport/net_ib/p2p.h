@@ -11,16 +11,20 @@
 #include "common.h"
 
 #define NCCL_IB_FLUSH_REQ_WR_ID_OFFSET 0x1000
+#define NCCL_IB_HEALTH_PROBE_WR_ID_TAG (1ULL << 63)
+#define NCCL_IB_HEALTH_PROBE_WR_ID_GENERATION_MASK (~NCCL_IB_HEALTH_PROBE_WR_ID_TAG)
 static_assert(NCCL_IB_FLUSH_REQ_WR_ID_OFFSET > NET_IB_MAX_REQUESTS,
               "wr_id offset for flush requests must be greater than NET_IB_MAX_REQUESTS");
 static_assert(NCCL_IB_FLUSH_REQ_WR_ID_OFFSET <= UINT64_MAX - NET_IB_MAX_REQUESTS,
               "wr_id for flush requests must fit in 64 bits since ibv_send_wr::wr_id is 64 bits");
 
-ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* req, int slot);
+ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* req, int slot,
+                           bool triggerHealthProbe);
 ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot);
 
 static inline ncclResult_t ncclIbRecvCommGetQpForCts(struct ncclIbRecvComm* recvComm, uint32_t id, ncclIbQp** qp) {
-  int devIndex = id % recvComm->base.vProps.ndevs;
+  int devIndex = recvComm->base.dataPathPolicy == ncclIbDataPathActiveStandby ? recvComm->base.primaryDevIndex :
+                                                                               id % recvComm->base.vProps.ndevs;
   // CTS message is always posted the first QP on the device
   int qpIndex = 0;
   ncclIbCommBaseGetQpByIndex(&recvComm->base, devIndex, qpIndex, qp);

@@ -25,7 +25,60 @@ extern int64_t ncclParamIbOooRq();
 
 struct ncclIbDevExtraProps {
   bool oooRq;
+  struct ncclIbDataPathInfo dataPathInfo;
 };
+
+static struct ncclIbDataPathInfo ncclIbGetDataPathInfo(const struct ncclIbNetCommBase* base) {
+  struct ncclIbDataPathInfo info = {NCCL_IB_DATA_PATH_INFO_VERSION, (uint8_t)base->dataPathPolicy, UINT8_MAX,
+                                    UINT8_MAX, 0};
+  if (base->dataPathPolicy == ncclIbDataPathActiveStandby) {
+    info.primaryDevIndex = base->primaryDevIndex;
+    info.standbyDevIndex = base->standbyDevIndex;
+  }
+  if (base->nqps > 0 && base->vProps.ndevs > 0) info.qpsPerDevice = base->nqps / base->vProps.ndevs;
+  return info;
+}
+
+static ncclResult_t ncclIbSetDataPathPolicy(struct ncclIbNetCommBase* base, const struct ncclIbMergedDev* mergedDev) {
+  if (mergedDev->containsHcaPairMember && mergedDev->dataPathPolicy != ncclIbDataPathActiveStandby) {
+    WARN("NET/IB: Configured HCA pair member reached connect without its partner in the virtual device");
+    return ncclInvalidUsage;
+  }
+  base->dataPathPolicy = mergedDev->dataPathPolicy;
+  base->primaryDevIndex = mergedDev->primaryDevIndex;
+  base->standbyDevIndex = mergedDev->standbyDevIndex;
+  if (base->dataPathPolicy == ncclIbDataPathActiveStandby &&
+      (base->vProps.ndevs != 2 || base->primaryDevIndex != 0 || base->standbyDevIndex != 1 ||
+       base->resiliency == NULL)) {
+    WARN("NET/IB: Invalid active-standby runtime configuration (ndevs=%d primary=%d standby=%d resiliency=%p)",
+         base->vProps.ndevs, base->primaryDevIndex, base->standbyDevIndex, base->resiliency);
+    return ncclInvalidUsage;
+  }
+  if (base->dataPathPolicy == ncclIbDataPathActiveStandby) {
+    int primary = base->vProps.devs[base->primaryDevIndex];
+    int standby = base->vProps.devs[base->standbyDevIndex];
+    INFO(NCCL_NET, "NET/IB: Active-standby direction selected: primary=%s:%d standby=%s:%d",
+         ncclIbDevs[primary].devName, ncclIbDevs[primary].portNum, ncclIbDevs[standby].devName,
+         ncclIbDevs[standby].portNum);
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclIbValidateDataPathInfo(const struct ncclIbNetCommBase* base,
+                                               const struct ncclIbDataPathInfo* remote) {
+  struct ncclIbDataPathInfo local = ncclIbGetDataPathInfo(base);
+  if (remote->version != NCCL_IB_DATA_PATH_INFO_VERSION || remote->policy != local.policy ||
+      remote->primaryDevIndex != local.primaryDevIndex || remote->standbyDevIndex != local.standbyDevIndex ||
+      (local.qpsPerDevice != 0 && remote->qpsPerDevice != 0 &&
+       remote->qpsPerDevice != local.qpsPerDevice)) {
+    WARN("NET/IB: Data path mismatch: local(version=%u policy=%u primary=%u standby=%u lanes=%u) "
+         "remote(version=%u policy=%u primary=%u standby=%u lanes=%u)",
+         local.version, local.policy, local.primaryDevIndex, local.standbyDevIndex, local.qpsPerDevice, remote->version,
+         remote->policy, remote->primaryDevIndex, remote->standbyDevIndex, remote->qpsPerDevice);
+    return ncclInvalidUsage;
+  }
+  return ncclSuccess;
+}
 
 enum ncclIbCommState {
   ncclIbCommStateStart = 0,
@@ -648,7 +701,8 @@ static ncclResult_t ncclIbSenderQpsCreate(ncclIbSendComm* comm, struct ncclIbCon
   qpCreateAttrs.type = IBV_QPT_RC;
   qpCreateAttrs.maxRecvWorkRequest = 0;
   // Send requests are sent using at most 2 messages (RDMA Write and RDMA Write with Immediate)
-  qpCreateAttrs.maxSendWorkRequest = 2 * NET_IB_MAX_REQUESTS;
+  qpCreateAttrs.maxSendWorkRequest = 2 * NET_IB_MAX_REQUESTS +
+                                     (comm->base.dataPathPolicy == ncclIbDataPathActiveStandby ? 1 : 0);
   for (int qpIndex = 0; qpIndex < nqps; qpIndex++) {
     // The QPs are created in a "striped" manner across the available devices.
     // For example, if there are 2 devices and 4 QPs, the QPs will be created
@@ -799,10 +853,15 @@ ncclResult_t ncclIbConnectImpl(void* ctx, int dev, void* opaqueHandle, void** se
   // Subnet-aware device selection: use the listener's GIDs (embedded in the
   // handle) to find a local NIC on the same subnet as the remote peer.
   // For single-subnet or IB deployments, all GIDs are zero → dev stays unchanged.
-  if (ncclParamIbSubnetAwareRouting()) NCCLCHECK(ncclIbFindDevBySubnet(handle->listenGids, 2, dev, &dev));
+  if (ncclParamIbSubnetAwareRouting() &&
+      (dev < 0 || dev >= ncclNMergedIbDevs ||
+       ncclIbMergedDevs[dev].dataPathPolicy != ncclIbDataPathActiveStandby)) {
+    NCCLCHECK(ncclIbFindDevBySubnet(handle->listenGids, 2, dev, &dev));
+  }
 
   struct ncclIbCommStage* stage = &handle->stage;
   struct ncclIbSendComm* comm = (struct ncclIbSendComm*)stage->comm;
+  struct ncclIbDataPathInfo remoteDataPathInfo;
   int ready;
 
   uint8_t link_layer = IBV_LINK_LAYER_UNSPECIFIED;
@@ -843,6 +902,7 @@ ib_connect_check:
 
   mergedDev = ncclIbMergedDevs + dev;
   comm->base.vProps = mergedDev->vProps;
+  NCCLCHECKGOTO(ncclIbSetDataPathPolicy(&comm->base, mergedDev), ret, fail);
   stage->state = ncclIbCommStateSendDevList;
   stage->offset = 0;
   struct ncclIbConnectionMetadata meta;
@@ -851,6 +911,8 @@ ib_connect_check:
 
   struct ncclIbDevExtraProps exProps;
   exProps.oooRq = true;
+  exProps.dataPathInfo = ncclIbGetDataPathInfo(&comm->base);
+  exProps.dataPathInfo.qpsPerDevice = nQpsPerDev;
   for (int i = 0; i < mergedDev->vProps.ndevs; i++) {
     int ibDevN = mergedDev->vProps.devs[i];
     exProps.oooRq = exProps.oooRq && ncclIbDevs[ibDevN].oooRqSize;
@@ -878,6 +940,8 @@ ib_recv_dev_list:
   memcpy(&remoteVProps, stage->buffer, sizeof(ncclNetVDeviceProps_t));
   memcpy(&exProps, (char*)stage->buffer + sizeof(ncclNetVDeviceProps_t), sizeof(exProps));
   comm->base.remOooRq = exProps.oooRq;
+  remoteDataPathInfo = exProps.dataPathInfo;
+  NCCLCHECKGOTO(ncclIbValidateDataPathInfo(&comm->base, &exProps.dataPathInfo), ret, fail);
 
   mergedDev = ncclIbMergedDevs + dev;
   comm->base.vProps = mergedDev->vProps;
@@ -887,6 +951,7 @@ ib_recv_dev_list:
   comm->base.nqps = remoteNqps > localNqps ? remoteNqps : localNqps; // Select max nqps (local or remote)
 
   comm->base.nDataQps = std::max(comm->base.vProps.ndevs, remoteVProps.ndevs);
+  NCCLCHECKGOTO(ncclIbValidateDataPathInfo(&comm->base, &remoteDataPathInfo), ret, fail);
 
   if (comm->base.resiliency) {
     NCCLCHECK(ncclIbResiliencyDeviceNumSet(comm->base.resiliency, comm->base.vProps.ndevs, remoteVProps.ndevs));
@@ -912,6 +977,7 @@ ib_recv_dev_list:
 
   memset(&meta, 0, sizeof(meta));
   meta.ndevs = comm->base.vProps.ndevs;
+  meta.dataPathInfo = ncclIbGetDataPathInfo(&comm->base);
 
   // Create QPs on the sender side
   NCCLCHECKGOTO(ncclIbSenderQpsCreate(comm, &meta), ret, fail);
@@ -936,6 +1002,10 @@ ib_recv_dev_list:
                                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ),
                   ret, fail);
     devInfo->rkey = commDev->ctsFifoMr->rkey;
+    if (comm->base.resiliency && comm->base.dataPathPolicy == ncclIbDataPathActiveStandby) {
+      meta.healthProbeAddr = (uint64_t)&comm->base.resiliency->healthProbeScratchpad;
+      meta.healthProbeRkeys[i] = comm->base.resiliency->devs[i].healthProbeMr->rkey;
+    }
 
     // Pack local GID info
     devInfo->link_layer = commDev->base.gidInfo.link_layer = ibDev->portAttr.link_layer;
@@ -1024,6 +1094,7 @@ ib_connect:
   if (stage->offset != sizeof(remMeta)) return ncclSuccess;
 
   memcpy(&remMeta, stage->buffer, sizeof(ncclIbConnectionMetadata));
+  NCCLCHECKGOTO(ncclIbValidateDataPathInfo(&comm->base, &remMeta.dataPathInfo), ret, fail);
 
   // ensure that the remote devices have the same link layer than the local devices used in the connection.
   if (comm->base.vProps.ndevs > 0) {
@@ -1059,6 +1130,11 @@ ib_connect:
                                                                comm->remCmplsRecords.addr, i),
                     ret, fail);
     }
+    if (comm->base.resiliency && comm->base.dataPathPolicy == ncclIbDataPathActiveStandby) {
+      NCCLCHECKGOTO(ncclIbResiliencyHealthProbeRemoteSet(comm->base.resiliency, remMeta.healthProbeRkeys[i],
+                                                         remMeta.healthProbeAddr, i),
+                    ret, fail);
+    }
   }
 
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
@@ -1071,6 +1147,7 @@ ib_connect:
   }
 
   NCCLCHECKGOTO(ncclIbSenderQpsToRts(comm, &remMeta), ret, fail);
+  NCCLCHECKGOTO(ncclIbResiliencyDataQpsReady(comm->base.resiliency), ret, fail);
 
   comm->base.ready = 1;
   stage->state = ncclIbCommStateConnected;
@@ -1161,7 +1238,12 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
   // size needs to be double the number of max requests.
   // When resiliency is enabled, the number of send work requests is as the
   // number of max requests because every CTS message is signaled.
-  qpCreateAttrs.maxSendWorkRequest = NET_IB_MAX_REQUESTS * (rComm->base.resiliency ? 1 : 2);
+  qpCreateAttrs.maxSendWorkRequest = NET_IB_MAX_REQUESTS * (rComm->base.resiliency ? 1 : 2) +
+                                     (rComm->base.dataPathPolicy == ncclIbDataPathActiveStandby ? 1 : 0);
+  if (rComm->base.dataPathPolicy == ncclIbDataPathActiveStandby) {
+    INFO(NCCL_NET, "NET/IB: Active-standby receive data-QP SQ reserve enabled (maxSendWr=%u, healthProbeReserve=1, "
+         "comm=%p)", qpCreateAttrs.maxSendWorkRequest, rComm);
+  }
   for (int qpIndex = 0; qpIndex < nqps; qpIndex++) {
     // The QPs are created in a "striped" manner across the available devices.
     // For example, if there are 2 devices and 4 QPs, the QPs will be created
@@ -1419,6 +1501,8 @@ ib_recv_dev_list:
   mergedDev = ncclIbMergedDevs + lComm->dev;
   NCCLCHECK(ncclIbCheckVProps(&mergedDev->vProps, &remoteVProps));
   rComm->base.vProps = mergedDev->vProps;
+  NCCLCHECKGOTO(ncclIbSetDataPathPolicy(&rComm->base, mergedDev), ret, fail);
+  NCCLCHECKGOTO(ncclIbValidateDataPathInfo(&rComm->base, &exProps.dataPathInfo), ret, fail);
   memcpy(stage->buffer, &rComm->base.vProps, sizeof(ncclNetVDeviceProps_t));
   int localNqps, remoteNqps;
   localNqps = nQpsPerDev * rComm->base.vProps.ndevs; // We must have at least 1 qp per-device
@@ -1426,6 +1510,7 @@ ib_recv_dev_list:
   rComm->base.nqps = remoteNqps > localNqps ? remoteNqps : localNqps; // Select max nqps (local or remote)
 
   rComm->base.nDataQps = std::max(rComm->base.vProps.ndevs, remoteVProps.ndevs);
+  NCCLCHECKGOTO(ncclIbValidateDataPathInfo(&rComm->base, &exProps.dataPathInfo), ret, fail);
 
   if (rComm->base.resiliency) {
     NCCLCHECK(ncclIbResiliencyDeviceNumSet(rComm->base.resiliency, rComm->base.vProps.ndevs, remoteVProps.ndevs));
@@ -1435,6 +1520,7 @@ ib_recv_dev_list:
   stage->state = ncclIbCommStateSendDevList;
 
   exProps.oooRq = true;
+  exProps.dataPathInfo = ncclIbGetDataPathInfo(&rComm->base);
   for (int i = 0; i < mergedDev->vProps.ndevs; i++) {
     int ibDevN = mergedDev->vProps.devs[i];
     exProps.oooRq = exProps.oooRq && ncclIbDevs[ibDevN].oooRqSize;
@@ -1458,11 +1544,13 @@ ib_recv:
 
   /* copy back the received info */
   memcpy(&remMeta, stage->buffer, sizeof(struct ncclIbConnectionMetadata));
+  NCCLCHECKGOTO(ncclIbValidateDataPathInfo(&rComm->base, &remMeta.dataPathInfo), ret, fail);
 
   // Subnet-aware device selection: use the remote sender's GIDs to find a local
   // NIC on the same subnet. Override lComm->dev and update vProps if a
   // better device is found.
-  if (ncclParamIbSubnetAwareRouting() && remMeta.ndevs > 0) {
+  if (ncclParamIbSubnetAwareRouting() && rComm->base.dataPathPolicy != ncclIbDataPathActiveStandby &&
+      remMeta.ndevs > 0) {
     union ibv_gid remoteGids[NCCL_IB_MAX_DEVS_PER_NIC];
     int nRemoteGids = 0;
     for (int i = 0; i < remMeta.ndevs && i < NCCL_IB_MAX_DEVS_PER_NIC; i++) {
@@ -1494,6 +1582,7 @@ ib_recv:
   // Metadata to send back to requestor (sender)
   struct ncclIbConnectionMetadata meta;
   memset(&meta, 0, sizeof(meta));
+  meta.dataPathInfo = ncclIbGetDataPathInfo(&rComm->base);
   // Receiver's CQ size needs to accomodate receive requests that can generate
   // up to 2 completions (one for the CTS message and one for the completion
   // of a receive request) per QP, in the worst case.
@@ -1548,6 +1637,11 @@ ib_recv:
     rComm->base.remDevs[i] = remMeta.devs[i];
     rComm->base.remDevs[i].remoteGid.global.interface_id = rComm->base.remDevs[i].gid.global.interface_id;
     rComm->base.remDevs[i].remoteGid.global.subnet_prefix = rComm->base.remDevs[i].gid.global.subnet_prefix;
+    if (rComm->base.resiliency && rComm->base.dataPathPolicy == ncclIbDataPathActiveStandby) {
+      NCCLCHECKGOTO(ncclIbResiliencyHealthProbeRemoteSet(rComm->base.resiliency, remMeta.healthProbeRkeys[i],
+                                                         remMeta.healthProbeAddr, i),
+                    ret, fail);
+    }
   }
 
   // Determine if Flush is enabled for this Comm. Must be done before creating
@@ -1583,6 +1677,10 @@ ib_recv:
                                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ),
                   ret, fail);
     meta.devs[i].rkey = rCommDev->cmplsRecordsMr->rkey;
+    if (rComm->base.resiliency && rComm->base.dataPathPolicy == ncclIbDataPathActiveStandby) {
+      meta.healthProbeAddr = (uint64_t)&rComm->base.resiliency->healthProbeScratchpad;
+      meta.healthProbeRkeys[i] = rComm->base.resiliency->devs[i].healthProbeMr->rkey;
+    }
   }
   if (ncclParamIbUseInline()) rComm->remCtsFifo.flags = IBV_SEND_INLINE;
 
@@ -1638,6 +1736,7 @@ ib_recv_ready:
                                    &stage->offset),
                 ret, fail);
   if (stage->offset != sizeof(int)) return ncclSuccess;
+  NCCLCHECKGOTO(ncclIbResiliencyDataQpsReady(rComm->base.resiliency), ret, fail);
 
   *recvComm = rComm;
 exit:

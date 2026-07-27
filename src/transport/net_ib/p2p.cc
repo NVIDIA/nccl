@@ -102,7 +102,8 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
     wr->wr.rdma.remote_addr = slots[r].addr;
     wr->next = wr + 1;
     wr_id += (uint64_t)(slot & 0xff) << (r * 8);
-    wr->wr_id = wr_id;
+    // Reserve the high bit for the isolated standby health-probe namespace.
+    wr->wr_id = wr_id & ~NCCL_IB_HEALTH_PROBE_WR_ID_TAG;
 #ifdef NCCL_ENABLE_NET_PROFILING
     reqs[r]->pInfo[0].nEventHandles = 0;
 #endif
@@ -140,13 +141,14 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
       lastWr->num_sge = 1;
     }
   }
-  lastWr->wr_id = wr_id;
+  lastWr->wr_id = wr_id & ~NCCL_IB_HEALTH_PROBE_WR_ID_TAG;
   lastWr->opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
   lastWr->imm_data = htobe32(immData);
   lastWr->next = NULL;
   lastWr->send_flags = IBV_SEND_SIGNALED;
 
   uint32_t sendOffsets[NCCL_NET_IB_MAX_RECVS] = {0};
+  bool primaryPayloadPosted = false;
   int qpIndex = -1;
   ncclIbQp* qp = NULL;
   for (int i = 0; i < nqps; i++) {
@@ -250,7 +252,16 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
             __func__, reqs[r], reqs[0]->base, reqs[r]->id, slot, nreqs, r, comm->wrs[r].wr_id,
             comm->wrs[r].sg_list->length, qpIndex, devIndex, qp->qp->qp_num, sendOffsets[r], reqs[r]->send.size);
       reqs[r]->send.sentData[qpIndex] = true;
+      if (comm->base.dataPathPolicy == ncclIbDataPathActiveStandby &&
+          qpIndex % comm->base.vProps.ndevs == comm->base.primaryDevIndex && comm->wrs[r].sg_list->length > 0) {
+        primaryPayloadPosted = true;
+      }
     }
+  }
+
+  if (comm->base.resiliency) {
+    bool replay = ((struct ncclIbResiliencySend*)comm->base.resiliency)->failedRequests[slot].request != NULL;
+    NCCLCHECK(ncclIbResiliencyHealthProbePost(comm->base.resiliency, primaryPayloadPosted && !replay));
   }
 
   TRACE(NCCL_NET, "NET/IB: %s: Send request posted (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d, wr_id=%ld)", __func__,
@@ -314,6 +325,11 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     req->send.data = data;
     if (comm->base.resiliency) {
       memset(req->send.sentData, 0, sizeof(req->send.sentData));
+      // Health probes complete on the standby data CQ and are independent of
+      // request event counts. Let any active request progress every data CQ.
+      for (int devIndex = 0; devIndex < comm->base.vProps.ndevs; devIndex++) {
+        req->devBases[devIndex] = ncclIbGetNetCommDevBase(&comm->base, devIndex);
+      }
     }
 #ifdef NCCL_ENABLE_NET_PROFILING
     req->pInfo[0].pHandle = phandle;
@@ -361,7 +377,8 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
   return ncclSuccess;
 }
 
-ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* req, int slot) {
+ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* req, int slot,
+                           bool triggerHealthProbe) {
   ncclIbQp* ctsQp = NULL;
   NCCLCHECK(ncclIbRecvCommGetQpForCts(comm, req->id, &ctsQp));
 
@@ -413,16 +430,22 @@ ncclResult_t ncclIbPostFifo(struct ncclIbRecvComm* comm, struct ncclIbRequest* r
 
   TRACE(NCCL_NET,
         "NET/IB: %s: Posting a CTS (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d, wr_id=%ld, opcode=%d, send_flags=%d, "
-        "qp_num=%u)",
-        __func__, req, req->base, req->id, slot, req->nreqs, wr.wr_id, wr.opcode, wr.send_flags, ctsQp->qp->qp_num);
+        "qp_num=%u, devIndex=%d)",
+        __func__, req, req->base, req->id, slot, req->nreqs, wr.wr_id, wr.opcode, wr.send_flags, ctsQp->qp->qp_num,
+        ctsQp->devIndex);
 
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(ctsQp->qp, &wr, &bad_wr));
 
+  if (comm->base.resiliency) {
+    NCCLCHECK(ncclIbResiliencyHealthProbePost(comm->base.resiliency, triggerHealthProbe));
+  }
+
   TRACE(NCCL_NET,
         "NET/IB: %s: CTS posted (req=%p, comm=%p, id=%ld, slot=%d, nreqs=%d, wr_id=%ld, opcode=%d, send_flags=%d, "
-        "qp_num=%u)",
-        __func__, req, req->base, req->id, slot, req->nreqs, wr.wr_id, wr.opcode, wr.send_flags, ctsQp->qp->qp_num);
+        "qp_num=%u, devIndex=%d)",
+        __func__, req, req->base, req->id, slot, req->nreqs, wr.wr_id, wr.opcode, wr.send_flags, ctsQp->qp->qp_num,
+        ctsQp->devIndex);
 
   return ncclSuccess;
 }
@@ -514,7 +537,7 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
 
   // Post to FIFO to notify sender
   TIME_START(2);
-  NCCLCHECK(ncclIbPostFifo(comm, req, slot));
+  NCCLCHECK(ncclIbPostFifo(comm, req, slot, true));
   comm->base.fifoHead++;
   TIME_STOP(2);
 
@@ -818,7 +841,7 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
   struct ncclIbRequest* r = (struct ncclIbRequest*)request;
   *done = 0;
 
-  if (r->base->resiliency && r->base->resiliency->inProgress) {
+  if (r->base->resiliency) {
     NCCLCHECK(ncclIbResiliencyProgress(r->base->resiliency));
   }
 
@@ -849,6 +872,10 @@ ncclResult_t ncclIbTest(void* request, int* done, int* sizes) {
       totalWrDone += wrDone;
       for (int w = 0; w < wrDone; w++) {
         struct ibv_wc* wc = wcs + w;
+        if (r->base->resiliency && ncclIbResiliencyIsHealthProbeCompletion(r->base->resiliency, wc, i)) {
+          NCCLCHECK(ncclIbResiliencyHealthProbeHandleCompletion(r->base->resiliency, wc, i));
+          continue;
+        }
         if (wc->status != IBV_WC_SUCCESS) {
           if (r->base->resiliency == NULL) {
             WARN("NET/IB: Got CQE with error (devIndex=%d, req=%p, comm=%p (%s), wr_id=%lu, qp_num=%d)", i, r, r->base,

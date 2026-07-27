@@ -52,6 +52,7 @@ struct ncclIbConnectionMetadata {
   struct ncclIbQpInfo qpInfo[NCCL_IB_MAX_QPS];
   struct ncclIbResiliencyInfo resiliencyInfo;
   struct ncclIbDevInfo devs[NCCL_IB_MAX_DEVS_PER_NIC];
+  struct ncclIbDataPathInfo dataPathInfo;
   char devName[MAX_MERGED_DEV_NAME];
   // An address for a registered memory to be accessed by the peer. The address
   // can be accessed using RDMA using the key specified in ncclIbDevInfo::rkey.
@@ -61,6 +62,10 @@ struct ncclIbConnectionMetadata {
   // The receiver side gets in this member, from the sender, the address of the
   // memory to which the receiver writes the CTS messages.
   uint64_t addr;
+  // Registered per-communicator heartbeat scratchpad used by the peer to
+  // validate an active-standby data QP without touching user buffers.
+  uint64_t healthProbeAddr;
+  uint32_t healthProbeRkeys[NCCL_IB_MAX_DEVS_PER_NIC];
   int ndevs;
   int tc;
   int sl;

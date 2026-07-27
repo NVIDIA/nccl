@@ -57,8 +57,31 @@ struct ncclIbMrCache {
 extern int ncclNMergedIbDevs;
 #define NCCL_IB_MAX_DEVS_PER_NIC NCCL_NET_MAX_DEVS_PER_NIC
 #define MAX_MERGED_DEV_NAME (MAXNAMESIZE * NCCL_IB_MAX_DEVS_PER_NIC) + NCCL_IB_MAX_DEVS_PER_NIC
+
+enum ncclIbDataPathPolicy {
+  ncclIbDataPathActiveActive = 0,
+  ncclIbDataPathActiveStandby = 1,
+};
+
+#define NCCL_IB_DATA_PATH_INFO_VERSION 1
+struct ncclIbDataPathInfo {
+  uint8_t version;
+  uint8_t policy;
+  uint8_t primaryDevIndex;
+  uint8_t standbyDevIndex;
+  uint16_t qpsPerDevice;
+};
+
 struct alignas(64) ncclIbMergedDev {
+  // vProps is the runtime view used for QP/CQ/MR creation. In active-standby
+  // mode it is normalized as [primary, standby]. topoVProps is reported to
+  // NCCL core and contains only the primary device.
   ncclNetVDeviceProps_t vProps;
+  ncclNetVDeviceProps_t topoVProps;
+  enum ncclIbDataPathPolicy dataPathPolicy;
+  int primaryDevIndex;
+  int standbyDevIndex;
+  bool containsHcaPairMember;
   int speed;
   int16_t railId;
   int16_t planeId;
@@ -339,6 +362,9 @@ struct ncclIbResiliency;
 
 struct alignas(32) ncclIbNetCommBase {
   ncclNetVDeviceProps_t vProps;
+  enum ncclIbDataPathPolicy dataPathPolicy;
+  int primaryDevIndex;
+  int standbyDevIndex;
   bool isSend;
   struct ncclIbRequest reqs[NET_IB_MAX_REQUESTS];
   struct ncclIbQp qps[NCCL_IB_MAX_QPS];
@@ -379,6 +405,10 @@ static inline ncclResult_t ncclIbCommBaseGetQpByIndex(struct ncclIbNetCommBase* 
 static inline int ncclIbCommBaseGetNqpsPerRequest(struct ncclIbNetCommBase* baseComm) {
   assert(baseComm->nDataQps != -1);
   assert(baseComm->nqps != -1);
+  if (baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) {
+    assert(baseComm->vProps.ndevs == 2);
+    return (baseComm->splitDataOnQps == 1) ? baseComm->nqps / baseComm->vProps.ndevs : 1;
+  }
   return (baseComm->splitDataOnQps == 1) ? baseComm->nqps : baseComm->nDataQps;
 }
 
@@ -393,7 +423,15 @@ static inline int ncclIbCommBaseGetNqpsPerRequest(struct ncclIbNetCommBase* base
 static inline ncclResult_t ncclIbCommBaseGetQpForRequest(struct ncclIbNetCommBase* baseComm, const uint64_t id,
                                                          const uint8_t qpIndex, ncclIbQp** outQp, int* outQpIndex) {
   int nQps = ncclIbCommBaseGetNqpsPerRequest(baseComm);
-  *outQpIndex = (id * nQps + qpIndex) % baseComm->nqps;
+  if (baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) {
+    int qpsPerDevice = baseComm->nqps / baseComm->vProps.ndevs;
+    assert(qpsPerDevice > 0);
+    assert(qpIndex < nQps);
+    int lane = baseComm->splitDataOnQps == 1 ? qpIndex : id % qpsPerDevice;
+    *outQpIndex = lane * baseComm->vProps.ndevs + baseComm->primaryDevIndex;
+  } else {
+    *outQpIndex = (id * nQps + qpIndex) % baseComm->nqps;
+  }
   *outQp = baseComm->activeQps[*outQpIndex];
   assert(*outQp != NULL);
   return ncclSuccess;

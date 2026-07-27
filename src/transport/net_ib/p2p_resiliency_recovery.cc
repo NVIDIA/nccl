@@ -217,6 +217,50 @@ static ncclResult_t ncclIbPortRecoveryDrainCqAndPostReceiveWRs(struct ncclIbPort
   return ncclSuccess;
 }
 
+// Helper function to drain and discard all the CQEs pending on the recovery CQ
+// without posting new receive WQEs. Used after the recovery QP work queues were
+// flushed, where a pending CQE refers to a WQE that no longer exists.
+static ncclResult_t ncclIbPortRecoveryDiscardCqes(struct ncclIbPortRecoveryContext* recoveryContext) {
+  struct ibv_cq* cq = recoveryContext->recoveryCq;
+  int wrDone = 0;
+  struct ibv_wc wcs[NCCL_IB_RESILIENCY_PORT_RECOVERY_CQ_SIZE];
+  do {
+    NCCLCHECK(wrap_ibv_poll_cq(cq, NCCL_IB_RESILIENCY_PORT_RECOVERY_CQ_SIZE, wcs, &wrDone));
+    if (wrDone > 0) {
+      INFO(NCCL_NET, "NET/IB: %s: Discarded %d CQEs from recovery CQ %p for device %d (comm=%p)", __func__, wrDone, cq,
+           recoveryContext->devIndex, recoveryContext->resCtx->baseComm);
+    }
+  } while (wrDone > 0);
+  return ncclSuccess;
+}
+
+// The recovery QPs live as long as the communicator and are reused by every
+// recovery cycle on their device, but their work queues are not empty when a
+// cycle completes: the receiver consumes the final "ack" without re-posting a
+// receive WQE, and the sender may leave send WQEs behind after retransmitting
+// "alive" messages. Those leftovers accumulate across cycles until
+// ncclIbPortRecoveryContextInit() can no longer post its initial batch of
+// receive WQEs (ibv_post_recv() fails with ENOMEM), which marks the device as
+// permanently failed and prevents any further recovery of that device.
+// Transitioning the QP to RESET flushes both work queues without generating
+// completions, and re-arming it to RTS (using the attributes cached on the QP at
+// connection time) hands a pristine QP to the next cycle. Both peers do this at
+// the end of a successful cycle, so their PSNs remain in sync.
+static ncclResult_t ncclIbPortRecoveryQpRearm(struct ncclIbPortRecoveryContext* recoveryContext) {
+  struct ncclIbQp* recoveryQp = &recoveryContext->resCtx->portRecoveryQps[recoveryContext->devIndex];
+  if (recoveryQp->qp == NULL) return ncclSuccess;
+  INFO(NCCL_NET, "NET/IB: %s: Re-arming recovery QP on device %d (%s comm=%p, qp_num=%u)", __func__,
+       recoveryContext->devIndex, recoveryContext->resCtx->baseComm->isSend ? "send" : "recv",
+       recoveryContext->resCtx->baseComm, recoveryQp->qp->qp_num);
+  NCCLCHECK(ncclIbQpReset(recoveryQp));
+  NCCLCHECK(ncclIbQpInit(recoveryQp));
+  NCCLCHECK(ncclIbQpRtr(recoveryQp));
+  NCCLCHECK(ncclIbQpRts(recoveryQp));
+  // CQEs generated before the work queues were flushed are stale for the next cycle.
+  NCCLCHECK(ncclIbPortRecoveryDiscardCqes(recoveryContext));
+  return ncclSuccess;
+}
+
 static inline ncclResult_t ncclIbPortRecoveryContextInit(struct ncclIbResiliency* resCtx, int failedDevIndex,
                                                          ncclIbPortRecoveryContext** outRecoveryCtx) {
   ncclResult_t res = ncclSuccess;
@@ -1192,6 +1236,15 @@ static inline ncclResult_t ncclIbPortRecoveryContextProgress(ncclIbPortRecoveryC
     INFO(NCCL_NET, "NET/IB: %s: Port recovery succeeded for devIndex=%d (%s comm=%p)", __func__,
          recoveryContext->devIndex, recoveryContext->resCtx->baseComm->isSend ? "send" : "recv",
          recoveryContext->resCtx->baseComm);
+    // Hand a clean recovery QP to the next recovery cycle on this device. The
+    // recovery that just completed remains valid even if this fails, so the
+    // failure is only reported.
+    if (ncclIbPortRecoveryQpRearm(recoveryContext) != ncclSuccess) {
+      WARN("NET/IB: Failed to re-arm the recovery QP on device %d (%s comm=%p). Subsequent recovery attempts on this "
+           "device may fail",
+           recoveryContext->devIndex, recoveryContext->resCtx->baseComm->isSend ? "send" : "recv",
+           recoveryContext->resCtx->baseComm);
+    }
     for (int i = 0; i < recoveryContext->resCtx->ndevs; i++) {
       if (i != recoveryContext->devIndex) continue;
       INFO(NCCL_NET, "NET/IB: %s: Marking device %d as recovered (%s comm=%p)", __func__, i,

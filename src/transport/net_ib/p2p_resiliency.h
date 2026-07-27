@@ -26,9 +26,29 @@ enum ncclIbResiliencyDevState {
   ncclIbResiliencyDevStateErrorPermanent
 };
 
+enum ncclIbActiveStandbyState {
+  ncclIbAsPrimaryActive = 0,
+  ncclIbAsSwitchingToStandby,
+  ncclIbAsStandbyActive,
+  ncclIbAsPrimaryRecovering,
+  ncclIbAsFailed,
+};
+
+enum ncclIbResiliencyHealthState {
+  ncclIbHealthDown = 0,
+  ncclIbHealthHealthy,
+};
+
+enum ncclIbHealthProbeResultSource {
+  ncclIbHealthProbeResultNone = 0,
+  ncclIbHealthProbeResultCqe,
+  ncclIbHealthProbeResultPostFailure,
+};
+
 struct ncclIbResiliencyDev {
   // Atomic to allow lock-free access from multiple threads (main + recovery).
   std::atomic<ncclIbResiliencyDevState> state;
+  std::atomic<ncclIbResiliencyHealthState> healthState;
   // CQ to get CQEs on the sender side for probing operations.
   // Receiver side is not expected to get any CQEs on the this CQ but Verbs
   // requires a CQ to be associated with a QP.
@@ -41,6 +61,40 @@ struct ncclIbResiliencyDev {
   struct ibv_mr* probingResultMr;
   // CQ to get CQEs for recovery protocol messages.
   struct ibv_cq* portRecoveryCq;
+  // Registration of the communicator-owned heartbeat scratchpad on this
+  // device. It is both a local probe source and a remote-write target.
+  struct ibv_mr* healthProbeMr;
+};
+
+struct ncclIbResiliencyHealthProbeDiag {
+  enum ncclIbHealthProbeResultSource source;
+  enum ibv_wc_status wcStatus;
+  uint32_t vendorErr;
+  ncclResult_t postResult;
+  int postErrno;
+  int devIndex;
+  int qpIndex;
+  int lane;
+  uint32_t qpNum;
+  uint64_t generation;
+  uint64_t timestamp;
+};
+
+struct ncclIbResiliencyHealthProbe {
+  bool outstanding;
+  uint64_t generation;
+  uint64_t lastSubmit;
+  uint64_t lastSuccess;
+  uint32_t qpNum;
+  int devIndex;
+  int qpIndex;
+  int nextLane;
+  struct ncclIbResiliencyHealthProbeDiag diag;
+};
+
+struct ncclIbResiliencyRemoteCompletionRecordsInfo {
+  uint64_t addr;
+  uint32_t rkey;
 };
 
 struct ncclIbResiliency {
@@ -78,6 +132,16 @@ struct ncclIbResiliency {
 
   // Number of outstanding devices that are currently undergoing recovery.
   int outstandingRecovery;
+
+  // Active-standby state is published by the main progress thread after QP
+  // mappings are updated. The generation makes transitions diagnosable.
+  enum ncclIbActiveStandbyState activeStandbyState;
+  uint64_t activeStandbyGeneration;
+  uint64_t healthProbeScratchpad;
+  struct ncclIbResiliencyHealthProbe healthProbe;
+  // Remote heartbeat targets are needed by both send and receive
+  // communicators for bidirectional standby data-QP probing.
+  struct ncclIbResiliencyRemoteCompletionRecordsInfo remHealthProbeInfo[NCCL_IB_MAX_DEVS_PER_NIC];
 };
 
 enum ncclIbResiliencyRequestSendState {
@@ -112,13 +176,6 @@ struct ncclIbResiliencyRequestSend {
   // incrementing "generation ID" used to make sure that the CQE belongs to
   // a request that was already handled so the CQE can be ignored.
   uint64_t id;
-};
-
-struct ncclIbResiliencyRemoteCompletionRecordsInfo {
-  // The address of the completion records structure on the receiver side.
-  uint64_t addr;
-  // For accessing the completion records structure on the receiver side.
-  uint32_t rkey;
 };
 
 struct ncclIbResiliencySend {
@@ -167,6 +224,16 @@ ncclResult_t ncclIbResiliencyHandleCompletionError(struct ncclIbResiliency* resC
 // Progresses all operations on the resiliency context.
 ncclResult_t ncclIbResiliencyProgress(struct ncclIbResiliency* resCtx);
 
+// Post a rate-limited health probe on an actual standby data QP after the
+// primary path successfully accepted payload or CTS traffic.
+ncclResult_t ncclIbResiliencyHealthProbePost(struct ncclIbResiliency* resCtx, bool primaryTrafficPosted);
+// Publish data-QP readiness after the complete connection handshake.
+ncclResult_t ncclIbResiliencyDataQpsReady(struct ncclIbResiliency* resCtx);
+// Health probe CQEs share the data CQ but have an isolated wr_id namespace.
+bool ncclIbResiliencyIsHealthProbeCompletion(struct ncclIbResiliency* resCtx, const struct ibv_wc* wc, int devIndex);
+ncclResult_t ncclIbResiliencyHealthProbeHandleCompletion(struct ncclIbResiliency* resCtx, struct ibv_wc* wc,
+                                                         int devIndex);
+
 // -----------------------------
 // Control path APIs
 // -----------------------------
@@ -213,5 +280,7 @@ ncclResult_t ncclIbResiliencyClose(struct ncclIbResiliency* resCtx);
 // structure on the receiver side.
 ncclResult_t ncclIbResiliencyRemoteCompletionRecordsSet(struct ncclIbResiliency* resCtx, uint32_t cmplsRecordsRkey,
                                                         uint64_t cmplsRecordsAddr, uint devIndex);
+ncclResult_t ncclIbResiliencyHealthProbeRemoteSet(struct ncclIbResiliency* resCtx, uint32_t rkey, uint64_t addr,
+                                                  uint devIndex);
 
 #endif // NET_IB_P2P_RESILIENCY_H_

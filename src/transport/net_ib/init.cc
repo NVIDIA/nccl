@@ -30,6 +30,168 @@ NCCL_PARAM(IbMergeNics, "IB_MERGE_NICS", 1);
 NCCL_PARAM(IbDevicePciOrder, "IB_DEVICE_PCI_ORDER", 1);
 
 extern int64_t ncclParamIbArThreshold();
+extern int ncclParamIbResiliencyPortFailover();
+
+struct ncclIbHcaPair {
+  int devs[2];
+  int directionalDevs[2];
+  bool created;
+};
+
+static struct ncclIbHcaPair ncclIbHcaPairs[MAX_IB_DEVS / 2];
+static int ncclIbNHcaPairs;
+
+static ncclResult_t ncclIbParsePairEndpoint(char* endpoint, int* devIndex) {
+  char* separator = strrchr(endpoint, ':');
+  if (separator == NULL || separator == endpoint || strchr(endpoint, ':') != separator) return ncclInvalidUsage;
+  *separator = '\0';
+  char* end = NULL;
+  long port = strtol(separator + 1, &end, 10);
+  if (endpoint[0] == '\0' || end == separator + 1 || *end != '\0' || port <= 0 || port > UINT8_MAX) {
+    return ncclInvalidUsage;
+  }
+
+  int found = -1;
+  for (int d = 0; d < ncclNIbDevs; d++) {
+    if (strcmp(endpoint, ncclIbDevs[d].devName) == 0 && port == ncclIbDevs[d].portNum) {
+      if (found != -1) return ncclInvalidUsage;
+      found = d;
+    }
+  }
+  if (found == -1) return ncclInvalidUsage;
+  *devIndex = found;
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclIbParseHcaPairs(void) {
+  const char* env = ncclGetEnv("NCCL_IB_RESILIENCY_HCA_PAIRS");
+  ncclIbNHcaPairs = 0;
+  if (env == NULL || env[0] == '\0') return ncclSuccess;
+  if (ncclParamIbResiliencyPortFailover() != 1) {
+    WARN("NET/IB: NCCL_IB_RESILIENCY_HCA_PAIRS requires NCCL_IB_RESILIENCY_PORT_FAILOVER=1");
+    return ncclInvalidUsage;
+  }
+
+  char* pairs = strdup(env);
+  if (pairs == NULL) return ncclSystemError;
+  ncclResult_t ret = ncclSuccess;
+  bool used[MAX_IB_DEVS] = {false};
+  char* savePair = NULL;
+  for (char* pair = strtok_r(pairs, ";", &savePair); pair != NULL; pair = strtok_r(NULL, ";", &savePair)) {
+    if (ncclIbNHcaPairs == MAX_IB_DEVS / 2) {
+      ret = ncclInvalidUsage;
+      goto fail;
+    }
+    char* comma = strchr(pair, ',');
+    if (comma == NULL || comma == pair || comma[1] == '\0' || strchr(comma + 1, ',') != NULL) {
+      ret = ncclInvalidUsage;
+      goto fail;
+    }
+    *comma = '\0';
+    int first = -1, second = -1;
+    if (ncclIbParsePairEndpoint(pair, &first) != ncclSuccess ||
+        ncclIbParsePairEndpoint(comma + 1, &second) != ncclSuccess || first == second || used[first] ||
+        used[second] || ncclIbDevs[first].link != ncclIbDevs[second].link) {
+      ret = ncclInvalidUsage;
+      goto fail;
+    }
+    used[first] = used[second] = true;
+    if (second < first) {
+      int tmp = first;
+      first = second;
+      second = tmp;
+    }
+    struct ncclIbHcaPair* hcaPair = ncclIbHcaPairs + ncclIbNHcaPairs++;
+    hcaPair->devs[0] = first;
+    hcaPair->devs[1] = second;
+    hcaPair->directionalDevs[0] = -1;
+    hcaPair->directionalDevs[1] = -1;
+    hcaPair->created = false;
+  }
+  if (ncclIbNHcaPairs == 0 || env[0] == ';' || env[strlen(env) - 1] == ';' || strstr(env, ";;") != NULL) {
+    ret = ncclInvalidUsage;
+  }
+
+fail:
+  free(pairs);
+  if (ret != ncclSuccess) {
+    WARN("NET/IB: Invalid NCCL_IB_RESILIENCY_HCA_PAIRS='%s'; expected exact active device:port pairs", env);
+    ncclIbNHcaPairs = 0;
+    return ret;
+  }
+
+  const char* forceMerge = ncclGetEnv("NCCL_NET_FORCE_MERGE");
+  if (forceMerge == NULL || forceMerge[0] == '\0') {
+    WARN("NET/IB: NCCL_IB_RESILIENCY_HCA_PAIRS requires matching NCCL_NET_FORCE_MERGE groups");
+    ncclIbNHcaPairs = 0;
+    return ncclInvalidUsage;
+  }
+  char* groups = strdup(forceMerge);
+  if (groups == NULL) return ncclSystemError;
+  bool pairSeen[MAX_IB_DEVS / 2] = {false};
+  int nGroups = 0;
+  char* saveGroup = NULL;
+  for (char* group = strtok_r(groups, ";", &saveGroup); group != NULL; group = strtok_r(NULL, ";", &saveGroup)) {
+    char* comma = strchr(group, ',');
+    if (comma == NULL || comma == group || comma[1] == '\0' || strchr(comma + 1, ',') != NULL) {
+      ret = ncclInvalidUsage;
+      break;
+    }
+    *comma = '\0';
+    int first = -1, second = -1;
+    if (ncclIbParsePairEndpoint(group, &first) != ncclSuccess ||
+        ncclIbParsePairEndpoint(comma + 1, &second) != ncclSuccess) {
+      ret = ncclInvalidUsage;
+      break;
+    }
+    int matchedPair = -1;
+    for (int p = 0; p < ncclIbNHcaPairs; p++) {
+      if ((first == ncclIbHcaPairs[p].devs[0] && second == ncclIbHcaPairs[p].devs[1]) ||
+          (second == ncclIbHcaPairs[p].devs[0] && first == ncclIbHcaPairs[p].devs[1])) {
+        matchedPair = p;
+        break;
+      }
+    }
+    if (matchedPair == -1 || pairSeen[matchedPair]) {
+      ret = ncclInvalidUsage;
+      break;
+    }
+    pairSeen[matchedPair] = true;
+    nGroups++;
+  }
+  if (nGroups != ncclIbNHcaPairs || forceMerge[0] == ';' || forceMerge[strlen(forceMerge) - 1] == ';' ||
+      strstr(forceMerge, ";;") != NULL) {
+    ret = ncclInvalidUsage;
+  }
+  free(groups);
+  if (ret != ncclSuccess) {
+    WARN("NET/IB: NCCL_NET_FORCE_MERGE='%s' must contain exactly the configured HCA pair member sets", forceMerge);
+    ncclIbNHcaPairs = 0;
+    return ret;
+  }
+  INFO(NCCL_NET | NCCL_ENV, "NCCL_IB_RESILIENCY_HCA_PAIRS set to %s", env);
+  return ncclSuccess;
+}
+
+static int ncclIbFindHcaPair(const ncclNetVDeviceProps_t* props) {
+  if (props->ndevs != 2) return -1;
+  for (int i = 0; i < ncclIbNHcaPairs; i++) {
+    int first = ncclIbHcaPairs[i].devs[0];
+    int second = ncclIbHcaPairs[i].devs[1];
+    if ((props->devs[0] == first && props->devs[1] == second) ||
+        (props->devs[0] == second && props->devs[1] == first)) return i;
+  }
+  return -1;
+}
+
+static bool ncclIbContainsHcaPairMember(const ncclNetVDeviceProps_t* props) {
+  for (int i = 0; i < props->ndevs; i++) {
+    for (int p = 0; p < ncclIbNHcaPairs; p++) {
+      if (props->devs[i] == ncclIbHcaPairs[p].devs[0] || props->devs[i] == ncclIbHcaPairs[p].devs[1]) return true;
+    }
+  }
+  return false;
+}
 
 // Returns 0 if this is the path of two VFs of the same physical device
 static int ncclIbMatchVfPath(char* path1, char* path2) {
@@ -194,7 +356,8 @@ fail:
   return ncclInternalError;
 }
 
-ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
+static ncclResult_t ncclIbBuildVDevice(int vDev, ncclNetVDeviceProps_t* props, int hcaPair,
+                                       int directionalPrimary) {
   if (ncclParamIbMergeNics() == 0 && props->ndevs > 1) {
     INFO(NCCL_NET, "NET/IB : Skipping makeVDevice, NCCL_IB_MERGE_NICS=0");
     return ncclInvalidUsage;
@@ -204,24 +367,54 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
     WARN("NET/IB : Can't make virtual NIC with 0 devices");
     return ncclInvalidUsage;
   }
+  for (int i = 0; i < props->ndevs; i++) {
+    if (props->devs[i] < 0 || props->devs[i] >= ncclNIbDevs) {
+      WARN("NET/IB : Cannot use physical device %d, max %d", props->devs[i], ncclNIbDevs);
+      return ncclInvalidUsage;
+    }
+  }
 
-  if (ncclNMergedIbDevs == MAX_IB_VDEVS) {
+  if (vDev < 0 || vDev >= MAX_IB_VDEVS) {
     WARN("NET/IB : Cannot allocate any more virtual devices (%d)", MAX_IB_VDEVS);
     return ncclInvalidUsage;
   }
 
-  // Always count up number of merged devices
-  ncclIbMergedDev* mDev = ncclIbMergedDevs + ncclNMergedIbDevs;
+  ncclIbMergedDev* mDev = ncclIbMergedDevs + vDev;
+  memset(mDev, 0, sizeof(*mDev));
   mDev->vProps.ndevs = 0;
-  mDev->speed = 0;
-  mDev->railId = ncclIbDevs[props->devs[0]].railId;
-  // Set the virtual bit on to avoid collision with physical planes when multiple planes are merged.
-  mDev->planeId = (props->ndevs > 1) ? NCCL_IB_PLANE_VIRT_BIT : ncclIbDevs[props->devs[0]].planeId;
+  mDev->topoVProps.ndevs = 0;
+  mDev->dataPathPolicy = ncclIbDataPathActiveActive;
+  mDev->primaryDevIndex = -1;
+  mDev->standbyDevIndex = -1;
+  mDev->containsHcaPairMember = ncclIbContainsHcaPairMember(props);
+  if (mDev->containsHcaPairMember && props->ndevs > 1 && hcaPair == -1) {
+    WARN("NET/IB: Virtual device containing a configured HCA pair member must contain exactly that complete pair");
+    return ncclInvalidUsage;
+  }
 
-  for (int i = 0; i < props->ndevs; i++) {
-    ncclIbDev* dev = ncclIbDevs + props->devs[i];
+  ncclNetVDeviceProps_t runtimeProps = *props;
+  if (hcaPair != -1) {
+    struct ncclIbHcaPair* pair = ncclIbHcaPairs + hcaPair;
+    if (directionalPrimary != pair->devs[0] && directionalPrimary != pair->devs[1]) {
+      WARN("NET/IB: Invalid directional primary device %d for HCA pair {%d,%d}", directionalPrimary,
+           pair->devs[0], pair->devs[1]);
+      return ncclInvalidUsage;
+    }
+    runtimeProps.devs[0] = directionalPrimary;
+    runtimeProps.devs[1] = directionalPrimary == pair->devs[0] ? pair->devs[1] : pair->devs[0];
+    mDev->dataPathPolicy = ncclIbDataPathActiveStandby;
+    mDev->primaryDevIndex = 0;
+    mDev->standbyDevIndex = 1;
+  }
+  mDev->speed = 0;
+  mDev->railId = ncclIbDevs[runtimeProps.devs[0]].railId;
+  // Set the virtual bit on to avoid collision with physical planes when multiple planes are merged.
+  mDev->planeId = (runtimeProps.ndevs > 1) ? NCCL_IB_PLANE_VIRT_BIT : ncclIbDevs[runtimeProps.devs[0]].planeId;
+
+  for (int i = 0; i < runtimeProps.ndevs; i++) {
+    ncclIbDev* dev = ncclIbDevs + runtimeProps.devs[i];
     if (mDev->vProps.ndevs == NCCL_IB_MAX_DEVS_PER_NIC) return ncclInvalidUsage;
-    mDev->vProps.devs[mDev->vProps.ndevs++] = props->devs[i];
+    mDev->vProps.devs[mDev->vProps.ndevs++] = runtimeProps.devs[i];
     mDev->speed += dev->speed;
     // rail ID of a fused device with different rails is undefined.
     if (dev->railId == NCCL_NET_ID_UNDEF || mDev->railId != dev->railId) mDev->railId = NCCL_NET_ID_UNDEF;
@@ -238,33 +431,94 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
     }
   }
 
+  mDev->topoVProps = mDev->vProps;
+  if (mDev->dataPathPolicy == ncclIbDataPathActiveStandby) {
+    int primary = mDev->vProps.devs[mDev->primaryDevIndex];
+    struct ncclIbHcaPair* pair = ncclIbHcaPairs + hcaPair;
+    mDev->topoVProps.ndevs = 1;
+    mDev->topoVProps.devs[0] = primary;
+    mDev->speed = ncclIbDevs[primary].speed;
+    mDev->railId = ncclIbDevs[primary].railId;
+    mDev->planeId = ncclIbDevs[primary].planeId;
+    snprintf(mDev->devName, sizeof(mDev->devName), "%s:%d+%s:%d@%s:%d",
+             ncclIbDevs[pair->devs[0]].devName, ncclIbDevs[pair->devs[0]].portNum,
+             ncclIbDevs[pair->devs[1]].devName, ncclIbDevs[pair->devs[1]].portNum,
+             ncclIbDevs[primary].devName, ncclIbDevs[primary].portNum);
+  }
+
   // Check link layers
-  ncclIbDev* dev0 = ncclIbDevs + props->devs[0];
-  for (int i = 1; i < props->ndevs; i++) {
-    if (props->devs[i] >= ncclNIbDevs) {
-      WARN("NET/IB : Cannot use physical device %d, max %d", props->devs[i], ncclNIbDevs);
+  ncclIbDev* dev0 = ncclIbDevs + runtimeProps.devs[0];
+  for (int i = 1; i < runtimeProps.ndevs; i++) {
+    if (runtimeProps.devs[i] >= ncclNIbDevs) {
+      WARN("NET/IB : Cannot use physical device %d, max %d", runtimeProps.devs[i], ncclNIbDevs);
       return ncclInvalidUsage;
     }
-    ncclIbDev* dev = ncclIbDevs + props->devs[i];
+    ncclIbDev* dev = ncclIbDevs + runtimeProps.devs[i];
     if (dev->link != dev0->link) {
       WARN("NET/IB : Attempted to merge incompatible devices: [%d]%s:%d/%s and [%d]%s:%d/%s. Try selecting NICs of "
            "only one link type using NCCL_IB_HCA",
-           props->devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), props->devs[i], dev->devName,
+           runtimeProps.devs[0], dev0->devName, dev0->portNum, NCCL_IB_LLSTR(dev0->link), runtimeProps.devs[i], dev->devName,
            dev->portNum, NCCL_IB_LLSTR(dev->link));
       return ncclInvalidUsage;
     }
   }
 
-  *d = ncclNMergedIbDevs++;
-  INFO(NCCL_NET, "NET/IB : Made virtual device [%d] name=%s speed=%d ndevs=%d rail=%d plane=%d", *d, mDev->devName,
-       mDev->speed, mDev->vProps.ndevs, mDev->railId, mDev->planeId);
+  INFO(NCCL_NET,
+       "NET/IB : Made virtual device [%d] name=%s speed=%d runtimeNdevs=%d topoNdevs=%d primary=%d standby=%d "
+       "rail=%d plane=%d",
+       vDev, mDev->devName, mDev->speed, mDev->vProps.ndevs, mDev->topoVProps.ndevs, mDev->primaryDevIndex,
+       mDev->standbyDevIndex, mDev->railId, mDev->planeId);
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
+  int vDev = ncclNMergedIbDevs;
+  NCCLCHECK(ncclIbBuildVDevice(vDev, props, -1, -1));
+  *d = vDev;
+  ncclNMergedIbDevs++;
   return ncclSuccess;
 }
 
 ncclResult_t ncclIbMakeVDevice(int* d, ncclNetVDeviceProps_t* props) {
   std::lock_guard<std::mutex> lock(ncclIbMutex);
-  ncclResult_t res = ncclIbMakeVDeviceInternal(d, props);
-  return res;
+  int hcaPair = ncclIbFindHcaPair(props);
+  if (hcaPair == -1) return ncclIbMakeVDeviceInternal(d, props);
+
+  struct ncclIbHcaPair* pair = ncclIbHcaPairs + hcaPair;
+  if (pair->created) {
+    *d = pair->directionalDevs[0];
+    INFO(NCCL_NET, "NET/IB : Reusing directional virtual devices [%d,%d] for HCA pair {%s:%d,%s:%d}",
+         pair->directionalDevs[0], pair->directionalDevs[1], ncclIbDevs[pair->devs[0]].devName,
+         ncclIbDevs[pair->devs[0]].portNum, ncclIbDevs[pair->devs[1]].devName,
+         ncclIbDevs[pair->devs[1]].portNum);
+    return ncclSuccess;
+  }
+  if (ncclNMergedIbDevs > MAX_IB_VDEVS - 2) {
+    WARN("NET/IB : Cannot allocate two directional virtual devices, %d of %d slots are already used",
+         ncclNMergedIbDevs, MAX_IB_VDEVS);
+    return ncclInvalidUsage;
+  }
+
+  int first = ncclNMergedIbDevs;
+  int second = first + 1;
+  ncclResult_t ret = ncclIbBuildVDevice(first, props, hcaPair, pair->devs[0]);
+  if (ret == ncclSuccess) ret = ncclIbBuildVDevice(second, props, hcaPair, pair->devs[1]);
+  if (ret != ncclSuccess) {
+    memset(ncclIbMergedDevs + first, 0, 2 * sizeof(struct ncclIbMergedDev));
+    pair->directionalDevs[0] = pair->directionalDevs[1] = -1;
+    pair->created = false;
+    return ret;
+  }
+
+  pair->directionalDevs[0] = first;
+  pair->directionalDevs[1] = second;
+  pair->created = true;
+  ncclNMergedIbDevs += 2;
+  *d = first;
+  INFO(NCCL_NET, "NET/IB : HCA pair {%s:%d,%s:%d} created directional virtual devices [%d,%d]",
+       ncclIbDevs[pair->devs[0]].devName, ncclIbDevs[pair->devs[0]].portNum,
+       ncclIbDevs[pair->devs[1]].devName, ncclIbDevs[pair->devs[1]].portNum, first, second);
+  return ncclSuccess;
 }
 
 ncclResult_t ncclIbSetNetAttr(void* ctx, ncclNetAttr_t* netAttr) {
@@ -482,6 +736,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
     }
     // sort devices to ensure a consistent order across nodes
     if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
+    NCCLCHECKGOTO(ncclIbParseHcaPairs(), ret, fail);
     // Once sorted, get the realPort ID, the plane index, and create the virtual devices.
     // Doing it after sorting ensures that devices will have consistent realPort IDs and plane indexes accross ranks.
     char line[2048] = "";
@@ -576,12 +831,12 @@ ncclResult_t ncclIbGetProperties(int dev, ncclNetProperties_t* props) {
   }
   struct ncclIbMergedDev* mergedDev = ncclIbMergedDevs + dev;
   // Take the rest of the properties from an arbitrary sub-device (should be the same)
-  NCCLCHECK(ncclIbGetPhysProperties(mergedDev->vProps.devs[0], props));
+  NCCLCHECK(ncclIbGetPhysProperties(mergedDev->topoVProps.devs[0], props));
   props->name = mergedDev->devName;
   props->speed = mergedDev->speed;
   props->railId = mergedDev->railId;
   props->planeId = mergedDev->planeId;
-  memcpy(&props->vProps, &mergedDev->vProps, sizeof(ncclNetVDeviceProps_t));
+  memcpy(&props->vProps, &mergedDev->topoVProps, sizeof(ncclNetVDeviceProps_t));
   return ncclSuccess;
 }
 

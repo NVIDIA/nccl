@@ -10,9 +10,12 @@
 #include "connect.h" // For ncclIbQpCreate()
 #include "p2p_resiliency_recovery.h"
 
+#include <cerrno>
+
 NCCL_PARAM(IbResiliencyPortFailover, "IB_RESILIENCY_PORT_FAILOVER", 0);
 NCCL_PARAM(IbResiliencyPortFailoverMaxAttempts, "IB_RESILIENCY_PORT_FAILOVER_MAX_ATTEMPTS", 1);
 NCCL_PARAM(IbResiliencyPortFailoverProbeDelay, "IB_RESILIENCY_PORT_FAILOVER_PROBE_DELAY", 10); // In milliseconds
+NCCL_PARAM(IbResiliencyStandbyHealthInterval, "IB_RESILIENCY_STANDBY_HEALTH_INTERVAL", 1000); // In milliseconds
 
 extern int64_t ncclParamIbPkey();
 extern int64_t ncclParamIbRetryCnt();
@@ -79,6 +82,44 @@ static ncclResult_t ncclIbResiliencyReplaceQps(struct ncclIbResiliency* resCtx, 
     // Find the failed QP's index in the baseComm.qps[] array
     int failedQpIndex = failedQp - resCtx->baseComm->qps;
     assert(failedQpIndex >= 0 && failedQpIndex < resCtx->baseComm->nqps);
+
+    if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) {
+      int ndevs = resCtx->baseComm->vProps.ndevs;
+      // Only the primary logical QPs are part of the active-standby data
+      // path. Standby logical entries remain bound to their own QPs so a
+      // later primary recovery cannot make them an unintended active path.
+      if (qpIndex % ndevs != resCtx->baseComm->primaryDevIndex) continue;
+      int replacementDevIndex = failedDevIndex == resCtx->baseComm->primaryDevIndex ?
+                                  resCtx->baseComm->standbyDevIndex :
+                                  resCtx->baseComm->primaryDevIndex;
+      if (resCtx->devs[replacementDevIndex].state.load(std::memory_order_acquire) != ncclIbResiliencyDevStateOk) {
+        WARN("NET/IB: Cannot replace active-standby QP on failed device %d: peer device %d is not healthy",
+             failedDevIndex, replacementDevIndex);
+        return ncclRemoteError;
+      }
+      enum ncclIbResiliencyHealthState replacementHealth =
+        resCtx->devs[replacementDevIndex].healthState.load(std::memory_order_acquire);
+      if (replacementHealth == ncclIbHealthDown) {
+        WARN("NET/IB: Cannot replace active-standby QP on failed device %d: peer device %d health state=%d",
+             failedDevIndex, replacementDevIndex, replacementHealth);
+        return ncclRemoteError;
+      }
+      int lane = failedQpIndex / ndevs;
+      int newQpIndex = lane * ndevs + replacementDevIndex;
+      INFO(NCCL_NET,
+           "NET/IB: %s: Replacing active-standby QP: logicalIndex=%d failedIndex=%d (devIndex=%d) "
+           "with same-lane index=%d (devIndex=%d) on %s communicator (comm=%p)",
+           __func__, qpIndex, failedQpIndex, failedDevIndex, newQpIndex, replacementDevIndex,
+           resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+      activeQps[qpIndex] = &resCtx->baseComm->qps[newQpIndex];
+      INFO(NCCL_NET,
+           "NET/IB: %s: Active-standby generation=%llu state=%d oldQp=%u newQp=%u oldDev=%d newDev=%d",
+           __func__, (unsigned long long)resCtx->activeStandbyGeneration, resCtx->activeStandbyState,
+           resCtx->baseComm->qps[failedQpIndex].qp ? resCtx->baseComm->qps[failedQpIndex].qp->qp_num : 0,
+           resCtx->baseComm->qps[newQpIndex].qp ? resCtx->baseComm->qps[newQpIndex].qp->qp_num : 0, failedDevIndex,
+           replacementDevIndex);
+      continue;
+    }
 
     // After finding a failed QP, iterate over the QPs to find a replacement QP
     // that is not associated with a failed device.
@@ -257,7 +298,7 @@ static ncclResult_t ncclIbResiliencyRepostRequest(struct ncclIbRequest* request)
   } else if (request->type == NCCL_NET_IB_REQ_RECV) {
     INFO(NCCL_NET, "NET/IB: %s: Reposting CTS (request=%p, comm=%p, id=%ld, slot=%ld)", __func__, request,
          request->base, request->id, request->id % NET_IB_MAX_REQUESTS);
-    NCCLCHECK(ncclIbPostFifo((struct ncclIbRecvComm*)request->base, request, slot));
+    NCCLCHECK(ncclIbPostFifo((struct ncclIbRecvComm*)request->base, request, slot, false));
   } else {
     WARN("NET/IB: Unsupported type of request reposting (type=%d, id=%ld).", request->type, request->id);
     return ncclInternalError;
@@ -371,31 +412,242 @@ static ncclResult_t ncclIbResiliencyHandleCompletionErrorSender(struct ncclIbRes
 // Mark the device as failed and replace its QPs.
 static ncclResult_t ncclIbResiliencyHandleDeviceFailure(struct ncclIbResiliency* resCtx, int devIndex) {
   ncclResult_t res = ncclSuccess;
-  enum ncclIbResiliencyDevState devState = resCtx->devs[devIndex].state.load(std::memory_order_acquire);
-  if (devState == ncclIbResiliencyDevStateOk) {
-    WARN("NET/IB: Device %d marked as failed. Initiating recovery? %s (%s comm=%p, outstandingRecovery=%d)", devIndex,
-         resCtx->recoveryEnabled ? "Yes" : "No", resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
+  struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
+  enum ncclIbResiliencyDevState expected = ncclIbResiliencyDevStateOk;
+  if (!resDev->state.compare_exchange_strong(expected, ncclIbResiliencyDevStateError, std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
+    INFO(NCCL_NET,
+         "NET/IB: %s: Device failure merged with existing owner (devIndex=%d, state=%d, %s comm=%p, "
+         "outstandingRecovery=%d)",
+         __func__, devIndex, expected, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
          resCtx->outstandingRecovery);
-    resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateError, std::memory_order_release);
-    NCCLCHECK(ncclIbResiliencyReplaceQps(resCtx, devIndex));
-    if (resCtx->recoveryEnabled) {
-      resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateRecoveryInProgress, std::memory_order_release);
-      res = ncclIbPortRecoveryHandleFailure(resCtx, devIndex);
-      if (res == ncclSuccess) {
-        resCtx->outstandingRecovery++;
-        resCtx->inProgress = true;
-      } else {
-        for (int i = 0; i < resCtx->ndevs; i++) {
-          if (i != devIndex) continue;
-          INFO(NCCL_NET, "NET/IB: %s: Marking device %d as permanently failed (%s comm=%p)", __func__, i,
-               resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
-          resCtx->devs[i].state.store(ncclIbResiliencyDevStateErrorPermanent, std::memory_order_release);
-        }
-      }
-    }
-  } else {
-    INFO(NCCL_NET, "NET/IB: %s: Device %d was already marked as failed.", __func__, devIndex);
+    return ncclSuccess;
   }
+
+  WARN("NET/IB: Device %d failure CAS ownership acquired. Initiating recovery? %s (%s comm=%p, "
+       "outstandingRecovery=%d)",
+       devIndex, resCtx->recoveryEnabled ? "Yes" : "No", resCtx->baseComm->isSend ? "send" : "recv",
+       resCtx->baseComm, resCtx->outstandingRecovery);
+  if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) {
+    resDev->healthState.store(ncclIbHealthDown, std::memory_order_release);
+    if (devIndex == resCtx->baseComm->primaryDevIndex) {
+      resCtx->activeStandbyState = ncclIbAsSwitchingToStandby;
+      resCtx->activeStandbyGeneration++;
+    } else if (devIndex == resCtx->baseComm->standbyDevIndex &&
+               resCtx->activeStandbyState == ncclIbAsStandbyActive) {
+      resCtx->activeStandbyState = ncclIbAsPrimaryRecovering;
+      resCtx->activeStandbyGeneration++;
+    }
+  }
+  res = ncclIbResiliencyReplaceQps(resCtx, devIndex);
+  if (res != ncclSuccess) {
+    if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) {
+      resCtx->activeStandbyState = ncclIbAsFailed;
+      resCtx->activeStandbyGeneration++;
+    }
+    return res;
+  }
+  if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby &&
+      devIndex == resCtx->baseComm->primaryDevIndex) {
+    resCtx->activeStandbyState = ncclIbAsStandbyActive;
+  }
+  if (resCtx->recoveryEnabled) {
+    resDev->state.store(ncclIbResiliencyDevStateRecoveryInProgress, std::memory_order_release);
+    res = ncclIbPortRecoveryHandleFailure(resCtx, devIndex);
+    if (res == ncclSuccess) {
+      resCtx->outstandingRecovery++;
+      resCtx->inProgress = true;
+    } else {
+      INFO(NCCL_NET, "NET/IB: %s: Marking device %d as permanently failed (%s comm=%p)", __func__, devIndex,
+           resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+      resDev->healthState.store(ncclIbHealthDown, std::memory_order_release);
+      resDev->state.store(ncclIbResiliencyDevStateErrorPermanent, std::memory_order_release);
+    }
+  }
+  return ncclSuccess;
+}
+
+static const char* ncclIbHealthProbeResultSourceStr(enum ncclIbHealthProbeResultSource source) {
+  switch (source) {
+  case ncclIbHealthProbeResultCqe: return "CQE";
+  case ncclIbHealthProbeResultPostFailure: return "POST_FAILURE";
+  default: return "NONE";
+  }
+}
+
+static void ncclIbResiliencyHealthProbeDiagSetCqe(struct ncclIbResiliency* resCtx, const struct ibv_wc* wc,
+                                                  int devIndex, uint64_t generation) {
+  struct ncclIbResiliencyHealthProbeDiag* diag = &resCtx->healthProbe.diag;
+  diag->source = ncclIbHealthProbeResultCqe;
+  diag->wcStatus = wc->status;
+  diag->vendorErr = wc->vendor_err;
+  diag->postResult = ncclSuccess;
+  diag->postErrno = 0;
+  diag->devIndex = devIndex;
+  diag->qpIndex = resCtx->healthProbe.qpIndex;
+  diag->lane = resCtx->healthProbe.qpIndex / resCtx->baseComm->vProps.ndevs;
+  diag->qpNum = wc->qp_num;
+  diag->generation = generation;
+  diag->timestamp = clockNano();
+}
+
+static void ncclIbResiliencyHealthProbeDiagSetPostFailure(struct ncclIbResiliency* resCtx, int devIndex,
+                                                          ncclResult_t postResult, int postErrno) {
+  struct ncclIbResiliencyHealthProbeDiag* diag = &resCtx->healthProbe.diag;
+  diag->source = ncclIbHealthProbeResultPostFailure;
+  diag->wcStatus = IBV_WC_SUCCESS;
+  diag->vendorErr = 0;
+  diag->postResult = postResult;
+  diag->postErrno = postErrno;
+  diag->devIndex = devIndex;
+  diag->qpIndex = resCtx->healthProbe.qpIndex;
+  diag->lane = resCtx->healthProbe.qpIndex / resCtx->baseComm->vProps.ndevs;
+  diag->qpNum = resCtx->healthProbe.qpNum;
+  diag->generation = resCtx->healthProbe.generation;
+  diag->timestamp = clockNano();
+}
+
+static ncclResult_t ncclIbResiliencyHealthProbeHandleFailure(struct ncclIbResiliency* resCtx, int devIndex) {
+  struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
+  resCtx->healthProbe.outstanding = false;
+  struct ncclIbResiliencyHealthProbeDiag* diag = &resCtx->healthProbe.diag;
+  resDev->healthState.store(ncclIbHealthDown, std::memory_order_release);
+  if (diag->source == ncclIbHealthProbeResultCqe) {
+    WARN("NET/IB: Standby data-QP health probe failed (comm=%p, diagSource=%s, devIndex=%d, lane=%d, qpIndex=%d, "
+         "qp_num=%u, generation=%llu, status=%s(%d), vendorErr=%u, timestamp=%llu, health=Down). Trying existing "
+         "port recovery.",
+         resCtx->baseComm, ncclIbHealthProbeResultSourceStr(diag->source), devIndex, diag->lane, diag->qpIndex,
+         diag->qpNum, (unsigned long long)diag->generation, ibvWcStatusStr(diag->wcStatus), diag->wcStatus,
+         diag->vendorErr, (unsigned long long)diag->timestamp);
+  } else {
+    WARN("NET/IB: Standby data-QP health probe failed (comm=%p, diagSource=%s, devIndex=%d, lane=%d, qpIndex=%d, "
+         "qp_num=%u, generation=%llu, postResult=%d, postErrno=%d, timestamp=%llu, health=Down). Trying existing "
+         "port recovery.",
+         resCtx->baseComm, ncclIbHealthProbeResultSourceStr(diag->source), devIndex, diag->lane, diag->qpIndex,
+         diag->qpNum, (unsigned long long)diag->generation, diag->postResult, diag->postErrno,
+         (unsigned long long)diag->timestamp);
+  }
+  NCCLCHECK(ncclIbResiliencyHandleDeviceFailure(resCtx, devIndex));
+  return ncclSuccess;
+}
+
+bool ncclIbResiliencyIsHealthProbeCompletion(struct ncclIbResiliency* resCtx, const struct ibv_wc* wc, int devIndex) {
+  (void)devIndex;
+  return resCtx != NULL && resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby &&
+         wc->wr_id != NCCL_IB_RECV_WR_ID_DUMMY &&
+         (wc->wr_id & NCCL_IB_HEALTH_PROBE_WR_ID_TAG) != 0;
+}
+
+ncclResult_t ncclIbResiliencyHealthProbeHandleCompletion(struct ncclIbResiliency* resCtx, struct ibv_wc* wc,
+                                                         int devIndex) {
+  uint64_t generation = wc->wr_id & NCCL_IB_HEALTH_PROBE_WR_ID_GENERATION_MASK;
+  if (!resCtx->healthProbe.outstanding || generation != resCtx->healthProbe.generation ||
+      devIndex != resCtx->healthProbe.devIndex || wc->qp_num != resCtx->healthProbe.qpNum) {
+    INFO(NCCL_NET,
+         "NET/IB: Ignoring stale standby health-probe CQE (comm=%p, devIndex=%d/%d, qp_num=%u/%u, "
+         "generation=%llu/%llu, outstanding=%d, status=%s(%d))",
+         resCtx->baseComm, devIndex, resCtx->healthProbe.devIndex, wc->qp_num, resCtx->healthProbe.qpNum,
+         (unsigned long long)generation, (unsigned long long)resCtx->healthProbe.generation,
+         resCtx->healthProbe.outstanding, ibvWcStatusStr(wc->status), wc->status);
+    return ncclSuccess;
+  }
+
+  if (wc->status != IBV_WC_SUCCESS) {
+    ncclIbResiliencyHealthProbeDiagSetCqe(resCtx, wc, devIndex, generation);
+    return ncclIbResiliencyHealthProbeHandleFailure(resCtx, devIndex);
+  }
+
+  ncclIbResiliencyHealthProbeDiagSetCqe(resCtx, wc, devIndex, generation);
+  resCtx->healthProbe.outstanding = false;
+  resCtx->healthProbe.lastSuccess = clockNano();
+  INFO(NCCL_NET,
+       "NET/IB: Standby data-QP health probe completed (comm=%p, diagSource=CQE, devIndex=%d, lane=%d, qpIndex=%d, "
+       "qp_num=%u, generation=%llu, status=%s(%d), vendorErr=%u, timestamp=%llu, health=Healthy)",
+       resCtx->baseComm, devIndex, resCtx->healthProbe.diag.lane, resCtx->healthProbe.qpIndex, wc->qp_num,
+       (unsigned long long)resCtx->healthProbe.generation, ibvWcStatusStr(wc->status), wc->status, wc->vendor_err,
+       (unsigned long long)resCtx->healthProbe.diag.timestamp);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbResiliencyHealthProbePost(struct ncclIbResiliency* resCtx, bool primaryTrafficPosted) {
+  if (resCtx == NULL || !primaryTrafficPosted ||
+      resCtx->baseComm->dataPathPolicy != ncclIbDataPathActiveStandby ||
+      resCtx->activeStandbyState != ncclIbAsPrimaryActive || resCtx->healthProbe.outstanding) {
+    return ncclSuccess;
+  }
+  int64_t intervalMs = ncclParamIbResiliencyStandbyHealthInterval();
+  if (intervalMs <= 0) return ncclSuccess;
+  uint64_t now = clockNano();
+  if (resCtx->healthProbe.lastSubmit != 0 &&
+      now - resCtx->healthProbe.lastSubmit < (uint64_t)intervalMs * MSEC_TO_NSEC) {
+    return ncclSuccess;
+  }
+
+  int devIndex = resCtx->baseComm->standbyDevIndex;
+  struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
+  if (resDev->state.load(std::memory_order_acquire) != ncclIbResiliencyDevStateOk ||
+      resDev->healthState.load(std::memory_order_acquire) == ncclIbHealthDown || resDev->healthProbeMr == NULL) {
+    return ncclSuccess;
+  }
+
+  int ndevs = resCtx->baseComm->vProps.ndevs;
+  int qpsPerDevice = resCtx->baseComm->nqps / ndevs;
+  if (qpsPerDevice <= 0) return ncclInternalError;
+  int lane = resCtx->healthProbe.nextLane % qpsPerDevice;
+  int qpIndex = lane * ndevs + devIndex;
+  struct ncclIbQp* qp = &resCtx->baseComm->qps[qpIndex];
+  if (qp->qp == NULL || qp->remDevIdx < 0 || qp->remDevIdx >= resCtx->baseComm->nRemDevs) {
+    WARN("NET/IB: Invalid standby data QP for health probe (comm=%p, devIndex=%d, lane=%d, qpIndex=%d, remDevIdx=%d)",
+         resCtx->baseComm, devIndex, lane, qpIndex, qp->remDevIdx);
+    return ncclInternalError;
+  }
+
+  struct ncclIbResiliencyRemoteCompletionRecordsInfo* remote = &resCtx->remHealthProbeInfo[qp->remDevIdx];
+  if (remote->addr == 0 || remote->rkey == 0) {
+    WARN("NET/IB: Missing remote heartbeat scratchpad for health probe (comm=%p, remDevIdx=%d)", resCtx->baseComm,
+         qp->remDevIdx);
+    return ncclInternalError;
+  }
+
+  uint64_t generation = (resCtx->healthProbe.generation + 1) & NCCL_IB_HEALTH_PROBE_WR_ID_GENERATION_MASK;
+  if (generation == 0 || generation == NCCL_IB_HEALTH_PROBE_WR_ID_GENERATION_MASK) generation = 1;
+  resCtx->healthProbeScratchpad = generation;
+  struct ibv_sge sge = {};
+  sge.addr = (uint64_t)&resCtx->healthProbeScratchpad;
+  sge.length = sizeof(resCtx->healthProbeScratchpad);
+  sge.lkey = resDev->healthProbeMr->lkey;
+  struct ibv_send_wr wr = {};
+  wr.wr_id = NCCL_IB_HEALTH_PROBE_WR_ID_TAG | generation;
+  assert(wr.wr_id != NCCL_IB_RECV_WR_ID_DUMMY);
+  wr.sg_list = &sge;
+  wr.num_sge = 1;
+  wr.opcode = IBV_WR_RDMA_WRITE;
+  wr.send_flags = IBV_SEND_SIGNALED;
+  wr.wr.rdma.remote_addr = remote->addr;
+  wr.wr.rdma.rkey = remote->rkey;
+
+  resCtx->healthProbe.generation = generation;
+  resCtx->healthProbe.devIndex = devIndex;
+  resCtx->healthProbe.qpIndex = qpIndex;
+  resCtx->healthProbe.qpNum = qp->qp->qp_num;
+  struct ibv_send_wr* badWr = NULL;
+  ncclResult_t res = wrap_ibv_post_send(qp->qp, &wr, &badWr);
+  if (res != ncclSuccess) {
+    int postErrno = errno;
+    ncclIbResiliencyHealthProbeDiagSetPostFailure(resCtx, devIndex, res, postErrno);
+    NCCLCHECK(ncclIbResiliencyHealthProbeHandleFailure(resCtx, devIndex));
+    return ncclSuccess;
+  }
+
+  resCtx->healthProbe.outstanding = true;
+  resCtx->healthProbe.lastSubmit = now;
+  resCtx->healthProbe.nextLane = (lane + 1) % qpsPerDevice;
+  INFO(NCCL_NET,
+       "NET/IB: Posted %s standby data-QP health probe (comm=%p, devIndex=%d, lane=%d, qpIndex=%d, qp_num=%u, "
+       "generation=%llu, remoteAddr=0x%llx, rkey=0x%x)",
+       resCtx->baseComm->isSend ? "forward" : "reverse", resCtx->baseComm, devIndex, lane, qpIndex, qp->qp->qp_num,
+       (unsigned long long)generation,
+       (unsigned long long)remote->addr, remote->rkey);
   return ncclSuccess;
 }
 
@@ -611,6 +863,16 @@ ncclResult_t ncclIbResiliencyInit(struct ncclIbNetCommBase* baseComm, struct ncc
   struct ncclIbResiliency* baseCtx = *resCtx;
   baseCtx->baseComm = baseComm;
   baseCtx->inProgress = false;
+  baseCtx->activeStandbyState = ncclIbAsPrimaryActive;
+  baseCtx->activeStandbyGeneration = 0;
+  baseCtx->healthProbeScratchpad = 0;
+  baseCtx->healthProbe = {};
+  baseCtx->healthProbe.devIndex = -1;
+  baseCtx->healthProbe.qpIndex = -1;
+  baseCtx->healthProbe.diag.devIndex = -1;
+  baseCtx->healthProbe.diag.qpIndex = -1;
+  baseCtx->healthProbe.diag.lane = -1;
+  memset(baseCtx->remHealthProbeInfo, 0, sizeof(baseCtx->remHealthProbeInfo));
   if (baseComm->isSend) {
     struct ncclIbResiliencySend* sendResCtx = (struct ncclIbResiliencySend*)baseCtx;
     memset(sendResCtx->failedRequests, 0, sizeof(sendResCtx->failedRequests));
@@ -649,6 +911,17 @@ ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIn
   assert(devIndex < resCtx->ndevs);
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
   resDev->state.store(ncclIbResiliencyDevStateOk, std::memory_order_release);
+  resDev->healthState.store(ncclIbHealthDown, std::memory_order_release);
+  resDev->probingCq = NULL;
+  resDev->nOutstandingProbes = 0;
+  resDev->probingResultMr = NULL;
+  resDev->portRecoveryCq = NULL;
+  resDev->healthProbeMr = NULL;
+  if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) {
+    struct ncclIbNetCommDevBase* devBase = ncclIbGetNetCommDevBase(resCtx->baseComm, devIndex);
+    NCCLCHECK(wrap_ibv_reg_mr(&resDev->healthProbeMr, devBase->pd, &resCtx->healthProbeScratchpad,
+                              sizeof(resCtx->healthProbeScratchpad), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE));
+  }
   void* cqContext = (void*)&resCtx->baseComm->stats;
   int cqSize = -1;
   if (resCtx->baseComm->isSend) {
@@ -676,6 +949,16 @@ ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIn
   return ncclSuccess;
 }
 
+ncclResult_t ncclIbResiliencyDataQpsReady(struct ncclIbResiliency* resCtx) {
+  if (resCtx == NULL || resCtx->baseComm->dataPathPolicy != ncclIbDataPathActiveStandby) return ncclSuccess;
+  for (int devIndex = 0; devIndex < resCtx->ndevs; devIndex++) {
+    resCtx->devs[devIndex].healthState.store(ncclIbHealthHealthy, std::memory_order_release);
+    INFO(NCCL_NET, "NET/IB: Active-standby data QPs ready (health=Healthy, devIndex=%d, %s comm=%p)", devIndex,
+         resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm);
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclIbResiliencyDevDestroy(struct ncclIbResiliency* resCtx, uint devIndex) {
   assert(resCtx != NULL);
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
@@ -698,6 +981,10 @@ ncclResult_t ncclIbResiliencyDevDestroy(struct ncclIbResiliency* resCtx, uint de
            __func__, &sendResCtx->probingResults, devIndex, resCtx->baseComm);
     }
   }
+  if (resDev->healthProbeMr) {
+    NCCLCHECK(wrap_ibv_dereg_mr(resDev->healthProbeMr));
+    resDev->healthProbeMr = NULL;
+  }
   return ncclSuccess;
 }
 
@@ -719,6 +1006,7 @@ ncclResult_t ncclIbResiliencyDataCqSizeGet(struct ncclIbResiliency* resCtx, uint
   // completions of all other requests.
   assert(resCtx->ndevs > 0);
   *cqSize = (*cqSize) * resCtx->ndevs;
+  if (baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) *cqSize += 1;
   INFO(NCCL_NET, "NET/IB: %s: CQ size should be %d on device %d for %s communicator (comm=%p)", __func__, *cqSize,
        devIndex, baseComm->isSend ? "send" : "recv", baseComm);
   return ncclSuccess;
@@ -995,6 +1283,15 @@ ncclResult_t ncclIbResiliencyRemoteCompletionRecordsSet(struct ncclIbResiliency*
   return ncclSuccess;
 }
 
+ncclResult_t ncclIbResiliencyHealthProbeRemoteSet(struct ncclIbResiliency* resCtx, uint32_t rkey, uint64_t addr,
+                                                  uint devIndex) {
+  assert(resCtx != NULL);
+  assert(devIndex < NCCL_IB_MAX_DEVS_PER_NIC);
+  resCtx->remHealthProbeInfo[devIndex].rkey = rkey;
+  resCtx->remHealthProbeInfo[devIndex].addr = addr;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclIbResiliencyRequestIsComplete(struct ncclIbRequest* request, bool* isComplete) {
   assert(isComplete != NULL);
 
@@ -1046,6 +1343,14 @@ ncclResult_t ncclIbResiliencyHandleCompletionError(struct ncclIbResiliency* resC
        "wc->qp_num=%u, wc->byte_len=%d)",
        __func__, devIndex, ibvWcStatusStr(wc->status), wc->status, ibvWcOpcodeStr(wc->opcode), wc->opcode, wc->wr_id,
        wc->qp_num, wc->byte_len);
+  // A real data-QP error on the standby path is stronger evidence than a
+  // successful port query. Publish the standby as unavailable before the
+  // common device replacement/recovery path runs.
+  if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby &&
+      (devIndex == resCtx->baseComm->primaryDevIndex || devIndex == resCtx->baseComm->standbyDevIndex)) {
+    resCtx->devs[devIndex].healthState.store(ncclIbHealthDown, std::memory_order_release);
+  }
+
   NCCLCHECK(ncclIbResiliencyCheckErrorNotFatal(resCtx, wc, devIndex));
 
   // Before handling the request that got an error, first the device is
@@ -1062,14 +1367,30 @@ ncclResult_t ncclIbResiliencyHandleCompletionError(struct ncclIbResiliency* resC
 }
 
 static ncclResult_t ncclIbResiliencyActiveQpsRestore(struct ncclIbResiliency* resCtx, int restoredDevIndex) {
+  if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby &&
+      restoredDevIndex != resCtx->baseComm->primaryDevIndex) {
+    return ncclSuccess;
+  }
   for (int qpIndex = 0; qpIndex < resCtx->baseComm->nqps; qpIndex++) {
     ncclIbQp* qpToRestore = &resCtx->baseComm->qps[qpIndex];
     if (qpToRestore->devIndex != restoredDevIndex) {
       continue;
     }
+    if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby &&
+        qpIndex % resCtx->baseComm->vProps.ndevs != resCtx->baseComm->primaryDevIndex) {
+      continue;
+    }
+    struct ncclIbQp* oldQp = resCtx->baseComm->activeQps[qpIndex];
     INFO(NCCL_NET, "NET/IB: %s: Restoring QP (index=%d, qp_num=%u) on device %d (comm=%p)", __func__, qpIndex,
          qpToRestore->qp->qp_num, restoredDevIndex, resCtx->baseComm);
     resCtx->baseComm->activeQps[qpIndex] = qpToRestore;
+    if (resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby) {
+      INFO(NCCL_NET,
+           "NET/IB: %s: Active-standby failback generation=%llu logicalQp=%d oldQp=%u newQp=%u oldDev=%d newDev=%d",
+           __func__, (unsigned long long)(resCtx->activeStandbyGeneration + 1), qpIndex,
+           oldQp && oldQp->qp ? oldQp->qp->qp_num : 0, qpToRestore->qp ? qpToRestore->qp->qp_num : 0,
+           oldQp ? oldQp->devIndex : -1, restoredDevIndex);
+    }
   }
   return ncclSuccess;
 }
@@ -1115,8 +1436,25 @@ ncclResult_t ncclIbResiliencyProgress(struct ncclIbResiliency* resCtx) {
              "NET/IB: %s: Device %d has been recovered for resiliency context (%s comm=%p, outstandingRecovery=%d)",
              __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
              resCtx->outstandingRecovery);
-        ncclIbResiliencyActiveQpsRestore(resCtx, devIndex);
+        bool primaryFailback = resCtx->baseComm->dataPathPolicy == ncclIbDataPathActiveStandby &&
+                               devIndex == resCtx->baseComm->primaryDevIndex;
+        if (primaryFailback) {
+          resCtx->activeStandbyState = ncclIbAsPrimaryRecovering;
+        }
+        NCCLCHECK(ncclIbResiliencyActiveQpsRestore(resCtx, devIndex));
+        resCtx->devs[devIndex].healthState.store(ncclIbHealthHealthy, std::memory_order_release);
         resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateOk, std::memory_order_release);
+        if (primaryFailback) {
+          resCtx->activeStandbyState = ncclIbAsPrimaryActive;
+          resCtx->activeStandbyGeneration++;
+        }
+        struct ncclIbResiliencyHealthProbeDiag* diag = &resCtx->healthProbe.diag;
+        INFO(NCCL_NET,
+             "NET/IB: %s: Device %d recovery published health=Healthy state=Ok (%s comm=%p, generation=%llu, "
+             "lastProbeSource=%s, lastProbeGeneration=%llu, lastProbeTimestamp=%llu)",
+             __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
+             (unsigned long long)resCtx->activeStandbyGeneration, ncclIbHealthProbeResultSourceStr(diag->source),
+             (unsigned long long)diag->generation, (unsigned long long)diag->timestamp);
       }
       if (devState == ncclIbResiliencyDevStateRecoveryFailed) {
         resCtx->outstandingRecovery--;
@@ -1125,6 +1463,7 @@ ncclResult_t ncclIbResiliencyProgress(struct ncclIbResiliency* resCtx) {
           "NET/IB: %s: Device %d will not be attempted to be recovered any more (%s comm=%p, outstandingRecovery=%d).",
           __func__, devIndex, resCtx->baseComm->isSend ? "send" : "recv", resCtx->baseComm,
           resCtx->outstandingRecovery);
+        resCtx->devs[devIndex].healthState.store(ncclIbHealthDown, std::memory_order_release);
         resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateErrorPermanent, std::memory_order_release);
         continue;
       }

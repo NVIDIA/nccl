@@ -107,7 +107,7 @@ ncclResult_t ncclCeGather(struct ncclComm* comm, struct ncclCeCollArgs* args, cu
 
 ncclResult_t ncclCeAlltoAll(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream);
 
-ncclResult_t ncclHierCeAllGatherDispatch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
+ncclResult_t ncclHierCeAllGather(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
 
 ncclResult_t ncclHierCeAlltoAll(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
 #endif /* NCCL_CE_COLL_H_ */

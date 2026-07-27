@@ -23,6 +23,14 @@ import torch.distributed as dist
 # inspect the module shape on machines without nccl4py installed.
 try:
     import nccl.bindings as _nccl_bindings
+
+    # nccl4py 0.3.0 moved the low-level symbols out of the nccl.bindings
+    # package root and into the nccl.bindings.nccl submodule, leaving the
+    # root namespace empty. Fall back to the submodule so both the 0.2.x
+    # and 0.3.x layouts work.
+    if not hasattr(_nccl_bindings, "mem_alloc"):
+        from nccl.bindings import nccl as _nccl_bindings
+
     from nccl.core.communicator import Communicator, NCCLDevCommRequirements
     from nccl.core.constants import WindowFlag
     from nccl.core.utils import UniqueId, get_unique_id

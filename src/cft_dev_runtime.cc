@@ -49,7 +49,8 @@ int computeCftMcSize(struct ncclComm* comm) {
 }
 
 ncclResult_t symBindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le) {
-  if (le != NCCL_LE_ID_INVALID && !mem->globalHasSysmemSegment) {
+  if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterCft) && le != NCCL_LE_ID_INVALID &&
+      !mem->globalHasSysmemSegment) {
 #if CUDA_VERSION >= 13030
     CUCHECK(cuLogicalEndpointBindAddr(le, (CUdevice)comm->cudaDev, mem->bigOffset, mem->primaryAddr, mem->lsaMinSize,
                                       0));
@@ -59,7 +60,8 @@ ncclResult_t symBindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, nc
 }
 
 ncclResult_t symUnbindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le) {
-  if (le != NCCL_LE_ID_INVALID && !mem->globalHasSysmemSegment) {
+  if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterCft) && le != NCCL_LE_ID_INVALID &&
+      !mem->globalHasSysmemSegment) {
 #if CUDA_VERSION >= 13030
     CUCHECKIGNORE(cuLogicalEndpointUnbind(le, (CUdevice)comm->cudaDev, mem->bigOffset, mem->lsaMinSize));
 #endif
@@ -235,6 +237,10 @@ ncclResult_t ncclGetMultimemDeviceLeInfo(ncclWindow_t window, size_t offset, ncc
   ncclComm_t comm = nullptr;
   struct ncclDevrWindow* winHost = nullptr;
   NCCLCHECK(findCommAndHostWindowFromDeviceWindow(window, &comm, &winHost));
+  if (!ncclDevrWinRegEnabled(winHost->winFlags, ncclDevrRegisterCft)) {
+    WARN("CFT access is disabled because the window was not registered for CFT.");
+    return ncclInvalidUsage;
+  }
   if (comm->gpuCftSupport == 0) {
     WARN("Using CFT query function without CFT support in the communicator.");
     return ncclInvalidArgument;
@@ -265,6 +271,10 @@ ncclResult_t ncclGetCftDeviceLeInfo(ncclWindow_t window, size_t offset, int peer
   ncclComm_t comm = nullptr;
   struct ncclDevrWindow* winHost = nullptr;
   NCCLCHECK(findCommAndHostWindowFromDeviceWindow(window, &comm, &winHost));
+  if (!ncclDevrWinRegEnabled(winHost->winFlags, ncclDevrRegisterCft)) {
+    WARN("CFT access is disabled because the window was not registered for CFT.");
+    return ncclInvalidUsage;
+  }
 
   if (comm->gpuCftSupport == 0) {
     WARN("Using CFT query function without CFT support in the communicator.");
@@ -296,6 +306,10 @@ ncclResult_t ncclGetPeerDeviceLeInfo(ncclWindow_t window, size_t offset, int pee
   ncclComm_t comm = nullptr;
   struct ncclDevrWindow* winHost = nullptr;
   NCCLCHECK(findCommAndHostWindowFromDeviceWindow(window, &comm, &winHost));
+  if (!ncclDevrWinRegEnabled(winHost->winFlags, ncclDevrRegisterCft)) {
+    WARN("CFT access is disabled because the window was not registered for CFT.");
+    return ncclInvalidUsage;
+  }
 
   if (comm->gpuCftSupport == 0) {
     WARN("Using CFT query function without CFT support in the communicator.");

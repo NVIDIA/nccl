@@ -2937,6 +2937,10 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     struct ncclWindow_vidmem* peerWinDevHost = NULL;
     NCCLCHECK(ncclShadowPoolToHost(&comm->devrState.shadows, info->peerWin, &peerWinDevHost));
     peerWinHost = (struct ncclDevrWindow*)peerWinDevHost->winHost;
+    if (!ncclDevrWinRegEnabled(peerWinHost->winFlags, ncclDevrRegisterRma)) {
+      WARN("ncclPutSignal requires a window registered for RMA");
+      return ncclInvalidArgument;
+    }
 
     // Validate source buffer and window
     if (srcBuff == NULL) {
@@ -2946,6 +2950,10 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     NCCLCHECK(ncclDevrFindWindow(comm, srcBuff, &srcWinHost));
     if (srcWinHost == NULL || !(srcWinHost->winFlags & NCCL_WIN_COLL_SYMMETRIC)) {
       WARN("ncclPutSignal: srcWinHost is not in a valid symmetric window");
+      return ncclInvalidArgument;
+    }
+    if (!ncclDevrWinRegEnabled(srcWinHost->winFlags, ncclDevrRegisterRma)) {
+      WARN("ncclPutSignal requires a window registered for RMA");
       return ncclInvalidArgument;
     }
     srcWinOffset = (char*)srcBuff - (char*)srcWinHost->userPtr;

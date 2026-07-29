@@ -64,6 +64,8 @@ typedef enum { ncclSuccess                 =  0,
 #define NCCL_WIN_DEFAULT 0x00
 #define NCCL_WIN_COLL_SYMMETRIC 0x01
 #define NCCL_WIN_STRICT_ORDERING 0x02
+/* Restrict window registration to GIN only. By default, register for all supported capabilities. */
+#define NCCL_WIN_GIN_ONLY 0x04
 
 #define NCCL_WIN_REQUIRED_ALIGNMENT 4096
 

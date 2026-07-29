@@ -87,7 +87,7 @@ struct ncclDevrMemory {
 ncclResult_t ncclDevrPopulateSegmentSizes(struct ncclDevrMemory* mem, int numSegments);
 
 ncclResult_t ncclDevrCheckRegistrationSupport(void* userPtr, size_t userSize, struct ncclComm* comm,
-                                              bool hasSysmemSegment);
+                                              bool hasSysmemSegment, int winFlags);
 
 ncclResult_t ncclDevrValidateHandleLocationType(CUmemGenericAllocationHandle memHandle, int segment);
 

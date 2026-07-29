@@ -18,6 +18,19 @@
 // ncclDevr[_]: runtime implements for symmetric API.
 
 struct ncclDevrMemory;
+
+// No public NCCL_WIN_REGISTER_* flag means all capabilities. Specifying one or more
+// registration flags selects only those capabilities. Add future public flags here.
+enum ncclDevrRegisterCapability {
+  ncclDevrRegisterGin = 1 << 0,
+  ncclDevrRegisterLsa = 1 << 1,
+  ncclDevrRegisterCft = 1 << 2,
+  ncclDevrRegisterRma = 1 << 3,
+  ncclDevrRegisterAll = ncclDevrRegisterGin | ncclDevrRegisterLsa | ncclDevrRegisterCft | ncclDevrRegisterRma,
+};
+
+bool ncclDevrWinRegEnabled(int winFlags, enum ncclDevrRegisterCapability capability);
+
 struct ncclDevrWindow {
   struct ncclDevrMemory* memory;
   void* userPtr;

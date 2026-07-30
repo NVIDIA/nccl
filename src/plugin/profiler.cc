@@ -371,6 +371,7 @@ ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm) {
 ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphCaptured) {
   ncclProfilerEventDescr_t eDescr = {0};
   eDescr.type = ncclProfileGroupApi;
+  eDescr.rank = info->comm->rank;
   eDescr.groupApi.graphCaptured = isGraphCaptured;
 
   ncclProfilerApiState.eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
@@ -421,6 +422,7 @@ ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eStat
 ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo* info, bool isGraphCaptured) {
   ncclProfilerEventDescr_t eDescr = {0};
   eDescr.type = ncclProfileP2pApi;
+  eDescr.rank = info->comm->rank;
   eDescr.parentObj = ncclProfilerApiState.groupApiEventHandle;
   eDescr.p2pApi.func = ncclFuncToString(info->coll);
   eDescr.p2pApi.count = info->count;
@@ -453,6 +455,7 @@ ncclResult_t ncclProfilerStopP2pApiEvent() {
 ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo* info, bool isGraphCaptured) {
   ncclProfilerEventDescr_t eDescr = {0};
   eDescr.type = ncclProfileCollApi;
+  eDescr.rank = info->comm->rank;
   eDescr.parentObj = ncclProfilerApiState.groupApiEventHandle;
   eDescr.collApi.func = ncclFuncToString(info->coll);
   eDescr.collApi.count = info->count;
@@ -512,6 +515,7 @@ ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cud
   startKernelLaunchEvent:
     if (eActivationMask_ & ncclProfileKernelLaunch) {
       eDescr.type = ncclProfileKernelLaunch;
+      eDescr.rank = plan->comm->rank;
       eDescr.parentObj = groupApiEventHandle;
       eDescr.kernelLaunch.stream = (void*)stream;
       ncclProfiler->startEvent(plan->comm->profilerContext, &plan->kernelLaunchEventHandle, &eDescr);

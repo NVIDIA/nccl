@@ -152,9 +152,6 @@ ncclResult_t nvlsGroupUnmapMem(struct ncclComm* comm, size_t ucsize, void* ucptr
 #include "channel.h"
 
 #define NVLS_MEM_ALIGN_SIZE (1 << 21)
-#define NVLS_NCHANNELS_SM90 16
-#define NVLS_NCHANNELS_SM100 32
-#define NVLS_NCHANNELS_SM100_NVL 24
 
 NCCL_PARAM(NvlsEnable, "NVLS_ENABLE", 2);
 NCCL_PARAM(NvlsChunkSize, "NVLS_CHUNKSIZE", 128 * 1024);
@@ -199,27 +196,50 @@ static ncclResult_t ncclNvlsTreeSm100Tuning(struct ncclComm* comm, int* nChannel
   return ncclSuccess;
 }
 
+static ncclResult_t ncclNvlsChannels(struct ncclComm* comm, int* nChannels, int* chunkSize, int* treeMaxChunkSize) {
+  int channels = 0;
+
+  if (comm->minCompCap >= 100 && comm->nNodes > 1) {
+    NCCLCHECK(ncclNvlsTreeSm100Tuning(comm, &channels, chunkSize, treeMaxChunkSize));
+  }
+
+  if (comm->config.nvlsCTAs != NCCL_CONFIG_UNDEF_INT) {
+    channels = comm->config.nvlsCTAs;
+  } else if (channels == 0 && comm->compCap >= 100) {
+    // Use a reduced number of channels for single node/MNNVL domain on Blackwell and above.
+    // comm->nNodes is not yet initialized at this point so we need to use local information.
+    bool multiNode = false;
+    if (comm->MNNVL) {
+      multiNode = (comm->clique.size < comm->nRanks);
+    } else {
+      int i;
+      for (i = 1; i < comm->nRanks; i++) {
+        if (comm->peerInfo[i].hostHash != comm->peerInfo[0].hostHash) break;
+      }
+      multiNode = (i < comm->nRanks);
+    }
+    if (multiNode) {
+      channels = RUBIN_AND_LATER(comm->compCap) ? /*RUBIN=*/64 : /*SM100=*/32;
+    } else {
+      channels = RUBIN_AND_LATER(comm->compCap) ? /*RUBIN=*/48 : /*SM100=*/24;
+    }
+  } else if (channels == 0) {
+    channels = /*SM90=*/16;
+  }
+
+  *nChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, channels));
+  return ncclSuccess;
+}
+
 ncclResult_t ncclNvlsTuning(struct ncclComm* comm) {
-  int nChannels;
   int chunkSize = 0;
   int treeMaxChunkSize = 0;
   const char* chunkSizeEnv = ncclGetEnv("NCCL_NVLS_CHUNKSIZE");
   bool userSetChunkSize = (chunkSizeEnv != NULL && strlen(chunkSizeEnv) > 0);
-
-  // Set default nChannels based on SM architecture
-  if (comm->compCap >= 100) {
-    nChannels = (comm->nNodes > 1) ? NVLS_NCHANNELS_SM100 : NVLS_NCHANNELS_SM100_NVL;
-  } else {
-    nChannels = NVLS_NCHANNELS_SM90;
-  }
-
-  // SM100 multi-node NVLSTree tuning (may adjust all three values)
-  if (comm->minCompCap >= 100 && comm->nNodes > 1) {
-    NCCLCHECK(ncclNvlsTreeSm100Tuning(comm, &nChannels, &chunkSize, &treeMaxChunkSize));
-  }
+  int nChannels;
+  NCCLCHECK(ncclNvlsChannels(comm, &nChannels, &chunkSize, &treeMaxChunkSize));
 
   // User overrides take priority over tuning
-  if (comm->config.nvlsCTAs != NCCL_CONFIG_UNDEF_INT) nChannels = comm->config.nvlsCTAs;
   // If user has set chunk size or chunkSize is not set, use the chunk size as determined by ncclParamNvlsChunkSize()
   if (userSetChunkSize || chunkSize == 0) chunkSize = ncclParamNvlsChunkSize();
 
@@ -230,9 +250,6 @@ ncclResult_t ncclNvlsTuning(struct ncclComm* comm) {
   } else if (envTreeMaxChunkSize != -2) {
     treeMaxChunkSize = envTreeMaxChunkSize;
   }
-
-  // Clamp nvlsChannels to [minCTAs, maxCTAs]
-  nChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, nChannels));
 
   // Apply final values
   comm->nvlsChannels = nChannels;

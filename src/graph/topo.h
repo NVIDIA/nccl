@@ -13,6 +13,7 @@
 #include "xml.h"
 #include "net.h"
 #include "os.h"
+#include "nvmlwrap.h"
 
 #define LOC_BW 5000.0
 #define MLOPART_LOC_BW 2618.0
@@ -21,7 +22,8 @@
 #define SM80_NVLINK_BW 20.0
 #define SM90_NVLINK_BW 20.6
 #define SM86_NVLINK_BW 12.0
-#define SM100_NVLINK_BW 40.1
+#define SM100_NVLINK_BW 40.1 // Blackwell
+#define RUBIN_NVLINK_BW 38.0 // Rubin
 #define PCI_BW 12.0           // PCI Gen3 x16
 #define AMD_ZEN12_BW 16.0
 #define AMD_ZEN34_BW 24.0
@@ -280,13 +282,14 @@ static ncclResult_t ncclTopoIdToNetDev(struct ncclTopoSystem* system, int64_t id
 
 // Returns NVLink bw in GB/s
 static float ncclTopoNVLinkBw(int cudaCompCap) {
-  return cudaCompCap >= 100 ? SM100_NVLINK_BW :
-         cudaCompCap >= 90  ? SM90_NVLINK_BW :
-         cudaCompCap == 86  ? SM86_NVLINK_BW :
-         cudaCompCap >= 80  ? SM80_NVLINK_BW :
-         cudaCompCap >= 70  ? SM70_NVLINK_BW :
-         cudaCompCap >= 60  ? SM60_NVLINK_BW :
-                              SM80_NVLINK_BW;
+  return RUBIN_AND_LATER(cudaCompCap) ? RUBIN_NVLINK_BW :
+         cudaCompCap >= 100           ? SM100_NVLINK_BW :
+         cudaCompCap >= 90            ? SM90_NVLINK_BW :
+         cudaCompCap == 86            ? SM86_NVLINK_BW :
+         cudaCompCap >= 80            ? SM80_NVLINK_BW :
+         cudaCompCap >= 70            ? SM70_NVLINK_BW :
+         cudaCompCap >= 60            ? SM60_NVLINK_BW :
+                                        SM80_NVLINK_BW;
 }
 
 // Mirror bits

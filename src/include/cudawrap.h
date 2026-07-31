@@ -13,6 +13,8 @@
 #include "checks.h"
 #include "compiler.h"
 
+#define RUBIN_AND_LATER(sm) (sm >= 107 && sm != 110 && sm != 120 && sm != 121)
+
 // Is cuMem API usage enabled
 extern int ncclCuMemEnable();
 extern int ncclCuMemHostEnable();

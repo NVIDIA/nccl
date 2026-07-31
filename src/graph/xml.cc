@@ -933,7 +933,13 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   NCCLCHECK(xmlGetSub(gpuNode, "nvlink", &nvlNode));
   if (nvlNode == NULL) {
     // NVML NVLink detection
-    int maxNvLinks = (sm < 60) ? 0 : (sm < 70) ? 4 : (sm < 80) ? 6 : (sm < 90) ? 12 : 18;
+    int maxNvLinks = RUBIN_AND_LATER(sm) ? 36 :
+                     sm >= 100           ? 18 :
+                     sm >= 90            ? 18 :
+                     sm >= 80            ? 12 :
+                     sm >= 70            ? 6 :
+                     sm >= 60            ? 4 :
+                                           0;
 
     if (maxNvLinks > 0 && nvmlDev == NULL) {
       INFO(NCCL_GRAPH, "No NVML device handle. Skipping nvlink detection.");

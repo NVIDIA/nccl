@@ -1097,6 +1097,29 @@ float sm100SpeedArrayInter[] = {96.0, 90.2, 86.0, 80.0, 48.0, 45.1, 42.0, 40.0, 
 #define NSPEEDSINTRA_SM100 (sizeof(sm100SpeedArrayIntra) / sizeof(float))
 #define NSPEEDSINTER_SM100 (sizeof(sm100SpeedArrayInter) / sizeof(float))
 
+// TODO define what is the MAX speed or ring Simple with 2 CTAs, that will be the max speed of the search. unless we update that part in the connect code
+float rubinSpeedArrayIntra[] = {90.0, 80.0, 70.0, 60.0, 50.0, 40.0, 30.0, 24.0, 20.0, 19.0, 18.0};
+float rubinSpeedArrayInter[] = {192,  96.0, 48.0, 45.1, 42.0, 40.0, 30.0, 24.0, 22.0, 20.0,
+                                17.5, 15.0, 12.0, 6.0,  3.0,  2.4,  1.2,  0.24, 0.12};
+#define NSPEEDSINTRA_RUBIN (sizeof(rubinSpeedArrayIntra) / sizeof(float))
+#define NSPEEDSINTER_RUBIN (sizeof(rubinSpeedArrayInter) / sizeof(float))
+
+static void ncclTopoGetSpeedArray(int inter, int ccMin, int* nSpeeds, float** speedArray) {
+  if (RUBIN_AND_LATER(ccMin)) {
+    *nSpeeds = inter ? NSPEEDSINTER_RUBIN : NSPEEDSINTRA_RUBIN;
+    *speedArray = inter ? rubinSpeedArrayInter : rubinSpeedArrayIntra;
+  } else if (ccMin >= 100) {
+    *nSpeeds = inter ? NSPEEDSINTER_SM100 : NSPEEDSINTRA_SM100;
+    *speedArray = inter ? sm100SpeedArrayInter : sm100SpeedArrayIntra;
+  } else if (ccMin >= 90) {
+    *nSpeeds = inter ? NSPEEDSINTER_SM90 : NSPEEDSINTRA_SM90;
+    *speedArray = inter ? sm90SpeedArrayInter : sm90SpeedArrayIntra;
+  } else {
+    *nSpeeds = inter ? NSPEEDSINTER : NSPEEDSINTRA;
+    *speedArray = inter ? speedArrayInter : speedArrayIntra;
+  }
+}
+
 ncclResult_t ncclTopoCheckCrossNicSupport(bool* supported) {
   *supported = (ncclParamCrossNic() != 0);
   return ncclSuccess;
@@ -1190,14 +1213,9 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   NCCLCHECKGOTO(ncclCalloc(&tmpGraph, 1), ret, exit);
   memcpy(tmpGraph, graph, sizeof(struct ncclTopoGraph));
 
+  ncclTopoGetSpeedArray(system->inter, ccMin, &nspeeds, &speedArray);
+
   // First try crossnic, then decrease bw and finally increase bwIntra.
-  if (system->inter == 0) {
-    nspeeds = ccMin >= 100 ? NSPEEDSINTRA_SM100 : (ccMin >= 90 ? NSPEEDSINTRA_SM90 : NSPEEDSINTRA);
-    speedArray = ccMin >= 100 ? sm100SpeedArrayIntra : (ccMin >= 90 ? sm90SpeedArrayIntra : speedArrayIntra);
-  } else {
-    nspeeds = ccMin >= 100 ? NSPEEDSINTER_SM100 : (ccMin >= 90 ? NSPEEDSINTER_SM90 : NSPEEDSINTER);
-    speedArray = ccMin >= 100 ? sm100SpeedArrayInter : (ccMin >= 90 ? sm90SpeedArrayInter : speedArrayInter);
-  }
   maxBw = system->maxBw;
   totalBw = system->totalBw;
 

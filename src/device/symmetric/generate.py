@@ -127,7 +127,7 @@ def required_cuda(k):
       if k.algo in ldmc_algos:
         cudart = 12070
         arch = None
-        specific_sms = ["100a", "101a", "100f", "101f", "120a", "121a"]
+        specific_sms = ["100a", "101a", "107", "100f", "101f", "120a", "121a"]
   return (cudart, arch, specific_sms)
 
 ################################################################################

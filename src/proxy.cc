@@ -395,6 +395,8 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   sub->profilerContext = op->profilerContext;
   sub->ringAlgo = op->ringAlgo;
   sub->workCounter = op->workCounter;
+  sub->stepStarted = op->stepStarted;
+  sub->stepCompleted = op->stepCompleted;
   args->nsubs = subIndex + 1;
   if (subIndex) {
     args->nChannels = std::min(args->nChannels, op->nChannels);
@@ -568,6 +570,8 @@ static ncclResult_t SaveProxyProfiler(struct ncclComm* comm, struct ncclProxyOp*
   } else {
     op->sendbuff = (uint8_t*)comm->profiler.workStarted;
     op->recvbuff = (uint8_t*)comm->profiler.workCompleted;
+    op->stepStarted = comm->profiler.stepStarted;
+    op->stepCompleted = comm->profiler.stepCompleted;
     // Ensure that in graph capturing the proxy workCounter is incremented to keep up with kernel workCounter
     if (comm->planner.persistent) incWorkCounter(comm, op);
     NCCLCHECK(ncclLocalOpAppend(comm, proxyConn, op));

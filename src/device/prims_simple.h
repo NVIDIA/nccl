@@ -42,6 +42,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
   int connStepSize; // Connection step size
   void* netDeviceHandle;
   uint64_t accSize;
+  bool stepProf = false; // KernelStep profiling for this work
 
   // Don't use barrier 0 as it's used by the final sync
   __device__ void barrier() {
@@ -228,6 +229,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         /* if user abort the kernel, we don't need to actually perform copy/reduce; just set size
          * to 0 to avoid unnecessary workload. */
         int workSize = ncclShmem.aborted ? 0 : sliceSize;
+        // KernelStep start: after waitPeer, before reduceCopy (Wait roles only).
+        if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
+          const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
+          uint64_t seq = 0;
+          profilerKernelStepStart(true, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)), &seq);
+          if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[index] = seq;
+          else ncclShmem.groups[group].kernelStepSeqRecv[index] = seq;
+        }
         if (flags & AnyNetDeviceUnpack) {
           ncclNetDeviceUnpack<Recv>(tid, tidInBlock, nworkers, group,
                                     ncclShmem.groups[group].devicePlugin.unpack.unpackNetDeviceIndexMask, Src,
@@ -275,6 +284,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         }
         barrier(); // This barrier has a counterpart in following loop
         postPeer<Recv, Send>(0 < workSize);
+        // KernelStep stop: after postPeer (Post roles only); seq published by Wait role.
+        if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RolePostRecv | Send * RolePostSend))) {
+          const bool isSendNotRecv = (Send && Recv) ? (flags & RolePostSend) : Send;
+          uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[index] :
+                                          ncclShmem.groups[group].kernelStepSeqRecv[index];
+          profilerKernelStepStop(true, seq, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
+        }
         offset += sliceSize;
         slice += 1;
         // Yes, for some template arguments this code will be unreachable.  That's fine.
@@ -293,9 +309,22 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         // since we've exited the loop above.
         waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(0, 0, 0, sliceSize);
       }
-      barrier(); // Has couterpart in preceding worker-only loop.
       int workSize = ncclShmem.aborted ? 0 : sliceSize;
+      if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
+        const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
+        uint64_t seq = 0;
+        profilerKernelStepStart(true, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)), &seq);
+        if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[index] = seq;
+        else ncclShmem.groups[group].kernelStepSeqRecv[index] = seq;
+      }
+      barrier(); // Has couterpart in preceding worker-only loop.
       postPeer<Recv, Send>(0 < workSize);
+      if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RolePostRecv | Send * RolePostSend))) {
+        const bool isSendNotRecv = (Send && Recv) ? (flags & RolePostSend) : Send;
+        uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[index] :
+                                        ncclShmem.groups[group].kernelStepSeqRecv[index];
+        profilerKernelStepStop(true, seq, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
+      }
       offset += sliceSize;
       slice += 1;
     }
@@ -580,6 +609,7 @@ public:
     int peer = -1;
     flags = 0;
     index = -1;
+    stepProf = P2p ? (p2pWork && p2pWork->profilerStepEnabled) : (collWork && collWork->profilerStepEnabled);
     if (mode == primsModeDefault) {
       // Connect to ranks in sendPeers/recvPeers
       // For send operations, we need an extra warp to overlap the threadfence and the copy

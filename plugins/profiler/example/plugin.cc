@@ -34,6 +34,7 @@ static const int defaultCeBatchPoolSize = 8;
 static const int defaultCollPoolSize = 8;
 static const int defaultP2pPoolSize = 8;
 static const int defaultProxyCtrlPoolSize = 16;
+static const int defaultKernelStepPoolSize = 4096;
 static const int defaultDetachPoolSize = 8;
 
 static int groupApiPoolSize;
@@ -44,6 +45,7 @@ static int groupPoolSize;
 static int collPoolSize;
 static int p2pPoolSize;
 static int proxyCtrlPoolSize;
+static int kernelStepPoolSize;
 static int ceCollPoolSize;
 static int ceSyncPoolSize;
 static int ceBatchPoolSize;
@@ -136,6 +138,10 @@ static struct context* contextFromEventHandle(void* eHandle) {
     struct kernelCh* ev = (struct kernelCh*)eHandle;
     return getTaskEventCtx(ev->parent);
   }
+  case ncclProfileKernelStep: {
+    struct kernelStep* ev = (struct kernelStep*)eHandle;
+    return ev->ctx;
+  }
   case ncclProfileCeColl: {
     struct ceColl* ev = (struct ceColl*)eHandle;
     return ev->parent ? ev->parent->ctx : nullptr;
@@ -179,6 +185,9 @@ static void initPoolSizes(void) {
 
   str = getenv("NCCL_PROFILE_PROXY_CTRL_POOL_SIZE");
   proxyCtrlPoolSize = str ? atoi(str) : defaultProxyCtrlPoolSize;
+
+  str = getenv("NCCL_PROFILE_KERNEL_STEP_POOL_SIZE");
+  kernelStepPoolSize = str ? atoi(str) : defaultKernelStepPoolSize;
 
   str = getenv("NCCL_PROFILE_CE_COLL_POOL_SIZE");
   ceCollPoolSize = str ? atoi(str) : defaultCeCollPoolSize;
@@ -227,6 +236,13 @@ static ncclResult_t allocateContextPools(struct context* ctx) {
 
   ctx->proxyCtrlPool = (struct proxyCtrl *)calloc(proxyCtrlPoolSize, sizeof(*ctx->proxyCtrlPool));
   if (!ctx->proxyCtrlPool) goto fail;
+  ctx->proxyCtrlPoolSize = proxyCtrlPoolSize;
+
+  ctx->kernelStepPool = (struct kernelStep *)calloc(kernelStepPoolSize, sizeof(*ctx->kernelStepPool));
+  if (!ctx->kernelStepPool) goto fail;
+  ctx->kernelStepPoolSize = kernelStepPoolSize;
+
+  // CE pools
 
   ctx->ceCollPool = (struct ceColl *)calloc(ceCollPoolSize, sizeof(*ctx->ceCollPool));
   if (!ctx->ceCollPool) goto fail;
@@ -253,6 +269,7 @@ fail:
   if (ctx->ceBatchPool) free(ctx->ceBatchPool);
   if (ctx->ceSyncPool) free(ctx->ceSyncPool);
   if (ctx->ceCollPool) free(ctx->ceCollPool);
+  if (ctx->kernelStepPool) free(ctx->kernelStepPool);
   if (ctx->proxyCtrlPool) free(ctx->proxyCtrlPool);
   if (ctx->p2pPool) free(ctx->p2pPool);
   if (ctx->collPool) free(ctx->collPool);
@@ -369,6 +386,15 @@ static void printAllEvents(FILE* fh, struct context* ctx) {
     printEvent(fh, &ctx->proxyCtrlPool[i % proxyCtrlPoolSize]);
   }
 
+  // KernelSteps with a Coll/P2p parent are printed nested under that parent.
+  // Only dump orphan KernelSteps (no parent) from the pool.
+  start = (ctx->kernelStepPoolIndex - kernelStepPoolSize >= 0) ? ctx->kernelStepPoolIndex - kernelStepPoolSize : 0;
+  end = ctx->kernelStepPoolIndex;
+  for (int i = start; i < end; i++) {
+    struct kernelStep* ks = &ctx->kernelStepPool[i % kernelStepPoolSize];
+    if (ks->type == ncclProfileKernelStep && ks->parent == NULL) printEvent(fh, ks);
+  }
+
   // Print orphan CeColl events (those without CollApi parent)
   start = (ctx->ceCollPoolIndex - ctx->ceCollPoolSize >= 0) ? ctx->ceCollPoolIndex - ctx->ceCollPoolSize : 0;
   end = ctx->ceCollPoolIndex;
@@ -393,6 +419,7 @@ static void freeContextPools(struct context* ctx) {
   free(ctx->collPool);
   free(ctx->p2pPool);
   free(ctx->proxyCtrlPool);
+  free(ctx->kernelStepPool);
   free(ctx->ceCollPool);
   free(ctx->ceSyncPool);
   free(ctx->ceBatchPool);
@@ -798,6 +825,33 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       __atomic_fetch_add(&parent->base.refCount, 1, __ATOMIC_RELAXED);
       debugEvent(event, "KernelChStart");
     }
+  } else if (eDescr->type == ncclProfileKernelStep) {
+    int id = __atomic_fetch_add(&ctx->kernelStepPoolIndex, 1, __ATOMIC_RELAXED);
+    if ((id - __atomic_load_n(&ctx->kernelStepPoolBase, __ATOMIC_RELAXED)) >= kernelStepPoolSize) {
+      __atomic_fetch_sub(&ctx->kernelStepPoolIndex, 1, __ATOMIC_RELAXED);
+      *eHandle = NULL;
+      return ncclSuccess;
+    }
+    struct kernelStep* event = &ctx->kernelStepPool[id % kernelStepPoolSize];
+    memset(event, 0, sizeof(*event));
+    event->type = ncclProfileKernelStep;
+    event->ctx = ctx;
+    event->parent = (struct taskEventBase*)eDescr->parentObj;
+    event->channelId = eDescr->kernelStep.channelId;
+    event->isSend = eDescr->kernelStep.isSend;
+    event->peer = eDescr->kernelStep.peer;
+    event->step = eDescr->kernelStep.step;
+    event->size = eDescr->kernelStep.size;
+    event->startGpuClk = eDescr->kernelStep.pTimer;
+    event->startTs = gettime() - startTime;
+    // Nest under parent Coll/P2p (same parentObj as KernelCh / ProxyOp).
+    if (event->parent) {
+      if (event->parent->stepTail) event->parent->stepTail->next = event;
+      else event->parent->stepHead = event;
+      event->parent->stepTail = event;
+    }
+    *eHandle = event;
+    debugEvent(event, "KernelStepStart");
   } else if (eDescr->type == ncclProfileNetPlugin) {
     struct proxyStep* parent = (struct proxyStep *)eDescr->parentObj;
     if (parent == NULL) return ncclSuccess;
@@ -931,6 +985,10 @@ void updateEvent(void* handle) {
     event->stopTs = gettime() - startTime;
     updateEvent(event->parent);
     debugEvent(event, "KernelChStop");
+  } else if (type == ncclProfileKernelStep) {
+    struct kernelStep* event = (struct kernelStep *)handle;
+    event->stopTs = gettime() - startTime;
+    debugEvent(event, "KernelStepStop");
   } else if (type == ncclProfileNetPlugin) {
     struct netPlugin* event = (struct netPlugin *)handle;
     event->stopTs = gettime() - startTime;
@@ -1045,6 +1103,11 @@ __hidden ncclResult_t exampleProfilerRecordEventState(void* eHandle, ncclProfile
     struct kernelCh* event = (struct kernelCh *)eHandle;
     if (eState == ncclProfilerKernelChStop) {
       event->stopGpuClk = eStateArgs->kernelCh.pTimer;
+    }
+  } else if (type == ncclProfileKernelStep) {
+    struct kernelStep* event = (struct kernelStep *)eHandle;
+    if (eState == ncclProfilerKernelStepStop) {
+      event->stopGpuClk = eStateArgs->kernelStep.pTimer;
     }
   }
   debugEvent(eHandle, "RecordEventState");

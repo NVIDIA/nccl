@@ -126,6 +126,9 @@ struct ncclProxyOp {
   ncclPid_t pid;
   void* profilerContext;
   uint64_t workCounter;
+  // KernelStep ring bases (set by SaveProxyProfiler); host drains these in profilerProxyProgress
+  struct ncclDevKernelStepRing* stepStarted;
+  struct ncclDevKernelStepRing* stepCompleted;
 
   struct ncclProxyOp* enqNext;
 };
@@ -177,6 +180,9 @@ struct ncclProxySubArgs {
   struct ncclProxyEventHandle pHandles[NCCL_STEPS];
   size_t transSize;
   uint64_t workCounter;
+  // KernelStep rings for this profiler proxy op
+  struct ncclDevKernelStepRing* stepStarted;
+  struct ncclDevKernelStepRing* stepCompleted;
 
   void* recvRequestsCache[NCCL_STEPS];
   int recvRequestsSubCount;

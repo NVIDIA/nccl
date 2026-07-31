@@ -254,6 +254,7 @@ struct alignas(16) ncclDevWorkP2p {
   uint8_t sendNetReg:1, recvNetReg:1;
   uint8_t sendIpcReg:1, recvIpcReg:1;
   uint8_t profilerEnabled:1;
+  uint8_t profilerStepEnabled:1;
 };
 
 // Compute the subset of the data transfer corresponding to the given part index.
@@ -287,7 +288,7 @@ struct alignas(16) ncclDevWorkColl {
   uint32_t channelLo:8, channelHi:8;
   uint32_t nWarps:8;
   uint32_t redOpArgIsPtr:1, regUsed:1, netRegUsed:1, oneNode:1, direct:2, isOneRPN:1;
-  uint32_t profilerEnabled:1;
+  uint32_t profilerEnabled:1, profilerStepEnabled:1;
   uint32_t root;
   uint8_t pad1[12];  // pad to 16-byte boundary (20 bytes above -> 32)
   void* recvbuff;
@@ -435,6 +436,24 @@ struct ncclDevProfiler {
   } data[MAX_PROFILER_EVENTS_PER_CHANNEL];
 };
 
+// Per-slice KernelStep profiler rings (Simple prims). Dual rings mirror KernelCh.
+#define MAX_KERNEL_STEP_EVENTS_PER_CHANNEL 1024
+#define NCCL_KERNEL_STEP_FLAG_SEND (1u << 0)
+
+struct ncclDevKernelStepEvent {
+  uint64_t counter;    // monotonic per-channel seq (pairs start/completed)
+  uint64_t timestamp;  // GPU globaltimer
+  uint32_t step;       // protocol step id
+  uint32_t size;       // slice bytes
+  uint8_t peer;        // peer index within the primitive fan
+  uint8_t flags;       // NCCL_KERNEL_STEP_FLAG_*
+  uint8_t pad[6];
+};
+
+struct ncclDevKernelStepRing {
+  struct ncclDevKernelStepEvent data[MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
+};
+
 struct ncclKernelComm {
   int rank;
   int nRanks;
@@ -457,6 +476,11 @@ struct ncclKernelComm {
   // Profiler counters
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
+  // KernelStep rings (per-slice start/end); nullptr until allocated at init
+  struct ncclDevKernelStepRing* stepStarted /*[MAXCHANNELS]*/;
+  struct ncclDevKernelStepRing* stepCompleted /*[MAXCHANNELS]*/;
+  // Monotonic per-channel KernelStep sequence (device atomicAdd); host drain cursor is separate
+  uint64_t* stepSeq /*[MAXCHANNELS]*/;
 };
 
 struct alignas(16) ncclKernelCommAndChannels {

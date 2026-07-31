@@ -43,6 +43,9 @@ struct ncclShmemGroup {
   } devicePlugin;
   int32_t dstSizes[NCCL_MAX_ARITY + 1];
   uint64_t redOpArgs;
+  // KernelStep: Wait role publishes seq here for Post role after barrier
+  uint64_t kernelStepSeqSend[NCCL_MAX_ARITY];
+  uint64_t kernelStepSeqRecv[NCCL_MAX_ARITY];
 };
 
 struct ncclShmemData {
@@ -60,6 +63,7 @@ struct ncclShmemData {
   int workSize;
   uint64_t workCounter;
   bool profilerEnabled;
+  bool profilerStepEnabled;
   struct ncclShmemGroup groups[NCCL_MAX_GROUPS];
 
   alignas(16) char workStorage[ncclMaxDevWorkBatchBytes()];
@@ -326,20 +330,63 @@ __device__ __forceinline__ bool profilerEnabled(int workItemIdx) {
            ((struct ncclDevWorkColl*)ncclShmem.workStorage)[workItemIdx].profilerEnabled;
 }
 
+__device__ __forceinline__ bool profilerStepEnabled(int workItemIdx) {
+  return (ncclShmem.workType == ncclDevWorkTypeP2p) ?
+           ((struct ncclDevWorkP2p*)ncclShmem.workStorage)[workItemIdx].profilerStepEnabled :
+           ((struct ncclDevWorkColl*)ncclShmem.workStorage)[workItemIdx].profilerStepEnabled;
+}
+
+// Work-boundary markers are needed for KernelCh and to bookend KernelStep proxy drain.
+__device__ __forceinline__ bool profilerWorkMarkersEnabled(int workItemIdx) {
+  return profilerEnabled(workItemIdx) || profilerStepEnabled(workItemIdx);
+}
+
+__device__ __forceinline__ void profilerKernelStepStart(bool enabled, int isSend, int peerIdx, uint32_t step,
+                                                         uint32_t size, uint64_t* seqOut) {
+  if (!enabled || ncclShmem.comm.stepStarted == nullptr || ncclShmem.comm.stepSeq == nullptr) return;
+  int ch = ncclShmem.channelId;
+  uint64_t seq = atomicAdd((unsigned long long*)(ncclShmem.comm.stepSeq + ch), 1ULL) + 1ULL;
+  *seqOut = seq;
+  struct ncclDevKernelStepEvent* e =
+    &ncclShmem.comm.stepStarted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
+  e->timestamp = globaltimer();
+  e->step = step;
+  e->size = size;
+  e->peer = (uint8_t)peerIdx;
+  e->flags = isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
+  __threadfence_system();
+  e->counter = seq;
+}
+
+__device__ __forceinline__ void profilerKernelStepStop(bool enabled, uint64_t seq, int isSend, int peerIdx,
+                                                        uint32_t step, uint32_t size) {
+  if (!enabled || ncclShmem.comm.stepCompleted == nullptr || seq == 0) return;
+  int ch = ncclShmem.channelId;
+  struct ncclDevKernelStepEvent* e =
+    &ncclShmem.comm.stepCompleted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
+  e->timestamp = globaltimer();
+  e->step = step;
+  e->size = size;
+  e->peer = (uint8_t)peerIdx;
+  e->flags = isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
+  __threadfence_system();
+  e->counter = seq;
+}
+
 __device__ __forceinline__ void profiler(int action) {
   if (threadIdx.x == 0) {
     int idx = 0;
     uint64_t wc = ncclShmem.channel.workCounter + 1;
     if (action == START) {
       for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
-        if (!profilerEnabled(idx++)) continue;
+        if (!profilerWorkMarkersEnabled(idx++)) continue;
         ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
           globaltimer();
         ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
       }
     } else {
       for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
-        if (!profilerEnabled(idx++)) continue;
+        if (!profilerWorkMarkersEnabled(idx++)) continue;
         ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
           globaltimer();
         ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;

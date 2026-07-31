@@ -106,6 +106,9 @@ static ncclResult_t ncclProfiler_init(void** context, uint64_t commId __attribut
                                       int nranks __attribute__((unused)), int rank __attribute__((unused)),
                                       ncclDebugLogger_t logfn __attribute__((unused))) {
   NCCLCHECK(ncclProfiler_v2->init(context, eActivationMask));
+  if (eActivationMask) {
+    *eActivationMask &= ~(ncclProfileKernelStep | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch);
+  }
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.stopEvent = ncclProfiler_v2->stopEvent;
   ncclProfiler.recordEventState = ncclProfiler_recordEventState;

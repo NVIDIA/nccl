@@ -65,6 +65,23 @@ struct kernelCh {
   uint64_t stopGpuClk;
 };
 
+// Per-slice Simple-prims KernelStep event (GPU globaltimer start/stop).
+struct kernelStep {
+  uint64_t type;
+  struct context* ctx;
+  struct taskEventBase* parent;
+  struct kernelStep* next;          // next step under the same Coll/P2p parent
+  uint8_t channelId;
+  uint8_t isSend;
+  uint8_t peer;
+  uint32_t step;
+  uint32_t size;
+  uint64_t startGpuClk;
+  uint64_t stopGpuClk;
+  double startTs;
+  double stopTs;
+};
+
 #define PROXY_STEP_SEND_GPU_WAIT 0
 #define PROXY_STEP_SEND_PEER_WAIT 1
 #define PROXY_STEP_SEND_WAIT 2
@@ -124,6 +141,8 @@ struct taskEventBase {
   int refCount;                     // number of references for this operation
   void* parent;                     // parent API event
   struct taskEventBase* next;       // next top level event
+  struct kernelStep* stepHead;      // nested KernelStep list (intra-host Simple)
+  struct kernelStep* stepTail;
   double startTs;
   double stopTs;
 };
@@ -376,6 +395,11 @@ struct context {
   int proxyCtrlPoolBase;
   int proxyCtrlPoolIndex;
   struct proxyCtrl* proxyCtrlPool;
+
+  int kernelStepPoolSize;
+  int kernelStepPoolBase;
+  int kernelStepPoolIndex;
+  struct kernelStep* kernelStepPool;
 
   // CE event pools
   int ceCollPoolSize;

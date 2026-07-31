@@ -19,12 +19,22 @@ struct ncclInfo;
 struct ncclComm;
 struct ncclProxyOp;
 struct ncclProxyConnector;
+struct ncclDevProfiler;
+struct ncclDevKernelStepRing;
+struct ncclDevKernelStepEvent;
 
 struct ncclProfilerProxy {
   bool initialized;
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
   uint64_t workCounter[MAXCHANNELS]; // host work counter
+  // KernelStep dual rings (cuda host alloc, [MAXCHANNELS] elements each)
+  struct ncclDevKernelStepRing* stepStarted /*[MAXCHANNELS]*/;
+  struct ncclDevKernelStepRing* stepCompleted /*[MAXCHANNELS]*/;
+  uint64_t* stepSeq /*[MAXCHANNELS]*/;       // device-published high water (same buffer as device)
+  uint64_t stepCounter[MAXCHANNELS];         // host drain cursor per channel (last fully drained seq)
+  // In-flight KernelStep plugin handles [MAXCHANNELS][MAX_KERNEL_STEP_EVENTS_PER_CHANNEL], flat
+  void** kernelStepHandles;
   struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
 };
@@ -95,6 +105,11 @@ ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle);
 // Kernel Channel Start/Stop Event Wrappers
 ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start);
 ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop);
+
+// KernelStep Start/Stop Event Wrappers (per-slice Simple prims timing)
+ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s, const struct ncclDevKernelStepEvent* ev,
+                                              void** eHandle);
+ncclResult_t ncclProfilerStopKernelStepEvent(void* eHandle, const struct ncclDevKernelStepEvent* ev);
 
 // Record Event Wrappers
 ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, ncclProfilerEventState_t eState);

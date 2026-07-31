@@ -106,6 +106,10 @@ typedef union {
   struct {
     uint64_t pTimer;
   } kernelCh;
+
+  struct {
+    uint64_t pTimer;  // GPU globaltimer stop for KernelStep
+  } kernelStep;
 } ncclProfilerEventStateArgs_v5_t;
 
 typedef struct {

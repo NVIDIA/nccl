@@ -649,10 +649,22 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   // Alloc profiler counters for the kernel
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.workStarted, MAXCHANNELS), ret, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.workCompleted, MAXCHANNELS), ret, fail);
+  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.stepStarted, MAXCHANNELS), ret, fail);
+  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.stepCompleted, MAXCHANNELS), ret, fail);
+  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.stepSeq, MAXCHANNELS), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepHandles, MAXCHANNELS * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL), ret,
+                fail);
+  ncclCommPushFree(comm, comm->profiler.kernelStepHandles);
   tmpCommAndChans.comm.workStarted = comm->profiler.workStarted;
   tmpCommAndChans.comm.workCompleted = comm->profiler.workCompleted;
+  tmpCommAndChans.comm.stepStarted = comm->profiler.stepStarted;
+  tmpCommAndChans.comm.stepCompleted = comm->profiler.stepCompleted;
+  tmpCommAndChans.comm.stepSeq = comm->profiler.stepSeq;
   ncclCommPushCudaHostFree(comm, comm->profiler.workStarted);
   ncclCommPushCudaHostFree(comm, comm->profiler.workCompleted);
+  ncclCommPushCudaHostFree(comm, comm->profiler.stepStarted);
+  ncclCommPushCudaHostFree(comm, comm->profiler.stepCompleted);
+  ncclCommPushCudaHostFree(comm, comm->profiler.stepSeq);
 
   if (comm->collNetDenseToUserRank != nullptr) {
     NCCLCHECKGOTO(ncclCudaCallocAsync(&tmpCommAndChans.comm.collNetDenseToUserRank, nRanks, deviceStream,

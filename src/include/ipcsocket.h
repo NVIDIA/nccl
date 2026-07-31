@@ -17,21 +17,30 @@
 
 #define NCCL_IPC_SOCKNAME_LEN 64
 
+#if defined(NCCL_OS_WINDOWS)
+typedef intptr_t ncclIpcFd;
+#else
+typedef int ncclIpcFd;
+#endif
+
+#define NCCL_INVALID_IPC_FD ((ncclIpcFd) - 1)
+
 struct ncclIpcSocket {
-  int fd;
+  ncclIpcFd fd;
   char socketName[NCCL_IPC_SOCKNAME_LEN];
   volatile uint32_t* abortFlag;
 };
 
 ncclResult_t ncclIpcSocketInit(struct ncclIpcSocket* handle, int rank, uint64_t hash, volatile uint32_t* abortFlag);
 ncclResult_t ncclIpcSocketClose(struct ncclIpcSocket* handle);
-ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd);
+ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, ncclIpcFd* fd);
 
-ncclResult_t ncclIpcSocketRecvFd(struct ncclIpcSocket* handle, int* fd);
-ncclResult_t ncclIpcSocketSendFd(struct ncclIpcSocket* handle, const int fd, int rank, uint64_t hash);
+ncclResult_t ncclIpcSocketRecvFd(struct ncclIpcSocket* handle, ncclIpcFd* fd);
+ncclResult_t ncclIpcSocketSendFd(struct ncclIpcSocket* handle, ncclIpcFd fd, int rank, uint64_t hash);
 
-ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, const int sendFd, int rank,
+ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, ncclIpcFd sendFd, int rank,
                                   uint64_t hash);
-ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, int* recvFd);
+ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, ncclIpcFd* recvFd);
+int ncclIpcFdClose(ncclIpcFd fd);
 
 #endif /* NCCL_IPCSOCKET_H */

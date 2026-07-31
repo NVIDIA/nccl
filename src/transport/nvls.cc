@@ -74,7 +74,7 @@ ncclResult_t ncclNvlsGroupCreate(struct ncclComm* comm, CUmulticastObjectProp* p
 ncclResult_t ncclNvlsGroupConnect(struct ncclComm* comm, char* shareableHandle, int rank,
                                   CUmemGenericAllocationHandle* mcHandle) {
   CUmemAllocationHandleType type = ncclCuMemHandleType;
-  int fd = -1;
+  ncclIpcFd fd = NCCL_INVALID_IPC_FD;
   ncclResult_t ret = ncclSuccess;
   INFO(NCCL_NVLS, "NVLS importing shareableHandle %p from rank %d", shareableHandle, rank);
 
@@ -85,9 +85,9 @@ ncclResult_t ncclNvlsGroupConnect(struct ncclComm* comm, char* shareableHandle, 
     TRACE(NCCL_NVLS, "NVLS rank %d request conversion of handle 0x%lx from rank %d", comm->localRank,
           *(uint64_t*)shareableHandle, rank);
     NCCLCHECKGOTO(ncclProxyClientGetFdBlocking(comm, rank, shareableHandle, &fd), ret, fail);
-    TRACE(NCCL_NVLS, "NVLS rank %d received converted fd %d from rank %d", comm->localRank, fd, rank);
+    TRACE(NCCL_NVLS, "NVLS rank %d received converted fd %lld from rank %d", comm->localRank, (long long)fd, rank);
     CUCHECKGOTO(cuMemImportFromShareableHandle(mcHandle, (void*)(uintptr_t)fd, type), ret, fail);
-    SYSCHECK(close(fd), "close");
+    SYSCHECK(ncclIpcFdClose(fd), "close");
   } else {
     if (type == CU_MEM_HANDLE_TYPE_FABRIC) {
       CUCHECKGOTO(cuMemImportFromShareableHandle(mcHandle, (void*)shareableHandle, type), ret, fail);
@@ -98,7 +98,7 @@ ncclResult_t ncclNvlsGroupConnect(struct ncclComm* comm, char* shareableHandle, 
 exit:
   return ret;
 fail:
-  if (fd != -1) close(fd);
+  if (fd != NCCL_INVALID_IPC_FD) ncclIpcFdClose(fd);
   goto exit;
 }
 

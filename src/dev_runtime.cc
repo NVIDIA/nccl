@@ -293,12 +293,12 @@ static ncclResult_t symMemoryImportAndMapSegmentHandle(struct ncclComm* comm, in
     impHandle = memHandle;
   } else {
     if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
-      int fd = -1;
+      ncclIpcFd fd = NCCL_INVALID_IPC_FD;
       NCCLCHECKGOTO(ncclProxyClientGetFdBlocking(comm, devr->lsaRankList[r], msg, &fd), ret, fail);
       CUCHECKGOTO(cuMemImportFromShareableHandle(&impHandle, reinterpret_cast<void*>((uintptr_t)fd),
                                                  ncclCuMemHandleType),
                   ret, fail);
-      SYSCHECKGOTO(close(fd), "close", ret, fail);
+      SYSCHECKGOTO(ncclIpcFdClose(fd), "close", ret, fail);
     } else {
       CUCHECKGOTO(cuMemImportFromShareableHandle(&impHandle, (void*)&msg->fabricHandle, ncclCuMemHandleType), ret,
                   fail);

@@ -860,7 +860,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
 
         // For POSIX FD: We need to get the FD from the owner
         // Use proxy to convert cuMem handle to FD
-        int fd = -1;
+        ncclIpcFd fd = NCCL_INVALID_IPC_FD;
 
         // The handleData contains the cuMem handle - request FD conversion
         ret = ncclProxyClientGetFdBlocking(comm, entry->desc.imported.ownerRank, &matchedInfo->handleData, &fd);
@@ -872,7 +872,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
 
         curet = CUPFN(cuMemImportFromShareableHandle(&newHandle, (void*)(uintptr_t)fd,
                                                      CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR));
-        close(fd);
+        ncclIpcFdClose(fd);
       } else if (matchedInfo->handleType == CU_MEM_HANDLE_TYPE_FABRIC) {
         // For FABRIC: Import directly using the fabric handle
         curet =

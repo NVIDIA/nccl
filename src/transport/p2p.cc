@@ -47,7 +47,7 @@ static_assert(sizeof(struct p2pConnectInfo) <= CONNECT_SIZE, "p2pConnectInfo is 
 struct p2pIpcExpInfo {
   ncclIpcDesc ipcDesc;
   bool legacyIpcCap;
-  int impFd;
+  ncclIpcFd impFd;
   size_t size;
   uintptr_t offset;
 };
@@ -286,12 +286,13 @@ ncclResult_t ncclP2pImportShareableBuffer(struct ncclComm* comm, int peer, size_
     // Import and map the remote memory descriptor to the local GPU
     if (type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
       // UDS fd support
-      int fd = -1;
+      ncclIpcFd fd = NCCL_INVALID_IPC_FD;
       // Send cuMem handle to remote for conversion to an fd
       NCCLCHECK(ncclProxyClientGetFdBlocking(comm, peer, &cuDesc->data, &fd));
-      INFO(NCCL_P2P, "UDS converted handle 0x%lx to fd %d on remote peer %d", *(uint64_t*)&cuDesc->data, fd, peer);
+      INFO(NCCL_P2P, "UDS converted handle 0x%lx to fd %lld on remote peer %d", *(uint64_t*)&cuDesc->data,
+           (long long)fd, peer);
       CUCHECK(cuMemImportFromShareableHandle(&handle, (void*)(uintptr_t)fd, type));
-      SYSCHECK(close(fd), "close");
+      SYSCHECK(ncclIpcFdClose(fd), "close");
     } else {
       CUCHECK(cuMemImportFromShareableHandle(&handle, cuDesc, type));
     }
@@ -912,8 +913,8 @@ ncclResult_t ipcHandleMultiSegmentRegistration(CUdeviceptr userBuff, size_t user
   CUdeviceptr tmpBase;
   size_t tmpBaseSize;
   CUmemGenericAllocationHandle* segmentHandles = nullptr;
-  int* expFds = nullptr;
-  int* impFds = nullptr;
+  ncclIpcFd* expFds = nullptr;
+  ncclIpcFd* impFds = nullptr;
   int capacity = 2;
   *ipcInfos = nullptr;
   // Minimum of two segments in this codepath
@@ -921,7 +922,7 @@ ncclResult_t ipcHandleMultiSegmentRegistration(CUdeviceptr userBuff, size_t user
   if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
     NCCLCHECKGOTO(ncclCalloc(&expFds, capacity), ret, fail);
     for (int idx = 0; idx < capacity; idx++) {
-      expFds[idx] = -1;
+      expFds[idx] = NCCL_INVALID_IPC_FD;
     }
   }
   NCCLCHECKGOTO(ncclCalloc(&segmentHandles, capacity), ret, fail);
@@ -934,7 +935,7 @@ ncclResult_t ipcHandleMultiSegmentRegistration(CUdeviceptr userBuff, size_t user
       if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
         NCCLCHECKGOTO(ncclRealloc(&expFds, segment, capacity), ret, fail);
         for (int idx = segment; idx < capacity; idx++) {
-          expFds[idx] = -1;
+          expFds[idx] = NCCL_INVALID_IPC_FD;
         }
       }
       NCCLCHECKGOTO(ncclRealloc(&segmentHandles, segment, capacity), ret, fail);
@@ -979,8 +980,8 @@ ncclResult_t ipcHandleMultiSegmentRegistration(CUdeviceptr userBuff, size_t user
     if (!proxyConn->sameProcess) {
       if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
         ipcInfo->impFd = impFds[segment];
-        close(expFds[segment]);
-        expFds[segment] = -1;
+        ncclIpcFdClose(expFds[segment]);
+        expFds[segment] = NCCL_INVALID_IPC_FD;
       }
     }
     CUCHECKGOTO(cuMemRelease(segmentHandles[segment]), ret, fail);
@@ -1001,9 +1002,9 @@ fail:
   }
   for (int segment = 0; segment < *numSegments; segment++) {
     if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
-      if (expFds[segment] != -1) {
-        close(expFds[segment]);
-        expFds[segment] = -1;
+      if (expFds[segment] != NCCL_INVALID_IPC_FD) {
+        ncclIpcFdClose(expFds[segment]);
+        expFds[segment] = NCCL_INVALID_IPC_FD;
       }
     }
     CUCHECKIGNORE(cuMemRelease(segmentHandles[segment]));
@@ -1118,10 +1119,10 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
                 memcpy(&ipcInfo->ipcDesc.memHandle, &handle, sizeof(CUmemGenericAllocationHandle));
               } else {
                 if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
-                  int expFd = -1;
+                  ncclIpcFd expFd = NCCL_INVALID_IPC_FD;
                   CUCHECKGOTO(cuMemExportToShareableHandle(&expFd, handle, ncclCuMemHandleType, 0), ret, fail);
                   NCCLCHECKGOTO(ncclProxyClientQueryFdBlocking(comm, proxyConn, expFd, &ipcInfo->impFd), ret, fail);
-                  SYSCHECKGOTO(close(expFd), "close", ret, fail);
+                  SYSCHECKGOTO(ncclIpcFdClose(expFd), "close", ret, fail);
                 } else {
                   // Allow this to silently fail for cases where the user buff cannot be registered
                   if (CUPFN(cuMemExportToShareableHandle(&ipcInfo->ipcDesc.cuDesc.handle, handle, ncclCuMemHandleType,
@@ -1389,7 +1390,7 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
           CUCHECKGOTO(cuMemImportFromShareableHandle(&segmentHandles[segment],
                                                      (void*)(uintptr_t)ipcExpInfo[segment].impFd, ncclCuMemHandleType),
                       ret, fail);
-          SYSCHECKGOTO(close(ipcExpInfo[segment].impFd), "close", ret, fail);
+          SYSCHECKGOTO(ncclIpcFdClose(ipcExpInfo[segment].impFd), "close", ret, fail);
         } else {
           CUCHECKGOTO(cuMemImportFromShareableHandle(&segmentHandles[segment],
                                                      (void*)&ipcExpInfo[segment].ipcDesc.cuDesc.handle,

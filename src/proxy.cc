@@ -1224,13 +1224,13 @@ ncclResult_t ncclProxyConnect(struct ncclComm* comm, int transport, int send, in
 
 // UDS support
 ncclResult_t ncclProxyCallBlockingUDS(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type,
-                                      void* reqBuff, int reqSize, void* respBuff, int respSize, int* reqFd,
-                                      int* respFd) {
+                                      void* reqBuff, int reqSize, void* respBuff, int respSize, ncclIpcFd* reqFd,
+                                      ncclIpcFd* respFd) {
   ncclResult_t res = ncclSuccess;
   struct ncclIpcSocket ipcSock = {0};
   void* opId;
   NCCLCHECK(getRandomData(&opId, sizeof(opId)));
-  int reqFdtmp = -1;
+  ncclIpcFd reqFdtmp = NCCL_INVALID_IPC_FD;
 
   int rank = comm->topParentLocalRanks[comm->localRank];
   struct ncclProxyState* sharedProxyState = comm->proxyState;
@@ -1267,8 +1267,9 @@ ncclResult_t ncclProxyCallBlockingUDS(struct ncclComm* comm, struct ncclProxyCon
   NCCLCHECKGOTO(ncclIpcSocketRecvMsg(&ipcSock, respBuff, respSize, respFd), res, error);
   NCCLCHECKGOTO(ncclIpcSocketClose(&ipcSock), res, error);
 
-  INFO(NCCL_PROXY, "ProxyCall UDS comm %p rank %d tpRank %d(%lx) reqSize %d respSize %d respFd %d opId %p - DONE", comm,
-       rank, proxyConn->tpRank, pidHash, reqSize, respSize, (respFd ? *respFd : -1), opId);
+  INFO(NCCL_PROXY, "ProxyCall UDS comm %p rank %d tpRank %d(%lx) reqSize %d respSize %d respFd %lld opId %p - DONE",
+       comm, rank, proxyConn->tpRank, pidHash, reqSize, respSize, (long long)(respFd ? *respFd : NCCL_INVALID_IPC_FD),
+       opId);
 
   return res;
 
@@ -1280,7 +1281,7 @@ error:
 
 // cuMem API support
 // The request/response is sent out-of-band using ncclIpcSocket for this specific command
-ncclResult_t ncclProxyClientGetFdBlocking(struct ncclComm* comm, int proxyRank, void* handle, int* convertedFd) {
+ncclResult_t ncclProxyClientGetFdBlocking(struct ncclComm* comm, int proxyRank, void* handle, ncclIpcFd* convertedFd) {
   ncclResult_t ret = ncclSuccess;
 
   // Request the allocation of a UDS fd for the handle
@@ -1292,8 +1293,8 @@ ncclResult_t ncclProxyClientGetFdBlocking(struct ncclComm* comm, int proxyRank, 
                 ret, error);
 
   // We have now received the converted fd over UDS
-  INFO(NCCL_PROXY, "UDS: ClientGetFd handle 0x%lx tpRank %d returned fd %d sameProcess %d", *(uint64_t*)handle,
-       comm->topParentRanks[proxyRank], *convertedFd, comm->gproxyConn[proxyRank].sameProcess);
+  INFO(NCCL_PROXY, "UDS: ClientGetFd handle 0x%lx tpRank %d returned fd %lld sameProcess %d", *(uint64_t*)handle,
+       comm->topParentRanks[proxyRank], (long long)*convertedFd, comm->gproxyConn[proxyRank].sameProcess);
 
   return ret;
 
@@ -1304,15 +1305,15 @@ error:
 }
 
 ncclResult_t ncclProxyClientBatchQueryFdBlocking(struct ncclComm* comm, struct ncclProxyConnector* proxyConn,
-                                                 int* localFds, int* rmtFds, int numSegments) {
+                                                 ncclIpcFd* localFds, ncclIpcFd* rmtFds, int numSegments) {
   ncclResult_t ret = ncclSuccess;
   for (int segment = 0; segment < numSegments; segment++) {
     NCCLCHECKGOTO(ncclProxyCallBlockingUDS(comm, proxyConn, ncclProxyMsgQueryFd, NULL, 0, (void*)&rmtFds[segment],
-                                           sizeof(int), &localFds[segment], NULL),
+                                           sizeof(ncclIpcFd), &localFds[segment], NULL),
                   ret, fail);
     // We have now received the converted fd for a segment over UDS
-    INFO(NCCL_PROXY, "UDS: ClientQueryFdBatch localFd %d tpRank %d remote fd %d sameProcess %d segment %d",
-         localFds[segment], proxyConn->tpRank, rmtFds[segment], proxyConn->sameProcess, segment);
+    INFO(NCCL_PROXY, "UDS: ClientQueryFdBatch localFd %lld tpRank %d remote fd %lld sameProcess %d segment %d",
+         (long long)localFds[segment], proxyConn->tpRank, (long long)rmtFds[segment], proxyConn->sameProcess, segment);
   }
 exit:
   return ret;
@@ -1320,19 +1321,20 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclProxyClientQueryFdBlocking(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int localFd,
-                                            int* rmtFd) {
+ncclResult_t ncclProxyClientQueryFdBlocking(struct ncclComm* comm, struct ncclProxyConnector* proxyConn,
+                                            ncclIpcFd localFd, ncclIpcFd* rmtFd) {
   ncclResult_t ret = ncclSuccess;
-  NCCLCHECKGOTO(ncclProxyCallBlockingUDS(comm, proxyConn, ncclProxyMsgQueryFd, NULL, 0, (void*)rmtFd, sizeof(int),
+  NCCLCHECKGOTO(ncclProxyCallBlockingUDS(comm, proxyConn, ncclProxyMsgQueryFd, NULL, 0, (void*)rmtFd, sizeof(ncclIpcFd),
                                          &localFd, NULL),
                 ret, fail);
 exit:
   // We have now received the converted fd over UDS
-  INFO(NCCL_PROXY, "UDS: ClientQueryFd localFd %d tpRank %d remote fd %d sameProcess %d", localFd, proxyConn->tpRank,
-       *rmtFd, proxyConn->sameProcess);
+  INFO(NCCL_PROXY, "UDS: ClientQueryFd localFd %lld tpRank %d remote fd %lld sameProcess %d", (long long)localFd,
+       proxyConn->tpRank, (long long)*rmtFd, proxyConn->sameProcess);
   return ret;
 fail:
-  WARN("ncclProxyClientQueryFdBlocking call to tpRank %d localFd %d failed : %d", proxyConn->tpRank, localFd, ret);
+  WARN("ncclProxyClientQueryFdBlocking call to tpRank %d localFd %lld failed : %d", proxyConn->tpRank,
+       (long long)localFd, ret);
   goto exit;
 }
 
@@ -1552,14 +1554,14 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
   return ncclSuccess;
 }
 
-static ncclResult_t proxyQueryFd(struct ncclProxyState* proxyState, int rank, void* opId, int rmtFd) {
+static ncclResult_t proxyQueryFd(struct ncclProxyState* proxyState, int rank, void* opId, ncclIpcFd rmtFd) {
 #if CUDART_VERSION >= 11030
   struct ncclIpcSocket ipcSock = {0};
   uint64_t hash = (uint64_t)opId;
   ncclResult_t ret = ncclSuccess;
 
   NCCLCHECKGOTO(ncclIpcSocketInit(&ipcSock, proxyState->tpRank, hash ^ 1, proxyState->abortFlag), ret, exit);
-  NCCLCHECKGOTO(ncclIpcSocketSendMsg(&ipcSock, &rmtFd, sizeof(int), -1, rank, hash), ret, exit);
+  NCCLCHECKGOTO(ncclIpcSocketSendMsg(&ipcSock, &rmtFd, sizeof(rmtFd), NCCL_INVALID_IPC_FD, rank, hash), ret, exit);
 exit:
   NCCLCHECK(ncclIpcSocketClose(&ipcSock));
   return ncclSuccess;
@@ -1578,7 +1580,7 @@ static ncclResult_t proxyGetFd(struct ncclProxyState* proxyState, int rank, void
   INFO(NCCL_PROXY, "UDS proxyGetFd received handle 0x%lx peer %d opId %lx", handle, rank, hash);
 
   CUmemAllocationHandleType type = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
-  int fd = -1;
+  ncclIpcFd fd = NCCL_INVALID_IPC_FD;
 
   CUCHECK(cuMemExportToShareableHandle(&fd, handle, type, 0));
   // Send back the converted fd using UDS
@@ -1587,7 +1589,7 @@ static ncclResult_t proxyGetFd(struct ncclProxyState* proxyState, int rank, void
 error:
   NCCLCHECK(ncclIpcSocketClose(&ipcSock));
   // We can now safely close the exported fd
-  SYSCHECK(close(fd), "close");
+  SYSCHECK(ncclIpcFdClose(fd), "close");
   return ret;
 #else
   return ncclInternalError;
@@ -1962,9 +1964,9 @@ fail:
 }
 
 // Process a request on the UDS socket
-static ncclResult_t proxyUDSRecvReq(struct ncclProxyState* proxyState, int reqFd) {
+static ncclResult_t proxyUDSRecvReq(struct ncclProxyState* proxyState, ncclIpcFd reqFd) {
   ncclIpcHdr hdr;
-  int rmtFd = -1;
+  ncclIpcFd rmtFd = NCCL_INVALID_IPC_FD;
 
   NCCLCHECK(ncclIpcSocketRecvMsg(&proxyState->ipcSock, &hdr, sizeof(hdr), &rmtFd));
   if (hdr.type == ncclProxyMsgGetFd) {
@@ -1973,13 +1975,13 @@ static ncclResult_t proxyUDSRecvReq(struct ncclProxyState* proxyState, int reqFd
     // this dummy rmtFd.
     uint64_t handle = *(uint64_t*)hdr.data;
     INFO(NCCL_PROXY, "proxyUDSRecvReq::ncclProxyMsgGetFd rank %d opId %p handle=0x%lx", hdr.rank, hdr.opId, handle);
-    close(rmtFd);
+    ncclIpcFdClose(rmtFd);
     return proxyGetFd(proxyState, hdr.rank, hdr.opId, handle);
   } else if (hdr.type == ncclProxyMsgQueryFd) {
     // remote main thread registers buffer into this rank, it querys rmtFd of this rank through UDS
     // and the rmtFd is returned unchanged back to remote main thread which will use rmtFd to call into
     // proxy service thread for buffer registration.
-    INFO(NCCL_PROXY, "proxyUDSRecvReq::proxyQueryFd rank %d opId %p rmtFd %d", hdr.rank, hdr.opId, rmtFd);
+    INFO(NCCL_PROXY, "proxyUDSRecvReq::proxyQueryFd rank %d opId %p rmtFd %lld", hdr.rank, hdr.opId, (long long)rmtFd);
     return proxyQueryFd(proxyState, hdr.rank, hdr.opId, rmtFd);
   }
 
@@ -2000,7 +2002,7 @@ void* ncclProxyServiceUDS(void* _args) {
     WARN("[Proxy Service UDS] Failed to set CUDA device %d", proxyState->cudaDev);
   }
 
-  int ipcFd;
+  ncclIpcFd ipcFd;
   {
     if (ncclIpcSocketGetFd(&proxyState->ipcSock, &ipcFd) != ncclSuccess) {
       WARN("[Proxy Service UDS] Get listenSock fd fails");
@@ -2022,7 +2024,7 @@ void* ncclProxyServiceUDS(void* _args) {
       return NULL;
     }
 #elif defined(NCCL_OS_WINDOWS)
-    HANDLE hPipe = (HANDLE)(intptr_t)ipcFd;
+    HANDLE hPipe = reinterpret_cast<HANDLE>(ipcFd);
     DWORD bytesAvail = 0;
     BOOL peekResult = PeekNamedPipe(hPipe, NULL, 0, NULL, &bytesAvail, NULL);
     if (!peekResult) {

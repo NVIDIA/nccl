@@ -938,6 +938,7 @@ static ncclResult_t initNvlDomainInfo(struct ncclComm* comm) {
 NCCL_PARAM(GroupSize, "P2P_SCHEDULE_GROUP_SIZE", NCCL_MAX_DEV_WORK_P2P_PER_BATCH);
 
 static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
+  ncclResult_t ret = ncclSuccess;
   struct ncclNodeRanks* nodeRanks = comm->nodeRanks;
   // For MNNVL systems, we need to split the nodes into different groups to guarantee the proper PXN
   // aggregation factor.
@@ -953,15 +954,18 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   int nGroups = comm->nRanks / groupSize;
   int nGroupsPow2 = pow2Up(nGroups);
 
-  int *groupToNode, *groupToLocal;
-  NCCLCHECK(ncclCalloc(&groupToNode, nGroups));  // node hosting the group
-  NCCLCHECK(ncclCalloc(&groupToLocal, nGroups)); // local offset of the group
+  int *groupToNode = nullptr, *groupToLocal = nullptr;
   int groupCount = 0;
+  uint32_t groupRound = 0, groupDelta = 0;
+  int round = 0;
+  NCCLCHECK(ncclCalloc(&groupToNode, nGroups));                     // node hosting the group
+  NCCLCHECKGOTO(ncclCalloc(&groupToLocal, nGroups), ret, cleanup); // local offset of the group
   for (int n = 0; n < comm->nNodes; ++n) {
     if (0 != comm->nodeRanks[n].localRanks % groupSize) {
       WARN("nLocals = %d should be a diviser of the number of ranks in node %d = %d", groupSize, n,
            comm->nodeRanks[n].localRanks);
-      return ncclInternalError;
+      ret = ncclInternalError;
+      goto cleanup;
     }
     int nGroupsInNode = comm->nodeRanks[n].localRanks / groupSize;
     for (int g = 0; g < nGroupsInNode; ++g) {
@@ -973,12 +977,11 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   }
   if (groupCount != nGroups) {
     WARN("Group creation failed: %d vs %d", groupCount, nGroups);
-    return ncclInternalError;
+    ret = ncclInternalError;
+    goto cleanup;
   }
   INFO(NCCL_GRAPH, "%s: group size used is %d", __func__, groupSize);
 
-  uint32_t groupRound = 0, groupDelta = 0;
-  int round = 0;
   // When enumerating peer deltas we use the quadratic formula (x*x+x)/2 mod N.
   // Since that formula only produces valid permutations when N is a pow of 2,
   // we let N = pow2Up(n) and filter out results greater-eq to n.
@@ -1002,14 +1005,16 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
     groupDelta = (groupDelta + groupRound) & (nGroupsPow2 - 1); // Quadratic update
   } while (groupRound != nGroupsPow2);
 
-  free(groupToNode);
-  free(groupToLocal);
-
   if (round != comm->nRanks) {
     WARN("P2p schedule creation has bugs.");
-    return ncclInternalError;
+    ret = ncclInternalError;
+    goto cleanup;
   }
-  return ncclSuccess;
+
+cleanup:
+  free(groupToNode);
+  free(groupToLocal);
+  return ret;
 }
 
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent,

@@ -166,16 +166,6 @@ __hidden void printKernelChEventTrailer(FILE* fh, struct kernelCh* event) {
           "KernelCh", kernelId, getpid(), 1, event->stopTs);
 }
 
-static __thread int kernelStepId;
-__hidden void printKernelStepEvent(FILE* fh, struct kernelStep* event) {
-  if (event->type != ncclProfileKernelStep) return;
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GPU\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"Channel\": %d, \"IsSend\": %d, \"Peer\": %d, \"Step\": %u, \"Size\": %u, \"StartGpuClk\": %lu, \"StopGpuClk\": %lu}},\n",
-          "KernelStep", kernelStepId, getpid(), 1, event->startTs, event->channelId, event->isSend, event->peer,
-          event->step, event->size, event->startGpuClk, event->stopGpuClk);
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GPU\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
-          "KernelStep", kernelStepId++, getpid(), 1, event->stopTs);
-}
-
 static __thread int proxyCtrlId;
 __hidden void printProxyCtrlEvent(FILE* fh, struct proxyCtrl* event) {
   const char* str;
@@ -324,20 +314,6 @@ void debugEvent(void* eHandle, const char* tag) {
     fprintf(fh, "KernelCh event %p tag = %s {\n", event, tag);
     fprintf(fh, "  parent            = %p\n", event->parent);
     fprintf(fh, "  channel           = %d\n", event->channelId);
-  } else if (type == ncclProfileKernelStep) {
-    struct kernelStep* event = (struct kernelStep *)eHandle;
-    fprintf(fh, "KernelStep event %p tag = %s {\n", event, tag);
-    fprintf(fh, "  parent            = %p\n", event->parent);
-    fprintf(fh, "  channel           = %d\n", event->channelId);
-    fprintf(fh, "  isSend            = %d\n", event->isSend);
-    fprintf(fh, "  peer              = %d\n", event->peer);
-    fprintf(fh, "  step              = %u\n", event->step);
-    fprintf(fh, "  size              = %u\n", event->size);
-    fprintf(fh, "  startGpuClk       = %lu\n", event->startGpuClk);
-    fprintf(fh, "  stopGpuClk        = %lu\n", event->stopGpuClk);
-    fprintf(fh, "  startTs           = %f\n", event->startTs);
-    fprintf(fh, "  stopTs            = %f\n", event->stopTs);
-    fprintf(fh, "}\n");
   } else if (type == ncclProfileNetPlugin) {
     struct netPlugin* event = (struct netPlugin *)eHandle;
     fprintf(fh, "NetPlugin event %p tag = %s {\n", event, tag);
@@ -474,9 +450,6 @@ void printEvent(FILE* fh, void* handle) {
       }
       printKernelChEventTrailer(fh, &c->kernel[i]);
     }
-    for (struct kernelStep* s = c->base.stepHead; s; s = s->next) {
-      printKernelStepEvent(fh, s);
-    }
     printCollEventTrailer(fh, c);
   } else if (type == ncclProfileP2p) {
     struct p2p* p = (struct p2p *)handle;
@@ -485,9 +458,6 @@ void printEvent(FILE* fh, void* handle) {
       printKernelChEventHeader(fh, &p->kernel[i]);
       printEvent(fh, &p->op[i]);
       printKernelChEventTrailer(fh, &p->kernel[i]);
-    }
-    for (struct kernelStep* s = p->base.stepHead; s; s = s->next) {
-      printKernelStepEvent(fh, s);
     }
     printP2pEventTrailer(fh, p);
   } else if (type == ncclProfileProxyOp) {
@@ -507,8 +477,6 @@ void printEvent(FILE* fh, void* handle) {
   } else if (type == ncclProfileProxyCtrl) {
     struct proxyCtrl* p = (struct proxyCtrl *)handle;
     printProxyCtrlEvent(fh, p);
-  } else if (type == ncclProfileKernelStep) {
-    printKernelStepEvent(fh, (struct kernelStep *)handle);
   } else if (type == ncclProfileCeColl) {
     struct ceColl* ce = (struct ceColl*)handle;
     printCeCollEvent(fh, ce);

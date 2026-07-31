@@ -1097,10 +1097,16 @@ float sm100SpeedArrayInter[] = {96.0, 90.2, 86.0, 80.0, 48.0, 45.1, 42.0, 40.0, 
 #define NSPEEDSINTRA_SM100 (sizeof(sm100SpeedArrayIntra) / sizeof(float))
 #define NSPEEDSINTER_SM100 (sizeof(sm100SpeedArrayInter) / sizeof(float))
 
-// TODO define what is the MAX speed or ring Simple with 2 CTAs, that will be the max speed of the search. unless we update that part in the connect code
-float rubinSpeedArrayIntra[] = {90.0, 80.0, 70.0, 60.0, 50.0, 40.0, 30.0, 24.0, 20.0, 19.0, 18.0};
-float rubinSpeedArrayInter[] = {192,  96.0, 48.0, 45.1, 42.0, 40.0, 30.0, 24.0, 22.0, 20.0,
-                                17.5, 15.0, 12.0, 6.0,  3.0,  2.4,  1.2,  0.24, 0.12};
+// clang-format off
+float rubinSpeedArrayIntra[] = {/*8x*/171.0, /*12x*/114,    /*16x*/85.5, /*24x*/57,  /*32x=*/42.75,
+                                /*48x*/ 28.5, /*64x=*/ 21.375, /*72*/ 19.0,  /*96*/ 14.25};
+float rubinSpeedArrayInter[] = {
+  /*8x*/ 171.0,    /*8x*/ 96.0,   /*15x*/ 91.1,
+  /*16x*/ 85.5,    /*16x*/ 48.0,  /*30x*/ 45.5,
+  /*31x*/ 44.1,    /*32x*/ 42.75,
+  /*rest*/ 40.0, 30.0, 24.0, 22.0, 20.0, 17.5, 15.0, 12.0, 6.0, 3.0, 2.4, 1.2, 0.24, 0.12
+};
+// clang-format on
 #define NSPEEDSINTRA_RUBIN (sizeof(rubinSpeedArrayIntra) / sizeof(float))
 #define NSPEEDSINTER_RUBIN (sizeof(rubinSpeedArrayInter) / sizeof(float))
 
@@ -1296,7 +1302,8 @@ search:
     tmpGraph->crossNic = crossNic == 1 ? 1 : 0;
 
     // Decrease bw until we find a solution
-    if ((speedIndex < nspeeds - 1) && (graph->nChannels == 0 || (speedArray[speedIndex + 1] / graph->bwInter > .49))) {
+    if ((speedIndex < nspeeds - 1) &&
+        (graph->nChannels == 0 || (speedArray[speedIndex + 1] / graph->bwInter > .49) || (tmpGraph->nChannels & 1))) {
       tmpGraph->bwInter = tmpGraph->bwIntra = speedArray[++speedIndex];
       goto search;
     }

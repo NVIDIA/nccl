@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "core.h"
+#include "cudawrap.h"
 #include "graph.h"
 #include "topo.h"
 #include "comm.h"
@@ -2129,7 +2130,7 @@ ncclResult_t ncclTopoGetLocalNetType(struct ncclTopoSystem* system, int type, in
   // Starting net is chosen to avoid collision and follow a similar pattern for all GPUs.
   // localGpuCount GPUs share localNetCount NET devs; each GPU using netsPerGpu NET devs.
   int net = system->nodes[GPU].nodes[gpu].gpu.dev;
-  if ((gpuArch >= 100 && isCx8) || ncclParamTopoScatterStartNet()) {
+  if (RUBIN_AND_LATER(gpuArch) || (gpuArch >= 100 && isCx8) || ncclParamTopoScatterStartNet()) {
     net = net % localGpuCount;
   }
   if (isPow2(localNetCount)) net = mirrorBits(net, localNetCount);

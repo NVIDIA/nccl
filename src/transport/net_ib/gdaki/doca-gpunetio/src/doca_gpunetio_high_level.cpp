@@ -378,7 +378,14 @@ static doca_error_t create_qp(
     enum doca_gpu_dev_verbs_nic_handler req_nic_handler, bool set_core_direct,
     enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext, struct doca_verbs_qp **verbs_qp,
     enum doca_gpu_dev_verbs_nic_handler *out_nic_handler) {
+    static std::atomic<uint32_t> dataQpIndex{0};
+    static std::atomic<uint32_t> companionQpIndex{0};
     doca_error_t status = DOCA_SUCCESS, tmp_status = DOCA_SUCCESS;
+    uint32_t qpAffinityIndex = 0;
+    uint32_t rawQpAffinityIndex = 0;
+    uint32_t lagGroupSize = 1;
+    const char* lagGroupEnv = nullptr;
+    int parsedLagGroupSize = 0;
     struct doca_verbs_qp_init_attr *verbs_qp_init_attr = NULL;
     struct doca_verbs_qp *new_qp = NULL;
     uint32_t external_umem_size = 0;
@@ -396,6 +403,20 @@ static doca_error_t create_qp(
     status = doca_verbs_qp_init_attr_set_external_uar(verbs_qp_init_attr, external_uar);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to set receive_max_sges");
+        goto destroy_resources;
+    }
+
+    // Main and companion QPs need independent indices because each sequence is context-major.
+    rawQpAffinityIndex = set_core_direct ? companionQpIndex.fetch_add(1) : dataQpIndex.fetch_add(1);
+    lagGroupEnv = getenv("DOCA_LAG_TX_PORT_AFFINITY_GROUP_SIZE");
+    parsedLagGroupSize = lagGroupEnv != nullptr ? atoi(lagGroupEnv) : 0;
+    if (parsedLagGroupSize > 0) lagGroupSize = (uint32_t)parsedLagGroupSize;
+    // Collapse the remote-rank QPs in one context to a shared index before selecting a LAG port.
+    qpAffinityIndex = rawQpAffinityIndex / lagGroupSize;
+
+    status = doca_verbs_qp_init_attr_set_user_index(verbs_qp_init_attr, qpAffinityIndex);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to set QP affinity index");
         goto destroy_resources;
     }
 

@@ -91,6 +91,17 @@ constexpr uint32_t sc_verbs_mac_addr_len = 6;
 constexpr uint32_t sc_verbs_mac_addr_2msbytes_len = 2;
 constexpr uint32_t sc_verbs_log_msg_max = 30;
 
+static int docaGetLagTxPortAffinityMode() {
+    const char* affinityEnv = getenv("DOCA_LAG_TX_PORT_AFFINITY");
+    const int affinityMode = affinityEnv != nullptr ? atoi(affinityEnv) : 0;
+    return affinityMode >= 1 && affinityMode <= 3 ? affinityMode : 0;
+}
+
+static uint32_t docaGetLagTxPort(int affinityMode, uint32_t userIndex) {
+    // Modes 1 and 2 pin a QP; mode 3 alternates contexts between both LAG ports.
+    return affinityMode == 3 ? (userIndex % 2) + 1 : (uint32_t)affinityMode;
+}
+
 using create_qp_in = uint32_t[MLX5_ST_SZ_DW(create_qp_in)];
 using create_qp_out = uint32_t[MLX5_ST_SZ_DW(create_qp_out)];
 
@@ -691,6 +702,14 @@ doca_error_t doca_verbs_qp::create_qp_obj(
     DEVX_SET(qpc, qpc, pd, dvpd.pdn);
 
     DEVX_SET(qpc, qpc, user_index, verbs_qp_init_attr.user_index);
+    const int lagAffinityMode = docaGetLagTxPortAffinityMode();
+    if (lagAffinityMode != 0) {
+        const uint32_t lagPort = docaGetLagTxPort(lagAffinityMode, verbs_qp_init_attr.user_index);
+        // Set affinity during creation for devices that honor the CREATE_QP field.
+        DEVX_SET(qpc, qpc, lag_tx_port_affinity, lagPort);
+        DOCA_LOG(LOG_INFO, "Set LAG tx port affinity = %u (mode=%d user_index=%u)", lagPort,
+                 lagAffinityMode, verbs_qp_init_attr.user_index);
+    }
     DEVX_SET(qpc, qpc, uar_page, uar_id);
 
     if (m_sq_size_wqebb > 0) {
@@ -1033,6 +1052,16 @@ doca_error_t doca_verbs_qp::rtr2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
 
     m_current_state = DOCA_VERBS_QP_STATE_RTS;
 
+    const int lagAffinityMode = docaGetLagTxPortAffinityMode();
+    if (lagAffinityMode != 0) {
+        // Some firmware applies LAG affinity only after the QP has reached RTS.
+        doca_error_t affinityStatus = rts2rts(verbs_qp_attr, 0);
+        if (affinityStatus != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to apply QP LAG tx port affinity after RTS");
+            return affinityStatus;
+        }
+    }
+
     DOCA_LOG(LOG_INFO, "DOCA IB Verbs QP %p: has been successfully moved to RTS state", this);
 
     return DOCA_SUCCESS;
@@ -1093,6 +1122,15 @@ doca_error_t doca_verbs_qp::rts2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
     int mlx5_opt_param_mask{0};
     convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(attr_mask, mlx5_opt_param_mask,
                                                                     DOCA_VERBS_QP_RTS2RTS);
+
+    const int lagAffinityMode = docaGetLagTxPortAffinityMode();
+    if (lagAffinityMode != 0) {
+        const uint32_t lagPort = docaGetLagTxPort(lagAffinityMode, m_init_attr.user_index);
+        DEVX_SET(qpc, qpc, lag_tx_port_affinity, lagPort);
+        mlx5_opt_param_mask |= MLX5_QPC_OPT_MASK_RTS2RTS_LAG_TX_PORT_AFFINITY;
+        DOCA_LOG(LOG_INFO, "RTS2RTS LAG tx port affinity = %u (mode=%d user_index=%u)", lagPort,
+                 lagAffinityMode, m_init_attr.user_index);
+    }
 
     DEVX_SET(rts2rts_qp_in, in, opt_param_mask, mlx5_opt_param_mask);
 

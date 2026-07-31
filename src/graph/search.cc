@@ -448,6 +448,14 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
   // 1. Try to get the same nChannels between Rings and Trees
   if (graph->nChannels < graph->minChannels) return ncclSuccess;
 
+  const bool evenReference = refGraph->nChannels > 0 && !(refGraph->nChannels & 1);
+  const bool evenReferenceIsBetter = refGraph->nChannels * refGraph->bwIntra >= graph->nChannels * graph->bwIntra;
+
+  // Favor an even number of channels when aggregate bandwidth is equal or better.
+  if (graph->pattern != NCCL_TOPO_PATTERN_NVLS && evenReference && (graph->nChannels & 1) &&
+      graph->nChannels < system->nodes[NET].count && evenReferenceIsBetter)
+    return ncclSuccess;
+
   if (graph->pattern == NCCL_TOPO_PATTERN_NVLS) {
     // NVLS channels correspond to GPUs pulling from NVLS. So the more the better.
     if (graph->nChannels > refGraph->nChannels && graph->nChannels <= system->nodes[GPU].count) *copy = 1;
@@ -1098,13 +1106,13 @@ float sm100SpeedArrayInter[] = {96.0, 90.2, 86.0, 80.0, 48.0, 45.1, 42.0, 40.0, 
 #define NSPEEDSINTER_SM100 (sizeof(sm100SpeedArrayInter) / sizeof(float))
 
 // clang-format off
-float rubinSpeedArrayIntra[] = {/*8x*/171.0, /*12x*/114,    /*16x*/85.5, /*24x*/57,  /*32x=*/42.75,
-                                /*48x*/ 28.5, /*64x=*/ 21.375, /*72*/ 19.0,  /*96*/ 14.25};
+float rubinSpeedArrayIntra[] = {/*4x*/280.8, /*6x*/187.2, /*8x*/140.4, /*12x*/93.6, /*16x*/70.2,
+                                /*24x*/46.8,  /*32x*/35.1, /*48x*/23.4,  /*64x=*/17.55};
 float rubinSpeedArrayInter[] = {
-  /*8x*/ 171.0,    /*8x*/ 96.0,   /*15x*/ 91.1,
-  /*16x*/ 85.5,    /*16x*/ 48.0,  /*30x*/ 45.5,
-  /*31x*/ 44.1,    /*32x*/ 42.75,
-  /*rest*/ 40.0, 30.0, 24.0, 22.0, 20.0, 17.5, 15.0, 12.0, 6.0, 3.0, 2.4, 1.2, 0.24, 0.12
+  /*4x*/ 280.8,    /*6x*/ 187.2,  /*8x*/ 140.4,  96.0,          /*12x*/ 93.6,
+  /*15x*/ 74.6,    /*16x*/ 70.2,  48.0,         /*24x*/ 46.8,
+  /*30x*/ 37.4,    /*31x*/ 36.1,  /*32x*/ 35.1,
+  /*rest*/ 32.8, 24.6, /*48x*/23.4, 19.7, 18.1, /*64x*/17.55, 16.4, 14.4, 12.3, 9.9, 4.9, 2.5, 2.0, 1.0, 0.2, 0.1
 };
 // clang-format on
 #define NSPEEDSINTRA_RUBIN (sizeof(rubinSpeedArrayIntra) / sizeof(float))
@@ -1302,8 +1310,7 @@ search:
     tmpGraph->crossNic = crossNic == 1 ? 1 : 0;
 
     // Decrease bw until we find a solution
-    if ((speedIndex < nspeeds - 1) &&
-        (graph->nChannels == 0 || (speedArray[speedIndex + 1] / graph->bwInter > .49) || (tmpGraph->nChannels & 1))) {
+    if ((speedIndex < nspeeds - 1) && (graph->nChannels == 0 || (speedArray[speedIndex + 1] / graph->bwInter > .49))) {
       tmpGraph->bwInter = tmpGraph->bwIntra = speedArray[++speedIndex];
       goto search;
     }

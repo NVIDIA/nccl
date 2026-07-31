@@ -25,7 +25,11 @@ struct ncclDevrTeam {
   void* mcBasePtr;
   ncclCftLeId ucLeId;
   ncclCftLeId mcLeId;
+#if defined(NCCL_OS_WINDOWS)
+  int worldRankList[1]; // Variable length. [1] for MSVC.
+#else
   int worldRankList[];
+#endif
 };
 
 // Non-static functions in dev_runtime.cc also called from cft_dev_runtime.cc:

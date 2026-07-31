@@ -93,6 +93,7 @@ struct ncclGdrDmaBufMapping {
   size_t cpuMappedLen;
 };
 
+#if defined(NCCL_OS_LINUX)
 static gdr_mh_t ncclGdrDmaBufHandleFromMapping(ncclGdrDmaBufMapping* mapping) {
   gdr_mh_t mh;
   mh.h = (unsigned long)mapping;
@@ -102,6 +103,7 @@ static gdr_mh_t ncclGdrDmaBufHandleFromMapping(ncclGdrDmaBufMapping* mapping) {
 static ncclGdrDmaBufMapping* ncclGdrDmaBufMappingFromHandle(gdr_mh_t mh) {
   return (ncclGdrDmaBufMapping*)mh.h;
 }
+#endif
 
 static const char* ncclGdrMappingTypeName(gdr_mapping_type_t type) {
   switch (type) {
@@ -297,6 +299,7 @@ static int ncclGdrDmaBufUnpin(gdr_t, gdr_mh_t handle) {
 }
 
 static int ncclGdrDmaBufGetInfo(gdr_t, gdr_mh_t handle, gdr_info_t* info) {
+#if defined(NCCL_OS_LINUX)
   ncclGdrDmaBufMapping* mapping = ncclGdrDmaBufMappingFromHandle(handle);
   if (mapping == nullptr || info == nullptr) return EINVAL;
   info->va = mapping->va;
@@ -308,6 +311,9 @@ static int ncclGdrDmaBufGetInfo(gdr_t, gdr_mh_t handle, gdr_info_t* info) {
   info->wc_mapping = mapping->wcMapping;
   info->mapping_type = mapping->mapped ? mapping->mappingType : GDR_MAPPING_TYPE_NONE;
   return 0;
+#else
+  return ENOTSUP;
+#endif
 }
 
 static int ncclGdrDmaBufMap(gdr_t g, gdr_mh_t handle, void** va, size_t size) {
@@ -364,21 +370,29 @@ static int ncclGdrDmaBufUnmap(gdr_t g, gdr_mh_t handle, void* va, size_t size) {
 }
 
 static int ncclGdrDmaBufCopyToMapping(gdr_mh_t handle, void* map_d_ptr, const void* h_ptr, size_t size) {
+#if defined(NCCL_OS_LINUX)
   ncclGdrDmaBufMapping* mapping = ncclGdrDmaBufMappingFromHandle(handle);
   if (mapping == nullptr || !mapping->mapped) return EINVAL;
   if (size == 0) return 0;
   memcpy(map_d_ptr, h_ptr, size);
   if (mapping->mappingType == GDR_MAPPING_TYPE_WC) wc_store_fence();
   return 0;
+#else
+  return ENOTSUP;
+#endif
 }
 
 static int ncclGdrDmaBufCopyFromMapping(gdr_mh_t handle, void* h_ptr, const void* map_d_ptr, size_t size) {
+#if defined(NCCL_OS_LINUX)
   ncclGdrDmaBufMapping* mapping = ncclGdrDmaBufMappingFromHandle(handle);
   if (mapping == nullptr || !mapping->mapped) return EINVAL;
   if (size == 0) return 0;
   memcpy(h_ptr, map_d_ptr, size);
   if (mapping->mappingType == GDR_MAPPING_TYPE_WC) wc_store_fence();
   return 0;
+#else
+  return ENOTSUP;
+#endif
 }
 
 static int ncclGdrDmaBufGetAttribute(gdr_t, gdr_attr_t attr, int* v) {

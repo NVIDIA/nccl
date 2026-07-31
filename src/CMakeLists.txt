@@ -100,6 +100,9 @@ endif()
 
 ###################### Create a shared NCCL library ############################
 add_library(nccl SHARED)
+if(NCCL_OS_WINDOWS)
+    target_compile_definitions(nccl PRIVATE NCCL_BUILD_SHARED_LIB)
+endif()
 
 target_sources(nccl PRIVATE ${LIBSRCFILES})
 if(NCCL_OS_WINDOWS)
@@ -232,20 +235,17 @@ target_link_libraries(nccl
     ${EXTRA_LIBS}
 )
 
-# Add version script for symbol visibility control
-target_link_options(nccl PRIVATE
-    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
-)
+# Add version script for symbol visibility control on linkers that support it.
+if(NOT NCCL_OS_WINDOWS)
+    target_link_options(nccl PRIVATE
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
+    )
+endif()
 
 # Set output directories for nccl shared library
 set_target_properties(nccl PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
-
-# On Windows, export all symbols to generate import library (nccl.lib) for DLL linking
-if(NCCL_OS_WINDOWS)
-    set_target_properties(nccl PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-endif()
 
 ###################### Create a ras binary executable ############################
 if(NOT NCCL_OS_WINDOWS)

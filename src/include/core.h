@@ -21,8 +21,17 @@
 #else
 #define NCCL_API(ret, func, args...) extern "C" __attribute__((visibility("default"))) ret func(args)
 #endif // end PROFAPI
+#elif defined(NCCL_OS_WINDOWS)
+#define NCCL_STRINGIFY_(x) #x
+#define NCCL_STRINGIFY(x) NCCL_STRINGIFY_(x)
+#if defined(NCCL_BUILD_SHARED_LIB)
+#define NCCL_API(ret, func, ...) \
+  __pragma(comment(linker, "/export:" NCCL_STRINGIFY(func))) extern "C" ret func(__VA_ARGS__)
 #else
-/* Windows and other non-Linux: use standard variadic macro (no visibility attribute) */
+#define NCCL_API(ret, func, ...) extern "C" ret func(__VA_ARGS__)
+#endif
+#else
+/* Other non-Linux platforms: use standard variadic macro (no visibility attribute) */
 #define NCCL_API(ret, func, ...) extern "C" ret func(__VA_ARGS__)
 #endif // end NCCL_OS_LINUX
 

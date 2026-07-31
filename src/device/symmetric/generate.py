@@ -351,7 +351,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cc"), "w") as f:
 # Output file list for CMake (excludes rules.mk since it's not generated for CMake)
 files_to_print += "sym_kernels_host.cc;"
 if os.environ.get("NCCL_USE_CMAKE", "0") == "1":
-  print(files_to_print)
+  print(files_to_print.rstrip(';'))
 
 # Generate <gensrc>/rules.mk (only needed for Makefile builds, not CMake)
 if os.environ.get("NCCL_USE_CMAKE", "0") != "1":

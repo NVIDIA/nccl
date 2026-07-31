@@ -87,6 +87,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclLsaBarrierSession_internal<Coop>::waitIntern
   using nccl::utility::testAbort;
   uint32_t steps;
   uint64_t startCycle;
+  (void)startCycle;
   ncclResult_t ret = ncclSuccess;
   if NCCL_IF_CONSTEXPR (EnableTimeout) {
     startCycle = clock64();

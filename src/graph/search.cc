@@ -553,8 +553,10 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
   int netCount = 0;
 
   // First add the preferred NETs.
-  if (system->nHosts > 1 && ncclParamScatterEnable()) {
-    // For MNNVL systems, we sort the devices by GPU first, then by channel
+  if (system->nHosts > 1 && ncclParamScatterEnable() && ncclParamCrossNic() != 0) {
+    // For MNNVL systems, we sort the devices by GPU first, then by channel.
+    // This logic cannot guarantee no cross-rail connectivity with different GPU count per NVLD.
+    // When cross-rail connectivity must be avoided (CROSS_NIC=0), we use the ChannelFirst one.
     NCCLCHECK(ncclTopoPrefNetsGpuFirst(system, gpu, nets, &netCount));
   } else {
     // For other systems, we sort the devices by channel first, then by GPU

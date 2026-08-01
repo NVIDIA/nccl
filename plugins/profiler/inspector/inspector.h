@@ -326,6 +326,8 @@ inline int ncclTypeSize(ncclDataType_t type) {
 // Global flag to control P2P tracking
 extern bool enableNcclInspectorP2p;
 extern bool requireKernelTiming;
+// Opt-in flag for extra per-device Prometheus stats metrics (totals + drops)
+extern bool enableNcclInspectorPromStats;
 // Minimum message size (bytes) to be `tracked by inspector
 extern size_t ncclInspectorDumpMinSizeBytes;
 

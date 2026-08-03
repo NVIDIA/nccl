@@ -597,7 +597,18 @@ exit:
   return ret;
 }
 
-NCCL_PARAM(MnnvlRailPerHost, "MNNVL_RAIL_PER_HOST", 0);
+NCCL_PARAM(MnnvlRailPerHost, "MNNVL_RAIL_PER_HOST", -1);
+
+static bool ncclTopoMnnvlRailPerHost(struct ncclTopoSystem* system) {
+  int railPerHost = ncclParamMnnvlRailPerHost();
+  if (railPerHost == -1) {
+    railPerHost = 1;
+    for (int g = 0; g < system->nodes[GPU].count && railPerHost == 1; g++) {
+      railPerHost &= RUBIN_AND_LATER(system->nodes[GPU].nodes[g].gpu.cudaCompCap) ? 1 : 0;
+    }
+  }
+  return railPerHost;
+}
 
 static bool ncclTopoSearchCheckNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph,
                                    struct ncclTopoNode* startNet, int n, int step) {
@@ -613,7 +624,8 @@ static bool ncclTopoSearchCheckNet(struct ncclTopoSystem* system, struct ncclTop
   } else if (graph->crossNic == 0) {
     if (net->net.railId != NCCL_TOPO_UNDEF && startNet->net.railId != NCCL_TOPO_UNDEF) {
       if (net->net.railId != startNet->net.railId) return false;
-    } else if (ncclParamMnnvlRailPerHost() && NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id)) {
+    } else if (ncclTopoMnnvlRailPerHost(system) &&
+               NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id)) {
       // Different hosts in an MNNVL system: rail are per host and identified with the PCI id.
       if (net->net.pciId != startNet->net.pciId || net->net.port != startNet->net.port) return false;
     } else {

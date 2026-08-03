@@ -51,9 +51,4 @@ struct ncclGinSyncHandle {
   ncclGinSignal_t railSignals;
 };
 
-NCCL_EXTERN_C __host__ ncclResult_t ncclGinOutboxCreateRequirement(
-  int nBlocks, int size_log2, ncclGinOutboxHandle* outHandle, ncclDevResourceRequirements* outReq);
-NCCL_EXTERN_C __host__ ncclResult_t ncclGinInboxA2ACreateRequirement(
-  ncclTeam peers, int nBlocks, int size_log2, ncclGinInboxA2AHandle* outHandle, ncclDevResourceRequirements* outReq);
-
 #endif /* _NCCL_DEVICE_GIN_SESSION_H_ */

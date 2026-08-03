@@ -6,7 +6,7 @@
  *************************************************************************/
 
 #include "core.h"
-#include "nccl_device/core.h"
+#include "nccl_device/host.h"
 #include "nccl_device/impl/cft_barrier__types.h"
 #include <cstring>
 

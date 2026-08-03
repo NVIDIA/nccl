@@ -9,9 +9,6 @@
 #define _NCCL_DEVICE_CFT_BARRIER_H_
 #include "cft.h"
 
-NCCL_EXTERN_C __host__ ncclResult_t ncclCftBarrierCreateRequirement(
-  ncclTeam_t team, int nBarriers, ncclCftBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq);
-
 #ifdef __CUDACC__
 template <typename Coop>
 struct ncclCftBarrierSession_internal;

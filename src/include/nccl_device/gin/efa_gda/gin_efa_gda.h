@@ -338,7 +338,6 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
     nccl_ofi_gin_gdaki_dev_handle* dev = getDevHandle(ctx);
 
     bool hasPayload = hasWins && bytes > 0;
-    bool needsSignalEp = (signal.type != NCCL_GIN_SIGNAL_TYPE_NONE) || hasCounter;
 
     /* This backend supports INDEXED signals only. EFA's FI_REMOTE_WRITE
      * counter ticks exactly once per inbound write and has no atomic-add,
@@ -350,17 +349,36 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
            "EFA GDA: signalId out of range");
     assert((!hasCounter || (int)counterId < dev->nCounters) && "EFA GDA: counterId out of range");
 
-    if (hasPayload || needsSignalEp) {
-      /* Two WQE patterns:
+    /* A Put ALWAYS posts at least one WQE -- even with no payload and no
+     * signal/counter, where it degenerates to a 0-byte write to the peer's
+     * per-context scratch via the peer DATA endpoint (target slot 0), which
+     * binds no FI_REMOTE_WRITE: remotely unobservable.
+     *
+     * Empty puts cannot be dropped as no-ops, because under
+     * ncclGinOptFlagsAggregateRequests a put carries a LOCAL side effect: its
+     * non-aggregated doorbell rendezvous in postRdmaWrite is what publishes
+     * earlier deferred WQEs on the QP. Dropping an "empty" put would make it
+     * impossible to terminate a deferred stream whose last real put was
+     * aggregated -- the tail WQEs (and their signals) would never be handed to
+     * the NIC and the peer would wait forever. Callers that want to elide
+     * empty puts for performance should skip at the call site, where "empty"
+     * is actually known. */
+    {
+      /* Three WQE patterns:
        *
        * (a) Data put: posts an RDMA write of the user payload.
-       *     Routed through signal/counter endpoint when needsSignalEp
-       *     so the receiver's FI_REMOTE_WRITE fires on completion;
-       *     otherwise routed through the data endpoint.
+       *     Routed through the signal/counter endpoint when a signal or
+       *     counter is attached, so the receiver's FI_REMOTE_WRITE fires
+       *     on completion; otherwise routed through the data endpoint.
        *
        * (b) Signal-only: posts a 0-byte RDMA write into the peer's
        *     per-context scratch buffer. The write event bumps the
-       *     receiver's FI_REMOTE_WRITE counter on the signal endpoint. */
+       *     receiver's FI_REMOTE_WRITE counter on the signal endpoint.
+       *
+       * (c) Empty (no payload, no signal/counter): same 0-byte scratch
+       *     write as (b) but addressed to the peer DATA endpoint, which
+       *     binds no FI_REMOTE_WRITE -- remotely unobservable. Posted for
+       *     its local doorbell rendezvous (see the block comment above). */
       uint64_t absSrcAddr;
       uint64_t absDstAddr;
       uint32_t dstRkey;

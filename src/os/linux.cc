@@ -717,7 +717,8 @@ ncclResult_t ncclOsGetBcmLinks(const char* busId, int* nlinks, char** peers) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen) {
+ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen, int* cpuOffset) {
+  *cpuOffset = 0;
   char filePath[PATH_MAX];
   snprintf(filePath, sizeof(filePath), "/sys/devices/system/node/node%u/cpumap", numaId);
   int offset = 0;

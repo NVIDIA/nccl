@@ -18,7 +18,7 @@
 #ifdef NCCL_OS_LINUX
 #include <sched.h>
 #elif defined(NCCL_OS_WINDOWS)
-#define CPU_SETSIZE 64 // Windows uses DWORD_PTR for affinity
+#define CPU_SETSIZE NCCL_WINDOWS_MAX_CPUS
 #endif
 
 // Convert local_cpus, e.g. 0003ff,f0003fff to ncclAffinity.
@@ -26,7 +26,8 @@
 #define U32_LEN 32 // using uint32_t
 #define CPU_SET_N_U32 (CPU_SETSIZE / U32_LEN)
 
-static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set) {
+static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set, int cpuOffset = 0) {
+  if (cpuOffset < 0 || cpuOffset >= CPU_SETSIZE) return ncclInvalidArgument;
   uint32_t cpumasks[CPU_SET_N_U32] = {0};
 
   // transform the string into an array of 32 bit masks, starting with the highest mask
@@ -45,7 +46,8 @@ static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set) {
   for (int a = 0; (a + m) < CPU_SET_N_U32; a++) {
     // each mask is U32_LEN CPUs, list them all if the bit is on
     for (int i = 0; i < U32_LEN; ++i) {
-      if (cpumasks[a + m] & (1UL << i)) ncclOsCpuSet(*set, i + a * U32_LEN);
+      int cpu = cpuOffset + i + a * U32_LEN;
+      if (cpu < CPU_SETSIZE && (cpumasks[a + m] & (1UL << i))) ncclOsCpuSet(*set, cpu);
     }
   }
   return ncclSuccess;
@@ -97,7 +99,7 @@ static ncclResult_t ncclCpusetToStrList(ncclAffinity* mask, char* str, size_t le
   int count = 0;
   for (uint64_t id = 0; id < CPU_SETSIZE; ++id) {
     if (ncclOsCpuIsSet(*mask, id)) {
-      snprintf(str + strlen(str), len - strlen(str), "%s%lu", (count++ == 0) ? "" : ",", id);
+      snprintf(str + strlen(str), len - strlen(str), "%s%llu", (count++ == 0) ? "" : ",", (unsigned long long)id);
     }
   }
   return ncclSuccess;

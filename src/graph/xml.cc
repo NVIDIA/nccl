@@ -481,8 +481,10 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     // Set affinity using OS-specific implementation
     unsigned int nodeNumber = (unsigned int)strtoul(numaId, NULL, 0);
     char affinityStr[MAX_STR_LEN];
-    NCCLCHECK(ncclOsGetNumaNodeAffinity(nodeNumber, affinityStr, sizeof(affinityStr)));
+    int cpuOffset;
+    NCCLCHECK(ncclOsGetNumaNodeAffinity(nodeNumber, affinityStr, sizeof(affinityStr), &cpuOffset));
     NCCLCHECK(xmlSetAttr(cpuNode, "affinity", affinityStr));
+    if (cpuOffset > 0) NCCLCHECK(xmlSetAttrInt(cpuNode, "affinity_offset", cpuOffset));
   }
 
   NCCLCHECK(xmlGetAttrIndex(cpuNode, "arch", &index));
@@ -614,9 +616,11 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   }
 
 #elif NCCL_OS_WINDOWS
+  char* path = NULL;
   char* parentBusId = NULL;
   char deviceClass[MAX_STR_LEN];
   deviceClass[0] = '\0';
+  NOWARN(ncclOsGetPciPath(busId, &path), NCCL_GRAPH);
   bool isGpuDevice = false;
   if (ncclOsGetPciDeviceClassByBusId(busId, deviceClass, sizeof(deviceClass)) == ncclSuccess &&
       deviceClass[0] != '\0') {
@@ -799,7 +803,12 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     INFO(NCCL_INIT, "ncclTopoGetXmlFromSys: Windows - creating parent node");
     if (nvmlDeviceFound) {
       char numaIdStr[MAX_STR_LEN] = "0";
-      INFO(NCCL_INIT, "ncclTopoGetXmlFromSys: Using NUMA node %s (Windows default)", numaIdStr);
+      if (path != NULL) {
+        ncclResult_t numaRet;
+        NOWARN(numaRet = ncclOsTopoGetStrFromSys(path, "numa_node", numaIdStr, sizeof(numaIdStr)), NCCL_GRAPH);
+        if (numaRet != ncclSuccess) snprintf(numaIdStr, sizeof(numaIdStr), "0");
+      }
+      INFO(NCCL_GRAPH, "ncclTopoGetXmlFromSys: Using NUMA node %s", numaIdStr);
 
       // Get PCI device parent using Windows Setup API
       ncclResult_t result = ncclOsGetPciDeviceParent(device, &parentBusId);
@@ -888,6 +897,7 @@ exit:
 #if NCCL_OS_LINUX
   free(path);
 #elif NCCL_OS_WINDOWS
+  free(path);
   free(parentBusId);
 #endif
   return ret;

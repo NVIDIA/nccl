@@ -79,7 +79,7 @@ ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity);
 ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity);
 int ncclOsGetCpu();
 
-ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen);
+ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen, int* cpuOffset);
 
 ncclResult_t ncclOsGetPciDeviceClassByBusId(const char* busId, char* deviceClass, size_t maxLen);
 

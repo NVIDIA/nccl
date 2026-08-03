@@ -812,7 +812,9 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
   const char* str;
   NCCLCHECK(xmlGetAttr(xmlCpu, "affinity", &str));
   if (str != NULL) {
-    NCCLCHECK(ncclStrToCpuset(str, &cpu->cpu.affinity));
+    int cpuOffset;
+    NCCLCHECK(xmlGetAttrIntDefault(xmlCpu, "affinity_offset", &cpuOffset, 0));
+    NCCLCHECK(ncclStrToCpuset(str, &cpu->cpu.affinity, cpuOffset));
   }
 
   NCCLCHECK(xmlGetAttrStr(xmlCpu, "arch", &str));

@@ -35,7 +35,7 @@ CUDALIBS := -L$(CUDA_LIB) -lcudart
 SHIM_SO := $(LIBDIR)/libnccl-checkpoint-shim.so
 PUBLIC_HEADER := nccl_checkpoint.h
 NCCL_HEADER := $(GENDIR)/nccl.h
-SHIM_HEADERS := $(NCCL_HEADER) $(NCCL_SRC)/include/nccl_device/core.h
+SHIM_HEADERS := $(NCCL_HEADER) $(NCCL_SRC)/include/nccl_device/host.h
 SHIM_AUTO := $(GENDIR)/shim_auto.cc
 SHIM_EXPORTS := $(GENDIR)/shim_exports.map
 

@@ -15,7 +15,13 @@
 // (always_inline, external) that the device-API definitions in nccl_device.h
 // below are then compiled with, so the library emits real symbols.
 #include "nccl_device_wrapper.h"
+// The bitcode library is device-only: suppress "nccl_device/host.h" by
+// pre-defining its include guard, so the host entrypoints never enter this TU.
+#define _NCCL_DEVICE_HOST_H_
 #include "nccl_device.h"
+#ifdef NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER
+#error "nccl_device/host.h leaked in: its include guard was renamed, update the #define above"
+#endif
 #include "util.h"
 #include <new>
 

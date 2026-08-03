@@ -170,7 +170,6 @@ NCCL_EXTERN_C ncclResult_t ncclGetPeerDeviceLeInfo(ncclWindow_t window, size_t o
 ////////////////////////////////////////////////////////////////////////////////
 // Team API:
 
-#ifndef __clang_llvm_bitcode_lib__
 NCCL_EXTERN_C ncclTeam_t ncclTeamWorld(ncclComm_t comm);
 NCCL_EXTERN_C ncclTeam_t ncclTeamLsa(ncclComm_t comm);
 #if __cplusplus
@@ -182,7 +181,6 @@ NCCL_EXTERN_C ncclTeam_t ncclTeamCftMultimem(ncclComm_t comm);
 NCCL_EXTERN_C int ncclTeamRankToWorld(ncclComm_t comm, ncclTeam_t team, int rank);
 NCCL_EXTERN_C int ncclTeamRankToLsa(ncclComm_t comm, ncclTeam_t team, int rank);
 NCCL_EXTERN_C ncclTeam_t ncclTeamRail(ncclComm_t comm);
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Device resource requirement API:

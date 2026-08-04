@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "network/unpack/unpack.h"
+#include "coll_sizes.h"
 #include <cassert>
 
 enum primsMode {
@@ -182,8 +183,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
     constexpr int Dst = DstBuf != -1;
 
     nelem = nelem < 0 ? 0 : nelem;
-    int sliceSize = stepSize * StepPerSlice;
-    sliceSize = max(divUp(nelem, 16 * SlicePerChunk) * 16, sliceSize / 32);
+    int sliceSize = ncclSimpleSliceSize(nelem, SlicePerChunk, stepSize * StepPerSlice);
     int slice = 0;
     int offset = 0;
 
@@ -411,8 +411,7 @@ private:
     constexpr int DirectRecv = 1 && Direct && DirectRecv1;
     constexpr int DirectSend = 1 && Direct && DirectSend1;
     int offset = 0; // slice offset
-    int sliceSize = stepSize * StepPerSlice;
-    int dataSize = max(DIVUP(peerElem, 16 * SlicePerChunk) * 16, sliceSize / 32);  // per-peer slice size
+    int dataSize = ncclSimpleSliceSize(peerElem, SlicePerChunk, stepSize * StepPerSlice); // per-peer slice size
 
     NVCC_PRAGMA_UNROLL_AUTO
     for (int slice = 0; slice < SlicePerChunk; ++slice) {

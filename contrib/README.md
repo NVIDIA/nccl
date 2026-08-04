@@ -26,6 +26,7 @@ contribution process described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 | Directory | Description |
 |-----------|-------------|
 | [`custom_algos/`](custom_algos/) | Reference custom collective kernels built on the NCCL Device API |
+| [`pace/`](pace/) | PACE: parallelism-aware AG / RS / SG collectives built on the NCCL GIN device API |
 | [`nccl4rust/`](nccl4rust/) | Experimental Rust host and device bindings with Rust-style wrappers over NCCL's public APIs |
 | [`nccl_checkpoint/`](nccl_checkpoint/) | NCCL Checkpoint library for multi-node, communicator-aware checkpoint and restore |
 | [`nccl_ep/`](nccl_ep/) | NCCL Expert Parallelism (EP) API for MoE communication (dispatch/combine primitives) — **moved to [NVIDIA/nccl-extensions](https://github.com/NVIDIA/nccl-extensions)** |

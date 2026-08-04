@@ -1,0 +1,16 @@
+[build-system]
+requires = [
+    "setuptools>=45",
+    "wheel",
+    "torch"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pace"
+dynamic = ["version"]
+description = "PACE - Parallelism-Aware Collective Engine"
+requires-python = ">=3.12"
+
+[tool.setuptools.dynamic]
+version = {attr = "pace.__version__"}

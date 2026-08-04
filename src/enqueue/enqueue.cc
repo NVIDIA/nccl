@@ -23,6 +23,7 @@
 #include "sym_kernels.h"
 #include "config/collconfig.h"
 #include "config/algorithm_registry.h"
+#include "coll_sizes.h"
 
 #include <cstring> // std::memcpy
 #include <cinttypes> // PRIx64
@@ -115,22 +116,6 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
     return ncclSystemError;
   }
   return result;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Data movement metrics.
-
-static inline int ncclFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
-  switch (func) {
-  case ncclFuncAllReduce:
-    return 2;
-  case ncclFuncAllGather:
-    return nRanks;
-  case ncclFuncReduceScatter:
-    return nRanks;
-  default:
-    return 1;
-  }
 }
 
 /*****************************************************************************/
@@ -650,7 +635,6 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
   int nChannels[2 * 2] = {0, 0, 0, 0}; // [collnet][nvls]
   int const nMaxChannels[2 * 2] = {comm->nChannels, comm->nvlsChannels, // [collnet][nvls]
                                    comm->nChannels, std::min(comm->nChannels, comm->nvlsChannels)};
-  constexpr size_t MinTrafficPerChannel = 32 << 10; // 32K traffic as minimal
   do {
     size_t workBytes = 0;
     struct ncclTaskColl* task = ncclIntruQueueHead(&planner->collTaskQueue);
@@ -668,14 +652,13 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
       nPlanColls += 1;
       workBytes += workNode->size;
       int kind = 2 * task->isCollnet + task->isNvls;
-      trafficBytes[kind] += std::max(MinTrafficPerChannel, task->trafficBytes);
+      trafficBytes[kind] += std::max(ncclMinTrafficPerChannel, task->trafficBytes);
       // minCTAs/maxCTAs are resolved (env > per-call > comm) at task-append time, so they are
       // applied unconditionally; comm defaults (minCTAs=1, maxCTAs=MAXCHANNELS) are no-ops on the base.
       // We must check the minCTAs first to avoid the case where task->minCTAs > task->maxCTAs.
       // For example, comm's min/max CTAs set to [8, 32] and config only set maxCTAs=4.
       // We would have task->minCTAs=8 and task->maxCTAs=4.
-      task->nMaxChannels = std::max<int>(task->nMaxChannels, task->minCTAs);
-      task->nMaxChannels = std::min<int>(task->nMaxChannels, task->maxCTAs);
+      task->nMaxChannels = ncclClampChannels(task->nMaxChannels, task->minCTAs, task->maxCTAs);
       // nvlsCTAs has no comm default (UNDEF == no cap), so it is applied only when resolved to a value.
       if (task->isNvls && task->nvlsCTAs != NCCL_CONFIG_UNDEF_INT)
         task->nMaxChannels = std::min<int>(task->nMaxChannels, task->nvlsCTAs);
@@ -700,7 +683,7 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
 
     int kind = 2 * task->isCollnet + task->isNvls;
     if (kind != kindPrev) {
-      trafficPerChannel = divUp(trafficBytes[kind] / nChannels[kind], 16) * 16;
+      trafficPerChannel = ncclCollTrafficPerChannel(trafficBytes[kind], nChannels[kind]);
       kindPrev = kind;
       channelId = 0;
       currentTraffic = 0;
@@ -741,49 +724,16 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
       // not task->isCollnet
       int trafficPerByte = ncclFuncTrafficPerByte(task->func, comm->nRanks);
       if (task->protocol == NCCL_PROTO_LL) trafficPerByte *= 4;
-      size_t cellSize = divUp(divUp(MinTrafficPerChannel, (size_t)trafficPerByte), 16) * 16;
-      int elementsPerCell = cellSize / elementSize;
-      size_t cells = divUp(task->count * elementSize, cellSize);
+      struct ncclCollChannelLayout layout = ncclComputeCollChannelLayout(
+        task->count, elementSize, trafficPerByte, trafficPerChannel, currentTraffic, channelId, nMaxChannels[kind]);
+      channelId += layout.channelOffset;
+      int elementsPerCell = layout.elementsPerCell;
       size_t trafficPerElement = elementSize * trafficPerByte;
-      size_t trafficPerCell = cellSize * trafficPerByte;
-      size_t cellsPerChannel = std::min(cells, divUp(trafficPerChannel, trafficPerCell));
-      size_t cellsLo;
-      if (channelId + 1 == nMaxChannels[kind]) {
-        // On last channel everything goes to "lo"
-        cellsLo = cells;
-      } else {
-        cellsLo = std::min(cells, divUp((trafficPerChannel - currentTraffic), trafficPerCell));
-      }
-      int nMidChannels = (cells - cellsLo) / cellsPerChannel;
-      size_t cellsHi = (cells - cellsLo) % cellsPerChannel;
-      int nChannels = (cellsLo != 0 ? 1 : 0) + nMidChannels + (cellsHi != 0 ? 1 : 0);
-      if (nMaxChannels[kind] < channelId + nChannels) {
-        // Overflowed available channels
-        nMidChannels = nMaxChannels[kind] - channelId - 2;
-        cellsPerChannel = (cells - cellsLo) / (nMidChannels + 1);
-        cellsHi = cellsPerChannel + (cells - cellsLo) % (nMidChannels + 1);
-      }
-      if (cellsHi == 0 && nMidChannels != 0) {
-        cellsHi = cellsPerChannel;
-        nMidChannels -= 1;
-      }
-      if (cellsLo == 0) {
-        // Least channel skipped. Make the next channel the new least.
-        channelId += 1;
-        if (nMidChannels == 0) {
-          cellsLo = cellsHi;
-          cellsHi = 0;
-        } else {
-          cellsLo = cellsPerChannel;
-          nMidChannels -= 1;
-        }
-      }
-      size_t countMid = nMidChannels != 0 ? cellsPerChannel * elementsPerCell : 0;
-      size_t countLo = cellsLo * elementsPerCell;
-      size_t countHi = cellsHi * elementsPerCell;
-      (countHi != 0 ? countHi : countLo) -= cells * elementsPerCell - task->count;
-
-      nChannels = (countLo != 0 ? 1 : 0) + nMidChannels + (cellsHi != 0 ? 1 : 0);
+      int nMidChannels = layout.nMidChannels;
+      int nChannels = layout.nChannels;
+      size_t countLo = layout.countLo;
+      size_t countMid = layout.countMid;
+      size_t countHi = layout.countHi;
 
       // Update number of channels propagated to the profiler
       task->nChannels = (uint8_t)nChannels;
@@ -828,12 +778,12 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
       // Update the current channel and vacant traffic budget.
       if (countHi != 0) {
         channelId += nChannels - 1;
-        currentTraffic = cellsHi * elementsPerCell * trafficPerElement;
+        currentTraffic = layout.cellsHi * elementsPerCell * trafficPerElement;
       } else if (nMidChannels != 0) {
         channelId += nChannels;
         currentTraffic = 0;
       } else {
-        currentTraffic += cellsLo * elementsPerCell * trafficPerElement;
+        currentTraffic += layout.cellsLo * elementsPerCell * trafficPerElement;
       }
 
       if (currentTraffic >= trafficPerChannel && channelId + 1 != nMaxChannels[kind]) {
@@ -2292,11 +2242,9 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
   int nstepsPerLoop, nchunksPerLoop;
   size_t loopOffset = 0;
   int stepSize = comm->buffSizes[info->protocol] / NCCL_STEPS;
-  int chunkSteps = (info->protocol == NCCL_PROTO_SIMPLE && info->algorithm == NCCL_ALGO_RING) ? info->chunkSteps : 1;
-  int sliceSteps = (info->protocol == NCCL_PROTO_SIMPLE && info->algorithm == NCCL_ALGO_RING) ? info->sliceSteps : 1;
-  int chunkSize = stepSize * chunkSteps;
-  if (info->protocol == NCCL_PROTO_LL) chunkSize /= 2;
-  if (info->protocol == NCCL_PROTO_LL128) chunkSize = (chunkSize / NCCL_LL128_LINEELEMS) * NCCL_LL128_DATAELEMS;
+  int chunkSteps = ncclRingChunkSteps(info->protocol, info->algorithm, info->chunkSteps);
+  int sliceSteps = ncclRingSliceSteps(info->protocol, info->algorithm, info->sliceSteps);
+  int chunkSize = ncclGetChunkSize(info->protocol, stepSize, chunkSteps);
   // Buffer-based ceiling; plugins may increase chunk size up to this limit.
   int bufferMaxChunkSize = chunkSize;
 
@@ -2448,7 +2396,7 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
   proxyOp->sliceSteps = sliceSteps;
   proxyOp->chunkSteps = chunkSteps;
   proxyOp->chunkSize = chunkSize;
-  proxyOp->sliceSize = chunkSize / chunkSteps * sliceSteps;
+  proxyOp->sliceSize = ncclNominalSliceSize(chunkSize, chunkSteps, sliceSteps);
   proxyOp->loopSize = loopSize;
   proxyOp->loopOffset = loopOffset;
   proxyOp->protocol = info->protocol;

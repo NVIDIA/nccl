@@ -10,6 +10,74 @@
 #include "gdrwrap.h"
 #include "transport.h"
 
+int ncclClampChannels(int nChannels, int minChannels, int maxChannels) {
+  return std::min(std::max(nChannels, minChannels), maxChannels);
+}
+
+int ncclFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
+  switch (func) {
+  case ncclFuncAllReduce:
+    return 2;
+  case ncclFuncAllGather:
+  case ncclFuncReduceScatter:
+    return nRanks;
+  default:
+    return 1;
+  }
+}
+
+size_t ncclCollTrafficPerChannel(size_t trafficBytes, int nChannels) {
+  return nChannels > 0 ? DIVUP(trafficBytes / nChannels, 16) * 16 : 0;
+}
+
+struct ncclCollChannelLayout ncclComputeCollChannelLayout(size_t count, size_t elementSize, int trafficPerByte,
+                                                          size_t trafficPerChannel, size_t currentTraffic,
+                                                          int channelId, int maxChannels) {
+  struct ncclCollChannelLayout layout = {};
+  if (count == 0 || maxChannels <= channelId) return layout;
+
+  size_t cellSize = DIVUP(DIVUP(ncclMinTrafficPerChannel, (size_t)trafficPerByte), 16) * 16;
+  layout.elementsPerCell = cellSize / elementSize;
+  size_t cells = DIVUP(count * elementSize, cellSize);
+  size_t trafficPerCell = cellSize * trafficPerByte;
+  size_t cellsPerChannel = std::min(cells, DIVUP(trafficPerChannel, trafficPerCell));
+
+  if (channelId + 1 == maxChannels) {
+    layout.cellsLo = cells;
+  } else {
+    layout.cellsLo = std::min(cells, DIVUP(trafficPerChannel - currentTraffic, trafficPerCell));
+  }
+  layout.nMidChannels = (cells - layout.cellsLo) / cellsPerChannel;
+  layout.cellsHi = (cells - layout.cellsLo) % cellsPerChannel;
+  int nChannels = (layout.cellsLo != 0 ? 1 : 0) + layout.nMidChannels + (layout.cellsHi != 0 ? 1 : 0);
+  if (maxChannels < channelId + nChannels) {
+    layout.nMidChannels = maxChannels - channelId - 2;
+    cellsPerChannel = (cells - layout.cellsLo) / (layout.nMidChannels + 1);
+    layout.cellsHi = cellsPerChannel + (cells - layout.cellsLo) % (layout.nMidChannels + 1);
+  }
+  if (layout.cellsHi == 0 && layout.nMidChannels != 0) {
+    layout.cellsHi = cellsPerChannel;
+    layout.nMidChannels -= 1;
+  }
+  if (layout.cellsLo == 0) {
+    layout.channelOffset = 1;
+    if (layout.nMidChannels == 0) {
+      layout.cellsLo = layout.cellsHi;
+      layout.cellsHi = 0;
+    } else {
+      layout.cellsLo = cellsPerChannel;
+      layout.nMidChannels -= 1;
+    }
+  }
+
+  layout.countMid = layout.nMidChannels != 0 ? cellsPerChannel * layout.elementsPerCell : 0;
+  layout.countLo = layout.cellsLo * layout.elementsPerCell;
+  layout.countHi = layout.cellsHi * layout.elementsPerCell;
+  (layout.countHi != 0 ? layout.countHi : layout.countLo) -= cells * layout.elementsPerCell - count;
+  layout.nChannels = (layout.countLo != 0 ? 1 : 0) + layout.nMidChannels + (layout.cellsHi != 0 ? 1 : 0);
+  return layout;
+}
+
 ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   struct ncclChannel* channel = &comm->channels[channelId];
   if (channel->id != -1) return ncclSuccess;

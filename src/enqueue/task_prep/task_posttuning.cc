@@ -34,55 +34,9 @@ int64_t ncclParamMaxCTAs();
 int64_t ncclParamNvlsChannels();
 int64_t ncclParamCGAClusterSize();
 
-static inline int ncclFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
-  switch (func) {
-  case ncclFuncAllReduce:
-    return 2;
-  case ncclFuncAllGather:
-    return nRanks;
-  case ncclFuncReduceScatter:
-    return nRanks;
-  default:
-    return 1;
-  }
-}
-
-static inline int postTuningFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
-  switch (func) {
-  case ncclFuncAllReduce:
-    return 2;
-  case ncclFuncAllGather:
-    return nRanks;
-  case ncclFuncReduceScatter:
-    return nRanks;
-  default:
-    return 1;
-  }
-}
-
 static void postTuningSetChunkSteps(struct ncclTaskColl* task) {
-  switch (task->func) {
-  case ncclFuncAllReduce:
-    task->chunkSteps = ALLREDUCE_CHUNKSTEPS;
-    task->sliceSteps = ALLREDUCE_SLICESTEPS;
-    break;
-  case ncclFuncAllGather:
-    task->chunkSteps = ALLGATHER_CHUNKSTEPS;
-    task->sliceSteps = ALLGATHER_SLICESTEPS;
-    break;
-  case ncclFuncReduceScatter:
-    task->chunkSteps = REDUCESCATTER_CHUNKSTEPS;
-    task->sliceSteps = REDUCESCATTER_SLICESTEPS;
-    break;
-  case ncclFuncBroadcast:
-    task->chunkSteps = BROADCAST_CHUNKSTEPS;
-    task->sliceSteps = BROADCAST_SLICESTEPS;
-    break;
-  default:
-    task->chunkSteps = 1;
-    task->sliceSteps = 1;
-    break;
-  }
+  task->chunkSteps = ncclDefaultChunkStep(task->func);
+  task->sliceSteps = ncclDefaultSliceStep(task->func);
 }
 
 static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
@@ -102,7 +56,7 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
     task->datatype = ncclInt8;
     elementSize = 1;
   }
-  task->trafficBytes = task->count * elementSize * postTuningFuncTrafficPerByte(task->func, comm->nRanks);
+  task->trafficBytes = task->count * elementSize * ncclFuncTrafficPerByte(task->func, comm->nRanks);
   task->opHost = raw->opHost;
   task->opDev = raw->opDev;
   postTuningSetChunkSteps(task);
@@ -786,7 +740,7 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   task->count = agv->counts[root];
   task->root = root;
   task->datatype = ncclInt8;
-  task->trafficBytes = task->count * postTuningFuncTrafficPerByte(task->func, comm->nRanks);
+  task->trafficBytes = task->count * ncclFuncTrafficPerByte(task->func, comm->nRanks);
   postTuningSetChunkSteps(task);
   task->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
   task->opHost = ncclSum;

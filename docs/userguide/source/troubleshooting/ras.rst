@@ -377,11 +377,18 @@ RAS Diagnostics
 RAS diagnostics provide a readiness probe for NCCL jobs by checking the selected GPU, PCI configuration, CUDA driver,
 and NCCL configuration information across ranks.
 
+Available Checks
+^^^^^^^^^^^^^^^^
+
 The report includes results for the following checks:
 
 * **GPU inventory:** Checks that communicator ranks report the same number of GPUs and use the same GPU model.
 * **CUDA driver version:** Checks that all ranks report the same CUDA version supported by the driver.
 * **Volatile ECC errors:** Checks volatile SRAM and DRAM ECC error counters for the GPU used by each rank.
+* **Xid and SXid events:** Scans the host kernel log for GPU Xids and NVSwitch SXids, maps each event to the host
+  where it was detected, and classifies it into predefined guidance groups using the
+  `Xid Error Catalog <https://docs.nvidia.com/deploy/xid-errors/analyzing-xid-catalog.html>`_ and
+  `Fabric Manager guide <https://docs.nvidia.com/hgx-platforms/fabric-manager-user-guide/index.html>`_.
 * **NVLink state:** Checks that ranks report the same number of NVLinks, that every link is active, and that all active
   links run at the same speed.
 * **NCCL environment:** Checks that ``NCCL_*`` environment-variable names and values are consistent across ranks.
@@ -396,8 +403,8 @@ The report includes results for the following checks:
 
    RAS diagnostics do not exercise NCCL data paths and do not provide a comprehensive assessment of cluster health.
 
-PCI Diagnostics
-^^^^^^^^^^^^^^^
+PCI-Related Checks
+""""""""""""""""""
 
 RAS first runs ``rdma_topo check``. If the check passes or identifies a configuration problem, the result is conclusive
 and reported directly. Otherwise, RAS performs heuristic fallback checks on the GPU/NIC pairs selected by NCCL:
@@ -409,6 +416,21 @@ and reported directly. Otherwise, RAS performs heuristic fallback checks on the 
 The fallback checks can identify conditions that merit review, but do not provide the same platform-aware conclusion
 as ``rdma_topo check``.
 
+Xid and SXid Events
+"""""""""""""""""""
+
+The Xid/SXid check first tries ``/dev/kmsg`` and falls back to ``dmesg``, then
+``/var/log/kern.log``, ``/var/log/messages``, and ``/var/log/syslog`` when necessary. When a regular log file is used,
+only the active file is scanned; rotated log files are not inspected. Its first run reports events recorded since the
+local RAS thread started. Each later run reports events recorded since the preceding Xid/SXid scan. The scan interval
+is shared by initialization-triggered and on-demand RAS diagnostics in the process.
+
+.. note::
+
+   Xid guidance assumes an NVIDIA Ampere architecture or newer GPU. For earlier GPU architectures, use the
+   `archived NVIDIA Xid documentation <https://docs.nvidia.com/deploy/xid-errors/archive/index.html>`_ to interpret
+   the reported code.
+
 Prerequisites
 ^^^^^^^^^^^^^
 
@@ -418,8 +440,8 @@ RAS diagnostics require the RAS subsystem to be enabled, which is the default; s
 .. note::
 
    Some checks can provide more complete results when optional system tools are available or the process has elevated
-   privileges. PCI diagnostics use ``rdma_topo`` for the platform-aware audit and ``lspci`` for ATS inspection. Access
-   to the required PCI information may require elevated privileges.
+   privileges. The PCI-related checks use ``rdma_topo`` for the platform-aware audit and ``lspci`` for ATS inspection.
+   Access to the required PCI information may require elevated privileges.
 
 Running During Communicator Initialization
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -477,6 +499,7 @@ For example, an on-demand report with no reported issues might look like:
   node042:12345 NCCL DIAG [OK]   GPU inventory: 8x NVIDIA H100 per node consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   CUDA driver version: 13000 consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   ECC: no uncorrected volatile errors across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   Xid/SXid: no events requiring immediate attention across 2 hosts
   node042:12345 NCCL DIAG [OK]   NVLink: 18 links per GPU, all active at consistent speed across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   NCCL environment: NCCL_* env vars consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   rdma_topo check: passed on 8/8 ranks in comm 0x1234

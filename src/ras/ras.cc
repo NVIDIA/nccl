@@ -15,6 +15,7 @@
 #include "comm.h"
 #include "diagnostics_log.h"
 #include "diagnostics.h"
+#include "diagnostics_checks.h"
 #include "nccl.h"
 #include "param/param.h"
 #include "profiler.h"
@@ -116,6 +117,7 @@ ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank) 
 
       NCCLCHECKGOTO(ncclOsSocketPairCreate(rasNotificationPipe), ret, fail);
 
+      rasDiagnosticsInit();
       rasThread = std::thread(rasThreadMain, nullptr);
       ncclSetThreadName(rasThread, "NCCL RAS");
 

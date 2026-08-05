@@ -42,5 +42,10 @@ ncclResult_t rasDiagnosticsAtsCollectLocal(const struct rasDiagnosticsContext* c
                                            struct rasDiagnosticsLocalData* data);
 ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
                                         const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
+void rasDiagnosticsInit();
+ncclResult_t rasDiagnosticsXidCollectLocal(const struct rasDiagnosticsContext* ctx,
+                                           struct rasDiagnosticsLocalData* data);
+ncclResult_t rasDiagnosticsXidSummarize(const struct rasDiagnosticsContext* ctx,
+                                        const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
 
 #endif // NCCL_RAS_DIAGNOSTICS_CHECKS_H_

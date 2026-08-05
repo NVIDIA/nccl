@@ -70,6 +70,7 @@ static const struct rasDiagnosticsCheck rasDiagnosticsChecks[RAS_DIAG_CHECK_COUN
   {RAS_DIAG_CHECK_RDMA_TOPO, rasDiagnosticsRdmaTopoCollectLocal, rasDiagnosticsRdmaTopoSummarize},
   {RAS_DIAG_CHECK_IOMMU_MODE, rasDiagnosticsIommuCollectLocal, rasDiagnosticsIommuSummarize},
   {RAS_DIAG_CHECK_ATS, rasDiagnosticsAtsCollectLocal, rasDiagnosticsAtsSummarize},
+  {RAS_DIAG_CHECK_XID_SXID, rasDiagnosticsXidCollectLocal, rasDiagnosticsXidSummarize},
 };
 
 static ncclResult_t rasDiagnosticsSummarizePeerPayloads(

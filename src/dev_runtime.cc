@@ -1443,7 +1443,7 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
     bufSizeTotal = alignUp(bufSizeTotal, devr->granularity);
   }
 
-  if (devr->ginEnabled) {
+  if (requestedConnectionType != NCCL_GIN_CONNECTION_NONE) {
     reqs->ginSignalCount = ginSignalTotal;
     reqs->ginCounterCount = ginCounterTotal;
     NCCLCHECKGOTO(ncclGinDevCommSetup(comm, reqs, outDevComm, deviceCodeVersion), ret, fail);

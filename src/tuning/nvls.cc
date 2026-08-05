@@ -18,7 +18,7 @@ static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
 
 ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS]) {
   ncclResult_t ret = ncclSuccess;
-  if (!comm->nvlsSupport) {
+  if (!ncclNvlsTransportEnabled(comm)) {
     memset(enabled, 0, NCCL_NUM_FUNCTIONS * sizeof(int));
     return ncclSuccess;
   }

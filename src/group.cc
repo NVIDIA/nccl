@@ -262,7 +262,7 @@ ncclResult_t ncclCollPreconnect(struct ncclComm* comm, bool* algoNeedConnect) {
       case NCCL_ALGO_PAT:
         {
           NCCLCHECK(ncclTransportPatConnect(comm));
-          if (comm->localRanks > 1 && comm->nvlsSupport) {
+          if (comm->localRanks > 1 && ncclNvlsTransportEnabled(comm)) {
             NCCLCHECK(ncclNvlsBufferSetup(comm));
           }
           break;

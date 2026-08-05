@@ -57,8 +57,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   if (sendWin != nullptr || recvWin != nullptr) {
     NCCLCHECK(ncclGetSymRegType(sendWin, recvWin, &in->winRegType));
   }
-  in->nvlsSupport =
-    comm->nvlsSupport && (ncclNvlsSupported(raw->opDev.op, raw->datatype) || raw->func == ncclFuncAllGather);
+  in->nvlsSupport = ncclNvlsTransportEnabled(comm) &&
+                    (ncclNvlsSupported(raw->opDev.op, raw->datatype) || raw->func == ncclFuncAllGather);
   {
     size_t inputOff = sendWin ? (uintptr_t)raw->sendbuff - (uintptr_t)sendWin->userPtr : (uintptr_t)raw->sendbuff;
     size_t outputOff = recvWin ? (uintptr_t)raw->recvbuff - (uintptr_t)recvWin->userPtr : (uintptr_t)raw->recvbuff;

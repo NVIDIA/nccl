@@ -401,6 +401,36 @@ ncclConfig_t
   host-side CFT in case of error.
   :c:macro:`ncclHostCftDefault` selects the library-defined default behavior.
 
+ .. c:macro:: nvlsHostMode
+
+  (since 2.31)
+
+  Controls host-side use of NVLink SHARP (NVLS) for a single communicator.
+  The value is a bitmask that can independently disable the NVLS collective
+  transport and multimem use by NCCL's internal symmetric kernels and Copy
+  Engine (CE) collectives. Explicit Device API multimem requests remain
+  available. Selectively disabling host NVLS components on small or infrequently
+  used communicators can preserve limited hardware multicast resources for other
+  communicators that can utilize them more effectively.
+
+  Supported values (``ncclNvlsHostMode_t``):
+
+  * ``ncclNvlsHostModeDefault`` — Library-defined default. Currently equivalent
+    to ``ncclNvlsHostModeEnable``.
+  * ``ncclNvlsHostModeEnable`` — Enable all host NVLS components.
+  * ``ncclNvlsHostModeDisableTransport`` — Disable the NVLS collective transport
+    and its registered-buffer optimization. The NVLS, NVLS_TREE, and multi-RPN
+    PAT algorithms will be disabled.
+  * ``ncclNvlsHostModeDisableSymmetricMultimem`` — Disable multimem use by NCCL's
+    internal symmetric kernels and CE collectives. UC symmetric kernels and CE
+    fallbacks remain available.
+  * ``ncclNvlsHostModeDisable`` — Disable all present and future host NVLS
+    components. This value sets all non-reserved bits for forward compatibility.
+
+  The component flags can be combined with the bitwise OR operator. These flags
+  do not affect the communicator's reported Device API multimem capability and
+  do not prevent explicit Device API calls from allocating multimem resources.
+
 .. _ncclsiminfo:
 
 ncclSimInfo_t

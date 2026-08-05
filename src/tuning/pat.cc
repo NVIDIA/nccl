@@ -18,7 +18,7 @@ static int ncclPatEnable(struct ncclComm* comm) {
   if (patEnable != 2) return patEnable;
   if (!comm->isOneRPN) {
     if (comm->nNodes < 2) return 0;   // Multi-RPN PAT is inter-node only
-    if (!comm->nvlsSupport) return 0; // Multi-RPN PAT uses NVLS for the intra-node phase.
+    if (!ncclNvlsTransportEnabled(comm)) return 0; // Multi-RPN PAT uses NVLS for the intra-node phase.
   }
   if (comm->netDeviceType != NCCL_NET_DEVICE_HOST) return 0;   // PAT doesn't support net device offload
   return 1;
@@ -45,7 +45,7 @@ ncclResult_t ncclTuningPatModelInit(struct ncclComm* comm, int id, int enabled[N
     }
     float busBw = std::min(comm->graphs[algo].bwInter, comm->graphs[algo].bwIntra) * comm->graphs[algo].nChannels;
     if (!comm->isOneRPN) {
-      if (!comm->nvlsSupport) busBw = 0.0f;
+      if (!ncclNvlsTransportEnabled(comm)) busBw = 0.0f;
       if (busBw > 0.0f) {
         int nHeads = comm->channels[0].nvls.nHeads;
         for (int r = 0; r < comm->nRanks; r++) {

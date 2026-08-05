@@ -1412,8 +1412,7 @@ ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCo
       eDescr.ceColl.count = args->nElts;
       eDescr.ceColl.root = args->rootRank;
       eDescr.ceColl.datatype = ncclDatatypeToString(args->datatype);
-      // NVLS multicast isn't available across cliques - report UC for cross-clique
-      eDescr.ceColl.syncStrategy = (comm->nvlsSupport && !comm->p2pCrossClique) ? "MC" : "UC";
+      eDescr.ceColl.syncStrategy = comm->symkState.hasLsaMultimem ? "MC" : "UC";
       eDescr.ceColl.intraBatchSync = false;
       eDescr.ceColl.batchSize = 0;
       eDescr.ceColl.numBatches = 0;

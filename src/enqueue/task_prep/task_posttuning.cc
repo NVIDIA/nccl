@@ -775,7 +775,7 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   void* regBufRecv[NCCL_MAX_LOCAL_RANKS];
   bool regNeedConnect = true;
   int collNetSupport = 0;
-  int nvlsSupport = 0;
+  int nvlsTransportEnabled = 0;
 
   memset(task, 0, sizeof(*task));
   task->func = ncclFuncBroadcast;
@@ -790,9 +790,9 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   task->opHost = ncclSum;
 
   NCCLCHECK(ncclGetCollNetSupport(comm, task, &collNetSupport));
-  nvlsSupport =
-    comm->nvlsSupport && (ncclNvlsSupported(task->opDev.op, task->datatype) || task->func == ncclFuncAllGather);
-  NCCLCHECK(ncclGetAlgoInfo(comm, task, collNetSupport, nvlsSupport, 1, nullptr));
+  nvlsTransportEnabled = ncclNvlsTransportEnabled(comm) &&
+                         (ncclNvlsSupported(task->opDev.op, task->datatype) || task->func == ncclFuncAllGather);
+  NCCLCHECK(ncclGetAlgoInfo(comm, task, collNetSupport, nvlsTransportEnabled, 1, nullptr));
   task->devFuncId = ncclDevFuncId(task->func, task->opDev.op, task->datatype, task->algorithm, task->protocol);
   switch (task->algorithm) {
   case NCCL_ALGO_NVLS:

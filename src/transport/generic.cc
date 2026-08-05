@@ -107,7 +107,7 @@ ncclResult_t ncclTransportPatConnect(struct ncclComm* comm) {
     int denseLocalRank = 0;
     // Connect corresponding NVLS-dense rails across nodes.
     if (comm->localRanks > 1) {
-      if (!comm->nvlsSupport || comm->channels[0].nvls.nHeads != comm->localRanks ||
+      if (!ncclNvlsTransportEnabled(comm) || comm->channels[0].nvls.nHeads != comm->localRanks ||
           comm->channels[0].nvls.headRank < 0 || comm->channels[0].nvls.headRank >= comm->localRanks) {
         goto exit;
       }

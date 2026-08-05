@@ -192,8 +192,11 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       input.minCTAs = headTask->minCTAs;
       input.maxCTAs = headTask->maxCTAs;
       input.CTAPolicy = headTask->CTAPolicy;
-      input.nvlsSupport = comm->nvlsSupport && (ncclNvlsSupported(headTask->opDev.op, headTask->datatype) ||
-                                                headTask->func == ncclFuncAllGather);
+      // Symmetric kernels use comm->symkState.hasLsaMultimem for multicast capability.
+      // input.nvlsSupport only gates NVLS/NVLS_TREE during general-kernel fallback tuning.
+      input.nvlsSupport =
+        ncclNvlsTransportEnabled(comm) &&
+        (ncclNvlsSupported(headTask->opDev.op, headTask->datatype) || headTask->func == ncclFuncAllGather);
       NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &input.collNetSupport));
       NCCLCHECK(ncclGetRegBuff(comm, headTask, &input.regBuff));
       struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;

@@ -276,13 +276,15 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
     comm->nvlsSupport = 1;
   }
 
-  INFO(NCCL_INIT, "NVLS multicast support is %savailable on dev %d", comm->nvlsSupport ? "" : "not ", dev);
+  INFO(NCCL_INIT, "NVLS multicast support is %savailable on dev %d, transport %s, symmetric multimem %s",
+       comm->nvlsSupport ? "" : "not ", dev, ncclNvlsTransportEnabled(comm) ? "enabled" : "disabled",
+       ncclNvlsSymmetricMultimemEnabled(comm) ? "enabled" : "disabled");
   return ncclSuccess;
 }
 
 ncclResult_t ncclNvlsTreeConnect(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
-  if (comm && comm->nvlsSupport && comm->nNodes > 1) {
+  if (comm && ncclNvlsTransportEnabled(comm) && comm->nNodes > 1) {
     for (int c = 0; c < comm->nvlsChannels; c++) {
       struct ncclChannel* channel = comm->channels + c;
       NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, NCCL_MAX_NVLS_TREE_ARITY, channel->nvls.treeDown, 1,
@@ -418,8 +420,8 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   int nChannels = -1;
   cudaStream_t deviceStream, hostStream;
 
-  if (comm->nvlsSupport == 0 || comm->nvlsResources->inited) return ncclSuccess;
-  // initialize after checking comm->nvlsSupport
+  if (!ncclNvlsTransportEnabled(comm) || comm->nvlsResources->inited) return ncclSuccess;
+  // initialize after checking ncclNvlsTransportEnabled(comm)
   nHeads = comm->channels[0].nvls.nHeads;
   headRank = comm->channels[0].nvls.headRank;
   resources = comm->nvlsResources;
@@ -498,9 +500,10 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
   size_t typeSize;
   char shmPath[sizeof("/dev/shm/nccl-XXXXXX")];
   uintptr_t* nvlsShmem = NULL;
-  bool nvlsShare = parent && parent->nvlsSupport && parent->shareResources && parent->localRanks == comm->localRanks;
+  bool nvlsShare =
+    parent && ncclNvlsTransportEnabled(parent) && parent->shareResources && parent->localRanks == comm->localRanks;
 
-  if (comm->nvlsSupport == 0 || comm->nvlsChannels == 0) return ncclSuccess;
+  if (!ncclNvlsTransportEnabled(comm) || comm->nvlsChannels == 0) return ncclSuccess;
 
   if (nvlsShare) {
     /* reuse NVLS resources */
@@ -521,7 +524,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     size_t memSize = 64;
     cudaStream_t hostStream, deviceStream;
 
-    if (parent != nullptr && parent->nvlsSupport && parent->shareResources) {
+    if (parent != nullptr && ncclNvlsTransportEnabled(parent) && parent->shareResources) {
       /* ranks on other nodes might share the NVLS resources, we need to cap nvlsChannels
        * and match NVLS chunk sizes to make sure they agree for each rank. */
       comm->nvlsChannels = std::min(comm->nvlsChannels, parent->nvlsResources->nChannels);

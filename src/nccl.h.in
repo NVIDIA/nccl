@@ -86,6 +86,15 @@ typedef enum {
   ncclHostCftFallback = 3
 } ncclHostCftMode_t;
 
+/* Host NVLS component-disable flags. Individual component flags may be combined. */
+typedef enum {
+  ncclNvlsHostModeDefault = NCCL_CONFIG_UNDEF_INT, /* library default */
+  ncclNvlsHostModeEnable = 0,                      /* enable all host NVLS components */
+  ncclNvlsHostModeDisableTransport = 1 << 0,       /* disable NVLS transport and registered-buffer optimization */
+  ncclNvlsHostModeDisableSymmetricMultimem = 1 << 1, /* disable multimem in internal symmetric kernels and CE */
+  ncclNvlsHostModeDisable = INT_MAX,               /* disable all present and future host NVLS components */
+} ncclNvlsHostMode_t;
+
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
 typedef struct ncclConfig_v23100 {
@@ -116,6 +125,7 @@ typedef struct ncclConfig_v23100 {
   int numRmaSig;
   int rmaEagerInit;
   int hostCftMode;
+  int nvlsHostMode;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -145,7 +155,8 @@ typedef struct ncclConfig_v23100 {
   NCCL_CONFIG_UNDEF_INT,                    /* launchOrderImplicit */   \
   NCCL_CONFIG_UNDEF_INT,                    /* numRmaSig */             \
   NCCL_CONFIG_UNDEF_INT,                    /* rmaEagerInit */          \
-  NCCL_CONFIG_UNDEF_INT,                    /* hostCftMode */          \
+  NCCL_CONFIG_UNDEF_INT,                    /* hostCftMode */           \
+  NCCL_CONFIG_UNDEF_INT,                    /* nvlsHostMode */          \
 }
 
 /* A single vendor-specific option expressed as a key-value pair. Multiple options can be

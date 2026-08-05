@@ -58,7 +58,7 @@ ncclResult_t ncclRegisterCollNvlsBuffers(
   if (!(ncclParamLocalRegister() || (comm->planner.persistent && ncclParamGraphRegister()))) goto exit;
 #if CUDART_VERSION >= 11030
   if (info->algorithm == NCCL_ALGO_NVLS || info->algorithm == NCCL_ALGO_NVLS_TREE) {
-    if (!comm->nvlsRegSupport || info->opDev.op == ncclDevPreMulSum) goto exit;
+    if (!ncclNvlsTransportEnabled(comm) || !comm->nvlsRegSupport || info->opDev.op == ncclDevPreMulSum) goto exit;
     int nvlsReged = 0;
     int collnetReged = 0;
     const void* sendbuff = info->sendbuff;
@@ -146,7 +146,7 @@ ncclResult_t ncclRegisterCollBuffers(
 #if CUDART_VERSION >= 11030
   if (info->algorithm == NCCL_ALGO_NVLS || info->algorithm == NCCL_ALGO_NVLS_TREE) {
     /* this part of nvls reg code is temporarily not used and obsolete. */
-    if (!comm->nvlsRegSupport || info->opDev.op == ncclDevPreMulSum) goto exit;
+    if (!ncclNvlsTransportEnabled(comm) || !comm->nvlsRegSupport || info->opDev.op == ncclDevPreMulSum) goto exit;
     int nvlsReged = 0;
     int collnetReged = 0;
     const void* sendbuff = info->sendbuff;

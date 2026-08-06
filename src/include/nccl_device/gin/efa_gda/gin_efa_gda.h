@@ -54,6 +54,13 @@ static constexpr cuda::thread_scope ncclGinScope =
  * has wrapped. Never compare absolute counter values. */
 static constexpr uint32_t EFA_CNTR_MASK = 0x7fffffffu;
 
+/* Hardware cap on a single RDMA write: efadv_device_attr.max_rdma_size,
+ * 1 GiB on current EFA devices. A WQE exceeding it fails on the NIC as a CQ
+ * error, which this CQ-less path never observes, so the put hangs; the u32
+ * SGE length field additionally truncates sizes >= 4 GiB. Larger puts are
+ * split into chunks of at most this size in putImplMode. */
+static constexpr uint32_t EFA_GDA_MAX_WRITE_SIZE = 1u << 30;
+
 /* ── Atomic primitives parameterized on scope and memory order ────── */
 
 template <cuda::thread_scope Scope, cuda::memory_order Order>
@@ -491,7 +498,60 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
       const uint16_t dataSigQpn = dev->data.target_remote_qpns[targetIdx];
       const uint32_t dataSigQkey = dev->data.target_qkey[targetIdx];
 
-      /* First write: payload (hasPayload) or 0-byte scratch (signal-only),
+      /* Chunk payloads that exceed the EFA per-write limit.
+       *
+       * A single RDMA write is capped at EFA_GDA_MAX_WRITE_SIZE (1 GiB).
+       * Split larger payloads into full-size leading chunks plus a tail
+       * (<= cap); the tail is posted by the normal signal/counter-carrying
+       * path below.
+       *
+       * Leading chunks target the peer's DATA EP (slot 0): no remote signal
+       * fires and the caller's counter does not tick. They are posted
+       * non-aggregated so their doorbells ring (the drain below only counts
+       * rung WQEs). */
+      if (hasPayload && bytes > (size_t)EFA_GDA_MAX_WRITE_SIZE) {
+        const size_t cap = (size_t)EFA_GDA_MAX_WRITE_SIZE;
+        const size_t nLeading = (bytes - 1) / cap; /* tail is (0, cap] */
+        /* Peer's DATA EP tuple: target slot 0 -> idx = 0*nranks + peer. */
+        const uint32_t dataIdx = (uint32_t)peer;
+        const uint16_t dAh = dev->data.target_address_handles[dataIdx];
+        const uint16_t dQpn = dev->data.target_remote_qpns[dataIdx];
+        const uint32_t dQkey = dev->data.target_qkey[dataIdx];
+        for (size_t i = 0; i < nLeading; i++) {
+          postRdmaWrite<mode>(&dev->data, dAh, dQpn, dQkey, absSrcAddr + i * cap, srcLkey, (uint32_t)cap,
+                              absDstAddr + i * cap, dstRkey, ncclGinOptFlagsDefault);
+        }
+        /* EFA SRD is unordered: the tail landing does not imply the leading
+         * chunks landed. So when the tail announces completion (signal or
+         * counter), first wait for the leading chunks' local completions: a
+         * local completion means the write has been queued towards the
+         * receiver's PCIe, so any write issued after it to that same PCIe
+         * destination is delivered after it by PCIe ordering rules. The tail
+         * therefore lands behind the whole payload, making its signal/counter
+         * mean the data is there and the source buffer safe to reuse.
+         * A plain put announces nothing, so nothing can observe its chunks
+         * out of order; the wait is deferred to the caller's later flush /
+         * signaled put / barrier. The drain is whole-endpoint (outstanding
+         * == 0, same loop as flushImplMode) and must be: the FI_WRITE
+         * counter does not attribute completions to WQEs, so a fully
+         * drained endpoint is the only state that proves THIS put's chunks
+         * completed. That is required for correct signal delivery, even
+         * though it also waits on concurrent posters' writes. */
+        if (isIndexed || hasCounter) {
+          cuda::atomic_ref<uint64_t, ncclGinScope<mode>> submitted_ref(dev->data.submitted_count);
+          while (((((uint32_t)submitted_ref.load(cuda::memory_order_relaxed)) -
+                   (uint32_t)hwCounterLoad(dev->data.local_cntr_value)) &
+                  EFA_CNTR_MASK) != 0) {
+            /* spin: leading chunks in flight */
+          }
+        }
+        absSrcAddr += nLeading * cap;
+        absDstAddr += nLeading * cap;
+        writeBytes = (uint32_t)(bytes - nLeading * cap);
+      }
+
+      /* Final write: the payload tail (the WHOLE payload when no chunking
+       * occurred above; hasPayload) or 0-byte scratch (signal-only),
        * on the counterId-selected poster so the local counter ticks once,
        * addressed to the resolved target so the receiver's FI_REMOTE_WRITE
        * fires once. absSrcAddr/absDstAddr/writeBytes already point at the

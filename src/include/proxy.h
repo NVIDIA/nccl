@@ -103,6 +103,7 @@ struct ncclProxyOp {
   union ncclProxyOpSpecifics specifics;
   int nChannels;
   int nPeers;
+  int minPeers;
 
   // Profiler plugin
   union {
@@ -198,6 +199,7 @@ struct ncclProxyArgs {
   int sharedSize[NCCL_STEPS];
   int nChannels;
   int nPeers;
+  int minPeers;
 
   int idle;
 

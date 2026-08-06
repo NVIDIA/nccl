@@ -1101,10 +1101,20 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
   int nGroups = comm->nRanks / groupSize;
   int nGroupsPow2 = pow2Up(nGroups);
 
-  int *groupToNode = nullptr, *groupToLocal = nullptr;
+  int *groupToNode = nullptr, *groupToLocal = nullptr, *cumulativeNetRecvCounts = nullptr;
   int groupCount = 0;
   uint32_t groupRound = 0, groupDelta = 0;
   int round = 0;
+  int scheduleGroup = 0;
+  int nGroupsPerEpoch = 0;
+  bool pxnEnabled = comm->nNodes > 1 && ncclPxnDisable(comm) == 0;
+  // localRanks can span hosts on MNNVL, while PXN aggregation is host-local.
+  int gpusPerHost = 0;
+  for (int i = 0; i < comm->localRanks; i++) {
+    int rank = comm->localRankToRank[i];
+    if (comm->peerInfo[rank].hostHash == comm->peerInfo[comm->rank].hostHash) gpusPerHost++;
+  }
+  int netPeersPerGroup = pxnEnabled ? divUp(groupSize, gpusPerHost) : groupSize;
   NCCLCHECK(ncclCalloc(&groupToNode, nGroups));                     // node hosting the group
   NCCLCHECKGOTO(ncclCalloc(&groupToLocal, nGroups), ret, cleanup); // local offset of the group
   for (int n = 0; n < comm->nNodes; ++n) {
@@ -1127,8 +1137,7 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
     ret = ncclInternalError;
     goto cleanup;
   }
-  INFO(NCCL_GRAPH, "%s: group size used is %d", __func__, groupSize);
-
+  NCCLCHECKGOTO(ncclCalloc(&cumulativeNetRecvCounts, nGroups + 1), ret, cleanup);
   // When enumerating peer deltas we use the quadratic formula (x*x+x)/2 mod N.
   // Since that formula only produces valid permutations when N is a pow of 2,
   // we let N = pow2Up(n) and filter out results greater-eq to n.
@@ -1140,6 +1149,14 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
       int recvGroup = (group - groupDelta + nGroups) % nGroups;
       int sendNode = groupToNode[sendGroup];
       int recvNode = groupToNode[recvGroup];
+      int recvRank = nodeRanks[recvNode].localRankToRank[groupToLocal[recvGroup] + local];
+      int peerIndex;
+      // Classify the receive group using one representative rank. A group using NET
+      // contributes one peer per estimated source host with PXN, or one per rank otherwise.
+      bool usesNet = ncclTopoRankToIndex(comm->topo, recvRank, &peerIndex, false) != ncclSuccess;
+      cumulativeNetRecvCounts[scheduleGroup + 1] =
+        cumulativeNetRecvCounts[scheduleGroup] + (usesNet ? netPeersPerGroup : 0);
+      scheduleGroup++;
       for (int delta = 0; delta < groupSize; delta++) {
         int sendLocal = groupToLocal[sendGroup] + (local + delta) % groupSize;
         int recvLocal = groupToLocal[recvGroup] + (local - delta + groupSize) % groupSize;
@@ -1157,10 +1174,30 @@ static ncclResult_t ncclP2pSchedule(struct ncclComm* comm) {
     ret = ncclInternalError;
     goto cleanup;
   }
+  nGroupsPerEpoch = std::max(1, comm->p2pnChannels / comm->p2pnChannelsPerPeer);
+  comm->p2pA2aMinPeers = INT_MAX;
+  comm->p2pA2aMaxPeers = 0;
+  for (int begin = 0; begin < nGroups; begin += nGroupsPerEpoch) {
+    int end = std::min(begin + nGroupsPerEpoch, nGroups);
+    int peers = cumulativeNetRecvCounts[end] - cumulativeNetRecvCounts[begin];
+    if (peers == 0) continue;
+    comm->p2pA2aMinPeers = std::min(comm->p2pA2aMinPeers, peers);
+    comm->p2pA2aMaxPeers = std::max(comm->p2pA2aMaxPeers, peers);
+  }
+  if (comm->p2pA2aMinPeers == INT_MAX) comm->p2pA2aMinPeers = 0;
+  TRACE(NCCL_INIT,
+        "%s: MNNVL %d nodes %d ranks %d, rank %d node %d local ranks %d, NVL domain range [%d-%d], group %d, "
+        "group size used is %d, groups %d, GPUs/host %d, PXN %d, NET recv peers/group %d, P2P channels %d, "
+        "channels/peer %d configured %d, groups/epoch %d, total NET peers %d, A2A NET peer range [%d-%d]",
+        __func__, comm->MNNVL, comm->nNodes, comm->nRanks, comm->rank, comm->node, comm->localRanks,
+        comm->minLocalRanks, comm->maxLocalRanks, group, groupSize, nGroups, gpusPerHost, pxnEnabled, netPeersPerGroup,
+        comm->p2pnChannels, comm->p2pnChannelsPerPeer, comm->config.nChannelsPerNetPeer, nGroupsPerEpoch,
+        cumulativeNetRecvCounts[nGroups], comm->p2pA2aMinPeers, comm->p2pA2aMaxPeers);
 
 cleanup:
   free(groupToNode);
   free(groupToLocal);
+  free(cumulativeNetRecvCounts);
   return ret;
 }
 

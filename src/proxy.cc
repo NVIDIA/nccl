@@ -400,6 +400,7 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   if (subIndex) {
     args->nChannels = std::min(args->nChannels, op->nChannels);
     args->nPeers = std::min(args->nPeers, op->nPeers);
+    args->minPeers = std::min(args->minPeers, op->minPeers);
     if ((args->sliceSteps != op->sliceSteps) || (args->chunkSteps != op->chunkSteps) ||
         (args->protocol != op->protocol) || (args->dtype != op->dtype) || (args->redOp != op->redOp) ||
         (args->coll != op->coll)) {
@@ -427,6 +428,7 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   args->algorithm = op->algorithm;
   args->nChannels = op->nChannels;
   args->nPeers = op->nPeers;
+  args->minPeers = op->minPeers;
   args->specifics = op->specifics;
   args->state = ncclProxyOpReady;
   args->progress = op->connection->tcomm->proxyProgress;

@@ -684,6 +684,9 @@ struct ncclComm {
   int p2pnChannelsPerPeer;
   int p2pSchedGroupSize;
   int p2pMaxPeers;
+  // A2A NET peer envelope derived from the P2P channel schedule.
+  int p2pA2aMinPeers;
+  int p2pA2aMaxPeers;
 
   // Should this comm allocate LL buffers for network P2P connections?
   bool allocP2pNetLLBuffers;

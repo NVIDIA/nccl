@@ -255,12 +255,12 @@ void setXferNetAttrs(struct ncclProxyState* proxyState, struct ncclProxyArgs* ar
 
   if (send) {
     netAttr.sendCommAttr.maxConcurrentPeers = args->nPeers;
-    netAttr.sendCommAttr.minConcurrentPeers = args->nPeers;
+    netAttr.sendCommAttr.minConcurrentPeers = args->minPeers;
     netAttr.sendCommAttr.maxFlowsPerPeer = args->nChannels;
     netAttr.sendCommAttr.minFlowsPerPeer = args->nChannels;
   } else {
     netAttr.recvCommAttr.maxConcurrentPeers = args->nPeers;
-    netAttr.recvCommAttr.minConcurrentPeers = args->nPeers;
+    netAttr.recvCommAttr.minConcurrentPeers = args->minPeers;
     netAttr.recvCommAttr.maxFlowsPerPeer = args->nChannels;
     netAttr.recvCommAttr.minFlowsPerPeer = args->nChannels;
   }

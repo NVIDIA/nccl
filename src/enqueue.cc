@@ -30,6 +30,15 @@ NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 NCCL_PARAM(AllgathervEnable, "ALLGATHERV_ENABLE", 1);
 NCCL_PARAM(SymCeThreshold, "SYM_CE_THRESHOLD", 8 * 1024 * 1024);
 
+NCCL_PARAM(ProfilerKernelStepSampleRate, "PROFILER_KERNEL_STEP_SAMPLE_RATE", 8);
+
+static uint8_t profilerKernelStepSampleRate() {
+  int64_t rate = ncclParamProfilerKernelStepSampleRate();
+  if (rate < 1) return 1;
+  if (rate > UINT8_MAX) return UINT8_MAX;
+  return (uint8_t)rate;
+}
+
 // Returns maximum kernel stack size of all CUDA kernels
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* maxStackSize) {
   ncclResult_t result = ncclSuccess;
@@ -332,6 +341,7 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
     devWork.netRegUsed = devWork.regUsed = 0;
     devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
     devWork.profilerStepEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelStep);
+    devWork.profilerStepSampleRate = profilerKernelStepSampleRate();
     if (task->regBufType & NCCL_NET_REG_BUFFER) devWork.netRegUsed = 1;
     if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER)) devWork.regUsed = 1;
 
@@ -522,6 +532,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       devWork.netRegUsed = devWork.regUsed = 0;
       devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
       devWork.profilerStepEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelStep);
+      devWork.profilerStepSampleRate = profilerKernelStepSampleRate();
       if (task->regBufType & NCCL_NET_REG_BUFFER) devWork.netRegUsed = 1;
       if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER)) devWork.regUsed = 1;
 
@@ -1028,6 +1039,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     ncclProfilerPluginLoaded() && ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelCh);
   work->profilerStepEnabled =
     ncclProfilerPluginLoaded() && ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelStep);
+  work->profilerStepSampleRate = profilerKernelStepSampleRate();
 
   for (int dir = 0; dir < nProxyOps; dir++) {
     struct ncclProxyOp* op = &proxyOps[dir];

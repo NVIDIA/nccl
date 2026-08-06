@@ -720,7 +720,8 @@ ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s,
       eDescr.kernelStep.peer = ev->peer;
       eDescr.kernelStep.step = ev->step;
       eDescr.kernelStep.size = ev->size;
-      eDescr.kernelStep.pTimer = ev->timestamp;
+      eDescr.kernelStep.startTs = ev->start_ts;
+      eDescr.kernelStep.readyTs = ev->ready_ts;
       ncclProfiler->startEvent(sub->profilerContext, eHandle, &eDescr);
     }
   }
@@ -730,7 +731,7 @@ ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s,
 ncclResult_t ncclProfilerStopKernelStepEvent(void* eHandle, const struct ncclDevKernelStepEvent* ev) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && eHandle && ev) {
     ncclProfilerEventStateArgs_t a = {};
-    a.kernelStep.pTimer = ev->timestamp;
+    a.kernelStep.pTimer = ev->ready_ts; // stop ring stores end time in ready_ts
     ncclProfiler->recordEventState(eHandle, ncclProfilerKernelStepStop, &a);
     ncclProfiler->stopEvent(eHandle);
   }

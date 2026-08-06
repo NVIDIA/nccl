@@ -23,6 +23,18 @@ struct ncclDevProfiler;
 struct ncclDevKernelStepRing;
 struct ncclDevKernelStepEvent;
 
+struct ncclKernelStepParent {
+  uint64_t workCounter;
+  void* taskEventHandle;
+  void* profilerContext;
+  int eActivationMask;
+  int rank;
+};
+
+// Each profiled work produces at least two step events, so this covers every
+// distinct work item that can still be resident in the 16384-entry step ring.
+#define MAX_KERNEL_STEP_PARENT_EVENTS 8192
+
 struct ncclProfilerProxy {
   bool initialized;
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
@@ -32,9 +44,14 @@ struct ncclProfilerProxy {
   struct ncclDevKernelStepRing* stepStarted /*[MAXCHANNELS]*/;
   struct ncclDevKernelStepRing* stepCompleted /*[MAXCHANNELS]*/;
   uint64_t* stepSeq /*[MAXCHANNELS]*/;       // device-published high water (same buffer as device)
-  uint64_t stepCounter[MAXCHANNELS];         // host drain cursor per channel (last fully drained seq)
-  // In-flight KernelStep plugin handles [MAXCHANNELS][MAX_KERNEL_STEP_EVENTS_PER_CHANNEL], flat
-  void** kernelStepHandles;
+  uint64_t stepCounter[MAXCHANNELS];         // host discovery cursor per channel
+  // Unresolved out-of-order sequences [MAXCHANNELS][MAX_KERNEL_STEP_EVENTS_PER_CHANNEL], flat.
+  uint64_t* kernelStepPending;
+  int kernelStepPendingCount[MAXCHANNELS];
+  // KernelStep parent metadata [MAXCHANNELS][send/recv][MAX_KERNEL_STEP_PARENT_EVENTS], flat.
+  // P2P send/recv tasks share a GPU work counter, so direction is required to route
+  // sparse ring entries to the correct top-level task event.
+  struct ncclKernelStepParent* kernelStepParents;
   struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
 };

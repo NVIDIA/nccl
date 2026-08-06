@@ -12,6 +12,16 @@
 #include "timer.h"
 #include "transport.h"
 
+// Mark whether this connector's peer is on the same host (for KernelStep intra-host gating).
+static inline void ncclConnMarkSameHost(struct ncclComm* comm, int peerRank, struct ncclConnInfo* conn) {
+  if (peerRank >= 0 && peerRank < comm->nRanks &&
+      comm->peerInfo[comm->rank].hostHash == comm->peerInfo[peerRank].hostHash) {
+    conn->flags |= NCCL_CONN_SAME_HOST;
+  } else {
+    conn->flags &= ~NCCL_CONN_SAME_HOST;
+  }
+}
+
 struct ncclTransport* ncclTransports[NTRANSPORTS + 1] = {
   &p2pTransport, &shmTransport, &netTransport, &collNetTransport,
   &profilerTransport // Not really used for transport, only to create proxy ops polling on profiler counters.
@@ -246,6 +256,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
                               ret, fail);
                 if (ret == ncclSuccess) {
                   conn->connected = 1;
+                  ncclConnMarkSameHost(comm, sendPeer, &conn->conn);
                   /* comm->channels[c].devPeers[sendPeer]->send[connIndex] is a device memory access. */
                   CUDACHECKGOTO(cudaMemcpyAsync(&comm->channels[c].devPeersHostPtr[sendPeer]->send[connIndex],
                                                 &conn->conn, sizeof(struct ncclConnInfo), cudaMemcpyHostToDevice,
@@ -269,6 +280,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
                               ret, fail);
                 if (ret == ncclSuccess) {
                   conn->connected = 1;
+                  ncclConnMarkSameHost(comm, recvPeer, &conn->conn);
                   /* comm->channels[c].devPeers[recvPeer]->recv[connIndex] is a device memory access. */
                   CUDACHECKGOTO(cudaMemcpyAsync(&comm->channels[c].devPeersHostPtr[recvPeer]->recv[connIndex],
                                                 &conn->conn, sizeof(struct ncclConnInfo), cudaMemcpyHostToDevice,

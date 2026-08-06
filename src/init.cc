@@ -652,9 +652,12 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.stepStarted, MAXCHANNELS), ret, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.stepCompleted, MAXCHANNELS), ret, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.stepSeq, MAXCHANNELS), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepHandles, MAXCHANNELS * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL), ret,
+  NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepPending, MAXCHANNELS * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL), ret,
                 fail);
-  ncclCommPushFree(comm, comm->profiler.kernelStepHandles);
+  ncclCommPushFree(comm, comm->profiler.kernelStepPending);
+  NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepParents,
+                          MAXCHANNELS * 2 * MAX_KERNEL_STEP_PARENT_EVENTS), ret, fail);
+  ncclCommPushFree(comm, comm->profiler.kernelStepParents);
   tmpCommAndChans.comm.workStarted = comm->profiler.workStarted;
   tmpCommAndChans.comm.workCompleted = comm->profiler.workCompleted;
   tmpCommAndChans.comm.stepStarted = comm->profiler.stepStarted;

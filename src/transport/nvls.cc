@@ -458,6 +458,12 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
       peer->recv[1].conn.buffs[NCCL_PROTO_SIMPLE] = resources->ucBuff + ((h * 2 + 1) * nChannels + c) * buffSize;
       peer->send[0].conn.buffs[NCCL_PROTO_SIMPLE] = resources->mcBuff + ((h * 2 + 1) * nChannels + c) * buffSize;
 
+      // NVLS peers are local-fabric; treat as same-host for KernelStep gating.
+      peer->send[0].conn.flags |= NCCL_CONN_SAME_HOST;
+      peer->recv[0].conn.flags |= NCCL_CONN_SAME_HOST;
+      peer->send[1].conn.flags |= NCCL_CONN_SAME_HOST;
+      peer->recv[1].conn.flags |= NCCL_CONN_SAME_HOST;
+
       CUDACHECKGOTO(cudaMemcpyAsync(&comm->channels[c].devPeersHostPtr[nvlsPeer]->send[0], &peer->send[0].conn,
                                     sizeof(struct ncclConnInfo), cudaMemcpyHostToDevice, hostStream),
                     res, fail);
@@ -600,6 +606,12 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
         peer->send[0].conn.tail = (uint64_t*)(mem + memSize / 2);
         peer->send[0].conn.stepSize = nvlsStepSize;
         peer->send[0].conn.flags |= NCCL_NVLS_MIN_POLL;
+
+        // NVLS peers are local-fabric; treat as same-host for KernelStep gating.
+        peer->send[0].conn.flags |= NCCL_CONN_SAME_HOST;
+        peer->recv[0].conn.flags |= NCCL_CONN_SAME_HOST;
+        peer->send[1].conn.flags |= NCCL_CONN_SAME_HOST;
+        peer->recv[1].conn.flags |= NCCL_CONN_SAME_HOST;
 
         CUDACHECKGOTO(cudaMemcpyAsync(&comm->channels[c].devPeersHostPtr[nvlsPeer]->send[0], &peer->send[0].conn,
                                       sizeof(struct ncclConnInfo), cudaMemcpyHostToDevice, hostStream),

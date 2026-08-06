@@ -40,6 +40,15 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   uint64_t sendStep[MaxSend];
   union ncclLLFifoLine* recvBuff[MaxRecv];
   union ncclLLFifoLine* sendBuff[MaxSend];
+  bool stepProf = false; // KernelStep profiling for this work
+  uint8_t kernelStepSampleRate = 1;
+  uint16_t kernelStepWorkTag = 0;
+  uint64_t kernelStepStartTs = 0; // send credit wait start from waitSend (first SEND KernelStep)
+  bool sendSameHost = false; // send peer same host → stamp KernelSteps
+  bool recvSameHost = false; // recv peer same host → stamp KernelSteps
+  uint64_t kernelStepLogicalIndex = 0;
+  ncclKernelStepDeferredLocal kernelStepDeferredSend = {};
+  ncclKernelStepDeferredLocal kernelStepDeferredRecv = {};
 
   inline __device__ int recvOffset(int i) {
     return (recvStep[i] % NCCL_STEPS) * stepLines;
@@ -71,8 +80,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   int abort = 0;
 
   inline __device__ void waitSend(int nbytes) {
+    uint64_t waitStart = 0;
     if (sendConnHeadPtr) {
       int spins = 0;
+      const bool timeWait = COMPILER_EXPECT(stepProf, 0) && sendSameHost;
+      if (timeWait) waitStart = globaltimer();
       while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
         sendConnHeadCache = *sendConnHeadPtr;
         if (checkAbort(abort, 1, spins)) break;
@@ -85,6 +97,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       }
       sendConnHead += 1;
     }
+    if (COMPILER_EXPECT(stepProf, 0)) kernelStepStartTs = waitStart;
     barrier();
   }
 
@@ -260,6 +273,55 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
     while (nelem > 0) {
       int eltInLine = EltPerLine < nelem ? EltPerLine : nelem;
 
+      // KernelStep per LL line (tid 0 only): start before flag/data transfer.
+      uint64_t seqSend = 0, seqRecv = 0;
+      const uint32_t lineBytes = (uint32_t)(min(nelem, eltPerTrip) * sizeof(T));
+      // Wire line offset distinguishes lines within one FIFO step.
+      const uint32_t lineStep = (uint32_t)offset;
+      // Continuous sample index across LLGenericOp calls (work-level first/last).
+      const uint64_t sampleIndex = kernelStepLogicalIndex;
+      if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
+        if (RECV && recvSameHost) {
+          bool sample = profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex);
+          if (sample) {
+            kernelStepDeferredRecv.hasStart = kernelStepDeferredRecv.hasStop = 0;
+            profilerKernelStepStart(true, /*isSend=*/0, /*peer=*/0, lineStep, lineBytes, kernelStepWorkTag, /*startTs=*/0, &seqRecv);
+          } else {
+            kernelStepDeferredRecv.readyTs = globaltimer();
+            kernelStepDeferredRecv.step = lineStep;
+            kernelStepDeferredRecv.size = lineBytes;
+            kernelStepDeferredRecv.startTs = 0;
+            kernelStepDeferredRecv.workTag = kernelStepWorkTag;
+            kernelStepDeferredRecv.peer = 0;
+            kernelStepDeferredRecv.isSend = 0;
+            kernelStepDeferredRecv.hasStart = 1;
+            kernelStepDeferredRecv.hasStop = 0;
+          }
+        }
+        if (SEND && sendSameHost) {
+          uint64_t waitStart = kernelStepStartTs;
+          kernelStepStartTs = 0; // attach waitSend to first send KernelStep only
+          bool sample = profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex);
+          if (sample) {
+            kernelStepDeferredSend.hasStart = kernelStepDeferredSend.hasStop = 0;
+            profilerKernelStepStart(true, /*isSend=*/1, /*peer=*/0, lineStep, lineBytes, kernelStepWorkTag, waitStart, &seqSend);
+          } else {
+            kernelStepDeferredSend.readyTs = globaltimer();
+            kernelStepDeferredSend.step = lineStep;
+            kernelStepDeferredSend.size = lineBytes;
+            kernelStepDeferredSend.startTs = waitStart;
+            kernelStepDeferredSend.workTag = kernelStepWorkTag;
+            kernelStepDeferredSend.peer = 0;
+            kernelStepDeferredSend.isSend = 1;
+            kernelStepDeferredSend.hasStart = 1;
+            kernelStepDeferredSend.hasStop = 0;
+          }
+        } else if (SEND) {
+          kernelStepStartTs = 0;
+        }
+        if ((RECV && recvSameHost) || (SEND && sendSameHost)) kernelStepLogicalIndex += 1;
+      }
+
       DataLoader dl;
       ncclLLFifoLine line[MaxRecv];
       uint64_t data, peerData;
@@ -299,6 +361,27 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
         storeData(dstElts, data, eltInLine);
         dstElts += eltPerTrip;
       }
+
+      // KernelStep stop: after this line's stores.
+      if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
+        if (RECV) {
+          if (seqRecv != 0) {
+            profilerKernelStepStop(true, seqRecv, /*isSend=*/0, /*peer=*/0, lineStep, lineBytes);
+          } else if (kernelStepDeferredRecv.hasStart && !kernelStepDeferredRecv.hasStop) {
+            kernelStepDeferredRecv.endTs = globaltimer();
+            kernelStepDeferredRecv.hasStop = 1;
+          }
+        }
+        if (SEND) {
+          if (seqSend != 0) {
+            profilerKernelStepStop(true, seqSend, /*isSend=*/1, /*peer=*/0, lineStep, lineBytes);
+          } else if (kernelStepDeferredSend.hasStart && !kernelStepDeferredSend.hasStop) {
+            kernelStepDeferredSend.endTs = globaltimer();
+            kernelStepDeferredSend.hasStop = 1;
+          }
+        }
+      }
+
       nelem -= eltPerTrip;
       offset += nthreads;
     }
@@ -318,7 +401,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
     recvBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     recvStep[i] = conn->step;
-    if (wid == i) recvConn = conn;
+    if (wid == i) {
+      recvConn = conn;
+      recvSameHost = (conn->flags & NCCL_CONN_SAME_HOST) != 0;
+    }
   }
   __device__ __forceinline__ void loadRecvSync() {
     if (tid >= nthreads - WARP_SIZE && wid < fan.nrecv()) {
@@ -330,7 +416,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
     sendBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     sendStep[i] = conn->step;
-    if (wid == i) sendConn = conn;
+    if (wid == i) {
+      sendConn = conn;
+      sendSameHost = (conn->flags & NCCL_CONN_SAME_HOST) != 0;
+    }
   }
   __device__ __forceinline__ void loadSendSync() {
     if (tid < fan.nsend()) {
@@ -344,10 +433,25 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
 public:
   __device__ Primitives(const int tid, const int nthreads, int const* recvPeers, int const* sendPeers,
                         void const* inputBuf, void* outputBuf, uint64_t redOpArg, uint8_t group = 0,
-                        uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclDevWorkColl* e = nullptr,
+                        uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0,
+                        struct ncclDevWorkColl* collWork = nullptr, struct ncclDevWorkP2p* p2pWork = nullptr,
                         bool ipcReg = false, bool netReg = false, int stepSize_ = 0)
     : redOp(redOpArg), tid(tid), nthreads(nthreads), wid(tid % WARP_SIZE), group(group),
       stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL] / NCCL_STEPS / sizeof(ncclLLFifoLine)) {
+    (void)ipcReg;
+    (void)netReg;
+    (void)stepSize_;
+    stepProf = P2p ? (p2pWork && p2pWork->profilerStepEnabled) : (collWork && collWork->profilerStepEnabled);
+    kernelStepSampleRate = P2p ? (p2pWork ? p2pWork->profilerStepSampleRate : 1) :
+                                 (collWork ? collWork->profilerStepSampleRate : 1);
+    if (kernelStepSampleRate == 0) kernelStepSampleRate = 1;
+    if (P2p && p2pWork) {
+      kernelStepWorkTag = (uint16_t)(ncclShmem.channel.workCounter +
+        (p2pWork - (struct ncclDevWorkP2p*)ncclShmem.workStorage) + 1);
+    } else if (collWork) {
+      kernelStepWorkTag = (uint16_t)(ncclShmem.channel.workCounter +
+        (collWork - (struct ncclDevWorkColl*)ncclShmem.workStorage) + 1);
+    }
     auto* channel = &ncclShmem.channel;
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv = 0, nsend = 0;
@@ -374,6 +478,11 @@ public:
   }
 
   __device__ ~Primitives() {
+    // Publish deferred last KernelStep(s) before saving conn steps.
+    if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
+      if (recvSameHost) profilerKernelStepPublishDeferred(&kernelStepDeferredRecv);
+      if (sendSameHost) profilerKernelStepPublishDeferred(&kernelStepDeferredSend);
+    }
     // Save steps for the next operation
     if (tid >= nthreads - WARP_SIZE && wid < fan.nrecv()) recvConn->step = recvConnHead;
     if (tid < fan.nsend()) sendConn->step = sendConnHead;

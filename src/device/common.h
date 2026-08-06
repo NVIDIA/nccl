@@ -46,6 +46,12 @@ struct ncclShmemGroup {
   // KernelStep: Wait role publishes seq here for Post role after barrier
   uint64_t kernelStepSeqSend[NCCL_MAX_ARITY];
   uint64_t kernelStepSeqRecv[NCCL_MAX_ARITY];
+  // Compact deferred-last handshake: Wait sets pending + keeps start meta in registers;
+  // Post writes stopTs; Wait destructor publishes if still pending.
+  uint64_t kernelStepDeferredStopSend[NCCL_MAX_ARITY];
+  uint64_t kernelStepDeferredStopRecv[NCCL_MAX_ARITY];
+  uint8_t kernelStepDeferredPendingSend[NCCL_MAX_ARITY];
+  uint8_t kernelStepDeferredPendingRecv[NCCL_MAX_ARITY];
 };
 
 struct ncclShmemData {
@@ -341,19 +347,32 @@ __device__ __forceinline__ bool profilerWorkMarkersEnabled(int workItemIdx) {
   return profilerEnabled(workItemIdx) || profilerStepEnabled(workItemIdx);
 }
 
+// Deterministic sampling so every CUDA role for the same step agrees (start/stop pairing).
+// Always keep the first KernelStep (logicalIndex==0 ≡ index%rate for rate>=1); sample every
+// `rate`-th after that. The true last step of a Primitives work is published from a deferred
+// slot in the destructor when it was not already on the sampling grid.
+__device__ __forceinline__ bool profilerKernelStepSample(bool enabled, uint8_t rate, uint64_t logicalIndex) {
+  if (!enabled) return false;
+  if (rate <= 1) return true;
+  return (logicalIndex % rate) == 0;
+}
+
 __device__ __forceinline__ void profilerKernelStepStart(bool enabled, int isSend, int peerIdx, uint32_t step,
-                                                         uint32_t size, uint64_t* seqOut) {
+                                                         uint32_t size, uint16_t workTag, uint64_t startTs,
+                                                         uint64_t* seqOut) {
   if (!enabled || ncclShmem.comm.stepStarted == nullptr || ncclShmem.comm.stepSeq == nullptr) return;
   int ch = ncclShmem.channelId;
   uint64_t seq = atomicAdd((unsigned long long*)(ncclShmem.comm.stepSeq + ch), 1ULL) + 1ULL;
   *seqOut = seq;
   struct ncclDevKernelStepEvent* e =
     &ncclShmem.comm.stepStarted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
-  e->timestamp = globaltimer();
+  e->ready_ts = globaltimer(); // transfer/comm begin
+  e->start_ts = startTs;       // wait/step begin (0 if none)
   e->step = step;
   e->size = size;
   e->peer = (uint8_t)peerIdx;
   e->flags = isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
+  e->work_tag = workTag;
   __threadfence_system();
   e->counter = seq;
 }
@@ -364,13 +383,60 @@ __device__ __forceinline__ void profilerKernelStepStop(bool enabled, uint64_t se
   int ch = ncclShmem.channelId;
   struct ncclDevKernelStepEvent* e =
     &ncclShmem.comm.stepCompleted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
-  e->timestamp = globaltimer();
+  e->ready_ts = globaltimer(); // step end
+  e->start_ts = 0;
   e->step = step;
   e->size = size;
   e->peer = (uint8_t)peerIdx;
   e->flags = isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
   __threadfence_system();
   e->counter = seq;
+}
+
+// Local/register deferred KernelStep (LL/LL128 tid0, or Simple Wait-role thread).
+struct ncclKernelStepDeferredLocal {
+  uint64_t readyTs;
+  uint64_t endTs;
+  uint64_t startTs; // wait/step begin; 0 if none
+  uint32_t step;
+  uint32_t size;
+  uint16_t workTag;
+  uint8_t peer;
+  uint8_t isSend;
+  uint8_t hasStart;
+  uint8_t hasStop;
+};
+
+// Publish a skipped step that turned out to be the last of this Primitives work.
+__device__ __forceinline__ void profilerKernelStepPublishDeferred(struct ncclKernelStepDeferredLocal* d) {
+  if (d == nullptr || !d->hasStart || !d->hasStop) return;
+  if (ncclShmem.comm.stepStarted == nullptr || ncclShmem.comm.stepCompleted == nullptr ||
+      ncclShmem.comm.stepSeq == nullptr)
+    return;
+  int ch = ncclShmem.channelId;
+  uint64_t seq = atomicAdd((unsigned long long*)(ncclShmem.comm.stepSeq + ch), 1ULL) + 1ULL;
+  struct ncclDevKernelStepEvent* s =
+    &ncclShmem.comm.stepStarted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
+  s->ready_ts = d->readyTs;
+  s->start_ts = d->startTs;
+  s->step = d->step;
+  s->size = d->size;
+  s->peer = d->peer;
+  s->flags = d->isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
+  s->work_tag = d->workTag;
+  __threadfence_system();
+  s->counter = seq;
+  struct ncclDevKernelStepEvent* e =
+    &ncclShmem.comm.stepCompleted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
+  e->ready_ts = d->endTs;
+  e->start_ts = 0;
+  e->step = d->step;
+  e->size = d->size;
+  e->peer = d->peer;
+  e->flags = d->isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
+  __threadfence_system();
+  e->counter = seq;
+  d->hasStart = d->hasStop = 0;
 }
 
 __device__ __forceinline__ void profiler(int action) {
@@ -476,6 +542,12 @@ __device__ __forceinline__ void ncclKernelMain(struct ncclDevKernelArgs const* a
     loadWorkBatchToShmem(tid, tn, args, batchIx);
     __syncthreads();
   }
+  // Intermediate batches synchronize before profiler(STOP). Do the same for
+  // the terminal batch when KernelStep tracking is active so thread 0 cannot
+  // publish workCompleted before recv/send roles publish their final step ends.
+  bool anyProfilerStepEnabled = false;
+  for (int i = 0; i < ncclShmem.nWorks; i++) anyProfilerStepEnabled |= profilerStepEnabled(i);
+  if (anyProfilerStepEnabled) __syncthreads();
   profiler(FINI);
 }
 

@@ -395,6 +395,8 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   sub->profilerContext = op->profilerContext;
   sub->ringAlgo = op->ringAlgo;
   sub->workCounter = op->workCounter;
+  sub->stepStarted = op->stepStarted;
+  sub->stepCompleted = op->stepCompleted;
   args->nsubs = subIndex + 1;
   if (subIndex) {
     args->nChannels = std::min(args->nChannels, op->nChannels);
@@ -559,6 +561,23 @@ static void incWorkCounter(struct ncclComm* comm, struct ncclProxyOp* op) {
     (op->incWorkCounter) ? ++comm->profiler.workCounter[op->channelId] : comm->profiler.workCounter[op->channelId];
 }
 
+static void saveKernelStepParent(struct ncclComm* comm, struct ncclProxyOp* op) {
+  if (!(op->eActivationMask & ncclProfileKernelStep) || comm->profiler.kernelStepParents == nullptr) return;
+  int firstDir = op->coll == ncclFuncRecv ? 0 : 1;
+  int lastDir = op->coll == ncclFuncSend ? 1 : 0;
+  if (op->coll != ncclFuncSend && op->coll != ncclFuncRecv) firstDir = 0, lastDir = 1;
+  int slot = (int)(op->workCounter % MAX_KERNEL_STEP_PARENT_EVENTS);
+  for (int dir = firstDir; dir <= lastDir; dir++) {
+    size_t index = ((size_t)op->channelId * 2 + dir) * MAX_KERNEL_STEP_PARENT_EVENTS + slot;
+    struct ncclKernelStepParent* parent = comm->profiler.kernelStepParents + index;
+    parent->workCounter = op->workCounter;
+    parent->taskEventHandle = op->taskEventHandle;
+    parent->profilerContext = op->profilerContext;
+    parent->eActivationMask = op->eActivationMask;
+    parent->rank = op->rank;
+  }
+}
+
 static ncclResult_t SaveProxyProfiler(struct ncclComm* comm, struct ncclProxyOp* op, bool* justInquire) {
   struct ncclProxyConnector* proxyConn = (op->coll == ncclFuncRecv) ? &comm->profiler.recvProxyConn[op->channelId] :
                                                                       &comm->profiler.sendProxyConn[op->channelId];
@@ -568,8 +587,11 @@ static ncclResult_t SaveProxyProfiler(struct ncclComm* comm, struct ncclProxyOp*
   } else {
     op->sendbuff = (uint8_t*)comm->profiler.workStarted;
     op->recvbuff = (uint8_t*)comm->profiler.workCompleted;
+    op->stepStarted = comm->profiler.stepStarted;
+    op->stepCompleted = comm->profiler.stepCompleted;
     // Ensure that in graph capturing the proxy workCounter is incremented to keep up with kernel workCounter
     if (comm->planner.persistent) incWorkCounter(comm, op);
+    saveKernelStepParent(comm, op);
     NCCLCHECK(ncclLocalOpAppend(comm, proxyConn, op));
   }
   return ncclSuccess;

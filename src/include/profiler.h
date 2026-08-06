@@ -19,12 +19,39 @@ struct ncclInfo;
 struct ncclComm;
 struct ncclProxyOp;
 struct ncclProxyConnector;
+struct ncclDevProfiler;
+struct ncclDevKernelStepRing;
+struct ncclDevKernelStepEvent;
+
+struct ncclKernelStepParent {
+  uint64_t workCounter;
+  void* taskEventHandle;
+  void* profilerContext;
+  int eActivationMask;
+  int rank;
+};
+
+// Each profiled work produces at least two step events, so this covers every
+// distinct work item that can still be resident in the 16384-entry step ring.
+#define MAX_KERNEL_STEP_PARENT_EVENTS 8192
 
 struct ncclProfilerProxy {
   bool initialized;
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
   uint64_t workCounter[MAXCHANNELS]; // host work counter
+  // KernelStep dual rings (cuda host alloc, [MAXCHANNELS] elements each)
+  struct ncclDevKernelStepRing* stepStarted /*[MAXCHANNELS]*/;
+  struct ncclDevKernelStepRing* stepCompleted /*[MAXCHANNELS]*/;
+  uint64_t* stepSeq /*[MAXCHANNELS]*/;       // device-published high water (same buffer as device)
+  uint64_t stepCounter[MAXCHANNELS];         // host discovery cursor per channel
+  // Unresolved out-of-order sequences [MAXCHANNELS][MAX_KERNEL_STEP_EVENTS_PER_CHANNEL], flat.
+  uint64_t* kernelStepPending;
+  int kernelStepPendingCount[MAXCHANNELS];
+  // KernelStep parent metadata [MAXCHANNELS][send/recv][MAX_KERNEL_STEP_PARENT_EVENTS], flat.
+  // P2P send/recv tasks share a GPU work counter, so direction is required to route
+  // sparse ring entries to the correct top-level task event.
+  struct ncclKernelStepParent* kernelStepParents;
   struct ncclProxyConnector sendProxyConn[MAXCHANNELS];
   struct ncclProxyConnector recvProxyConn[MAXCHANNELS];
 };
@@ -95,6 +122,11 @@ ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle);
 // Kernel Channel Start/Stop Event Wrappers
 ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start);
 ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop);
+
+// KernelStep Start/Stop Event Wrappers (per-slice Simple prims timing)
+ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s, const struct ncclDevKernelStepEvent* ev,
+                                              void** eHandle);
+ncclResult_t ncclProfilerStopKernelStepEvent(void* eHandle, const struct ncclDevKernelStepEvent* ev);
 
 // Record Event Wrappers
 ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, ncclProfilerEventState_t eState);

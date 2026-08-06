@@ -176,9 +176,10 @@ static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivat
                                       int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn) {
   NCCLCHECK(ncclProfiler_v5->init(ctx, commId, eActivationMask, commName, nNodes, nRanks, rank, logfn));
 
-  // Clear v6 CE event bits from the activation mask since v5 doesn't support them
+  // Clear event bits unsupported by v5 plugins (v6 CE + KernelStep)
   if (eActivationMask) {
-    *eActivationMask &= ~(ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch);
+    *eActivationMask &=
+      ~(ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch | ncclProfileKernelStep);
   }
 
   ncclProfiler.startEvent = ncclProfiler_startEvent;

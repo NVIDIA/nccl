@@ -120,6 +120,7 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 #define NCCL_P2P_WRITE 0x01
 #define NCCL_P2P_READ 0x02
 #define NCCL_DIRECT_NIC 0x04
+#define NCCL_CONN_SAME_HOST 0x10 // peer shares hostHash with this rank (intra-host)
 #define NCCL_NVLS_MIN_POLL 0x80
 
 // Number of named barriers supported by CUDA
@@ -254,6 +255,8 @@ struct alignas(16) ncclDevWorkP2p {
   uint8_t sendNetReg:1, recvNetReg:1;
   uint8_t sendIpcReg:1, recvIpcReg:1;
   uint8_t profilerEnabled:1;
+  uint8_t profilerStepEnabled:1;
+  uint8_t profilerStepSampleRate;
 };
 
 // Compute the subset of the data transfer corresponding to the given part index.
@@ -287,9 +290,10 @@ struct alignas(16) ncclDevWorkColl {
   uint32_t channelLo:8, channelHi:8;
   uint32_t nWarps:8;
   uint32_t redOpArgIsPtr:1, regUsed:1, netRegUsed:1, oneNode:1, direct:2, isOneRPN:1;
-  uint32_t profilerEnabled:1;
+  uint32_t profilerEnabled:1, profilerStepEnabled:1;
   uint32_t root;
-  uint8_t pad1[12];  // pad to 16-byte boundary (20 bytes above -> 32)
+  uint8_t profilerStepSampleRate;
+  uint8_t pad1[11];  // pad to 16-byte boundary (20 bytes above -> 32)
   void* recvbuff;
   void* sendbuff;
   uint64_t pad0;     // pad to 16-byte boundary (16 bytes above -> 32)
@@ -435,6 +439,27 @@ struct ncclDevProfiler {
   } data[MAX_PROFILER_EVENTS_PER_CHANNEL];
 };
 
+// Per-slice/line KernelStep profiler rings (Simple / LL / LL128). Dual rings mirror KernelCh.
+// Sized for per-line LL stamps on training-sized messages (1024 was too small; overwrite observed).
+#define MAX_KERNEL_STEP_EVENTS_PER_CHANNEL 16384
+#define NCCL_KERNEL_STEP_FLAG_SEND (1u << 0)
+
+struct ncclDevKernelStepEvent {
+  uint64_t counter;   // monotonic per-channel seq (pairs start/completed)
+  uint64_t ready_ts;  // start ring: transfer/comm begin; stop ring: step end (GPU globaltimer)
+  uint64_t start_ts;  // start ring: wait/step begin (0 if none/recv); stop ring: unused 0
+  uint32_t step;      // protocol step id
+  uint32_t size;      // slice bytes
+  uint8_t peer;       // peer index within the primitive fan
+  uint8_t flags;      // NCCL_KERNEL_STEP_FLAG_*
+  uint16_t work_tag;  // low work-counter bits route sparse steps to their profiler parent
+};
+static_assert(sizeof(struct ncclDevKernelStepEvent) == 40, "KernelStep event ring footprint");
+
+struct ncclDevKernelStepRing {
+  struct ncclDevKernelStepEvent data[MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
+};
+
 struct ncclKernelComm {
   int rank;
   int nRanks;
@@ -457,6 +482,11 @@ struct ncclKernelComm {
   // Profiler counters
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
+  // KernelStep rings (per-slice start/end); nullptr until allocated at init
+  struct ncclDevKernelStepRing* stepStarted /*[MAXCHANNELS]*/;
+  struct ncclDevKernelStepRing* stepCompleted /*[MAXCHANNELS]*/;
+  // Monotonic per-channel KernelStep sequence (device atomicAdd); host drain cursor is separate
+  uint64_t* stepSeq /*[MAXCHANNELS]*/;
 };
 
 struct alignas(16) ncclKernelCommAndChannels {

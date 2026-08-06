@@ -119,6 +119,9 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
                                       int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn) {
   NCCLCHECK(ncclProfiler_v4->init(ctx, eActivationMask, commName, commId, nNodes, nRanks, rank, logfn));
+  if (eActivationMask) {
+    *eActivationMask &= ~(ncclProfileKernelStep | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch);
+  }
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.recordEventState = ncclProfiler_recordEventState;
   ncclProfiler.stopEvent = ncclProfiler_v4->stopEvent;

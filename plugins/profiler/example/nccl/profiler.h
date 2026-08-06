@@ -30,6 +30,8 @@ enum {
   ncclProfileCeColl         = (1 << 12), // CE collective operation
   ncclProfileCeSync         = (1 << 13), // CE synchronization operation
   ncclProfileCeBatch        = (1 << 14), // CE batch operation
+  // Kernel step events (v6): per-slice start/end on Simple prims (intra-host)
+  ncclProfileKernelStep     = (1 << 15),
 };
 
 typedef enum {
@@ -76,6 +78,9 @@ typedef enum {
   ncclProfilerCeSyncComplete           = 28,  // CE synchronization completes
   ncclProfilerCeBatchStart             = 29,  // CE batch operation begins
   ncclProfilerCeBatchComplete          = 30,  // CE batch operation completes
+
+  /* Kernel step states (v6) */
+  ncclProfilerKernelStepStop           = 31,  // per-slice GPU step end (pTimer in state args)
 } ncclProfilerEventState_t;
 
 typedef ncclProfilerEventState_t ncclProfilerEventState_v1_t;

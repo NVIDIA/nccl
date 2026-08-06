@@ -412,6 +412,21 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, ui
   return ncclSuccess;
 }
 
+ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s, const struct ncclDevKernelStepEvent* ev,
+                                              void** eHandle) {
+  (void)args;
+  (void)s;
+  (void)ev;
+  if (eHandle) *eHandle = nullptr;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerStopKernelStepEvent(void* eHandle, const struct ncclDevKernelStepEvent* ev) {
+  (void)eHandle;
+  (void)ev;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, ncclProfilerEventState_t eState) {
   (void)sub;
   (void)args;

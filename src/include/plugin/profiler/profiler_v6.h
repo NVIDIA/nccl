@@ -87,6 +87,16 @@ typedef struct {
     } kernelCh;
 
     struct {
+      uint8_t channelId;
+      uint8_t isSend;
+      uint8_t peer;      // peer index within the primitive fan
+      uint32_t step;     // protocol step id at stamp time
+      uint32_t size;     // slice bytes
+      uint64_t startTs;  // wait/step begin (0 if none/recv)
+      uint64_t readyTs;  // transfer/comm begin (GPU globaltimer)
+    } kernelStep;
+
+    struct {
       int64_t id;
       void* data;
     } netPlugin;

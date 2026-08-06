@@ -42,6 +42,9 @@ LLVM_DIS ?= llvm-dis
 LLVM_AS ?= llvm-as
 PYTHON ?= python3
 
+# Enable all ReduceCopy type and block-size combinations in generated IR.
+NCCL_DEVICE_DEFINES := -DNCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1
+
 # Include paths
 NCCL_INCLUDES := -I$(BUILDDIR)/include -I../../src/include -I../../src/include/nccl_device -I../../src/device
 CUDA_INCLUDES := -I$(CUDA_INC) -I$(CUDA_INC)/cccl
@@ -51,12 +54,15 @@ CUDA_INCLUDES := -I$(CUDA_INC) -I$(CUDA_INC)/cccl
 CLANG_COMPAT_INCLUDES := -Iclang_compat
 
 # Clang flags for LLVM IR generation
+# Clang supports extended device lambdas but does not define nvcc's feature macro.
 COMMON_CLANG_FLAGS := -std=$(BITCODE_CXX_STD) -x cuda \
                		  --cuda-path=$(CUDA_HOME) --cuda-device-only \
                		  --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
                		  $(CLANG_COMPAT_INCLUDES) \
                		  $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
                		  -D__clang_llvm_bitcode_lib__ \
+                      -D__CUDACC_EXTENDED_LAMBDA__ \
+                      $(NCCL_DEVICE_DEFINES) \
                		  -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
                		  -D_NV_RSQRT_SPECIFIER=
 
@@ -74,7 +80,7 @@ $(WRAPPER_HEADER): nccl_device_wrapper.h
 	@echo "Copying nccl_device_wrapper.h to build include..."
 	cp -f $< $@
 
-$(UNOPTIMIZED_BC): $(LLVM_SRC) nccl_device_wrapper.h
+$(UNOPTIMIZED_BC): $(LLVM_SRC) nccl_device_wrapper.h util.h
 	@mkdir -p $(OBJDIR)
 	@echo "Generating unoptimized LLVM bitcode..."
 	$(CLANG) $(CLANG_FLAGS) $(LLVM_SRC) -o $@
@@ -112,11 +118,12 @@ llvm_ir: $(FINAL_BC) $(OPTIMIZED_BC) $(WRAPPER_HEADER)
 	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
 
 # LTO IR generation
-$(FINAL_LTO_IR): $(LLVM_SRC) $(WRAPPER_HEADER)
+$(FINAL_LTO_IR): $(LLVM_SRC) $(WRAPPER_HEADER) util.h
 	@mkdir -p $(LIBDIR)
 	@echo "Generating LTO IR..."
-	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) -dlto --ltoir -x cu \
+	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
 		$(NCCL_INCLUDES) $(CUDA_INCLUDES) \
+		$(NCCL_DEVICE_DEFINES) \
 		-DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
 		-D__NCCL_DEVICE_LTOIR_LIB__ \
 		-o $@ $(LLVM_SRC)

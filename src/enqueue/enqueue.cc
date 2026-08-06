@@ -969,8 +969,7 @@ static inline int p2pPayloadPerChunk(int chunkSize, int protocol) {
 // No-op's are encoded with a -1 size.
 static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, int nChannelsMin, int nChannelsMax,
                                  int p2pEpoch, int p2pRound, int sendRank, void* sendAddr, ssize_t sendBytes,
-                                 int recvRank, void* recvAddr, ssize_t recvBytes, const int planTotalTasks[],
-                                 struct ncclTaskP2p** p2pTasks) {
+                                 int recvRank, void* recvAddr, ssize_t recvBytes, struct ncclTaskP2p** p2pTasks) {
   ncclResult_t ret = ncclSuccess;
   constexpr int connIndex = 1;
   bool selfSend = (sendRank == comm->rank);
@@ -985,6 +984,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   uint8_t base = ncclP2pChannelBaseForRound(comm, p2pRound);
   struct ncclProxyOp proxyOps[2] = {};
   int nProxyOps = selfSend ? 0 : 2;
+  int a2aMinPeers = NCCL_NET_ATTR_UNDEF, a2aMaxPeers = NCCL_NET_ATTR_UNDEF;
   if (!selfSend) {
     for (int part = 0; part < nChannelsMax; part++) {
       int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, part);
@@ -1164,15 +1164,10 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   }
 
   nChannelsMax = std::max(nChannels[0], nChannels[1]);
-  // Determine how many peers this plan will target concurrently. Make a
-  // simplifying assumption that each task targets a different peer.
-  // Each task is striped across 'nChannelsMax' of 'p2pnChannels' channels.
-  // Each channel runs up to NCCL_MAX_DEV_WORK_P2P_PER_BATCH tasks concurrently.
-  int maxConcurrent;
-  int concurrentTasks[2];
-  maxConcurrent = comm->p2pnChannels / nChannelsMax * NCCL_MAX_DEV_WORK_P2P_PER_BATCH;
-  concurrentTasks[0] = std::min(planTotalTasks[0], maxConcurrent);
-  concurrentTasks[1] = std::min(planTotalTasks[1], maxConcurrent);
+  if (!selfSend && p2pTasks[1] && p2pTasks[1]->collAPI == ncclFuncAlltoAll) {
+    a2aMinPeers = comm->p2pA2aMinPeers;
+    a2aMaxPeers = comm->p2pA2aMaxPeers;
+  }
   ++plan->p2pPairCounter;
   for (int i = 0; i < 2; i++) {
     if (p2pTasks[i]) p2pTasks[i]->p2pPairId = plan->p2pPairCounter;
@@ -1224,7 +1219,8 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
         proxyOps[dir].channelId = channelId;
         proxyOps[dir].opCount = uint64_t(comm->planner.wipPlan.channels[channelId].nWorkBatchesP2p) << 1 | 1;
         proxyOps[dir].nChannels = nChannels[dir];
-        proxyOps[dir].nPeers = concurrentTasks[dir];
+        proxyOps[dir].nPeers = a2aMaxPeers;
+        proxyOps[dir].minPeers = a2aMinPeers;
         NCCLCHECKGOTO(ncclAddProxyOpIfNeeded(comm, plan, &proxyOps[dir]), ret, cleanup);
       }
     }
@@ -1265,9 +1261,6 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
   int nChannelsMin = nChannelsMax;
   // Try to use all channels, but one channel per operation.
   while (nChannelsMin * nRanks > comm->p2pnChannels && nChannelsMin > 1) nChannelsMin /= 2;
-
-  // Save the total count of send/recv tasks in the plan
-  int planTotalTasks[2] = {comm->planner.nTasksP2pRecv, comm->planner.nTasksP2pSend};
   while (comm->planner.nTasksP2p != 0) {
     for (; *p2pRound < nRanks; (*p2pRound)++) {
       int sendRank = comm->p2pSchedule[*p2pRound].sendRank;
@@ -1308,7 +1301,7 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
         }
         struct ncclTaskP2p* p2pTasks[2] = {recv, send};
         NCCLCHECK(addP2pToPlan(comm, plan, nChannelsMin, nChannelsMax, *p2pEpoch, *p2pRound, sendRank, sendBuff,
-                               sendBytes, recvRank, recvBuff, recvBytes, planTotalTasks, p2pTasks));
+                               sendBytes, recvRank, recvBuff, recvBytes, p2pTasks));
         if (send != nullptr) {
           ncclIntruQueueDequeue(&peers[sendRank].sendQueue);
           // Profiler - We can overwrite groupAPI event handles here since all operations here belong to the same group
@@ -2521,13 +2514,13 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
   case ncclPatternPipelineTo:
   case ncclPatternPatUp:
   case ncclPatternPatDown:
-    proxyOp->nPeers = 1;
+    proxyOp->nPeers = proxyOp->minPeers = 1;
     break;
   case ncclPatternTreeUp:
   case ncclPatternTreeDown:
   case ncclPatternTreeUpDown:
   case ncclPatternNvlsTree:
-    proxyOp->nPeers = (NCCL_MAX_TREE_ARITY - 1) * 2;
+    proxyOp->nPeers = proxyOp->minPeers = (NCCL_MAX_TREE_ARITY - 1) * 2;
     break;
   case ncclPatternCollnetChain:
   case ncclPatternCollnetDirect:

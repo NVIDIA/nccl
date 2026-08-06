@@ -771,7 +771,8 @@ exit:
 
 bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
   bool enabled = ncclProfilerPluginLoaded() && (op->eActivationMask & ncclProfileKernelCh);
-  if (enabled && !comm->profiler.initialized) (void)proxyProfilerConnect(comm, op);
+  if (enabled && !comm->profiler.initialized &&
+      (proxyProfilerConnect(comm, op) != ncclSuccess || !comm->profiler.initialized)) return false;
   return enabled;
 }
 

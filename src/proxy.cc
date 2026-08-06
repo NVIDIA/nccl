@@ -670,7 +670,7 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
       ncclResult_t result = ncclSuccess;
       const ssize_t size = op->nbytes / comm->nRanks;
       const int nodeId = comm->node, nNodes = comm->nNodes;
-      const int maxParallelFactor = NCCL_PAT_NWORKERS / WARP_SIZE;
+      const int maxParallelFactor = (comm->isOneRPN ? NCCL_PAT_NWORKERS : NCCL_PAT_MULTI_RPN_NWORKERS) / WARP_SIZE;
       int denseLocalRank;
       int *nstepsSend = NULL, *nstepsRecv = NULL;
       PatRSAlgorithm<char> algo(op->chunkSize, NCCL_STEPS, maxParallelFactor, 0, size, size, op->chunkSize, nodeId,
@@ -712,7 +712,7 @@ ncclResult_t ncclProxySaveOp(struct ncclComm* comm, struct ncclProxyOp* op, bool
       ncclResult_t result = ncclSuccess;
       const ssize_t size = op->nbytes / comm->nRanks;
       const int nodeId = comm->node, nNodes = comm->nNodes;
-      const int maxParallelFactor = NCCL_PAT_NWORKERS / WARP_SIZE;
+      const int maxParallelFactor = (comm->isOneRPN ? NCCL_PAT_NWORKERS : NCCL_PAT_MULTI_RPN_NWORKERS) / WARP_SIZE;
       int denseLocalRank;
       int *nstepsSend = NULL, *nstepsRecv = NULL;
       PatAGAlgorithm<char> algo(op->chunkSize, NCCL_STEPS, maxParallelFactor, 0, size, size, op->chunkSize, nodeId,

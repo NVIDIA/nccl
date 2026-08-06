@@ -127,8 +127,8 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE
     ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), &count, &channelOffset, &channelCount,
                     &chunkCount);
 
-    static constexpr int nworkers = NCCL_PAT_NWORKERS;
-    static constexpr int nGatherWorkers = NCCL_MAX_NTHREADS - NCCL_PAT_NWORKERS - WARP_SIZE;
+    const int nworkers = work->isOneRPN ? NCCL_PAT_NWORKERS : NCCL_PAT_MULTI_RPN_NWORKERS;
+    const int nGatherWorkers = NCCL_MAX_NTHREADS - nworkers - WARP_SIZE;
     struct ncclPatShmem* shmem = (struct ncclPatShmem*)ncclScratchForWarp(0);
     uint64_t pollCount = 0;
     __syncthreads(); // Don't start using shared mem until everyone arrives
@@ -190,7 +190,7 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE
       if (tid == NCCL_MAX_NTHREADS - 1) {
         // Algo computation thread
         size_t patCount = count * localRanks;
-        PatAGAlgorithm<T> patAlgo(chunkCount * sizeof(T), NCCL_STEPS, NCCL_PAT_NWORKERS / WARP_SIZE, channelOffset,
+        PatAGAlgorithm<T> patAlgo(chunkCount * sizeof(T), NCCL_STEPS, nworkers / WARP_SIZE, channelOffset,
                                   channelOffset + channelCount, patCount, chunkCount, node, nNodes);
         shmem->parallelFactor = patAlgo.getParallelFactor();
         int step = 0;
@@ -238,7 +238,7 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE
         int gatherTid = tid - nworkers;
         Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/0, Proto, 0> prims(
           gatherTid, nGatherWorkers, nvls->up, nullptr, inputBuf, outputBuf, work->redOpArg,
-          /*group=*/1, /*connIndexRecv=*/1, /*connIndexSend=*/0);
+          /*group=*/NCCL_PAT_MULTI_RPN_NWORKERS / WARP_SIZE, /*connIndexRecv=*/1, /*connIndexSend=*/0);
 
         int parallelFactor = 0;
         volatile int* pfPtr = &shmem->parallelFactor;

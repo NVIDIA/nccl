@@ -409,6 +409,7 @@ public:
 
 // Need a power of two to ensure it divides by parallelFactor (which is also a power of two)
 #define NCCL_PAT_NWORKERS 512
+#define NCCL_PAT_MULTI_RPN_NWORKERS 256
 
 static constexpr int PatUsed = 0x1, PatSkipped = 0x2;
 

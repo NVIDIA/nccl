@@ -32,7 +32,7 @@
 
 namespace pace {
 
-AGComm::AGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, int ultra_node_scope, bool use_ring, bool use_graph, bool force_graph_capture, int min_graph_nodes, std::vector<int> topo_key): comm(rank, num_ranks, num_local_ranks, unroll, nvl_ring, rdma_ring, num_sms, ultra_node_scope, std::move(topo_key)), use_ring(use_ring), use_graph(use_graph), force_graph_capture(force_graph_capture), min_graph_nodes(min_graph_nodes) {
+AGComm::AGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, bool use_ring, bool use_graph, bool force_graph_capture, int min_graph_nodes, std::vector<int> topo_key): comm(rank, num_ranks, num_local_ranks, unroll, nvl_ring, rdma_ring, num_sms, std::move(topo_key)), use_ring(use_ring), use_graph(use_graph), force_graph_capture(force_graph_capture), min_graph_nodes(min_graph_nodes) {
     // The 0SM mem_layout aliases the local send buffer onto recv_area[node_id]
     // using a single ring-depth dimension R. The Python AGComm wrapper already
     // equalizes nvl_ring_size / rdma_ring_size to their max before constructing

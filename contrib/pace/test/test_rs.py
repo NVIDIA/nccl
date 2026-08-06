@@ -199,7 +199,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         os.dup2(newout.fileno(), original_stderr_fd)
         print(f'[rank {rank}]: use seperate stdout/stderr', flush=True)
 
-    config = CommConfig(slot_unroll=args.unroll, nvl_ring_size=args.nvl_ring, rdma_ring_size=args.rdma_ring, num_sms=args.num_sms, use_wg=args.use_wg, ultra_node_scope=args.ultra_node_scope)
+    config = CommConfig(slot_unroll=args.unroll, nvl_ring_size=args.nvl_ring, rdma_ring_size=args.rdma_ring, num_sms=args.num_sms, use_wg=args.use_wg)
     assert num_local_ranks % args.split_intra == 0
     num_local_ranks = num_local_ranks // args.split_intra
     buffer = RSComm(group, num_local_ranks=num_local_ranks, config=config)
@@ -248,11 +248,6 @@ if __name__ == '__main__':
     parser.add_argument("--nlid", type=int, default=0, help='number of local processes for direct launch')
     parser.add_argument("--skip-kineto", action='store_true', help='skip kineto tracing')
     parser.add_argument("--use-wg", action='store_true', help='use warp group for reduce scatter')
-    parser.add_argument("--ultra-node-scope", type=int, default=0,
-                       help='NVL fabric scope override (debug). 0 = default — '
-                            'accept NCCL natural LSA team scope (hypernode '
-                            'auto-detect). >0 narrows the scope to force '
-                            'gdaki/inter-team traffic within one NCCL LSA team.')
     args = parser.parse_args()
 
     if args.nlid > 0:

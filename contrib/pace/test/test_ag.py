@@ -196,7 +196,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         os.dup2(newout.fileno(), original_stderr_fd)
         print(f'[rank {rank}]: use seperate stdout/stderr', flush=True)
 
-    config = CommConfig(slot_unroll=args.unroll, nvl_ring_size=args.nvl_ring, rdma_ring_size=args.rdma_ring, num_sms=args.num_sms, ultra_node_scope=args.ultra_node_scope)
+    config = CommConfig(slot_unroll=args.unroll, nvl_ring_size=args.nvl_ring, rdma_ring_size=args.rdma_ring, num_sms=args.num_sms)
     config.ag_zero_sm.use_ring = args.use_ring
     assert num_local_ranks % args.split_intra == 0
     num_local_ranks = num_local_ranks // args.split_intra
@@ -241,16 +241,6 @@ if __name__ == '__main__':
     parser.add_argument("--lid", type=int, default=0, help='local id for direct launch')
     parser.add_argument("--nlid", type=int, default=0, help='number of local processes for direct launch')
     parser.add_argument("--use-ring", action='store_true', help='cord inter-node ring-forward flag (only meaningful when --num-sms 0; num_sms>0 always uses the ring kernel)')
-    parser.add_argument("--ultra-node-scope", type=int, default=0,
-                       help='NVL fabric scope override (debug). 0 = default — '
-                            'accept NCCL natural LSA team scope (hypernode '
-                            'auto-detect). >0 narrows the scope to force '
-                            'gdaki/inter-team traffic within one NCCL LSA team '
-                            '(e.g. simulate 2 nodes on a single 8-GPU box by '
-                            'setting --ultra-node-scope 4; replaces the now-'
-                            'ineffective --split-intra 2 for simulated-multinode '
-                            'testing, since NCCL correctly detects all 8 ranks '
-                            'as one LSA team on a single physical box).')
     args = parser.parse_args()
 
     if args.nlid > 0:

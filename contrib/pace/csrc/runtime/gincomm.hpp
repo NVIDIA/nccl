@@ -31,25 +31,16 @@ struct Topology {
     // "intranode" for buffer sizing + p2p_ptrs indexing). NCCL is the source of
     // truth for the natural scope (queried via ncclCommQueryProperties().nLsaTeams
     // in Connect()); but the child *Comm ctor bodies run BEFORE Connect() and
-    // size buffers based on this value, so we resolve a value here.
-    //
-    // Precedence:
-    //   1. explicit ultra_node_scope ctor arg > 0 (debug LOWER override —
-    //      narrows the scope to force gdaki/inter-team traffic even within a
-    //      single NCCL LSA team, e.g. simulate 2 nodes on a GB200 4x2 box where
-    //      NCCL reports one LSA team of 8 by setting ultra_node_scope=4).
-    //   2. ultra_node_scope == 0 (default) — accept NCCL's natural LSA team
-    //      size (hypernode auto-detect — e.g. NVL72 spanning multiple physical
-    //      boxes). At ctor time we use num_local_ranks as a conservative
-    //      placeholder (over-allocates buffer for hypernode; Connect()
-    //      overwrites with the authoritative NCCL value).
+    // size buffers based on this value, so we resolve a value here. At ctor time
+    // we use num_local_ranks as a conservative placeholder (over-allocates
+    // buffer for hypernode); Connect() overwrites with the authoritative NCCL
+    // LSA team size (hypernode auto-detect — e.g. NVL72 spanning multiple
+    // physical boxes).
     int nvl_local_ranks = 0;
-    // Effective number of "LSA teams" = num_ranks / nvl_local_ranks. With no
-    // override, equals NCCL's nLsaTeams; with an override that narrows
-    // nvl_local_ranks, exceeds nLsaTeams (drives gdaki setup for the
-    // simulated inter-team path). Set in Connect(); used as the gdaki gate
-    // (and the Destroy gate — comms may be torn down before we could re-query
-    // NCCL, so we stash the value).
+    // Effective number of "LSA teams" = num_ranks / nvl_local_ranks — equals
+    // NCCL's nLsaTeams (the natural scope). Set in Connect(); used as the gdaki
+    // gate (and the Destroy gate — comms may be torn down before we could
+    // re-query NCCL, so we stash the value).
     int n_lsa_teams = 0;
     // CUDA device ordinal (cudaGetDevice at construction). Plumbed into RS/AG
     // ring kernels so timeout/arrival dumps can identify the physical GPU,
@@ -104,13 +95,7 @@ public:
     CommBuffer buffer;
     LaunchContext launch;
 
-    Comm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, int ultra_node_scope, std::vector<int> topo_key, bool marshals_args = true);
-
-    // Stash the explicit ultra_node_scope ctor arg for Connect() to consult.
-    // 0 = no override (default — Connect() overwrites topo.nvl_local_ranks
-    // with NCCL's natural LSA team size). >0 = debug LOWER override (kept
-    // as-is in Connect(); gdaki setup may fire even within one NCCL LSA team).
-    int ultra_node_scope_arg = 0;
+    Comm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, std::vector<int> topo_key, bool marshals_args = true);
 
     // Set by each *Comm (AG/RS/SG/EP) ctor; called by Connect() AFTER the
     // NCCL query has set the authoritative topo.nvl_local_ranks (and
@@ -154,7 +139,7 @@ class RSComm {
     std::mutex lock;
 public:
     Comm comm;
-    RSComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, int ultra_node_scope, bool use_wg, std::vector<int> topo_key);
+    RSComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, bool use_wg, std::vector<int> topo_key);
 
     int out_numel_alignment() const;
 
@@ -170,7 +155,7 @@ class SGComm {
     std::mutex lock;
 public:
     Comm comm;
-    SGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, int ultra_node_scope, std::vector<int> topo_key);
+    SGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, std::vector<int> topo_key);
     ~SGComm();
 
     bool is_ring_mode() const { return ring_mode; };
@@ -206,7 +191,7 @@ public:
     // launch streams.
     std::mutex lock;
 
-    AGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, int ultra_node_scope, bool use_ring, bool use_graph, bool force_graph_capture, int min_graph_nodes, std::vector<int> topo_key);
+    AGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, bool use_ring, bool use_graph, bool force_graph_capture, int min_graph_nodes, std::vector<int> topo_key);
     ~AGComm();
 
     std::tuple<std::optional<torch::Tensor>, std::optional<EventHandle>> AllGather(const std::vector<torch::Tensor>& src, const std::optional<std::vector<torch::Tensor>>& output_tensors, std::optional<EventHandle>& previous_event, const bool async, const int input_dtype_mapping);

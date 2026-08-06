@@ -172,17 +172,6 @@ class CommConfig:
     nvl_ring_size: int = 4
     rdma_ring_size: int = 4
     num_sms: int = 32
-    # NVL fabric scope override (debug). 0 = default — accept NCCL's natural
-    # LSA team scope (queried via ncclCommQueryProperties in Connect; hypernode
-    # auto-detect — e.g. NVL72 spanning multiple physical boxes is correctly
-    # treated as a single NVL group). >0 = narrow the scope to force
-    # gdaki/inter-team traffic within one NCCL LSA team (e.g. simulate 2 nodes
-    # on a GB200 4x2 box where NCCL reports one LSA team of 8 by setting
-    # ultra_node_scope=4). The C++ ctor asserts num_local_ranks <=
-    # ultra_node_scope (clamped) <= nccl_lsa_team_size with mod=0
-    # (nvl_local_ranks % num_local_ranks == 0, num_ranks % nvl_local_ranks == 0,
-    # nccl_lsa_team_size % nvl_local_ranks == 0).
-    ultra_node_scope: int = 0
     # AG-only: 0-SM (num_sms == 0) cord-path knobs (use_ring, CUDA-graph mode).
     ag_zero_sm: AGZeroSMConfig = field(default_factory=AGZeroSMConfig)
     # Hint for reduce-scatter to use warp-group primitives, which can be more

@@ -455,7 +455,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     assert num_local_ranks % args.split_intra == 0
     num_local_ranks = num_local_ranks // args.split_intra
     # max_data_bytes multiplied by 2 is for batch_input, batch_input will use 1 + 1/2 + 1/4 + ... < 2 times the single input size
-    config = CommConfig(slot_unroll=args.unroll, nvl_ring_size=args.nvl_ring, rdma_ring_size=args.rdma_ring, num_sms=args.num_sms, ultra_node_scope=args.ultra_node_scope)
+    config = CommConfig(slot_unroll=args.unroll, nvl_ring_size=args.nvl_ring, rdma_ring_size=args.rdma_ring, num_sms=args.num_sms)
     buffer = SGComm(group, num_local_ranks=num_local_ranks, config=config)
     # is_ring_mode() is the reform-fixed query (was IsRingMode vs bound
     # IsDataRingMode name mismatch); exercise it so a regression is caught.
@@ -507,13 +507,6 @@ if __name__ == '__main__':
     parser.add_argument("--replicas", type=int, default=-1, help='batch-size knob: number of extra batch tensors to exercise (-1 = default 5)')
     parser.add_argument("--lid", type=int, default=0, help='local id for direct launch')
     parser.add_argument("--nlid", type=int, default=0, help='number of local processes for direct launch')
-    parser.add_argument("--ultra-node-scope", type=int, default=0,
-                       help='NVL fabric scope override (debug). 0 = default — '
-                            'accept NCCL natural LSA team scope (hypernode '
-                            'auto-detect). >0 narrows the scope to force '
-                            'gdaki/inter-team traffic within one NCCL LSA team '
-                            '(e.g. simulate 2 nodes on a single 8-GPU box by '
-                            'setting --ultra-node-scope 4).')
     parser.add_argument('--strided', action='store_true',
                        help='also exercise strided-S (QKV-view) inputs: run the '
                             'layout-contract validator checks and strided '

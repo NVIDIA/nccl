@@ -42,7 +42,7 @@
 
 namespace pace {
 
-SGComm::SGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, int ultra_node_scope, std::vector<int> topo_key): comm(rank, num_ranks, num_local_ranks, unroll, nvl_ring, rdma_ring, num_sms, ultra_node_scope, std::move(topo_key)) {
+SGComm::SGComm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, std::vector<int> topo_key): comm(rank, num_ranks, num_local_ranks, unroll, nvl_ring, rdma_ring, num_sms, std::move(topo_key)) {
     // Defer buffer/gin_sigs sizing to post_connect_fn (see AGComm rationale).
     comm.post_connect_fn = [this, unroll, nvl_ring, rdma_ring, num_sms]() {
         const int num_nodes = comm.topo.num_ranks / comm.topo.nvl_local_ranks;

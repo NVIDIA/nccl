@@ -6,7 +6,7 @@ communication — layout conversion, dtype casting, scatter/gather — directly
 into the collective kernels, and exposes a *parallelism* interface rather than
 the traditional collective interface: a compute kernel's output feeds straight
 into PACE, and PACE's output is consumed directly by the next kernel. PACE is
-built on top of NCCL's **GIN (Graph Interface for Networking)** device API.
+built on top of NCCL's **GIN (GPU Interface for Networking)** device API.
 
 This `contrib/` entry contains the **All-Gather (AG)**, **Reduce-Scatter
 (RS)** and **Scatter-Gather (SG / Ulysses-CP All-to-All)** collectives of
@@ -70,10 +70,10 @@ tensor between them:
 * **Prologue** prepares the compute kernel's output for communication:
   multi-tensor (list) input, on-the-wire dtype conversion, strided input read
   in place, and scaling factors.
-* **Communication** moves the data. We provide SM-resident consume kernels
-  similar to NCCL's, plus resource-lean **0-SM (intranode)** and **1-SM
-  (internode)** variants to minimize the SM footprint. Both variants use
-  pipelined staging, keeping the shared buffer bounded — independent of the
+* **Communication** moves the data. We provide SM-resident consume kernels,
+  plus resource-lean **0-SM (intranode)** and **1-SM (internode)** variants to
+  minimize the SM footprint (Scatter-Gather and All-Gather only). Both variants
+  use pipelined staging, keeping the shared buffer bounded — independent of the
   tensor size — without sacrificing bandwidth. For All-Gather collective, CUDA
   Graph is supported to reduce CPU launching overhead.
 * **Epilogue** is the reverse of the prologue: it lays the received data out so
@@ -88,39 +88,21 @@ Prologue support across the three collectives in this `contrib/`:
 | Strided input | — | — | ✅ QKV-split |
 | Scaling factors | — | ✅ `pre`/`postdivide` | — |
 
-## Hardware prerequisites
-
-* **GPU:** SM 9.0 or newer. NVLink between GPUs and
-  (for multi-node) a GIN-capable fabric (e.g. GPUDirect Async / GDAKI).
-* Multi-node runs require GIN networking that NCCL exposes through the
-  `nccl_device.h` GIN device API.
-
 ## Software prerequisites
 
-* PyTorch ≥ 2.1 (Python ≥ 3.12)
-* CUDA Toolkit ≥ 12.0
-* **NCCL ≥ 2.30** with GIN support — the host-side GIN API
-  (`ncclDevCommCreate`, `ncclMemAlloc`, `ncclCommWindowRegister`,
-  `ncclGetLsaDevicePointer`, …) and the `nccl_device.h` device API are
-  required. The version bundled with most PyTorch distributions is too old;
-  build NCCL from source:
-  ```bash
-  git clone https://github.com/NVIDIA/nccl
-  cd nccl
-  make -j install BUILDDIR=/path/to/nccl-install
-  ```
-  then point `NCCL_DIR` at `/path/to/nccl-install` (see below).
+* PyTorch ≥ 2.10 (Python ≥ 3.12)
+* CUDA Toolkit ≥ 12.9
+* **NCCL ≥ 2.31** with GIN support
 
 ## Build
 
 PACE is a PyTorch C++ extension. The build links the GIN-capable NCCL
 **statically** (`libnccl_static.a`) into `pace_cpp` so that calls resolve to
-the NCCL version it was built against, independent of the (often older)
-`libnccl.so.2` that PyTorch loads into the process.
+the NCCL version it was built against.
 
 ```bash
 NCCL_DIR=/path/to/nccl-install \
-TORCH_CUDA_ARCH_LIST="9.0" \
+TORCH_CUDA_ARCH_LIST="9.0" \       # or: 10.0
 python setup.py bdist_wheel        # or: pip install .
 ```
 
@@ -147,7 +129,6 @@ RS-only, and SG always uses the data-ring.
 | `nvl_ring_size` | `4` | AG / RS / SG | NVLink ring depth of the staging ring buffer. |
 | `rdma_ring_size` | `4` | AG / RS / SG | RDMA ring depth of the staging ring buffer. |
 | `num_sms` | `32` | AG / RS / SG | SM-resident kernel grid size. `0` selects the 0-SM (stream) path, `1` the 1-SM lean variant. |
-| `ultra_node_scope` | `0` | AG / RS / SG | NVL fabric scope override (debug). `0` accepts NCCL's natural LSA-team scope (hypernode auto-detect, e.g. NVL72 across boxes is one NVL group). `>0` narrows the scope to force gdaki/inter-team traffic within one NCCL LSA team (e.g. `4` on a GB200 4×2 box simulates 2 nodes). |
 | `use_wg` | `False` | RS | Hint to prefer warp-group primitives for small messages. |
 | `ag_zero_sm` | `AGZeroSMConfig()` | AG | Knobs for the 0-SM (`num_sms == 0`) all-gather cord path (below). |
 

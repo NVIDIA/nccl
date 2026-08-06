@@ -42,43 +42,18 @@ namespace {
 // segment.
 std::atomic<uint64_t> g_ipc_seq{0};
 
-// Resolve the LSA team scope at construction time. NCCL is the source of
-// truth for the natural scope (queried via ncclCommQueryProperties().nLsaTeams
-// in Connect()), but the child *Comm ctor bodies run BEFORE Connect() and
-// size buffers based on topo.nvl_local_ranks — so we need a value here.
-//
-// Precedence:
-//   1. explicit ultra_node_scope ctor arg > 0 (debug LOWER override — narrows
-//      the scope to force gdaki/inter-team traffic within one NCCL LSA team,
-//      e.g. simulate 2 nodes on a GB200 4x2 box where NCCL reports one LSA
-//      team of 8 by setting ultra_node_scope=4). Buffer sizing in the child
-//      ctor body uses this value directly.
-//   2. ultra_node_scope == 0 (default) — use num_local_ranks here
-//      (conservative; works for single-physical-box). Connect() will
-//      overwrite this with NCCL's natural LSA team size (hypernode auto-
-//      detect — e.g. NVL72 spanning multiple physical boxes, where NCCL
-//      reports nLsaTeams=1 and lsaSize=num_ranks). The conservative value
-//      here over-allocates buffer for the hypernode case (waste, not bug);
-//      p2p_ptrs is sized correctly in Connect() after the overwrite.
+// The LSA team scope at construction time. NCCL is the source of truth for
+// the natural scope (queried via ncclCommQueryProperties().nLsaTeams in
+// Connect()), but the child *Comm ctor bodies run BEFORE Connect() and size
+// buffers based on topo.nvl_local_ranks — so we need a value here. Use
+// num_local_ranks as a conservative placeholder (works for single-physical-
+// box; over-allocates buffer for the hypernode case — waste, not bug, and
+// Connect() overwrites it with NCCL's authoritative LSA team size before
+// post_connect_fn sizes the buffer).
 //
 // We do NOT read NCCL_LSA_TEAM_SIZE env var ourselves — that's NCCL's job
 // (NCCL's computeLsaSize honors it end-to-end, and we get the result via
 // ncclCommQueryProperties).
-int resolve_lsa_team_size_ctor(int ultra_node_scope, int num_local_ranks, int num_ranks) {
-    int v;
-    if (ultra_node_scope > 0) {
-        v = ultra_node_scope;
-    } else {
-        v = num_local_ranks;  // conservative; Connect() will overwrite
-    }
-    // Clamp to [num_local_ranks, num_ranks]. ultra_node_scope < num_local_ranks
-    // is invalid (local ranks ARE intranode by definition).
-    if (v < num_local_ranks) v = num_local_ranks;
-    if (v > num_ranks) v = num_ranks;
-    HOST_ASSERT(v % num_local_ranks == 0);
-    HOST_ASSERT(num_ranks % v == 0);
-    return v;
-}
 
 std::string ipc_shm_name_from_topo_key(const std::vector<int>& topo_key) {
     size_t h = 0;
@@ -104,7 +79,7 @@ LaunchContext::LaunchContext()
       c2_stream(at::cuda::getStreamFromPool(true)),
       c3_stream(at::cuda::getStreamFromPool(true)) {}
 
-Comm::Comm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, int ultra_node_scope, std::vector<int> topo_key, bool marshals_args) {
+Comm::Comm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_ring, int rdma_ring, int num_sms, std::vector<int> topo_key, bool marshals_args) {
     // Topology / launch scalars (the remaining fields keep their in-struct
     // defaults: round_n=0, active=false, use_ipc_path=false,
     // buffer_bytes/gin_sigs/gin_qps/send_slots=0 — the latter
@@ -112,14 +87,9 @@ Comm::Comm(int rank, int num_ranks, int num_local_ranks, int unroll, int nvl_rin
     topo.rank = rank;
     topo.num_ranks = num_ranks;
     topo.num_local_ranks = num_local_ranks;
-    // Stash the explicit override for Connect() to consult. 0 = default
-    // (Connect overwrites topo.nvl_local_ranks with NCCL's natural LSA team
-    // size); >0 = debug LOWER override (kept as-is in Connect).
-    ultra_node_scope_arg = ultra_node_scope;
-    // nvl_local_ranks at ctor time. If ultra_node_scope > 0, use it (capped +
-    // asserted). Else num_local_ranks (conservative; Connect() will overwrite
-    // with NCCL's authoritative value via ncclCommQueryProperties).
-    topo.nvl_local_ranks = resolve_lsa_team_size_ctor(ultra_node_scope, num_local_ranks, num_ranks);
+    // nvl_local_ranks at ctor time = num_local_ranks (conservative; Connect()
+    // overwrites with NCCL's authoritative value via ncclCommQueryProperties).
+    topo.nvl_local_ranks = num_local_ranks;
     HOST_ASSERT(topo.nvl_local_ranks > 0);
     topo.topo_key = std::move(topo_key);
     launch.unroll = unroll;
@@ -165,13 +135,11 @@ int Comm::Connect(pybind11::bytearray head_info) {
     const int local_rank = topo.rank % topo.num_local_ranks;
     constexpr size_t signal_bytes = SIGNAL_BYTES;
 
-    buffer.use_ipc_path = (num_nodes == 1 && ultra_node_scope_arg == 0);
-    // Rationale for the ultra_node_scope_arg==0 clause: the IPC path uses
-    // cudaMalloc + cudaIpcMemHandle (no ncclComm), so gdaki/ncclDevComm
-    // can't be set up. A debug ultra_node_scope override that narrows
-    // nvl_local_ranks below num_ranks expects gdaki to fire (n_lsa_teams>1)
-    // — force the non-IPC path so the gdaki setup can run. Default
-    // (ultra_node_scope_arg==0) on single physical box still takes IPC.
+    buffer.use_ipc_path = (num_nodes == 1);
+    // Rationale: the IPC path uses cudaMalloc + cudaIpcMemHandle (no ncclComm),
+    // so gdaki/ncclDevComm can't be set up. On a single physical box the whole
+    // group is intranode — take the cheap IPC path. Any multi-node (GIN) case
+    // takes the ncclComm + gdaki path below.
 
     if (buffer.use_ipc_path) {
         // Pure intranode without multicast: use cudaMalloc + cudaIpc, no ncclComm needed.
@@ -230,10 +198,9 @@ int Comm::Connect(pybind11::bytearray head_info) {
         // Import IPC handles to get p2p pointers. Same effective-group
         // indexing as the non-IPC path: p2p_ptrs[i] points to the i-th peer
         // in THIS rank's effective NVL group [(rank / nvl_local_ranks) *
-        // nvl_local_ranks, ...]. With ultra_node_scope override narrowing
-        // nvl_local_ranks below num_local_ranks, the loop must iterate the
-        // effective group, not num_local_ranks (would write past the
-        // nvl_local_ranks-sized array).
+        // nvl_local_ranks, ...]. Iterate the effective group (never
+        // num_local_ranks, which would write past the nvl_local_ranks-sized
+        // array on hypernode where the group spans more than num_local_ranks).
         buffer.p2p_ptrs = (void**)malloc(sizeof(void*) * topo.nvl_local_ranks);
         memset(buffer.p2p_ptrs, 0, sizeof(void*) * topo.nvl_local_ranks);
         const int ipc_effective_group_base = (topo.rank / topo.nvl_local_ranks) * topo.nvl_local_ranks;
@@ -282,24 +249,15 @@ int Comm::Connect(pybind11::bytearray head_info) {
         HOST_ASSERT(nccl_lsa_team_size > 0);
         HOST_ASSERT(topo.num_ranks % nccl_lsa_team_size == 0);
         HOST_ASSERT(nccl_lsa_team_size % topo.num_local_ranks == 0);
-        if (ultra_node_scope_arg == 0) {
-            // Default: accept NCCL's natural LSA team scope (hypernode auto-
-            // detect — e.g. NVL72 spanning multiple physical boxes). The
-            // conservative num_local_ranks placeholder set in Comm::Comm is
-            // overwritten here, BEFORE post_connect_fn sizes the buffer.
-            topo.nvl_local_ranks = nccl_lsa_team_size;
-        } else {
-            // Debug LOWER override: assert range + mod constraints against
-            // NCCL's natural scope.
-            HOST_ASSERT(topo.nvl_local_ranks <= nccl_lsa_team_size);
-            HOST_ASSERT(nccl_lsa_team_size % topo.nvl_local_ranks == 0);
-        }
+        // Accept NCCL's natural LSA team scope (hypernode auto-detect — e.g.
+        // NVL72 spanning multiple physical boxes). The conservative
+        // num_local_ranks placeholder set in Comm::Comm is overwritten here,
+        // BEFORE post_connect_fn sizes the buffer.
+        topo.nvl_local_ranks = nccl_lsa_team_size;
         HOST_ASSERT(topo.nvl_local_ranks % topo.num_local_ranks == 0);
         HOST_ASSERT(topo.num_ranks % topo.nvl_local_ranks == 0);
-        // Effective n_lsa_teams: num_ranks / nvl_local_ranks. With no
-        // override this equals props.nLsaTeams; with an override that narrows
-        // nvl_local_ranks, exceeds props.nLsaTeams (drives gdaki setup for
-        // the simulated inter-team path).
+        // Effective n_lsa_teams: num_ranks / nvl_local_ranks — equals
+        // props.nLsaTeams (NCCL's natural scope). Gates the gdaki setup below.
         topo.n_lsa_teams = topo.num_ranks / topo.nvl_local_ranks;
         // Run post_connect_fn now that topo.nvl_local_ranks + n_lsa_teams
         // are authoritative. Sizes buffer_bytes + gin_sigs based on the real
@@ -315,12 +273,11 @@ int Comm::Connect(pybind11::bytearray head_info) {
         }
         NCCLCHECK(ncclCommWindowRegister(transport.global_comm, buffer.data_buffer, buffer.buffer_bytes + signal_bytes, &buffer.gin_win, NCCL_WIN_COLL_SYMMETRIC));
 
-        // Per-peer pointers within this rank's effective NVL group. With an
-        // ultra_node_scope override (nvl_local_ranks < nccl_lsa_team_size),
-        // the group is [(rank / nvl_local_ranks) * nvl_local_ranks, ...]. The
-        // downstream kernels index p2p_ptrs[peer % nvl_local_ranks], so
-        // p2p_ptrs[i] must point to the i-th peer in THIS rank's effective
-        // group, not LSA-local rank i globally.
+        // Per-peer pointers within this rank's effective NVL group
+        // [(rank / nvl_local_ranks) * nvl_local_ranks, ...]. The downstream
+        // kernels index p2p_ptrs[peer % nvl_local_ranks], so p2p_ptrs[i] must
+        // point to the i-th peer in THIS rank's effective group, not LSA-local
+        // rank i globally.
         buffer.p2p_ptrs = (void**)malloc(sizeof(void*) * topo.nvl_local_ranks);
         const int effective_group_base = (topo.rank / topo.nvl_local_ranks) * topo.nvl_local_ranks;
         const int effective_local_rank = topo.rank - effective_group_base;
@@ -398,8 +355,8 @@ void Comm::Destroy() {
         CUDACHECK(cudaDeviceSynchronize());
 
         // Mirror the Connect() IPC loop's effective-group indexing. p2p_ptrs
-        // is sized nvl_local_ranks; with ultra_node_scope override narrowing
-        // the scope, must iterate the effective group, not num_local_ranks.
+        // is sized nvl_local_ranks; iterate the effective group, never
+        // num_local_ranks (hypernode group can span more than num_local_ranks).
         const int ipc_eff_base = (topo.rank / topo.nvl_local_ranks) * topo.nvl_local_ranks;
         const int ipc_eff_local = topo.rank - ipc_eff_base;
         for (int i = 0; i < topo.nvl_local_ranks; ++i) {

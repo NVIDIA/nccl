@@ -31,7 +31,7 @@ class AGComm(BaseComm):
         # mem_layout mismatch. The C++ AGComm ctor also takes max defensively.
         ring = max(c.nvl_ring_size, c.rdma_ring_size)
         z = c.ag_zero_sm
-        return pace_cpp.AGComm(self.rank, self.num_ranks, self.num_local_ranks, c.slot_unroll, ring, ring, c.num_sms, c.ultra_node_scope, z.use_ring, z.use_graph, z.force_graph_capture, z.min_graph_nodes, topo_key)
+        return pace_cpp.AGComm(self.rank, self.num_ranks, self.num_local_ranks, c.slot_unroll, ring, ring, c.num_sms, z.use_ring, z.use_graph, z.force_graph_capture, z.min_graph_nodes, topo_key)
 
     @staticmethod
     def get_recommended_config(num_local_ranks: int, num_ranks: int, num_sms: int = 0) -> CommConfig:

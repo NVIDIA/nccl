@@ -21,7 +21,7 @@ class SGComm(BaseComm):
 
     def _build_runtime(self, topo_key):
         c = self.config
-        return pace_cpp.SGComm(self.rank, self.num_ranks, self.num_local_ranks, c.slot_unroll, c.nvl_ring_size, c.rdma_ring_size, c.num_sms, c.ultra_node_scope, topo_key)
+        return pace_cpp.SGComm(self.rank, self.num_ranks, self.num_local_ranks, c.slot_unroll, c.nvl_ring_size, c.rdma_ring_size, c.num_sms, topo_key)
 
     @staticmethod
     def get_recommended_config(num_local_ranks: int, num_ranks: int) -> CommConfig:

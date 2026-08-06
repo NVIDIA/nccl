@@ -40,7 +40,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // The lifecycle methods live on Comm, so each collective exposes them to
     // Python via thin forwarding lambdas to its `.comm` member.
     pybind11::class_<pace::SGComm>(m, "SGComm")
-        .def(pybind11::init<int, int, int, int, int, int, int, int, std::vector<int>>())
+        .def(pybind11::init<int, int, int, int, int, int, int, std::vector<int>>())
         .def("get_head_info", [](pace::SGComm& s) { return s.comm.GenHeadInfo(); })
         .def("get_stream", [](pace::SGComm& s) { return s.comm.GetStream(); })
         .def("get_shared_memory_bytes", [](pace::SGComm& s) { return s.comm.GetSharedMemoryBytes(); })
@@ -51,7 +51,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("num_sms", &pace::SGComm::num_sms);
 
     pybind11::class_<pace::AGComm>(m, "AGComm")
-        .def(pybind11::init<int, int, int, int, int, int, int, int, bool, bool, bool, int, std::vector<int>>())
+        .def(pybind11::init<int, int, int, int, int, int, int, bool, bool, bool, int, std::vector<int>>())
         .def("get_head_info", [](pace::AGComm& s) { return s.comm.GenHeadInfo(); })
         .def("get_stream", [](pace::AGComm& s) { return s.comm.GetStream(); })
         .def("get_shared_memory_bytes", [](pace::AGComm& s) { return s.comm.GetSharedMemoryBytes(); })
@@ -60,7 +60,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("all_gather", &pace::AGComm::AllGather, py::call_guard<py::gil_scoped_release>());
 
     pybind11::class_<pace::RSComm>(m, "RSComm")
-        .def(pybind11::init<int, int, int, int, int, int, int, int, bool, std::vector<int>>())
+        .def(pybind11::init<int, int, int, int, int, int, int, bool, std::vector<int>>())
         .def("get_head_info", [](pace::RSComm& s) { return s.comm.GenHeadInfo(); })
         .def("get_stream", [](pace::RSComm& s) { return s.comm.GetStream(); })
         .def("get_shared_memory_bytes", [](pace::RSComm& s) { return s.comm.GetSharedMemoryBytes(); })

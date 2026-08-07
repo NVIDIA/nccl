@@ -191,7 +191,7 @@ ncclResult_t ncclRasAddRanks(struct rasRankInit* ranks, int nranks) {
 }
 
 // Requests the RAS thread to run RAS diagnostics for this communicator.
-ncclResult_t ncclRunDiagnosticsPassive(struct ncclComm* comm) {
+ncclResult_t ncclRunRasDiagnostics(struct ncclComm* comm) {
   struct rasNotification msg;
   ncclResult_t ret = ncclSuccess;
 

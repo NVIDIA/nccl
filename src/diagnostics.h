@@ -10,7 +10,7 @@
 
 #include "nccl.h"
 
-ncclResult_t ncclRunDiagnosticsActive(ncclComm* comm);
+ncclResult_t ncclRunDiagnostics(ncclComm* comm);
 
 #if defined(NCCL_OS_LINUX)
 

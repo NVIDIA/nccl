@@ -103,7 +103,7 @@ fail:
   return ret;
 }
 
-ncclResult_t ncclRunDiagnosticsActive(struct ncclComm* comm) {
+ncclResult_t ncclRunDiagnostics(struct ncclComm* comm) {
   auto t0 = std::chrono::steady_clock::now();
 
   if (comm->rank == 0) DIAG_PRINT("NCCL DIAG === NCCL Diagnostics ===");
@@ -114,7 +114,7 @@ ncclResult_t ncclRunDiagnosticsActive(struct ncclComm* comm) {
   if (comm->rank == 0 && r != ncclSuccess) DIAG_PRINT("NCCL DIAG [INFO] transport detect returned %d", r);
 
   r = ncclDiagP2pRun(comm);
-  if (comm->rank == 0 && r != ncclSuccess) DIAG_PRINT("NCCL DIAG [INFO] p2p: active check returned %d", r);
+  if (comm->rank == 0 && r != ncclSuccess) DIAG_PRINT("NCCL DIAG [INFO] p2p: check returned %d", r);
 
   auto t1 = std::chrono::steady_clock::now();
   double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();

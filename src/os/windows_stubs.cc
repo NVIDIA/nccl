@@ -42,12 +42,12 @@ ncclResult_t ncclRasAddRanks(struct rasRankInit* ranks, int nranks) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclRunDiagnosticsActive(struct ncclComm* comm) {
+ncclResult_t ncclRunDiagnostics(struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;
 }
 
-ncclResult_t ncclRunDiagnosticsPassive(struct ncclComm* comm) {
+ncclResult_t ncclRunRasDiagnostics(struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;
 }

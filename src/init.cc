@@ -1631,8 +1631,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   }
   NCCLCHECKGOTO(ncclCalloc(&comm->gproxyConn, comm->nRanks), ret, fail);
 
-  if (ncclParamRasDiagnostics() && comm->rank == 0) ncclRunDiagnosticsPassive(comm);
-  if (ncclParamDiagnostics()) ncclRunDiagnosticsActive(comm);
+  if (ncclParamRasDiagnostics() && comm->rank == 0) ncclRunRasDiagnostics(comm);
+  if (ncclParamDiagnostics()) ncclRunDiagnostics(comm);
 
   timers[TIMER_INIT_CONNECT] = clockNano();
   // Build p2p schedule

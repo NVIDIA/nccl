@@ -245,53 +245,46 @@ bool matchIfList(const char* string, int port, struct netIf* ifList, int listSiz
 thread_local struct ncclThreadSignal ncclThreadSignalLocalInstance;
 
 void* ncclMemoryStack::allocateSpilled(struct ncclMemoryStack* me, size_t size, size_t align) {
-  // `me->hunks` points to the top of the stack non-empty hunks. Hunks above
-  // this (reachable via `->above`) are empty.
+  // `me->topFrame.hunk` points to the top of the stack non-empty hunks. Hunks
+  // above this (reachable via `->above`) are empty.
   struct Hunk* top = me->topFrame.hunk;
-  size_t mallocSize = 0;
+  size_t mallocSize = (top ? top->size : 0) + (64 << 10);
 
   // If we have lots of space left in hunk but that wasn't enough then we'll
   // allocate the object unhunked.
   if (me->topFrame.end - me->topFrame.bumper >= 8 << 10) goto unhunked;
 
-  // If we have another hunk (which must be empty) waiting above this one and
-  // the object fits then use that.
-  if (top && top->above) {
-    struct Hunk* top1 = top->above;
-    uintptr_t uobj = (reinterpret_cast<uintptr_t>(top1) + sizeof(struct Hunk) + align - 1) & -uintptr_t(align);
-    if (uobj + size <= reinterpret_cast<uintptr_t>(top1) + top1->size) {
-      me->topFrame.hunk = top1;
-      me->topFrame.bumper = uobj + size;
-      me->topFrame.end = reinterpret_cast<uintptr_t>(top1) + top1->size;
-      return reinterpret_cast<void*>(uobj);
-    }
-  }
-
-  { // If the next hunk we're going to allocate wouldn't be big enough but the
-    // Unhunk proxy fits in the current hunk then go allocate as unhunked.
-    size_t nextSize = (top ? top->size : 0) + (64 << 10);
+  { // The object won't fit in the next hunk either.
     constexpr size_t maxAlign = 64;
-    if (nextSize < sizeof(struct Hunk) + maxAlign + size) {
+    if (mallocSize < sizeof(struct Hunk) + maxAlign + size) {
       uintptr_t uproxy = (me->topFrame.bumper + alignof(Unhunk) - 1) & -uintptr_t(alignof(Unhunk));
+      // If the Unhunk proxy fits in the current hunk then go allocate as unhunked.
       if (uproxy + sizeof(struct Unhunk) <= me->topFrame.end) goto unhunked;
     }
-
-    // At this point we must need another hunk, either to fit the object
-    // itself or its Unhunk proxy.
-    mallocSize = nextSize;
-    INFO_LOC(NCCL_ALLOC_HOST, "memory stack hunk malloc(%llu)", (unsigned long long)mallocSize);
-    struct Hunk* top1 = (struct Hunk*)malloc(mallocSize);
-    if (top1 == nullptr) goto malloc_exhausted;
-    top1->size = nextSize;
-    top1->above = nullptr;
-    if (top) top->above = top1;
-    top = top1;
-    me->topFrame.hunk = top;
-    me->topFrame.end = reinterpret_cast<uintptr_t>(top) + nextSize;
-    me->topFrame.bumper = reinterpret_cast<uintptr_t>(top) + sizeof(struct Hunk);
   }
 
-  { // Try to fit object in the new top hunk.
+  // At this point we must use the next hunk, either to fit the object
+  // itself or its Unhunk proxy. Reuse the empty hunk waiting above this
+  // one if it exists, otherwise allocate a new hunk.
+  {
+    struct Hunk* top1 = nullptr;
+    if (top && top->above) {
+      top1 = top->above;
+    } else {
+      INFO_LOC(NCCL_ALLOC_HOST, "memory stack hunk malloc(%llu)", (unsigned long long)mallocSize);
+      top1 = (struct Hunk*)malloc(mallocSize);
+      if (top1 == nullptr) goto malloc_exhausted;
+      top1->size = mallocSize;
+      top1->above = nullptr;
+      if (top) top->above = top1;
+    }
+    me->topFrame.hunk = top1;
+    me->topFrame.end = reinterpret_cast<uintptr_t>(top1) + top1->size;
+    me->topFrame.bumper = reinterpret_cast<uintptr_t>(top1) + sizeof(struct Hunk);
+  }
+
+  { // Try to fit the object in the new top hunk, otherwise fall through to the
+    // unhunked path.
     uintptr_t uobj = (me->topFrame.bumper + align - 1) & -uintptr_t(align);
     if (uobj + size <= me->topFrame.end) {
       me->topFrame.bumper = uobj + size;

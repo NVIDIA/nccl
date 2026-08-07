@@ -473,8 +473,7 @@ Asynchronous errors and error handling
 --------------------------------------
 
 Some communication errors, and in particular network errors, are reported through the ncclCommGetAsyncError function.
-Operations experiencing an asynchronous error will usually not progress and never complete. When an asynchronous error
-happens, the operation should be aborted and the communicator destroyed using ncclCommAbort.
+Operations experiencing an asynchronous error will usually not progress and never complete. When an asynchronous error happens, or if a peer experiences an error, calling ncclCommRevoke will locally cancel all communicator work on the stream, close peer connections, and prevent further work from being enqueued. A revoked communicator cannot issue collectives, but can be used with ncclCommShrink to create a smaller communicator to remove faulted peers. A revoked communicator should not call ncclCommDestroy or ncclCommFinalize, instead its resources must be freed through ncclCommAbort.
 When waiting for NCCL operations to complete, applications should call ncclCommGetAsyncError and destroy the
 communicator when an error happens.
 
@@ -521,6 +520,7 @@ Related links:
 
  * :c:func:`ncclCommGetAsyncError`
  * :c:func:`ncclCommAbort`
+ * :c:func:`ncclCommRevoke`
 
 .. _ft:
 

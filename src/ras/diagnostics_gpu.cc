@@ -491,39 +491,54 @@ exit:
 }
 
 // *************************************************************************
-// Per-NVLink operational state check.
+// Per-NVLink presence, operational state and speed check.
 // *************************************************************************
-// Counts each device's valid NVLinks and how many are not enabled. PCIe-only devices report zero links and are
-// skipped silently.
-
-// NVML has no valid-link count query, so scan link IDs [0, RAS_DIAG_NVLINK_MAX_LINKS) and keep the ones it marks valid.
-#define RAS_DIAG_NVLINK_MAX_LINKS 18
-
 struct rasDiagnosticsNvLinkData {
-  uint8_t nLinks; // Valid NVLinks reported by NVML.
-  uint8_t nInactive; // Valid NVLinks not in the NVML_FEATURE_ENABLED state.
+  uint8_t nLinks;
+  uint8_t nInactive;
+  uint32_t minSpeedMBps;
+  uint32_t maxSpeedMBps;
 };
 
 static ncclResult_t rasDiagnosticsNvLinkFillLocalData(const struct rasDiagnosticsCommSnapshot* comm, void* checkData) {
   struct rasDiagnosticsNvLinkData* nvlData = (struct rasDiagnosticsNvLinkData*)checkData;
+  nvmlFieldValue_t linkCount = {};
+  unsigned int nUnreadable = 0;
+  nvmlDevice_t device;
 
-  nvlData->nLinks = 0;
-  nvlData->nInactive = 0;
+  *nvlData = {};
 
-  if (comm->nvmlDev >= 0 && comm->nvmlDev < ncclNvmlDeviceCount) {
-    nvmlDevice_t device;
-    if (ncclNvmlDeviceGetHandleByIndex((unsigned int)comm->nvmlDev, &device) == ncclSuccess) {
-      for (unsigned int link = 0; link < RAS_DIAG_NVLINK_MAX_LINKS; link++) {
-        unsigned int valid = 0;
-        if (ncclNvmlDeviceGetNvLinkCapability(device, link, NVML_NVLINK_CAP_VALID, &valid) != ncclSuccess || valid == 0)
-          continue;
-        nvlData->nLinks++;
-        // Unreadable state counts as inactive rather than assumed healthy.
-        nvmlEnableState_t state = NVML_FEATURE_DISABLED;
-        if (ncclNvmlDeviceGetNvLinkState(device, link, &state) != ncclSuccess || state != NVML_FEATURE_ENABLED)
-          nvlData->nInactive++;
+  if (comm->nvmlDev >= 0 && comm->nvmlDev < ncclNvmlDeviceCount &&
+      ncclNvmlDeviceGetHandleByIndex((unsigned int)comm->nvmlDev, &device) == ncclSuccess) {
+    linkCount.fieldId = NVML_FI_DEV_NVLINK_LINK_COUNT;
+    if (ncclNvmlDeviceGetFieldValues(device, 1, &linkCount) == ncclSuccess && linkCount.nvmlReturn == NVML_SUCCESS)
+      nvlData->nLinks = (uint8_t)linkCount.value.uiVal;
+
+    for (unsigned int link = 0; link < nvlData->nLinks; link++) {
+      nvmlFieldValue_t values[2] = {};
+      unsigned int speedMBps = 0;
+
+      values[0].fieldId = NVML_FI_DEV_NVLINK_GET_STATE;
+      values[0].scopeId = link;
+      values[1].fieldId = NVML_FI_DEV_NVLINK_GET_SPEED;
+      values[1].scopeId = link;
+      // A link counts as up only where NVML confirms it enabled at a known speed, as topology detection requires.
+      if (ncclNvmlDeviceGetFieldValues(device, 2, values) == ncclSuccess && values[0].nvmlReturn == NVML_SUCCESS) {
+        if ((nvmlEnableState_t)values[0].value.uiVal == NVML_FEATURE_ENABLED && values[1].nvmlReturn == NVML_SUCCESS)
+          speedMBps = values[1].value.uiVal;
+      } else {
+        nUnreadable++;
       }
+
+      if (speedMBps == 0) {
+        nvlData->nInactive++;
+        continue;
+      }
+      if (nvlData->minSpeedMBps == 0 || speedMBps < nvlData->minSpeedMBps) nvlData->minSpeedMBps = speedMBps;
+      if (speedMBps > nvlData->maxSpeedMBps) nvlData->maxSpeedMBps = speedMBps;
     }
+    // Links whose state NVML cannot report leave nothing to check, so treat the device as having no NVLink.
+    if (nUnreadable == nvlData->nLinks) *nvlData = {};
   }
   return ncclSuccess;
 }
@@ -571,12 +586,14 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
     const char* startRecord = records + start * recordStride;
     const struct rasDiagnosticsRankHeader* startRank = rasDiagnosticsRankHeaderFromRecord(startRecord);
     // Sorted by rank, so the group's first record is its lowest rank; use it as the reference.
-    int refLinks = rasDiagnosticsNvLinkDataFromRecord(startRecord)->nLinks;
+    const struct rasDiagnosticsNvLinkData* refData = rasDiagnosticsNvLinkDataFromRecord(startRecord);
     int commNRanks = startRank->commNRanks;
     int countMismatchRanks[RAS_DIAG_RANK_SET_MAX];
     int inactiveRanks[RAS_DIAG_RANK_SET_MAX];
+    int speedMismatchRanks[RAS_DIAG_RANK_SET_MAX];
     int nCountMismatchStored = 0, nCountMismatch = 0;
     int nInactiveStored = 0, nInactive = 0;
+    int nSpeedMismatchStored = 0, nSpeedMismatch = 0;
     int nWithLinks = 0;
     int end = start;
 
@@ -588,7 +605,7 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
       if (end > start && rasDiagnosticsCommIdCompare(&startRank->commId, &rank->commId) != 0) break;
       nvlData = rasDiagnosticsNvLinkDataFromRecord(record);
       if (nvlData->nLinks > 0) nWithLinks++;
-      if (nvlData->nLinks != refLinks) {
+      if (nvlData->nLinks != refData->nLinks) {
         if (nCountMismatchStored < RAS_DIAG_RANK_SET_MAX) countMismatchRanks[nCountMismatchStored++] = rank->commRank;
         nCountMismatch++;
       }
@@ -596,19 +613,25 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
         if (nInactiveStored < RAS_DIAG_RANK_SET_MAX) inactiveRanks[nInactiveStored++] = rank->commRank;
         nInactive++;
       }
+      // A rank with no link up reports no speed; the inactive-link report covers it instead.
+      if (nvlData->minSpeedMBps != nvlData->maxSpeedMBps ||
+          (nvlData->maxSpeedMBps > 0 && refData->maxSpeedMBps > 0 && nvlData->maxSpeedMBps != refData->maxSpeedMBps)) {
+        if (nSpeedMismatchStored < RAS_DIAG_RANK_SET_MAX) speedMismatchRanks[nSpeedMismatchStored++] = rank->commRank;
+        nSpeedMismatch++;
+      }
       end++;
     }
 
     if (end - start != commNRanks) {
       NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, "NVLink", startRank, end - start), ret, exit);
     } else if (nWithLinks == 0) {
-      // No device exposes NVLink (e.g. PCIe-only); nothing to report.
-    } else if (nCountMismatch == 0 && nInactive == 0) {
-      NCCLCHECKGOTO(
-        rasDiagnosticsReport(reporter, RAS_DIAG_TAG_OK,
-                             "NVLink: found %d link(s) per device, all active across %d ranks in comm 0x%lx", refLinks,
-                             commNRanks, startRank->commId.commHash),
-        ret, exit);
+      // Nothing to check: either no device exposes NVLink (e.g. PCIe-only), or NVML cannot report it.
+    } else if (nCountMismatch == 0 && nInactive == 0 && nSpeedMismatch == 0) {
+      NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_OK,
+                                         "NVLink: %d links per GPU, all active at consistent speed across %d ranks "
+                                         "in comm 0x%lx",
+                                         refData->nLinks, commNRanks, startRank->commId.commHash),
+                    ret, exit);
     } else {
       if (nCountMismatch > 0) {
         char rankSet[128];
@@ -617,7 +640,7 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
           rasDiagnosticsReport(
             reporter, RAS_DIAG_TAG_INFO,
             "NVLink: link-count mismatch across %d ranks in comm 0x%lx, rank(s) %s differ from rank %d (%d)",
-            commNRanks, startRank->commId.commHash, rankSet, startRank->commRank, refLinks),
+            commNRanks, startRank->commId.commHash, rankSet, startRank->commRank, refData->nLinks),
           ret, exit);
       }
       if (nInactive > 0) {
@@ -625,6 +648,15 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
         rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), inactiveRanks, nInactiveStored, nInactive);
         NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
                                            "NVLink: inactive link(s) on rank(s) %s across %d ranks in comm 0x%lx",
+                                           rankSet, commNRanks, startRank->commId.commHash),
+                      ret, exit);
+      }
+      if (nSpeedMismatch > 0) {
+        char rankSet[128];
+        rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), speedMismatchRanks, nSpeedMismatchStored, nSpeedMismatch);
+        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                                           "NVLink: inconsistent link speeds on rank(s) %s across %d ranks "
+                                           "in comm 0x%lx",
                                            rankSet, commNRanks, startRank->commId.commHash),
                       ret, exit);
       }

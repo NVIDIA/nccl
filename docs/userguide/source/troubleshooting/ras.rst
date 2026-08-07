@@ -382,7 +382,8 @@ The report includes results for the following checks:
 * **GPU inventory:** Checks that communicator ranks report the same number of GPUs and use the same GPU model.
 * **CUDA driver version:** Checks that all ranks report the same CUDA version supported by the driver.
 * **Volatile ECC errors:** Checks volatile SRAM and DRAM ECC error counters for the GPU used by each rank.
-* **NVLink state:** Checks that ranks report the same number of NVLinks and that all reported links are active.
+* **NVLink state:** Checks that ranks report the same number of NVLinks, that every link is active, and that all active
+  links run at the same speed.
 * **NCCL environment:** Checks that ``NCCL_*`` environment-variable names and values are consistent across ranks.
 
 .. note::
@@ -451,7 +452,7 @@ For example, an on-demand report with no reported issues might look like:
   node042:12345 NCCL DIAG [OK]   GPU inventory: 8x NVIDIA H100 per node consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   CUDA driver version: 13000 consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   ECC: no uncorrected volatile errors across 8 ranks in comm 0x1234
-  node042:12345 NCCL DIAG [OK]   NVLink: found 18 link(s) per device, all active across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   NVLink: 18 links per GPU, all active at consistent speed across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   NCCL environment: NCCL_* env vars consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG RAS diagnostics completed in 12.3 ms across 8 RAS peers
 

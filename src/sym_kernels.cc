@@ -133,6 +133,11 @@ NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 1)
 
 bool ncclSymkTmaAvailable(struct ncclComm* comm) {
+  // TMA requires up to (8KB data + 8B mbarrier + alignment) x 16 warps SMEM.
+  // SMEM is partitioned across the 16 warps such that each warp gets ncclTmaShmemScratchWarpSize() bytes.
+  if (comm->maxSharedMemOptin < ncclTmaShmemScratchWarpSize() * 16) {
+    return false;
+  }
   return comm->minCompCap >= 100 && ncclParamSymTmaEnable();
 }
 

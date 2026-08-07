@@ -161,7 +161,7 @@ ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, stru
   if (nvlsTreeCorrection && (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_X86 ||
                              (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && inputs->comm->minNetBw >= 96.0f &&
                               inputs->comm->minLocalRanks == 4 && inputs->comm->maxLocalRanks == 4 &&
-                              (logSize < 23 || inputs->comm->nNodes > 2))))
+                              (logSize < 20 || inputs->comm->nNodes > 2))))
     bw *= treeCorrectionFactor[tuning->proto][logSize];
   tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, &lat, &bw);
   return ret;

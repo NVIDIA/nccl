@@ -1,18 +1,15 @@
-"""1:1 CuTeDSL ``@cute.extern`` prototypes for ``bindings/ir/nccl_device_wrapper.h``.
+"""Low-level CuTeDSL bindings for ``bindings/ir/nccl_device_wrapper.h``.
 
-Codegen target. Each entry is a typed ``@cute.extern`` stub bound to the
-device bitcode (``source=_BC``): parameter types and return type are
-derived from the stub signature, and the C symbol is named explicitly via
-``name=`` so the Python stub can keep a PEP 8 ``snake_case`` name. The
-stubs are the raw FFI surface — argument coercion (``_to_ptr`` /
-``_to_value`` / cutlass numeric casts) and return-value wrapping are the
-caller's job.
+Fixed symbols use ``@cute.extern``. ReduceCopy symbols are selected by dtype
+through overloaded ``@cute.extern`` declarations. Callers handle argument
+conversion and result wrapping.
 
 Struct decls live in :mod:`_structs`; coercion helpers in :mod:`_helpers`.
 """
 
 import os
 from pathlib import Path
+from typing import TypeVar
 
 import cutlass
 import cutlass.cute as cute
@@ -186,6 +183,184 @@ def nccl_get_resource_buffer_multimem_pointer(
 def nccl_get_resource_buffer_lsa_multimem_pointer(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32,
 ) -> _LLVMPtrType: ...
+
+
+_CUTE_DTYPE_SUFFIX_MAPPING = {
+    cutlass.Int8: "I8",
+    cutlass.Uint8: "U8",
+    cutlass.Int32: "I32",
+    cutlass.Uint32: "U32",
+    cutlass.Int64: "I64",
+    cutlass.Uint64: "U64",
+    cutlass.Float16: "F16",
+    cutlass.Float32: "F32",
+    cutlass.Float64: "F64",
+    cutlass.BFloat16: "BF16",
+    cutlass.Float8E4M3: "F8E4M3",
+    cutlass.Float8E5M2: "F8E5M2",
+}
+
+_REDUCE_COPY_ALL_DTYPES = (
+    cutlass.Int8,
+    cutlass.Uint8,
+    cutlass.Int32,
+    cutlass.Uint32,
+    cutlass.Int64,
+    cutlass.Uint64,
+    cutlass.Float16,
+    cutlass.Float32,
+    cutlass.Float64,
+    cutlass.BFloat16,
+    cutlass.Float8E4M3,
+    cutlass.Float8E5M2,
+)
+
+_REDUCE_COPY_MULTIMEM_DTYPES = (
+    cutlass.Int32,
+    cutlass.Uint32,
+    cutlass.Int64,
+    cutlass.Uint64,
+    cutlass.Float16,
+    cutlass.Float32,
+    cutlass.Float64,
+    cutlass.BFloat16,
+    cutlass.Float8E4M3,
+    cutlass.Float8E5M2,
+)
+
+ReduceCopyAllDTypes = TypeVar(
+    "ReduceCopyAllDTypes",
+    *_REDUCE_COPY_ALL_DTYPES,
+)
+ReduceCopyMultiMemDTypes = TypeVar(
+    "ReduceCopyMultiMemDTypes",
+    *_REDUCE_COPY_MULTIMEM_DTYPES,
+)
+
+
+def _reduce_copy_name_mangler(ffi):
+    dtype_param = next(
+        (param for param in ffi.params_types if isinstance(param, cute.ConstValue)),
+        None,
+    )
+    if dtype_param is None:
+        raise TypeError(f"{ffi.name} requires a constexpr dtype")
+    dtype = dtype_param.value
+
+    if ffi.name.startswith("ncclMultimem") and dtype not in _REDUCE_COPY_MULTIMEM_DTYPES:
+        raise TypeError(f"{ffi.name} does not support {dtype}")
+
+    suffix = _CUTE_DTYPE_SUFFIX_MAPPING[dtype]
+    return f"{ffi.name}_{suffix}"
+
+
+@cute.extern(
+    name="ncclLsaReduceSum",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_lsa_reduce_sum(
+    coop: ncclCoopAny,
+    src_window: _LLVMPtrType,
+    src_offset: cutlass.Int64,
+    dst: _LLVMPtrType,
+    count: cutlass.Int64,
+    team: ncclTeam,
+    dtype: cutlass.Constexpr[ReduceCopyAllDTypes],
+) -> None: ...
+
+
+@cute.extern(
+    name="ncclMultimemReduceSum",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_multimem_reduce_sum(
+    coop: ncclCoopAny,
+    mc_src: _LLVMPtrType,
+    dst: _LLVMPtrType,
+    count: cutlass.Int64,
+    dtype: cutlass.Constexpr[ReduceCopyMultiMemDTypes],
+) -> None: ...
+
+
+@cute.extern(
+    name="ncclLsaCopy",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_lsa_copy(
+    coop: ncclCoopAny,
+    src: _LLVMPtrType,
+    dst_window: _LLVMPtrType,
+    dst_offset: cutlass.Int64,
+    count: cutlass.Int64,
+    team: ncclTeam,
+    dtype: cutlass.Constexpr[ReduceCopyAllDTypes],
+) -> None: ...
+
+
+@cute.extern(
+    name="ncclMultimemCopy",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_multimem_copy(
+    coop: ncclCoopAny,
+    src: _LLVMPtrType,
+    mc_dst: _LLVMPtrType,
+    count: cutlass.Int64,
+    dtype: cutlass.Constexpr[ReduceCopyMultiMemDTypes],
+) -> None: ...
+
+
+@cute.extern(
+    name="ncclLsaReduceSumCopy",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_lsa_reduce_sum_copy(
+    coop: ncclCoopAny,
+    src_window: _LLVMPtrType,
+    src_offset: cutlass.Int64,
+    dst_window: _LLVMPtrType,
+    dst_offset: cutlass.Int64,
+    count: cutlass.Int64,
+    team: ncclTeam,
+    dtype: cutlass.Constexpr[ReduceCopyAllDTypes],
+) -> None: ...
+
+
+@cute.extern(
+    name="ncclMultimemReduceSumCopy",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_multimem_reduce_sum_copy(
+    coop: ncclCoopAny,
+    mc_src: _LLVMPtrType,
+    mc_dst: _LLVMPtrType,
+    count: cutlass.Int64,
+    dtype: cutlass.Constexpr[ReduceCopyMultiMemDTypes],
+) -> None: ...
+
+
+@cute.extern(
+    name="ncclLocalReduceSumCopy",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_local_reduce_sum_copy(
+    coop: ncclCoopAny,
+    n_src: cutlass.Int32,
+    src_base: _LLVMPtrType,
+    src_displ: cutlass.Int64,
+    n_dst: cutlass.Int32,
+    dst_base: _LLVMPtrType,
+    dst_displ: cutlass.Int64,
+    count: cutlass.Int64,
+    dtype: cutlass.Constexpr[ReduceCopyAllDTypes],
+) -> None: ...
 
 
 # === GIN API ===

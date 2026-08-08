@@ -13,7 +13,6 @@ from . import _bindings
 from ._helpers import _alloca_cft_le_info, _load_cft_le_info, _to_value
 from ._structs import _LLVMPtrType, ncclTeam as Team
 from .handles import MultimemHandle
-from .types import CftLeInfo
 
 if TYPE_CHECKING:
     from .comm import DevComm
@@ -147,70 +146,6 @@ class Window:
         """
         return _bindings.nccl_get_lsa_multimem_pointer(
             self.ptr, cutlass.Int64(offset), dev_comm.ptr)
-
-    # === CFT logical endpoints ===
-    #
-    # CFT ops address memory by an (le_id, le_offset) pair rather than by
-    # pointer, so these mirror the *_pointer methods above.
-
-    def cft_le_info(
-        self, offset: int, peer_cft: int, cft_team: Team, dev_comm: DevComm
-    ) -> CftLeInfo:
-        """Resolve ``offset`` to the logical endpoint of ``peer_cft``.
-
-        Args:
-            offset: Byte offset within the window.
-            peer_cft: Rank within ``cft_team``.
-            cft_team: CFT team, from :meth:`DevComm.team_cft`.
-            dev_comm: Device communicator owning this window.
-
-        Returns:
-            The logical endpoint, as a :class:`CftLeInfo`.
-        """
-        le_id_ptr, le_offset_ptr = _alloca_cft_le_info()
-        _bindings.nccl_get_cft_le_info(
-            self.ptr, cutlass.Int64(offset), cutlass.Int32(peer_cft),
-            _to_value(cft_team), dev_comm.ptr, le_id_ptr, le_offset_ptr)
-        return _load_cft_le_info(le_id_ptr, le_offset_ptr)
-
-    def peer_le_info(
-        self, offset: int, peer: int, dev_comm: DevComm
-    ) -> CftLeInfo:
-        """Resolve ``offset`` to the logical endpoint of ``peer``.
-
-        Args:
-            offset: Byte offset within the window.
-            peer: World rank of the peer. Must fall within the flat CFT team;
-                the device API does not check, and a peer outside it yields a
-                meaningless logical endpoint.
-            dev_comm: Device communicator owning this window.
-
-        Returns:
-            The logical endpoint, as a :class:`CftLeInfo`.
-        """
-        le_id_ptr, le_offset_ptr = _alloca_cft_le_info()
-        _bindings.nccl_get_peer_le_info(
-            self.ptr, cutlass.Int64(offset), cutlass.Int32(peer),
-            dev_comm.ptr, le_id_ptr, le_offset_ptr)
-        return _load_cft_le_info(le_id_ptr, le_offset_ptr)
-
-    def multimem_le_info(
-        self, offset: int, dev_comm: DevComm
-    ) -> CftLeInfo:
-        """Resolve ``offset`` to the multicast logical endpoint.
-
-        Args:
-            offset: Byte offset within the window.
-            dev_comm: Device communicator owning this window.
-
-        Returns:
-            The logical endpoint, as a :class:`CftLeInfo`.
-        """
-        le_id_ptr, le_offset_ptr = _alloca_cft_le_info()
-        _bindings.nccl_get_multimem_le_info(
-            self.ptr, cutlass.Int64(offset), dev_comm.ptr,
-            le_id_ptr, le_offset_ptr)
-        return _load_cft_le_info(le_id_ptr, le_offset_ptr)
 
     def tensor(self, dtype, layout, offset: int = 0):
         """Construct a ``cute.Tensor`` view over the registered buffer.

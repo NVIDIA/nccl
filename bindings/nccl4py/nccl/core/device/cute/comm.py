@@ -22,7 +22,7 @@ from ._structs import (
 )
 from .gin import Gin
 from .handles import GinBarrierHandle, LsaBarrierHandle, MultimemHandle
-from .types import CftLeInfo, CftTeamMode, GinBackendMask, GinResourceSharingMode
+from .types import GinBackendMask, GinResourceSharingMode
 
 
 def _device_function_entry_block():
@@ -299,65 +299,6 @@ class DevComm:
         """
         return _bindings.nccl_get_resource_buffer_lsa_multimem_pointer(
             self.ptr, cutlass.Uint32(handle))
-
-    # === Resource-buffer CFT logical endpoints ===
-    #
-    # As Window.*_le_info, but addressing a resource buffer by handle. The CFT
-    # variant takes no team: it resolves against the flat CFT team.
-
-    def resource_buffer_cft_le_info(
-        self, handle: int, peer_cft: int
-    ) -> CftLeInfo:
-        """Resolve the buffer to the logical endpoint of ``peer_cft``.
-
-        Args:
-            handle: ``ncclDevResourceHandle`` from ``DevCommResource``.
-            peer_cft: Rank within the flat CFT team.
-
-        Returns:
-            The logical endpoint, as a :class:`CftLeInfo`.
-        """
-        le_id_ptr, le_offset_ptr = _alloca_cft_le_info()
-        _bindings.nccl_get_resource_buffer_cft_le_info(
-            self.ptr, cutlass.Uint32(handle), cutlass.Int32(peer_cft),
-            le_id_ptr, le_offset_ptr)
-        return _load_cft_le_info(le_id_ptr, le_offset_ptr)
-
-    def resource_buffer_peer_le_info(
-        self, handle: int, peer: int
-    ) -> CftLeInfo:
-        """Resolve the buffer to the logical endpoint of ``peer``.
-
-        Args:
-            handle: ``ncclDevResourceHandle`` from ``DevCommResource``.
-            peer: World rank of the peer. Must fall within the flat CFT team;
-                the device API does not check, and a peer outside it yields a
-                meaningless logical endpoint.
-
-        Returns:
-            The logical endpoint, as a :class:`CftLeInfo`.
-        """
-        le_id_ptr, le_offset_ptr = _alloca_cft_le_info()
-        _bindings.nccl_get_resource_buffer_peer_le_info(
-            self.ptr, cutlass.Uint32(handle), cutlass.Int32(peer),
-            le_id_ptr, le_offset_ptr)
-        return _load_cft_le_info(le_id_ptr, le_offset_ptr)
-
-    def resource_buffer_multimem_le_info(
-        self, handle: int
-    ) -> CftLeInfo:
-        """Resolve the buffer to its multicast logical endpoint.
-
-        Args:
-            handle: ``ncclDevResourceHandle`` from ``DevCommResource``.
-
-        Returns:
-            The logical endpoint, as a :class:`CftLeInfo`.
-        """
-        le_id_ptr, le_offset_ptr = _alloca_cft_le_info()
-        _bindings.nccl_get_resource_buffer_multimem_le_info(
-            self.ptr, cutlass.Uint32(handle), le_id_ptr, le_offset_ptr)
-        return _load_cft_le_info(le_id_ptr, le_offset_ptr)
 
     # === Gin factory ===
 

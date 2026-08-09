@@ -21,11 +21,21 @@ import torch.distributed as dist
 
 # nccl4py is container-provided. Import is best-effort so unit tests can
 # inspect the module shape on machines without nccl4py installed.
+#
+# Import from ``nccl.core`` itself, never from its submodules. nccl4py's own
+# __init__ states that semantic-versioning guarantees cover exactly the names
+# in ``nccl.core.__all__``, and that every other module is an internal detail
+# free to move without notice -- which is what ``nccl.core.buffer`` and its
+# siblings are. All six names below are in that ``__all__``.
 try:
-    from nccl.core.buffer import mem_alloc as _mem_alloc
-    from nccl.core.communicator import Communicator, NCCLDevCommRequirements
-    from nccl.core.constants import WindowFlag
-    from nccl.core.utils import UniqueId, get_unique_id
+    from nccl.core import (
+        Communicator,
+        NCCLDevCommRequirements,
+        UniqueId,
+        WindowFlag,
+        get_unique_id,
+        mem_alloc as _mem_alloc,
+    )
 
     _NCCL4PY_AVAILABLE = True
     _NCCL4PY_IMPORT_ERROR: Optional[BaseException] = None
@@ -37,6 +47,31 @@ except Exception as _e:  # pragma: no cover - depends on environment
 def nccl4py_available() -> bool:
     """Whether the nccl4py package is importable in this process."""
     return _NCCL4PY_AVAILABLE
+
+
+def nccl4py_import_error() -> Optional[BaseException]:
+    """The exception that made nccl4py unusable, or None if it is usable."""
+    return _NCCL4PY_IMPORT_ERROR
+
+
+def nccl4py_missing() -> bool:
+    """Whether nccl4py itself is absent, as opposed to present but unusable.
+
+    ``nccl4py_available()`` collapses two very different situations into one
+    False, and callers need to tell them apart. Exactly one is benign: the
+    ``nccl`` package is not installed at all, an environment gap a test may
+    reasonably skip.
+
+    Everything else must fail loudly, including a ``ModuleNotFoundError`` that
+    names a *sub*module. ``No module named 'nccl.core.buffer'`` means nccl4py
+    IS installed but no longer laid out the way UB-X imports it -- the exact
+    shape of the 0.3.0 change that shipped UB-X unable to allocate. Reading
+    that as "not installed" would skip the regression this guard exists to
+    catch, so the check is on the missing module's name, not on the exception
+    type alone.
+    """
+    err = _NCCL4PY_IMPORT_ERROR
+    return isinstance(err, ModuleNotFoundError) and getattr(err, "name", None) == "nccl"
 
 
 def _debug_enabled() -> bool:
@@ -148,6 +183,23 @@ def get_or_create_nccl_comm(
 # Pool: ncclMemAlloc + window register + devcomm create
 # ---------------------------------------------------------------------------
 
+def _resolve_device_index(device) -> int:
+    """Resolve a torch device to the integer ordinal ``mem_alloc`` expects.
+
+    ``mem_alloc`` takes an ``NcclDeviceSpec`` -- an int or a
+    ``cuda.core.Device`` -- so a ``torch.device`` is not a valid argument.
+    Routing through ``torch.device()`` also tolerates a plain ``"cuda:0"``
+    string, which the annotations forbid but callers can still pass. An
+    index-less device means "current", the same GPU ``mem_alloc(device=None)``
+    would have picked; naming it explicitly keeps the pool and the tensor view
+    built over it on one device.
+    """
+    index = torch.device(device).index
+    if index is None:
+        index = torch.cuda.current_device()
+    return int(index)
+
+
 def _wrap_device_ptr_as_tensor(
     ptr: int, size: int, device: torch.device,
 ) -> torch.Tensor:
@@ -180,8 +232,8 @@ class NcclSymPool:
 
     Lifecycle:
 
-    1. ``nccl.core.buffer.mem_alloc(size_bytes)`` -> owning ``Buffer``; its
-       device pointer is what the rest of the pool is built on
+    1. ``nccl.core.mem_alloc(size_bytes)`` -> owning ``Buffer``; its device
+       pointer is what the rest of the pool is built on
     2. Wrap as ``torch.Tensor`` via __cuda_array_interface__
     3. ``comm.register_window(...)`` -> RegisteredWindowHandle
     4. ``comm.create_dev_comm(...)`` -> DevCommResource (with LSA multimem)
@@ -226,21 +278,9 @@ class NcclSymPool:
         # 1. ncclMemAlloc, through nccl4py's public allocator.
         if _diag:
             print(f"[r{_r} NcclSymPool] step1 PRE mem_alloc({self._size})", flush=True)
-        # mem_alloc wants an integer device ordinal (NcclDeviceSpec); handing
-        # it a torch.device resolves to the wrong thing. Going through
-        # torch.device() also tolerates a plain "cuda:0" string, which the
-        # annotation forbids but callers can still pass. An index-less device
-        # means "current", the same GPU mem_alloc(device=None) would have
-        # picked -- naming it explicitly just keeps the pool and the tensor
-        # view built over it on one device.
-        dev_index = torch.device(device).index
-        if dev_index is None:
-            dev_index = torch.cuda.current_device()
-        # The returned Buffer OWNS the allocation: it frees on close() and also
-        # when garbage collected. It must stay referenced for the pool's whole
-        # lifetime -- dropping it while the window is still registered frees
-        # the pool underneath NCCL, which corrupts silently rather than
-        # raising. close() releases it last, after the window is deregistered.
+        dev_index = _resolve_device_index(device)
+        # Buffer owns the allocation and also frees on GC -- see the class
+        # docstring; self._buf must outlive the registered window.
         self._buf = _mem_alloc(self._size, device=dev_index)
         self._raw_ptr = int(self._buf.handle)
         if self._raw_ptr == 0:
@@ -358,11 +398,13 @@ class NcclSymPool:
         # so torch can't hand the pointer to a kernel after free.
         self._internal_pool = None
         # Release the Buffer last, once nothing else can reach the memory.
-        # buf.close() is exactly what nccl.core.buffer.mem_free does; calling
-        # it directly saves importing a second symbol here. It still reaches
-        # into nccl.core.memory, so this is not free of module state at
+        # buf.close() is exactly what nccl.core.mem_free does; calling it
+        # directly saves importing a second symbol here. It still reaches into
+        # nccl4py module state, so this is not free of that state at
         # interpreter shutdown -- hence the except below, which is
-        # load-bearing rather than defensive.
+        # load-bearing rather than defensive. Dropping the reference after a
+        # failed close lets the finalizer retry it, which is safe because
+        # close() is idempotent (see test_close_is_idempotent).
         if self._buf is not None:
             try:
                 self._buf.close()

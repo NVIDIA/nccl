@@ -22,15 +22,7 @@ import torch.distributed as dist
 # nccl4py is container-provided. Import is best-effort so unit tests can
 # inspect the module shape on machines without nccl4py installed.
 try:
-    import nccl.bindings as _nccl_bindings
-
-    # nccl4py 0.3.0 moved the low-level symbols out of the nccl.bindings
-    # package root and into the nccl.bindings.nccl submodule, leaving the
-    # root namespace empty. Fall back to the submodule so both the 0.2.x
-    # and 0.3.x layouts work.
-    if not hasattr(_nccl_bindings, "mem_alloc"):
-        from nccl.bindings import nccl as _nccl_bindings
-
+    from nccl.core.buffer import mem_alloc as _mem_alloc
     from nccl.core.communicator import Communicator, NCCLDevCommRequirements
     from nccl.core.constants import WindowFlag
     from nccl.core.utils import UniqueId, get_unique_id
@@ -188,14 +180,18 @@ class NcclSymPool:
 
     Lifecycle:
 
-    1. ``ncclMemAlloc(size_bytes)`` -> raw device pointer
+    1. ``nccl.core.buffer.mem_alloc(size_bytes)`` -> owning ``Buffer``; its
+       device pointer is what the rest of the pool is built on
     2. Wrap as ``torch.Tensor`` via __cuda_array_interface__
     3. ``comm.register_window(...)`` -> RegisteredWindowHandle
     4. ``comm.create_dev_comm(...)`` -> DevCommResource (with LSA multimem)
     5. Resolve LSA multimem ptr (offset 0) and per-rank LSA peer ptrs
 
-    Tear-down (close()): destroy devcomm -> deregister window ->
-    ``ncclMemFree``.
+    Tear-down (close()): destroy devcomm -> deregister window -> drop the
+    tensor view -> release the ``Buffer`` (``ncclMemFree``). The Buffer is
+    held for the pool's whole lifetime: it also frees on garbage collection,
+    so letting it go early would free the pool while the window still
+    references it.
     """
 
     def __init__(
@@ -217,6 +213,7 @@ class NcclSymPool:
         self._world_size = int(world_size)
         # Pre-init for safe close() on partial construction failure
         self._raw_ptr: int = 0
+        self._buf = None
         self._internal_pool: Optional[torch.Tensor] = None
         self._window = None
         self._dev_comm = None
@@ -226,10 +223,26 @@ class NcclSymPool:
         _r = int(os.environ.get("RANK", "-1"))
         _diag = os.environ.get("UBX_INIT_DIAG", "0") == "1"
 
-        # 1. ncclMemAlloc
+        # 1. ncclMemAlloc, through nccl4py's public allocator.
         if _diag:
             print(f"[r{_r} NcclSymPool] step1 PRE mem_alloc({self._size})", flush=True)
-        self._raw_ptr = int(_nccl_bindings.mem_alloc(self._size))
+        # mem_alloc wants an integer device ordinal (NcclDeviceSpec); handing
+        # it a torch.device resolves to the wrong thing. Going through
+        # torch.device() also tolerates a plain "cuda:0" string, which the
+        # annotation forbids but callers can still pass. An index-less device
+        # means "current", the same GPU mem_alloc(device=None) would have
+        # picked -- naming it explicitly just keeps the pool and the tensor
+        # view built over it on one device.
+        dev_index = torch.device(device).index
+        if dev_index is None:
+            dev_index = torch.cuda.current_device()
+        # The returned Buffer OWNS the allocation: it frees on close() and also
+        # when garbage collected. It must stay referenced for the pool's whole
+        # lifetime -- dropping it while the window is still registered frees
+        # the pool underneath NCCL, which corrupts silently rather than
+        # raising. close() releases it last, after the window is deregistered.
+        self._buf = _mem_alloc(self._size, device=dev_index)
+        self._raw_ptr = int(self._buf.handle)
         if self._raw_ptr == 0:
             raise RuntimeError(f"ncclMemAlloc({self._size}) returned NULL")
         if _diag:
@@ -341,15 +354,22 @@ class NcclSymPool:
             except Exception:
                 pass
             self._window = None
-        # Drop the tensor view BEFORE freeing the underlying allocation,
+        # Drop the tensor view BEFORE releasing the underlying allocation,
         # so torch can't hand the pointer to a kernel after free.
         self._internal_pool = None
-        if self._raw_ptr != 0:
+        # Release the Buffer last, once nothing else can reach the memory.
+        # buf.close() is exactly what nccl.core.buffer.mem_free does; calling
+        # it directly saves importing a second symbol here. It still reaches
+        # into nccl.core.memory, so this is not free of module state at
+        # interpreter shutdown -- hence the except below, which is
+        # load-bearing rather than defensive.
+        if self._buf is not None:
             try:
-                _nccl_bindings.mem_free(self._raw_ptr)
+                self._buf.close()
             except Exception:
                 pass
-            self._raw_ptr = 0
+            self._buf = None
+        self._raw_ptr = 0
 
     def __del__(self):
         # Best-effort; explicit close() is preferred and verifiable in tests.

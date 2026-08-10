@@ -530,8 +530,16 @@ ncclResult_t ncclNetSocketAccept(void* listenComm, void** recvComm, ncclNetDevic
     NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, sock, &sendSockIdx, sizeof(uint8_t), &done));
     if (done == 0) return ncclSuccess;
 
-    if (sendSockIdx == rComm->nSocks) rComm->ctrlSock = *sock;
-    else rComm->socks[sendSockIdx] = *sock;
+    struct ncclSocket* slot = NULL;
+    if (sendSockIdx == rComm->nSocks) slot = &rComm->ctrlSock;
+    else if (sendSockIdx < rComm->nSocks) slot = &rComm->socks[sendSockIdx];
+    if (slot == NULL || slot->state == ncclSocketStateReady) {
+      WARN("NET/Socket : peer sent invalid or duplicate socket index %d (nSocks %d)", sendSockIdx, rComm->nSocks);
+      (void)ncclSocketClose(sock);
+      free(sock);
+      return ncclInternalError;
+    }
+    *slot = *sock;
     free(sock);
   }
   NCCLCHECK(ncclCalloc(&rComm->inlineData, MAX_REQUESTS * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize())));

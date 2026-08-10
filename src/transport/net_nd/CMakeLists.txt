@@ -8,6 +8,7 @@ add_library(nccl_net_nd_compile OBJECT
     ${CMAKE_CURRENT_SOURCE_DIR}/ndwrap.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/common.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/init.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/reg.cc
 )
 target_compile_definitions(nccl_net_nd_compile PRIVATE nccl_EXPORTS)
 target_include_directories(nccl_net_nd_compile PRIVATE

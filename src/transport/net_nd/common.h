@@ -84,8 +84,11 @@ enum ncclNdMemType {
 
 // Memory region structure
 struct ncclNdMr {
-  uintptr_t addr;
-  size_t pages;
+  uintptr_t start;
+  uintptr_t end;
+  enum ncclNdMemType memType;
+  uint64_t bufferId;
+  bool syncMemopsTracked;
   int refs;
   struct IND2MemoryRegion* mr;
   // IND2MemoryRegion keeps using the overlapped file supplied at creation.
@@ -297,6 +300,8 @@ struct alignas(8) ncclNdSendCommDev {
 
 // MR handle wrapper for multi-device
 struct ncclNdMrHandle {
+  int ndevs;
+  int devs[NCCL_ND_MAX_DEVS_PER_NIC];
   struct IND2MemoryRegion* mrs[NCCL_ND_MAX_DEVS_PER_NIC];
 };
 

@@ -1928,8 +1928,12 @@ void* ncclProxyService(void* _args) {
       if (closeConn) {
         (void)ncclSocketClose(sock);
 
-        if (op != nullptr) {
-          asyncProxyOpDequeue(peer, op);
+        // Drain every op still queued for this peer, not just the one that
+        // failed: orphaned ops would leak their buffers, keep asyncOpCount
+        // permanently elevated (busy-polling), and resume on whichever peer
+        // next reuses this slot, injecting responses into its socket stream.
+        while (peer->asyncOps != nullptr) {
+          asyncProxyOpDequeue(peer, peer->asyncOps);
           asyncOpCount--;
         }
         pollfds[s].fd = NCCL_INVALID_SOCKET;

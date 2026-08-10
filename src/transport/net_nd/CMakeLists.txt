@@ -6,7 +6,9 @@
 # Compile the provider layer without exposing an incomplete transport to NCCL.
 add_library(nccl_net_nd_compile OBJECT
     ${CMAKE_CURRENT_SOURCE_DIR}/ndwrap.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/common.cc
 )
+target_compile_definitions(nccl_net_nd_compile PRIVATE nccl_EXPORTS)
 target_include_directories(nccl_net_nd_compile PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/device

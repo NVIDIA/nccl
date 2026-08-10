@@ -142,7 +142,11 @@ static ncclResult_t p2pValidatePeerMappingCached(int cudaDevFrom, int cudaDevTo,
   *valid = 1;
   if (cudaDevFrom == cudaDevTo) return ncclSuccess;
   if (cudaDevFrom < 0 || cudaDevTo < 0 || cudaDevFrom >= kMaxDev || cudaDevTo >= kMaxDev) {
-    // Out of cache range: skip rather than refuse P2P.
+    // Cannot probe/cache this pair; fail closed when validation was requested.
+    INFO(NCCL_INIT | NCCL_P2P,
+         "P2P validate cannot probe device pair %d -> %d (out of range); disabling P2P for this pair.",
+         cudaDevFrom, cudaDevTo);
+    *valid = 0;
     return ncclSuccess;
   }
 
@@ -204,7 +208,15 @@ ncclResult_t p2pCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph
   int cudaDev2 = busIdToCudaDev(info2->busId);
   if (cudaDev1 == -1 || cudaDev2 == -1) {
 #if CUDART_VERSION >= 10010
-    // CUDA 10.1 and later can use P2P with invisible devices.
+    // CUDA 10.1+ can still use P2P with invisible devices via IPC/VMM. The SM-store
+    // probe needs visible cudaDev indices, so when validation is requested fail closed
+    // rather than allow that unvalidated P2P path (NCCL issue #2335).
+    if (ncclParamP2pValidate()) {
+      INFO(NCCL_INIT | NCCL_P2P,
+           "P2P validate requested but peer device is invisible (busId %lx/%lx); disabling P2P for this pair.",
+           info1->busId, info2->busId);
+      *ret = 0;
+    }
     return ncclSuccess;
 #else
     // Peer's CUDA device is not visible in this process : we can't communicate with it.

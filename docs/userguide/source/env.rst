@@ -867,6 +867,8 @@ The ``NCCL_P2P_VALIDATE`` variable asks NCCL to functionally verify peer mapping
 
 This matches the visibility contract used by NCCL's SM P2P protocols and detects false peer-access grants where capability queries and round-trip / host-staged copy tests still succeed. Results are cached per device pair within the process under a mutex.
 
+If a peer is not visible in the process (for example via ``CUDA_VISIBLE_DEVICES``) so the probe cannot run, validation **fails closed** and disables P2P for that pair. NCCL may otherwise still use P2P with invisible devices through IPC/VMM; without this fail-closed behavior, ``NCCL_P2P_VALIDATE=1`` would leave that path unvalidated.
+
 Values accepted
 ^^^^^^^^^^^^^^^
 Define and set to 1 to enable owner-verified P2P probing at initialization.

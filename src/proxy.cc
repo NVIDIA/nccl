@@ -1928,10 +1928,7 @@ void* ncclProxyService(void* _args) {
       if (closeConn) {
         (void)ncclSocketClose(sock);
 
-        // Drain every op still queued for this peer, not just the one that
-        // failed: orphaned ops would leak their buffers, keep asyncOpCount
-        // permanently elevated (busy-polling), and resume on whichever peer
-        // next reuses this slot, injecting responses into its socket stream.
+        // Drain every op still queued for this peer, not just the failed one.
         while (peer->asyncOps != nullptr) {
           asyncProxyOpDequeue(peer, peer->asyncOps);
           asyncOpCount--;

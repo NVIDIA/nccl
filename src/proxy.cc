@@ -1094,6 +1094,29 @@ static ncclResult_t ncclProxyGetConnection(struct ncclProxyConnectionPool* pool,
   return ncclSuccess;
 }
 
+// Resolve a connection handle received from a peer to the pool connection it
+// refers to. The handle is a raw ncclProxyConnection pointer the peer echoes
+// back from its Init response, so a hostile or buggy peer can supply an
+// arbitrary value that would otherwise be dereferenced and called through.
+// Only accept a pointer that exactly matches an allocated slot of the pool.
+// (Follow-up: replace the wire pointer with an integer id so that no raw
+// pointer crosses the trust boundary at all.)
+static ncclResult_t ncclProxyConnectionFromHandle(struct ncclProxyConnectionPool* pool, void* handle,
+                                                  struct ncclProxyConnection** conn) {
+  for (int b = 0; b < pool->banks; b++) {
+    if (pool->pools[b] == NULL) continue;
+    int slots = (b == pool->banks - 1) ? pool->offset : NCCL_PROXY_CONN_POOL_SIZE;
+    char* base = (char*)pool->pools[b];
+    char* end = base + (size_t)slots * sizeof(struct ncclProxyConnection);
+    char* p = (char*)handle;
+    if (p >= base && p < end && ((size_t)(p - base) % sizeof(struct ncclProxyConnection)) == 0) {
+      *conn = (struct ncclProxyConnection*)p;
+      return ncclSuccess;
+    }
+  }
+  return ncclInvalidArgument;
+}
+
 static ncclResult_t proxyFree(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState) {
   if (connection->send) {
     if (ncclTransports[connection->transport]->send.proxyFree) {
@@ -1682,6 +1705,19 @@ static ncclResult_t proxyServiceInitOp(int type, struct ncclProxyLocalPeer* peer
 
   asyncOp->type = type;
   NCCLCHECKGOTO(ncclSocketRecv(sock, &asyncOp->connection, sizeof(void*)), ret, fail);
+  // For every op other than Init the peer echoes back a connection handle it
+  // received from its Init response. Resolve it against the pool so a forged
+  // handle cannot be dereferenced/called through (proxySetup etc.).
+  if (type != ncclProxyMsgInit) {
+    struct ncclProxyConnection* conn;
+    if (ncclProxyConnectionFromHandle(connectionPool, asyncOp->connection, &conn) != ncclSuccess) {
+      WARN("[Proxy Service] rejecting %s from localRank %d: unknown connection handle %p", ncclProxyMsgTypeStr[type],
+           peer->tpLocalRank, asyncOp->connection);
+      ret = ncclInvalidArgument;
+      goto fail;
+    }
+    asyncOp->connection = conn;
+  }
 
   NCCLCHECKGOTO(ncclSocketRecv(sock, &asyncOp->reqSize, sizeof(int)), ret, fail);
   NCCLCHECKGOTO(ncclSocketRecv(sock, &asyncOp->respSize, sizeof(int)), ret, fail);

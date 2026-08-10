@@ -10,6 +10,7 @@ add_library(nccl_net_nd_compile OBJECT
     ${CMAKE_CURRENT_SOURCE_DIR}/init.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/connect.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/reg.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/p2p.cc
 )
 target_compile_definitions(nccl_net_nd_compile PRIVATE nccl_EXPORTS)
 target_include_directories(nccl_net_nd_compile PRIVATE

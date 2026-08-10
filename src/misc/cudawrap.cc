@@ -156,6 +156,7 @@ DECLARE_CUDA_PFN(cuMemUnmap, 10020);
 DECLARE_CUDA_PFN(cuMemGetAllocationPropertiesFromHandle, 10020);
 /* ncclMemAlloc/Free */
 DECLARE_CUDA_PFN(cuPointerGetAttribute, 4000);
+DECLARE_CUDA_PFN(cuPointerSetAttribute, 6000);
 #if CUDA_VERSION >= 11070
 /* transport/collNet.cc/net.cc*/
 DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
@@ -276,6 +277,7 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuMemGetAllocationPropertiesFromHandle, 10020, 1);
 /* ncclMemAlloc/Free */
   LOAD_SYM(cuPointerGetAttribute, 4000, 1);
+  LOAD_SYM(cuPointerSetAttribute, 6000, 1);
 #if CUDA_VERSION >= 11070
   LOAD_SYM(cuMemGetHandleForAddressRange, 11070, 1); // DMA-BUF support
 #endif

@@ -595,12 +595,9 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
         eDescr.coll.root = ct->root;
         eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
         eDescr.coll.nChannels = ct->nChannels;
-        // Sym plans post all KernelCh ops against the head task's event
-        // (profilerPostPlanWorkSym), covering countOneBits(plan->channelMask)
-        // channels, while ct->nChannels stays 0. Advertise the real count on the
-        // head so completion-gating plugins balance their per-channel refs.
-        if (plan->isSymColl && (ct->eActivationMask & ncclProfileKernelCh) &&
-            ct == ncclIntruQueueHead(&plan->collTaskQueue))
+        // Sym plans use plan->channelMask while ct->nChannels stays 0.
+        // Advertise the real count on the head task.
+        if (plan->isSymColl && ct == ncclIntruQueueHead(&plan->collTaskQueue))
           eDescr.coll.nChannels = (uint8_t)countOneBits(plan->channelMask);
         eDescr.coll.nWarps = ct->nWarps;
         eDescr.coll.isSymColl = plan->isSymColl;

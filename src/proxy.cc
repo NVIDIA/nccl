@@ -1690,6 +1690,15 @@ static ncclResult_t proxyServiceInitOp(int type, struct ncclProxyLocalPeer* peer
     NCCLCHECKGOTO(ncclSocketRecv(sock, asyncOp->reqBuff, asyncOp->reqSize), ret, fail);
   }
 
+  if (type == ncclProxyMsgInit &&
+      (asyncOp->reqSize < (int)sizeof(ncclProxyInitReq) || asyncOp->respSize < (int)sizeof(ncclProxyInitResp))) {
+    WARN("[Proxy Service] rejecting Init from localRank %d: reqSize=%d (expected %d) respSize=%d (expected %d)",
+         peer->tpLocalRank, asyncOp->reqSize, (int)sizeof(ncclProxyInitReq), asyncOp->respSize,
+         (int)sizeof(ncclProxyInitResp));
+    ret = ncclInvalidArgument;
+    goto fail;
+  }
+
   // Store opId for completion response
   NCCLCHECKGOTO(ncclSocketRecv(sock, &asyncOp->opId, sizeof(asyncOp->opId)), ret, fail);
 

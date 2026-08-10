@@ -92,6 +92,10 @@ bool ncclDevrIsOneLsaTeam(struct ncclComm* comm);
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm);
 ncclResult_t ncclDevrFinalize(struct ncclComm* comm);
 
+// True if any symmetric memory team holds a live multicast object
+// (checked by ncclNvlsSuspendCheck: such objects hang cuda-checkpoint).
+bool ncclDevrHasMulticastTeam(struct ncclComm* comm);
+
 // If found *outWinHost will be populated and *outWinId >= 0, otherwise *outWinId == -1
 ncclResult_t ncclDevrFindWindow(struct ncclComm* comm, void const* userPtr, struct ncclDevrWindow** outWin);
 

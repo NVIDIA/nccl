@@ -406,6 +406,10 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
     return ncclInvalidUsage;
   }
 
+  // Validate suspendability of the NVLS layer before any destructive work,
+  // so a rejection leaves the comm fully intact.
+  NCCLCHECK(ncclNvlsSuspendCheck(comm));
+
   ncclResult_t ret = ncclSuccess;
   size_t releasedScratch = 0;
   size_t releasedOffload = 0;
@@ -501,6 +505,10 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
 
     entry = entry->next;
   }
+
+  // Step 3: Suspend the NVLS multicast layer; live multicast objects hang
+  // cuda-checkpoint (see ncclNvlsSuspend in transport/nvls.cc).
+  NCCLCHECKGOTO(ncclNvlsSuspend(comm), ret, fail);
 
   manager->released = 1;
 
@@ -886,6 +894,10 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
     }
     entry = entry->next;
   }
+
+  // Step 5: Resume the NVLS multicast layer (see ncclNvlsResume in
+  // transport/nvls.cc).
+  NCCLCHECKGOTO(ncclNvlsResume(comm), ret, fail);
 
   manager->released = 0;
 

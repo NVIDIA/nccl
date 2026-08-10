@@ -74,25 +74,32 @@ struct ncclConnect {
 #if CUDART_VERSION >= 12010
 
 #define NVLS_HANDLE_SIZE 64
+
+// One NVLS multicast allocation: a multicast group plus this rank's unicast
+// (UC) backing memory, both mapped at fixed VAs. While suspended
+// (ncclCommSuspend NVLS extension) mcHandle/ucHandle are 0, the physical
+// memory and group are released (the VA reservations at ucPtr/mcPtr are
+// retained), and cpuBackup holds the UC contents if they must survive.
+struct ncclNvlsMcMem {
+  CUmemGenericAllocationHandle mcHandle; // Multicast group handle
+  CUmemGenericAllocationHandle ucHandle; // Unicast (physical) handle
+  char* mcPtr; // Multicast address
+  char* ucPtr; // Unicast address
+  size_t mcSize;
+  size_t ucSize;
+  void* cpuBackup; // UC contents while suspended (NULL if not preserved)
+};
+
 struct ncclNvlsSharedRes {
   int refCount;
   bool inited;
+  bool mcSuspended; // see ncclNvlsSuspend/ncclNvlsResume
   CUmulticastObjectProp bufProp;
   CUmulticastObjectProp signalProp;
   CUmemAccessDesc accessDesc;
   int dev;
-  size_t creditUCSize;
-  size_t creditMCSize;
-  size_t buffUCSize;
-  size_t buffMCSize;
-  CUmemGenericAllocationHandle mcBuffHandle; // Multicast handle for NVLS buffer
-  CUmemGenericAllocationHandle mcCreditHandle; // Multicast handle for NVLS credit buffer
-  char* mcBuff; // Multicast NVLS buffer address
-  char* mcCredit; // Multicast NVLS credit address
-  CUmemGenericAllocationHandle ucBuffHandle; // Unicast Handle for NVLS buffer
-  CUmemGenericAllocationHandle ucCreditHandle; // Unicast Handle for NVLS credit buffer
-  char* ucBuff; // Unicast NVLS buffer address
-  char* ucCredit; // Unicast NVLS credit address
+  struct ncclNvlsMcMem buff; // NVLS data buffer
+  struct ncclNvlsMcMem credit; // NVLS credit buffer
   int nChannels;
   int nHeads;
   int chunkSize;
@@ -152,6 +159,9 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm);
 ncclResult_t ncclNvlsTuning(struct ncclComm* comm);
 ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm);
+ncclResult_t ncclNvlsSuspendCheck(struct ncclComm* comm);
+ncclResult_t ncclNvlsSuspend(struct ncclComm* comm);
+ncclResult_t ncclNvlsResume(struct ncclComm* comm);
 ncclResult_t ncclNvlsTreeConnect(struct ncclComm* comm);
 ncclResult_t ncclNvlsGraphRegisterBuffer(
   struct ncclComm* comm, const void* sendbuff, void* recvbuff, size_t sendbuffSize, size_t recvbuffSize,

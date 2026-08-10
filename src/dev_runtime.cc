@@ -478,6 +478,13 @@ fail:
   return ret;
 }
 
+bool ncclDevrHasMulticastTeam(struct ncclComm* comm) {
+  for (struct ncclDevrTeam* t = comm->devrState.teamHead; t != nullptr; t = t->next) {
+    if (t->mcBasePtr != nullptr) return true;
+  }
+  return false;
+}
+
 static void symTeamDestroyAll(struct ncclComm* comm) {
   struct ncclDevrState* devr = &comm->devrState;
   while (devr->teamHead != nullptr) {

@@ -47,13 +47,9 @@ getNcclCollNet_t* getNcclCollNet[NCCL_NET_VERSION_COUNT] = {getNcclCollNet_v12, 
 #endif
 
 // Count only built-in transports registered below. Windows does not build the
-// real IB transport (only a failure stub is linked), so Socket is its sole
-// candidate until NetworkDirect is enabled.
-#if defined(NCCL_OS_LINUX)
+// real IB transport (only a failure stub is linked), so it registers
+// NetworkDirect and Socket instead.
 #define NCCL_NET_NUM_INTERNAL_PLUGINS 2
-#elif defined(NCCL_OS_WINDOWS)
-#define NCCL_NET_NUM_INTERNAL_PLUGINS 1
-#endif
 
 typedef enum ncclNetPluginState {
   ncclNetPluginStateDisabled = -2,       // Plugin library failed to initialize
@@ -337,6 +333,7 @@ static void initPluginLibsOnceFunc() {
   ncclNetPluginRegisterInternal(&pluginCounter, &ncclNetIb, 0);
   ncclNetPluginRegisterInternal(&pluginCounter, &ncclNetSocket, 0);
 #elif defined(NCCL_OS_WINDOWS)
+  ncclNetPluginRegisterInternal(&pluginCounter, &ncclNetNd, 12);
   ncclNetPluginRegisterInternal(&pluginCounter, &ncclNetSocket, 12);
 #endif
   pluginCount = pluginCounter;

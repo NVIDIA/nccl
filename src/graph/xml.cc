@@ -1089,8 +1089,16 @@ ncclResult_t ncclTopoGetSubsystem(const char* sysPath, char* subSys) {
     free(path);
   }
 #elif NCCL_OS_WINDOWS
-  (void)sysPath;
-  subSys[0] = '\0';
+  // Windows network plugins use a synthetic slash-prefixed PCI bus-id path
+  // (for example /0000:3b:00.0). It has the same leaf format consumed below,
+  // while the actual PCI properties are resolved through SetupAPI.
+  const char* leaf = strrchr(sysPath, '/');
+  unsigned int domain, bus, device, function;
+  if (leaf != NULL && sscanf(leaf + 1, "%x:%x:%x.%x", &domain, &bus, &device, &function) == 4) {
+    strcpy(subSys, "pci");
+  } else {
+    subSys[0] = '\0';
+  }
 #endif
   return ncclSuccess;
 }

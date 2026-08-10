@@ -26,8 +26,9 @@
 #define AMD_BW 16.0
 #define BDW_QPI_BW 6.0
 #define SKL_QPI_BW 10.0
-#define SRP_QPI_BW 22.0
-#define ERP_QPI_BW 40.0
+#define SPR_QPI_BW 22.0
+#define EMR_QPI_BW 40.0
+#define XEON6_QPI_BW 40.0
 #define ZPI_BW 6.0
 #define YONGFENG_ZPI_BW 9.0
 #define P9_BW 32.0

@@ -68,10 +68,11 @@ static ncclResult_t ncclTopoGetInterCpuBw(struct ncclTopoNode* cpu, float* bw) {
     return ncclSuccess;
   }
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 && cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_INTEL) {
-    *bw = cpu->cpu.model == NCCL_TOPO_CPU_MODEL_INTEL_ERP ? ERP_QPI_BW :
-          cpu->cpu.model == NCCL_TOPO_CPU_MODEL_INTEL_SRP ? SRP_QPI_BW :
-          cpu->cpu.model == NCCL_TOPO_CPU_MODEL_INTEL_SKL ? SKL_QPI_BW :
-                                                            BDW_QPI_BW;
+    *bw = cpu->cpu.model == NCCL_TOPO_CPU_MODEL_INTEL_XEON6 ? XEON6_QPI_BW :
+          cpu->cpu.model == NCCL_TOPO_CPU_MODEL_INTEL_EMR   ? EMR_QPI_BW :
+          cpu->cpu.model == NCCL_TOPO_CPU_MODEL_INTEL_SPR   ? SPR_QPI_BW :
+          cpu->cpu.model == NCCL_TOPO_CPU_MODEL_INTEL_SKL   ? SKL_QPI_BW :
+                                                              BDW_QPI_BW;
   }
   if (cpu->cpu.arch == NCCL_TOPO_CPU_ARCH_X86 && cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_AMD) {
     *bw = AMD_BW;
@@ -745,8 +746,9 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
       int familyId, modelId;
       NCCLCHECK(xmlGetAttrInt(xmlCpu, "familyid", &familyId));
       NCCLCHECK(xmlGetAttrInt(xmlCpu, "modelid", &modelId));
-      cpu->cpu.model = (familyId == 6 && modelId >= 0xCF) ? NCCL_TOPO_CPU_MODEL_INTEL_ERP :
-                       (familyId == 6 && modelId >= 0x8F) ? NCCL_TOPO_CPU_MODEL_INTEL_SRP :
+      cpu->cpu.model = (familyId == 6 && modelId == 0xCF) ? NCCL_TOPO_CPU_MODEL_INTEL_EMR :
+                       (familyId == 6 && modelId >= 0xAD) ? NCCL_TOPO_CPU_MODEL_INTEL_XEON6 :
+                       (familyId == 6 && modelId >= 0x8F) ? NCCL_TOPO_CPU_MODEL_INTEL_SPR :
                        (familyId == 6 && modelId >= 0x55) ? NCCL_TOPO_CPU_MODEL_INTEL_SKL :
                                                             NCCL_TOPO_CPU_MODEL_INTEL_BDW;
     } else if (cpu->cpu.vendor == NCCL_TOPO_CPU_VENDOR_ZHAOXIN) {

@@ -198,7 +198,8 @@ if it would result in a better performance.
 
 NCCL_IB_HCA
 -----------
-The ``NCCL_IB_HCA`` variable specifies which Host Channel Adapter (RDMA) interfaces to use for communication.
+The ``NCCL_IB_HCA`` variable specifies which Host Channel Adapter (RDMA) interfaces to use for communication. On Windows,
+NetworkDirect reuses it to select adapters by Windows interface alias.
 
 Values accepted
 ^^^^^^^^^^^^^^^
@@ -227,6 +228,9 @@ Examples:
 
 Note: using ``mlx5_1`` without a preceding ``=`` will select ``mlx5_1`` as well as ``mlx5_10`` to ``mlx5_19``, if they exist.
 It is therefore always recommended to add the ``=`` prefix to ensure an exact match.
+
+For NetworkDirect, specify comma-separated Windows interface aliases without IB port, rail, or plane fields. For example,
+``=Ethernet 4,Ethernet 10`` selects exactly those two interfaces.
 
 Note: There is a fixed upper limit of 32 Host Channel Adapter (HCA) devices supported in NCCL.
 
@@ -555,7 +559,7 @@ Forces NCCL to use a specific network, for example to make sure NCCL uses an ext
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The value of NCCL_NET has to match exactly the name of the NCCL network used (case-insensitive). Internal network names are "IB" (generic IB verbs) and "Socket" (TCP/IP sockets). External network plugins define their own names. Default value is undefined.
+The value of NCCL_NET has to match exactly the name of the NCCL network used (case-insensitive). On Linux, internal network names are "IB" (generic IB verbs) and "Socket" (TCP/IP sockets). On Windows, internal network names are "NetworkDirect" and "Socket"; when NCCL_NET is unset, NCCL tries NetworkDirect before falling back to Socket. External network plugins define their own names. Default value is undefined.
 
 NCCL_NET_PLUGIN
 ---------------
@@ -1182,12 +1186,13 @@ This is deprecated in 2.9 and may be removed in future versions.
 NCCL_IB_DISABLE
 ---------------
 
-The ``NCCL_IB_DISABLE`` variable prevents the IB/RoCE transport from being used by NCCL. Instead, NCCL will fall back to
-using IP sockets.
+The ``NCCL_IB_DISABLE`` variable prevents the IB/RoCE transport from being used by NCCL. On Windows, the same variable
+also disables the NetworkDirect transport. NCCL will instead fall back to another available transport such as IP sockets.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-Define and set to 1 to disable the use of InfiniBand Verbs for communication (and force another method, e.g. IP sockets).
+Define and set to 1 to disable the use of InfiniBand Verbs and NetworkDirect for communication (and force another method,
+e.g. IP sockets).
 
 NCCL_IB_AR_THRESHOLD
 --------------------
@@ -1219,6 +1224,7 @@ NCCL_IB_QPS_PER_CONNECTION
 
 Number of IB queue pairs to use for each connection between two ranks. This can be useful on multi-level fabrics which need multiple queue pairs to have good routing entropy.
 See ``NCCL_IB_SPLIT_DATA_ON_QPS`` for different ways to split data on multiple QPs, as it can affect performance.
+NetworkDirect reuses this variable as the QP count per physical adapter in a connection.
 
 Values accepted
 ^^^^^^^^^^^^^^^

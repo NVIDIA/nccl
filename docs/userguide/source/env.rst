@@ -846,6 +846,31 @@ Values accepted
 ^^^^^^^^^^^^^^^
 Define and set to 1 to disable direct user buffer access across GPUs.
 
+.. _env_NCCL_P2P_USE_CUDA_MEMCPY:
+
+NCCL_P2P_USE_CUDA_MEMCPY
+------------------------
+The ``NCCL_P2P_USE_CUDA_MEMCPY`` variable forces the P2P transport to use CUDA memory copies (copy engine) instead of NCCL's usual SM load/store protocols.
+
+.. warning::
+   On systems with a false peer-access grant (peer window is a private mirror), this path can complete while returning incorrect data. Prefer :ref:`env_NCCL_P2P_DISABLE` or :ref:`env_NCCL_P2P_VALIDATE` rather than enabling this variable to "work around" P2P hangs.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Define and set to 1 to use CUDA memcpy for P2P.
+
+.. _env_NCCL_P2P_VALIDATE:
+
+NCCL_P2P_VALIDATE
+-----------------
+The ``NCCL_P2P_VALIDATE`` variable asks NCCL to functionally verify peer mappings during initialization. When enabled, NCCL enables CUDA peer access, performs a small **device-side peer store** into the destination allocation, and checks the result with an **owner-local** read. If the destination GPU does not observe the written pattern, NCCL disables P2P for that pair and falls back to other transports.
+
+This matches the visibility contract used by NCCL's SM P2P protocols and detects false peer-access grants where capability queries and round-trip / host-staged copy tests still succeed. Results are cached per device pair within the process under a mutex.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Define and set to 1 to enable owner-verified P2P probing at initialization.
+
 NCCL_SHM_DISABLE
 ----------------
 The ``NCCL_SHM_DISABLE`` variable disables the Shared Memory (SHM) transports. SHM is used between devices when peer-to-peer cannot happen, therefore, host memory is used. NCCL will use the network (i.e. InfiniBand or IP sockets) to communicate between the CPU sockets when SHM is disabled.

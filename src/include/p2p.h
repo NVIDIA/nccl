@@ -68,4 +68,7 @@ ncclResult_t ncclIpcGraphRegisterBuffer(ncclComm* comm, const void* userbuff, si
 
 ncclResult_t ncclIpcDeregBuffer(struct ncclComm* comm, struct ncclIpcRegInfo* regInfo);
 
+// Owner-verified direct P2P probe (device peer store + owner-local read). See NCCL_P2P_VALIDATE.
+ncclResult_t ncclP2pValidatePeerMapping(int cudaDevFrom, int cudaDevTo, int* valid);
+
 #endif

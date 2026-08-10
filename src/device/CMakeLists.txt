@@ -50,6 +50,7 @@ if(NCCL_OS_WINDOWS)
                 ${device_symmetric_files}
                 ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
                 ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
+                ${CMAKE_CURRENT_SOURCE_DIR}/p2p_validate.cu
     )
     set_target_properties(nccl_device PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
@@ -63,6 +64,7 @@ else()
                 ${symmetric_files}
                 ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
                 ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
+                ${CMAKE_CURRENT_SOURCE_DIR}/p2p_validate.cu
     )
     set_target_properties(nccl_device PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON

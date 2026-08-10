@@ -101,7 +101,7 @@ $(OBJDIR)/gensrc/symmetric/rules.mk: $(OBJDIR)/gensrc/symmetric ;
 -include $(OBJDIR)/gensrc/symmetric/rules.mk
 # "gensrc/symmetric/rules.mk" populates $(LIB_OBJS_SYM_GEN)
 
-SRCS = common.cu onerank.cu
+SRCS = common.cu onerank.cu p2p_validate.cu
 
 # GIN symbol flow (how ncclGin_BackendMask<...> reaches the test):
 #   - common.cu uses ncclGin and is built with the default rule below (no -G).

@@ -14,6 +14,9 @@
 #include "transport.h"
 #include "mem_manager.h"
 #include <assert.h>
+#include <string.h>
+#include <stdint.h>
+#include <mutex>
 #include "shm.h"
 #include "register_inline.h"
 
@@ -121,10 +124,53 @@ static int busIdToCudaDev(int64_t busId) {
 
 // CE memcpy support
 NCCL_PARAM(P2pUseCudaMemcpy, "P2P_USE_CUDA_MEMCPY", 0);
+// When set, verify that peer mappings deliver bytes to the owning GPU (not a private mirror).
+// See https://github.com/NVIDIA/nccl/issues/2335
+NCCL_PARAM(P2pValidate, "P2P_VALIDATE", 0);
 static int useMemcpy = 0;
 static void initCeOperation();
 
 extern int64_t ncclParamMNNVLEnable();
+
+/* Cached wrapper around ncclP2pValidatePeerMapping (device peer store + owner-local read). */
+static ncclResult_t p2pValidatePeerMappingCached(int cudaDevFrom, int cudaDevTo, int* valid) {
+  constexpr int kMaxDev = 64;
+  static std::mutex cacheMutex;
+  static int8_t cache[kMaxDev][kMaxDev]; // 0 unknown, 1 ok, -1 fail
+  static bool cacheReady = false;
+
+  *valid = 1;
+  if (cudaDevFrom == cudaDevTo) return ncclSuccess;
+  if (cudaDevFrom < 0 || cudaDevTo < 0 || cudaDevFrom >= kMaxDev || cudaDevTo >= kMaxDev) {
+    // Out of cache range: skip rather than refuse P2P.
+    return ncclSuccess;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    if (!cacheReady) {
+      memset(cache, 0, sizeof(cache));
+      cacheReady = true;
+    }
+    if (cache[cudaDevFrom][cudaDevTo] != 0) {
+      *valid = cache[cudaDevFrom][cudaDevTo] > 0 ? 1 : 0;
+      return ncclSuccess;
+    }
+  }
+
+  // Run the probe outside the lock so concurrent pairs can proceed; serialize cache publish.
+  int probed = 1;
+  NCCLCHECK(ncclP2pValidatePeerMapping(cudaDevFrom, cudaDevTo, &probed));
+
+  std::lock_guard<std::mutex> lock(cacheMutex);
+  // Prefer a failure if any concurrent probe observed one.
+  int8_t v = probed ? 1 : -1;
+  if (cache[cudaDevFrom][cudaDevTo] == 0 || v < 0) {
+    cache[cudaDevFrom][cudaDevTo] = v;
+  }
+  *valid = cache[cudaDevFrom][cudaDevTo] > 0 ? 1 : 0;
+  return ncclSuccess;
+}
 
 /* Determine if two peers can communicate through p2p */
 ncclResult_t p2pCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1,
@@ -177,6 +223,17 @@ ncclResult_t p2pCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph
          cudaDev2, info2->busId);
     *ret = 0;
     return ncclSuccess;
+  }
+
+  // Optional functional check: capability APIs can report peer access while stores land in a
+  // private mirror invisible to the owning GPU (NCCL issue #2335).
+  if (p2p != 0 && ncclParamP2pValidate()) {
+    int valid = 1;
+    NCCLCHECK(p2pValidatePeerMappingCached(cudaDev1, cudaDev2, &valid));
+    if (!valid) {
+      *ret = 0;
+      return ncclSuccess;
+    }
   }
 
   // This will always fail when using NCCL_CUMEM_ENABLE=1

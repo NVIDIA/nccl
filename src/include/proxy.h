@@ -300,6 +300,9 @@ struct ncclProxyLocalPeer {
   int tpLocalRank;
   ncclProxyAsyncOp* asyncOps;
   int asyncOpCounter;
+  // Unique per accepted connection (never reused), so connections created by a
+  // previous occupant of this peer slot cannot be operated on by a later one.
+  uint64_t id;
 };
 
 // Common response header for all proxyOps
@@ -389,6 +392,9 @@ struct ncclProxyConnection {
   int send, transport, shared;
   int tpLocalRank, sameProcess;
   struct ncclSocket* sock;
+  // id of the ncclProxyLocalPeer that created this connection via Init; only
+  // that peer may submit further ops for it.
+  uint64_t ownerId;
   struct ncclTransportComm* tcomm;
   struct ncclProxyArgs* proxyAppend;
   struct ncclProxyArgs** proxyAppendPtr;

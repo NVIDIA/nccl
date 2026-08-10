@@ -1553,6 +1553,7 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
   NCCLCHECK(ncclProxyGetConnection(connectionPool, id, connection));
 
   (*connection)->sock = &peer->sock;
+  (*connection)->ownerId = peer->id;
   (*connection)->transport = req->transport;
   (*connection)->send = req->send;
   (*connection)->tpLocalRank = req->tpLocalRank;
@@ -1716,6 +1717,15 @@ static ncclResult_t proxyServiceInitOp(int type, struct ncclProxyLocalPeer* peer
       ret = ncclInvalidArgument;
       goto fail;
     }
+    // A connection may only be operated on by the peer that created it via
+    // Init. Ops on another rank's connection would corrupt its state and
+    // inject responses into that rank's socket stream.
+    if (conn->ownerId != peer->id) {
+      WARN("[Proxy Service] rejecting %s from localRank %d: connection handle is owned by another peer",
+           ncclProxyMsgTypeStr[type], peer->tpLocalRank);
+      ret = ncclInvalidArgument;
+      goto fail;
+    }
     asyncOp->connection = conn;
   }
 
@@ -1813,6 +1823,7 @@ void* ncclProxyService(void* _args) {
   int npeers = 0;
   int stop = PROXY_RUNNING;
   int asyncOpCount = 0;
+  uint64_t nextPeerId = 0;
   ncclResult_t ret;
   struct pollfd* pollfds = NULL;
   struct ncclProxyLocalPeer* peers = NULL;
@@ -1909,6 +1920,7 @@ void* ncclProxyService(void* _args) {
           pollfds[s].revents = 0;
           npeers++;
           peers[s].tpLocalRank = -1;
+          peers[s].id = ++nextPeerId;
         }
       }
     }

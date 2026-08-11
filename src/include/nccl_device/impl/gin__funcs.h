@@ -517,6 +517,7 @@ NCCL_DEVICE_INLINE void ncclGinPut_v2(ncclGin_C* net, ncclTeam team, int peer, n
   if (isSignal) {
     signal.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
     signal.indexedSignal.signalId = signalId;
+    signal.isStrong = net->comm.ginStrongLegacySignals;
   }
   if (coop.thread_rank() == 0) {
     ncclGinCall<ncclGinApi_Put>(ctx, ncclCoopThread(), teamRankToGinRank(net->comm, team, peer), /*hasWins=*/true,
@@ -692,6 +693,7 @@ NCCL_DEVICE_INLINE void ncclGinPutValue_v2(ncclGin_C* net, ncclTeam team, int pe
     if (isSignal) {
       signal.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
       signal.indexedSignal.signalId = signalId;
+      signal.isStrong = net->comm.ginStrongLegacySignals;
     }
     ncclGinCtx ctx = ncclGin_C_makeCtx(net);
     // Dispatch based on size to call with appropriate type
@@ -780,6 +782,7 @@ NCCL_DEVICE_INLINE void ncclGinSignal_v2(ncclGin_C* net, ncclTeam team, int peer
   if (isSignal) {
     signal.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
     signal.indexedSignal.signalId = signalId;
+    signal.isStrong = net->comm.ginStrongLegacySignals;
   }
   if (coop.thread_rank() == 0) {
     ncclGinCtx ctx = ncclGin_C_makeCtx(net);

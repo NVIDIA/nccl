@@ -193,8 +193,18 @@ def _resolve_device_index(device) -> int:
     index-less device means "current", the same GPU ``mem_alloc(device=None)``
     would have picked; naming it explicitly keeps the pool and the tensor view
     built over it on one device.
+
+    A non-CUDA device is rejected rather than resolved. ``torch.device("cpu")``
+    also has ``index is None``, so falling through would quietly allocate a
+    symmetric pool on the current GPU for a caller that asked for host memory.
     """
-    index = torch.device(device).index
+    dev = torch.device(device)
+    if dev.type != "cuda":
+        raise ValueError(
+            f"symmetric pools are CUDA-only; got device {dev!r} "
+            f"of type {dev.type!r}"
+        )
+    index = dev.index
     if index is None:
         index = torch.cuda.current_device()
     return int(index)
@@ -403,8 +413,9 @@ class NcclSymPool:
         # nccl4py module state, so this is not free of that state at
         # interpreter shutdown -- hence the except below, which is
         # load-bearing rather than defensive. Dropping the reference after a
-        # failed close lets the finalizer retry it, which is safe because
-        # close() is idempotent (see test_close_is_idempotent).
+        # failed close hands the retry to the Buffer's own finalizer;
+        # test_close_is_idempotent covers only close-after-success, so treat
+        # that retry as best-effort rather than a guarantee.
         if self._buf is not None:
             try:
                 self._buf.close()

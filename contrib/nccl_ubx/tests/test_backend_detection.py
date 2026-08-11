@@ -195,6 +195,9 @@ class TestBufferOwnership:
     def test_dropped_buffers_are_reclaimed(self, nccl_backend):
         """Buffers dropped without ``close()`` must still be freed.
 
+        Device 0 is named explicitly: ``mem_get_info()`` defaults to the
+        *current* device, which need not be the one allocated on below.
+
         The first half is a positive control. ``mem_get_info`` reports
         driver-level free memory, and nothing guarantees a priori that it
         observes ``ncclMemAlloc`` -- if it did not, a finalizer that freed
@@ -208,10 +211,10 @@ class TestBufferOwnership:
         count, chunk = 50, 8 * 1024 * 1024  # 400 MiB in flight
         torch.cuda.init()
         gc.collect()
-        free_start, _ = torch.cuda.mem_get_info()
+        free_start, _ = torch.cuda.mem_get_info(0)
 
         held = [nccl_backend._mem_alloc(chunk, device=0) for _ in range(count)]
-        free_held, _ = torch.cuda.mem_get_info()
+        free_held, _ = torch.cuda.mem_get_info(0)
         observed_mib = (free_start - free_held) / 1024 ** 2
         assert observed_mib > 256, (
             f"mem_get_info saw only {observed_mib:.1f} MiB while holding "
@@ -221,7 +224,7 @@ class TestBufferOwnership:
 
         del held  # deliberately no close(): this is the finalizer's job
         gc.collect()
-        free_end, _ = torch.cuda.mem_get_info()
+        free_end, _ = torch.cuda.mem_get_info(0)
 
         leaked_mib = (free_start - free_end) / 1024 ** 2
         assert leaked_mib < 64, (

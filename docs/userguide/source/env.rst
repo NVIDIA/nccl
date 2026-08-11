@@ -875,7 +875,14 @@ Value accepted
 ^^^^^^^^^^^^^^
 A path to an accessible file describing part or all of the topology.
 
-Note: For multi-node NVLink systems, despite NCCL_TOPO_DUMP_FILE producing a file with the full NVLink domain topology, NCCL_TOPO_FILE should only include the single node topology.
+The topology file must describe the topology of a single host (even for multi-node NVLink
+systems).
+
+``NCCL_TOPO_DUMP_FILE`` produces a file containing the topology of the NVLink domain.
+For multi-node NVLink systems, such a file should not be used directly as input to ``NCCL_TOPO_FILE`` without first
+trimming it to a single host's topology.
+To obtain a suitable topology file, either use ``NCCL_TOPO_DUMP_FILE`` from a single-host run or
+manually extract a single host's portion from a multi-host dump.
 
 NCCL_TOPO_DUMP_FILE
 -------------------
@@ -887,7 +894,11 @@ Value accepted
 ^^^^^^^^^^^^^^
 A path to a file which will be created or overwritten.
 
-Note: For multi-node NVLink systems, the dumped file will contain the full NVLink domain topology.
+The dumped file reflects the topology as seen by NCCL. For multi-node NVLink systems, the file
+contains the topology from all the hosts that are part of the same NVLink domain. This file is
+useful for debugging and inspection, but should be reduced to a sigle host before use with
+``NCCL_TOPO_FILE`` (see the notes above).
+
 
 NCCL_SET_THREAD_NAME
 --------------------

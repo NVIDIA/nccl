@@ -1094,26 +1094,29 @@ static ncclResult_t ncclProxyGetConnection(struct ncclProxyConnectionPool* pool,
   return ncclSuccess;
 }
 
-// Resolve a connection handle received from a peer to the pool connection it
-// refers to. The handle is a raw ncclProxyConnection pointer the peer echoes
-// back from its Init response, so a hostile or buggy peer can supply an
-// arbitrary value that would otherwise be dereferenced and called through.
-// Only accept a pointer that exactly matches an allocated slot of the pool.
-// (Follow-up: replace the wire pointer with an integer id so that no raw
-// pointer crosses the trust boundary at all.)
-static ncclResult_t ncclProxyConnectionFromHandle(struct ncclProxyConnectionPool* pool, void* handle,
-                                                  struct ncclProxyConnection** conn) {
+static ncclResult_t ncclProxyValidateConnection(struct ncclProxyConnectionPool* pool, struct ncclProxyConnection* conn,
+                                                uint64_t peerId) {
   for (int b = 0; b < pool->banks; b++) {
-    if (pool->pools[b] == NULL) continue;
+    struct ncclProxyConnection* base = pool->pools[b];
+    if (base == NULL) continue;
     int slots = (b == pool->banks - 1) ? pool->offset : NCCL_PROXY_CONN_POOL_SIZE;
-    char* base = (char*)pool->pools[b];
-    char* end = base + (size_t)slots * sizeof(struct ncclProxyConnection);
-    char* p = (char*)handle;
-    if (p >= base && p < end && ((size_t)(p - base) % sizeof(struct ncclProxyConnection)) == 0) {
-      *conn = (struct ncclProxyConnection*)p;
+    uintptr_t connAddr = (uintptr_t)conn;
+    uintptr_t startAddr = (uintptr_t)base;
+    uintptr_t endAddr = (uintptr_t)(base + slots);
+    if (connAddr >= startAddr && connAddr < endAddr) {
+      if ((connAddr - startAddr) % sizeof(struct ncclProxyConnection) != 0) {
+        WARN("Corrupted proxy connection address %p: wrong alignment", conn);
+        return ncclInvalidArgument;
+      }
+      // Connection exists, so we can now look into it. Check peer id.
+      if (conn->peerId != peerId) {
+        WARN("Invalid proxy connection peer: %" PRIu64 " != %" PRIu64, conn->peerId, peerId);
+        return ncclInvalidArgument;
+      }
       return ncclSuccess;
     }
   }
+  WARN("Invalid proxy connection address %p: not found", conn);
   return ncclInvalidArgument;
 }
 
@@ -1553,7 +1556,7 @@ static ncclResult_t proxyConnInit(struct ncclProxyLocalPeer* peer, struct ncclPr
   NCCLCHECK(ncclProxyGetConnection(connectionPool, id, connection));
 
   (*connection)->sock = &peer->sock;
-  (*connection)->ownerId = peer->id;
+  (*connection)->peerId = peer->id;
   (*connection)->transport = req->transport;
   (*connection)->send = req->send;
   (*connection)->tpLocalRank = req->tpLocalRank;
@@ -1706,27 +1709,10 @@ static ncclResult_t proxyServiceInitOp(int type, struct ncclProxyLocalPeer* peer
 
   asyncOp->type = type;
   NCCLCHECKGOTO(ncclSocketRecv(sock, &asyncOp->connection, sizeof(void*)), ret, fail);
-  // For every op other than Init the peer echoes back a connection handle it
-  // received from its Init response. Resolve it against the pool so a forged
-  // handle cannot be dereferenced/called through (proxySetup etc.).
+
   if (type != ncclProxyMsgInit) {
-    struct ncclProxyConnection* conn;
-    if (ncclProxyConnectionFromHandle(connectionPool, asyncOp->connection, &conn) != ncclSuccess) {
-      WARN("[Proxy Service] rejecting %s from localRank %d: unknown connection handle %p", ncclProxyMsgTypeStr[type],
-           peer->tpLocalRank, asyncOp->connection);
-      ret = ncclInvalidArgument;
-      goto fail;
-    }
-    // A connection may only be operated on by the peer that created it via
-    // Init. Ops on another rank's connection would corrupt its state and
-    // inject responses into that rank's socket stream.
-    if (conn->ownerId != peer->id) {
-      WARN("[Proxy Service] rejecting %s from localRank %d: connection handle is owned by another peer",
-           ncclProxyMsgTypeStr[type], peer->tpLocalRank);
-      ret = ncclInvalidArgument;
-      goto fail;
-    }
-    asyncOp->connection = conn;
+    // Ensure the connection is valid and owned by the correct peer.
+    NCCLCHECKGOTO(ncclProxyValidateConnection(connectionPool, asyncOp->connection, peer->id), ret, fail);
   }
 
   NCCLCHECKGOTO(ncclSocketRecv(sock, &asyncOp->reqSize, sizeof(int)), ret, fail);
@@ -1823,7 +1809,7 @@ void* ncclProxyService(void* _args) {
   int npeers = 0;
   int stop = PROXY_RUNNING;
   int asyncOpCount = 0;
-  uint64_t nextPeerId = 0;
+  uint64_t peerId = 0;
   ncclResult_t ret;
   struct pollfd* pollfds = NULL;
   struct ncclProxyLocalPeer* peers = NULL;
@@ -1920,7 +1906,7 @@ void* ncclProxyService(void* _args) {
           pollfds[s].revents = 0;
           npeers++;
           peers[s].tpLocalRank = -1;
-          peers[s].id = ++nextPeerId;
+          peers[s].id = ++peerId;
         }
       }
     }

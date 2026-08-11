@@ -106,8 +106,8 @@ def main():
                              "approximates real MoE expert load skew)")
 
     # Graph/Correctness
-    parser.add_argument("-G", "--cudagraph", type=int, default=10000,
-                        help="CUDA graph replays per measurement (default: 10000). "
+    parser.add_argument("-G", "--cudagraph", type=int, default=1000,
+                        help="CUDA graph replays per measurement (default: 1000). "
                              "Pass 0 or use --no-cudagraph for eager mode.")
     parser.add_argument("--no-cudagraph", dest="cudagraph",
                         action="store_const", const=0,

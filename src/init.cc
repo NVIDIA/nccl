@@ -584,16 +584,22 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
 
   comm->regCache.pageSize = ncclOsGetPageSize();
 
-  do {
-    cudaMemPoolProps props = {};
-    props.allocType = cudaMemAllocationTypePinned;
-    props.handleTypes = cudaMemHandleTypeNone;
-    props.location.type = cudaMemLocationTypeDevice;
-    props.location.id = comm->cudaDev;
-    CUDACHECK(cudaMemPoolCreate(&comm->memPool, &props));
-    uint64_t releaseThreshold = ~uint64_t(0);
-    CUDACHECK(cudaMemPoolSetAttribute(comm->memPool, cudaMemPoolAttrReleaseThreshold, &releaseThreshold));
-  } while (0);
+  {
+    int memoryPoolsSupported = 0;
+    CUDACHECK(cudaDeviceGetAttribute(&memoryPoolsSupported, cudaDevAttrMemoryPoolsSupported, comm->cudaDev));
+    if (memoryPoolsSupported) {
+      cudaMemPoolProps props = {};
+      props.allocType = cudaMemAllocationTypePinned;
+      props.handleTypes = cudaMemHandleTypeNone;
+      props.location.type = cudaMemLocationTypeDevice;
+      props.location.id = comm->cudaDev;
+      CUDACHECK(cudaMemPoolCreate(&comm->memPool, &props));
+      uint64_t releaseThreshold = ~uint64_t(0);
+      CUDACHECK(cudaMemPoolSetAttribute(comm->memPool, cudaMemPoolAttrReleaseThreshold, &releaseThreshold));
+    } else {
+      INFO(NCCL_INIT, "CUDA memory pools are not supported on device %d; using synchronous allocations", comm->cudaDev);
+    }
+  }
 
   ncclIntruQueueConstruct(&comm->eventCallbackQueue);
 

@@ -1422,8 +1422,13 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
                                             &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
                     result, fail);
 
-      CUDACHECKGOTO(cudaMallocAsync(&fifoBufDev, workBytes, comm->memPool, deviceStream), result, fail);
-      INFO_LOC(NCCL_ALLOC, "Persistent cudaMallocAsync work buf Size %zu pointer %p", workBytes, fifoBufDev);
+      if (comm->memPool) {
+        CUDACHECKGOTO(cudaMallocAsync(&fifoBufDev, workBytes, comm->memPool, deviceStream), result, fail);
+        INFO_LOC(NCCL_ALLOC, "Persistent cudaMallocAsync work buf Size %zu pointer %p", workBytes, fifoBufDev);
+      } else {
+        CUDACHECKGOTO(cudaMalloc(&fifoBufDev, workBytes), result, fail);
+        INFO_LOC(NCCL_ALLOC, "Persistent cudaMalloc work buf Size %zu pointer %p", workBytes, fifoBufDev);
+      }
       plan->workBufPersistent = fifoBufDev;
       plan->kernelArgs->workBuf = fifoBufDev;
 

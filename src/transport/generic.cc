@@ -106,7 +106,7 @@ ncclResult_t ncclTransportPatConnect(struct ncclComm* comm) {
   if (comm && comm->nRanks > 1) {
     int denseLocalRank = 0;
     // Connect corresponding NVLS-dense rails across nodes.
-    if (comm->localRanks > 1) {
+    if (!comm->isOneRPN) {
       if (!ncclNvlsTransportEnabled(comm) || comm->channels[0].nvls.nHeads != comm->localRanks ||
           comm->channels[0].nvls.headRank < 0 || comm->channels[0].nvls.headRank >= comm->localRanks) {
         goto exit;
@@ -114,24 +114,27 @@ ncclResult_t ncclTransportPatConnect(struct ncclComm* comm) {
       denseLocalRank = comm->channels[0].nvls.headRank;
     }
 
+    // Use the NVLS graph for multi-RPN PAT, similar to NVLS_TREE.
+    struct ncclTopoGraph* graph = !comm->isOneRPN ? &comm->graphs[NCCL_ALGO_NVLS] : &comm->graphs[NCCL_ALGO_TREE];
+    int nChannels = !comm->isOneRPN ? comm->nvlsChannels : comm->nChannels;
+
     for (int mask = 1; mask < comm->nNodes; mask <<= 1) {
       int prevNode = (comm->node + mask) % comm->nNodes;
       int numLocalRanks = comm->localRanks;
       int nextNode = (comm->node + comm->nNodes - mask) % comm->nNodes;
       int prevPeer = prevNode;
       int nextPeer = nextNode;
-      if (comm->localRanks > 1) {
+      if (!comm->isOneRPN) {
         prevPeer = comm->denseToUserRank[prevNode * numLocalRanks + denseLocalRank];
         nextPeer = comm->denseToUserRank[nextNode * numLocalRanks + denseLocalRank];
       }
-      for (int c = 0; c < comm->nChannels; c++) {
+      for (int c = 0; c < nChannels; c++) {
         NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &prevPeer, 1, &nextPeer, 0), ret, fail); // ReduceScatter
-      }
-      NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &comm->graphs[NCCL_ALGO_TREE], 0), ret, fail);
-      for (int c = 0; c < comm->nChannels; c++) {
         NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &nextPeer, 1, &prevPeer, 0), ret, fail); // AllGather
       }
-      NCCLCHECKGOTO(ncclTransportP2pSetup(comm, &comm->graphs[NCCL_ALGO_TREE], 0), ret, fail);
+    }
+    if (comm->nNodes > 1) {
+      NCCLCHECKGOTO(ncclTransportP2pSetup(comm, graph, 0), ret, fail);
     }
     INFO(NCCL_INIT, "Connected binomial trees");
   }

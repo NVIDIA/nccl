@@ -32,8 +32,8 @@ struct ncclKernelStepParent {
 };
 
 // Each profiled work produces at least two step events, so this covers every
-// distinct work item that can still be resident in the 16384-entry step ring.
-#define MAX_KERNEL_STEP_PARENT_EVENTS 8192
+// distinct work item that can still be resident in the KernelStep ring.
+#define MAX_KERNEL_STEP_PARENT_EVENTS 32768
 
 struct ncclProfilerProxy {
   bool initialized;

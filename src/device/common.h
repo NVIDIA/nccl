@@ -46,12 +46,6 @@ struct ncclShmemGroup {
   // KernelStep: Wait role publishes seq here for Post role after barrier
   uint64_t kernelStepSeqSend[NCCL_MAX_ARITY];
   uint64_t kernelStepSeqRecv[NCCL_MAX_ARITY];
-  // Compact deferred-last handshake: Wait sets pending + keeps start meta in registers;
-  // Post writes stopTs; Wait destructor publishes if still pending.
-  uint64_t kernelStepDeferredStopSend[NCCL_MAX_ARITY];
-  uint64_t kernelStepDeferredStopRecv[NCCL_MAX_ARITY];
-  uint8_t kernelStepDeferredPendingSend[NCCL_MAX_ARITY];
-  uint8_t kernelStepDeferredPendingRecv[NCCL_MAX_ARITY];
 };
 
 struct ncclShmemData {
@@ -347,10 +341,17 @@ __device__ __forceinline__ bool profilerWorkMarkersEnabled(int workItemIdx) {
   return profilerEnabled(workItemIdx) || profilerStepEnabled(workItemIdx);
 }
 
+// AllToAll self-copy (sendRank==rank) is still placed in the P2P work batch, but the host
+// never increments profiler.workCounter for it (nProxyOps==0). Exclude it from device-side
+// counter bumps / KernelStep tags so host and device stay aligned.
+__device__ __forceinline__ bool profilerIsP2pSelfCopy(int workItemIdx) {
+  if (ncclShmem.workType != ncclDevWorkTypeP2p) return false;
+  struct ncclDevWorkP2p* work = &((struct ncclDevWorkP2p*)ncclShmem.workStorage)[workItemIdx];
+  return work->sendRank == ncclShmem.comm.rank;
+}
+
 // Deterministic sampling so every CUDA role for the same step agrees (start/stop pairing).
-// Always keep the first KernelStep (logicalIndex==0 ≡ index%rate for rate>=1); sample every
-// `rate`-th after that. The true last step of a Primitives work is published from a deferred
-// slot in the destructor when it was not already on the sampling grid.
+// Keep the first KernelStep (logicalIndex==0) and every `rate`-th after that. rate<=1 keeps all.
 __device__ __forceinline__ bool profilerKernelStepSample(bool enabled, uint8_t rate, uint64_t logicalIndex) {
   if (!enabled) return false;
   if (rate <= 1) return true;
@@ -393,71 +394,32 @@ __device__ __forceinline__ void profilerKernelStepStop(bool enabled, uint64_t se
   e->counter = seq;
 }
 
-// Local/register deferred KernelStep (LL/LL128 tid0, or Simple Wait-role thread).
-struct ncclKernelStepDeferredLocal {
-  uint64_t readyTs;
-  uint64_t endTs;
-  uint64_t startTs; // wait/step begin; 0 if none
-  uint32_t step;
-  uint32_t size;
-  uint16_t workTag;
-  uint8_t peer;
-  uint8_t isSend;
-  uint8_t hasStart;
-  uint8_t hasStop;
-};
-
-// Publish a skipped step that turned out to be the last of this Primitives work.
-__device__ __forceinline__ void profilerKernelStepPublishDeferred(struct ncclKernelStepDeferredLocal* d) {
-  if (d == nullptr || !d->hasStart || !d->hasStop) return;
-  if (ncclShmem.comm.stepStarted == nullptr || ncclShmem.comm.stepCompleted == nullptr ||
-      ncclShmem.comm.stepSeq == nullptr)
-    return;
-  int ch = ncclShmem.channelId;
-  uint64_t seq = atomicAdd((unsigned long long*)(ncclShmem.comm.stepSeq + ch), 1ULL) + 1ULL;
-  struct ncclDevKernelStepEvent* s =
-    &ncclShmem.comm.stepStarted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
-  s->ready_ts = d->readyTs;
-  s->start_ts = d->startTs;
-  s->step = d->step;
-  s->size = d->size;
-  s->peer = d->peer;
-  s->flags = d->isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
-  s->work_tag = d->workTag;
-  __threadfence_system();
-  s->counter = seq;
-  struct ncclDevKernelStepEvent* e =
-    &ncclShmem.comm.stepCompleted[ch].data[seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL];
-  e->ready_ts = d->endTs;
-  e->start_ts = 0;
-  e->step = d->step;
-  e->size = d->size;
-  e->peer = d->peer;
-  e->flags = d->isSend ? NCCL_KERNEL_STEP_FLAG_SEND : 0;
-  __threadfence_system();
-  e->counter = seq;
-  d->hasStart = d->hasStop = 0;
-}
-
 __device__ __forceinline__ void profiler(int action) {
   if (threadIdx.x == 0) {
+    int nCounted = 0;
+    for (int i = 0; i < ncclShmem.nWorks; i++) {
+      if (profilerIsP2pSelfCopy(i)) continue;
+      nCounted++;
+    }
+    uint64_t base = ncclShmem.channel.workCounter;
     int idx = 0;
-    uint64_t wc = ncclShmem.channel.workCounter + 1;
-    if (action == START) {
-      for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
-        if (!profilerWorkMarkersEnabled(idx++)) continue;
+    for (int i = 0; i < ncclShmem.nWorks; i++) {
+      if (profilerIsP2pSelfCopy(i)) continue;
+      uint64_t wc = base + (++idx);
+      if (!profilerWorkMarkersEnabled(i)) continue;
+      if (action == START) {
         ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
           globaltimer();
         ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
-      }
-    } else {
-      for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
-        if (!profilerWorkMarkersEnabled(idx++)) continue;
+      } else {
         ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
           globaltimer();
         ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
       }
-      ncclShmem.channel.workCounter += ncclShmem.nWorks;
+    }
+    if (action != START) {
+      // Match host increments: one per non-self P2P work (self-copy has no profiler proxy).
+      ncclShmem.channel.workCounter = base + nCounted;
       if (action == FINI)
         ((ncclKernelCommAndChannels*)ncclShmem.args.comm)->channels[ncclShmem.channelId].workCounter =
           ncclShmem.channel.workCounter;

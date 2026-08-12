@@ -48,7 +48,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
   uint64_t kernelStepLogicalIndex = 0; // Per-work slice index; independent of persistent connection credits
   uint64_t kernelStepStartTs = 0; // send credit wait start from last waitPeer (0 if none)
   bool connSameHost = false; // peer on same host (NCCL_CONN_SAME_HOST); gate KernelStep stamps
-  ncclKernelStepDeferredLocal kernelStepDeferred = {}; // Wait-role local candidate for true last
 
   // Don't use barrier 0 as it's used by the final sync
   __device__ void barrier() {
@@ -243,32 +242,17 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
          * to 0 to avoid unnecessary workload. */
         int workSize = ncclShmem.aborted ? 0 : sliceSize;
         // KernelStep start: after waitPeer, before reduceCopy (Wait roles only).
-        // Skip inter-host peers (NET); only stamp same-host P2P/SHM/NVLS.
+        // Skip inter-host peers (NET); only stamp same-host P2P/SHM/NVLS. Inter-host
+        // send/recv rely on ProxySteps instead.
         if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
           const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
           uint64_t seq = 0;
           if (connSameHost && workSize > 0) {
             uint64_t waitStart = isSendNotRecv ? kernelStepStartTs : 0;
             kernelStepStartTs = 0;
-            bool sample = profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex);
-            if (sample) {
-              kernelStepDeferred.hasStart = kernelStepDeferred.hasStop = 0;
-              if (isSendNotRecv) ncclShmem.groups[group].kernelStepDeferredPendingSend[index] = 0;
-              else ncclShmem.groups[group].kernelStepDeferredPendingRecv[index] = 0;
+            if (profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex)) {
               profilerKernelStepStart(true, isSendNotRecv, index, (uint32_t)step,
                                       (uint32_t)(workSize * sizeof(T)), kernelStepWorkTag, waitStart, &seq);
-            } else {
-              kernelStepDeferred.readyTs = globaltimer();
-              kernelStepDeferred.step = (uint32_t)step;
-              kernelStepDeferred.size = (uint32_t)(workSize * sizeof(T));
-              kernelStepDeferred.startTs = waitStart;
-              kernelStepDeferred.workTag = kernelStepWorkTag;
-              kernelStepDeferred.peer = (uint8_t)index;
-              kernelStepDeferred.isSend = isSendNotRecv ? 1 : 0;
-              kernelStepDeferred.hasStart = 1;
-              kernelStepDeferred.hasStop = 0;
-              if (isSendNotRecv) ncclShmem.groups[group].kernelStepDeferredPendingSend[index] = 1;
-              else ncclShmem.groups[group].kernelStepDeferredPendingRecv[index] = 1;
             }
             kernelStepLogicalIndex += 1;
           } else {
@@ -331,14 +315,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
                                           ncclShmem.groups[group].kernelStepSeqRecv[index];
           if (seq != 0) {
             profilerKernelStepStop(true, seq, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
-          } else if (workSize > 0) {
-            uint8_t pending = isSendNotRecv ? ncclShmem.groups[group].kernelStepDeferredPendingSend[index] :
-                                              ncclShmem.groups[group].kernelStepDeferredPendingRecv[index];
-            if (pending) {
-              uint64_t stopTs = globaltimer();
-              if (isSendNotRecv) ncclShmem.groups[group].kernelStepDeferredStopSend[index] = stopTs;
-              else ncclShmem.groups[group].kernelStepDeferredStopRecv[index] = stopTs;
-            }
           }
         }
         offset += sliceSize;
@@ -360,32 +336,16 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(0, 0, 0, sliceSize);
       }
       int workSize = ncclShmem.aborted ? 0 : sliceSize;
-      // Empty trailing slices: do not stamp / do not advance sample index (preserves deferred last).
+      // Empty trailing slices: do not stamp / do not advance sample index.
       if (COMPILER_EXPECT(stepProf, 0) && workSize > 0 && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
         const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
         uint64_t seq = 0;
         if (connSameHost) {
           uint64_t waitStart = isSendNotRecv ? kernelStepStartTs : 0;
           kernelStepStartTs = 0;
-          bool sample = profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex);
-          if (sample) {
-            kernelStepDeferred.hasStart = kernelStepDeferred.hasStop = 0;
-            if (isSendNotRecv) ncclShmem.groups[group].kernelStepDeferredPendingSend[index] = 0;
-            else ncclShmem.groups[group].kernelStepDeferredPendingRecv[index] = 0;
+          if (profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex)) {
             profilerKernelStepStart(true, isSendNotRecv, index, (uint32_t)step,
                                     (uint32_t)(workSize * sizeof(T)), kernelStepWorkTag, waitStart, &seq);
-          } else {
-            kernelStepDeferred.readyTs = globaltimer();
-            kernelStepDeferred.step = (uint32_t)step;
-            kernelStepDeferred.size = (uint32_t)(workSize * sizeof(T));
-            kernelStepDeferred.startTs = waitStart;
-            kernelStepDeferred.workTag = kernelStepWorkTag;
-            kernelStepDeferred.peer = (uint8_t)index;
-            kernelStepDeferred.isSend = isSendNotRecv ? 1 : 0;
-            kernelStepDeferred.hasStart = 1;
-            kernelStepDeferred.hasStop = 0;
-            if (isSendNotRecv) ncclShmem.groups[group].kernelStepDeferredPendingSend[index] = 1;
-            else ncclShmem.groups[group].kernelStepDeferredPendingRecv[index] = 1;
           }
           kernelStepLogicalIndex += 1;
         } else {
@@ -407,14 +367,6 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
                                         ncclShmem.groups[group].kernelStepSeqRecv[index];
         if (seq != 0) {
           profilerKernelStepStop(true, seq, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
-        } else if (workSize > 0) {
-          uint8_t pending = isSendNotRecv ? ncclShmem.groups[group].kernelStepDeferredPendingSend[index] :
-                                            ncclShmem.groups[group].kernelStepDeferredPendingRecv[index];
-          if (pending) {
-            uint64_t stopTs = globaltimer();
-            if (isSendNotRecv) ncclShmem.groups[group].kernelStepDeferredStopSend[index] = stopTs;
-            else ncclShmem.groups[group].kernelStepDeferredStopRecv[index] = stopTs;
-          }
         }
       }
       offset += sliceSize;
@@ -708,8 +660,7 @@ public:
                                  (collWork ? collWork->profilerStepSampleRate : 1);
     if (kernelStepSampleRate == 0) kernelStepSampleRate = 1;
     if (P2p && p2pWork) {
-      kernelStepWorkTag = (uint16_t)(ncclShmem.channel.workCounter +
-        (p2pWork - (struct ncclDevWorkP2p*)ncclShmem.workStorage) + 1);
+      kernelStepWorkTag = p2pWork->profilerWorkTag;
     } else if (collWork) {
       kernelStepWorkTag = (uint16_t)(ncclShmem.channel.workCounter +
         (collWork - (struct ncclDevWorkColl*)ncclShmem.workStorage) + 1);
@@ -865,22 +816,6 @@ public:
     // Make sure all threads are done writing back conn->step and done using
     // ncclShmem.groups[group]
     barrier();
-
-    // Publish deferred last KernelStep (skipped by sampling) after Post has written stopTs.
-    if (COMPILER_EXPECT(stepProf, 0) && connSameHost && kernelStepDeferred.hasStart &&
-        (flags & (RoleWaitRecv | RoleWaitSend))) {
-      const bool isSend = (flags & RoleWaitSend);
-      uint8_t pending = isSend ? ncclShmem.groups[group].kernelStepDeferredPendingSend[index] :
-                                 ncclShmem.groups[group].kernelStepDeferredPendingRecv[index];
-      if (pending) {
-        kernelStepDeferred.endTs = isSend ? ncclShmem.groups[group].kernelStepDeferredStopSend[index] :
-                                             ncclShmem.groups[group].kernelStepDeferredStopRecv[index];
-        kernelStepDeferred.hasStop = 1;
-        profilerKernelStepPublishDeferred(&kernelStepDeferred);
-        if (isSend) ncclShmem.groups[group].kernelStepDeferredPendingSend[index] = 0;
-        else ncclShmem.groups[group].kernelStepDeferredPendingRecv[index] = 0;
-      }
-    }
 
     if ((flags & DirectRead) && (flags & RoleWaitSend) && P2p) {
       // For sendrecv DirectRead, sender needs to wait for receiver reading data from src.

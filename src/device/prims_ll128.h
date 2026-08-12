@@ -45,11 +45,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
   uint8_t kernelStepSampleRate = 1;
   uint16_t kernelStepWorkTag = 0;
   uint64_t kernelStepStartTs = 0; // send credit wait start from waitSend (first SEND KernelStep)
+  uint64_t kernelStepLogicalIndex = 0;
   bool sendSameHost = false;
   bool recvSameHost = false;
-  uint64_t kernelStepLogicalIndex = 0;
-  ncclKernelStepDeferredLocal kernelStepDeferredSend = {};
-  ncclKernelStepDeferredLocal kernelStepDeferredRecv = {};
 
   inline __device__ int recvOffset(int i) {
     return (recvStep[i] % NCCL_STEPS) * stepSize;
@@ -332,39 +330,15 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
       const uint64_t sampleIndex = kernelStepLogicalIndex;
       if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
         if (RECV && recvSameHost) {
-          bool sample = profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex);
-          if (sample) {
-            kernelStepDeferredRecv.hasStart = kernelStepDeferredRecv.hasStop = 0;
+          if (profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex)) {
             profilerKernelStepStart(true, /*isSend=*/0, /*peer=*/0, sliceStep, sliceBytes, kernelStepWorkTag, /*startTs=*/0, &seqRecv);
-          } else {
-            kernelStepDeferredRecv.readyTs = globaltimer();
-            kernelStepDeferredRecv.step = sliceStep;
-            kernelStepDeferredRecv.size = sliceBytes;
-            kernelStepDeferredRecv.startTs = 0;
-            kernelStepDeferredRecv.workTag = kernelStepWorkTag;
-            kernelStepDeferredRecv.peer = 0;
-            kernelStepDeferredRecv.isSend = 0;
-            kernelStepDeferredRecv.hasStart = 1;
-            kernelStepDeferredRecv.hasStop = 0;
           }
         }
         if (SEND && sendSameHost) {
           uint64_t waitStart = kernelStepStartTs;
           kernelStepStartTs = 0; // attach waitSend to first send KernelStep only
-          bool sample = profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex);
-          if (sample) {
-            kernelStepDeferredSend.hasStart = kernelStepDeferredSend.hasStop = 0;
+          if (profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex)) {
             profilerKernelStepStart(true, /*isSend=*/1, /*peer=*/0, sliceStep, sliceBytes, kernelStepWorkTag, waitStart, &seqSend);
-          } else {
-            kernelStepDeferredSend.readyTs = globaltimer();
-            kernelStepDeferredSend.step = sliceStep;
-            kernelStepDeferredSend.size = sliceBytes;
-            kernelStepDeferredSend.startTs = waitStart;
-            kernelStepDeferredSend.workTag = kernelStepWorkTag;
-            kernelStepDeferredSend.peer = 0;
-            kernelStepDeferredSend.isSend = 1;
-            kernelStepDeferredSend.hasStart = 1;
-            kernelStepDeferredSend.hasStop = 0;
           }
         } else if (SEND) {
           kernelStepStartTs = 0;
@@ -378,21 +352,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
       if (DST) storeRegs(dstPtr, regs, eltInSlice);
 
       if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
-        if (RECV) {
-          if (seqRecv != 0) {
-            profilerKernelStepStop(true, seqRecv, /*isSend=*/0, /*peer=*/0, sliceStep, sliceBytes);
-          } else if (kernelStepDeferredRecv.hasStart && !kernelStepDeferredRecv.hasStop) {
-            kernelStepDeferredRecv.endTs = globaltimer();
-            kernelStepDeferredRecv.hasStop = 1;
-          }
+        if (RECV && seqRecv != 0) {
+          profilerKernelStepStop(true, seqRecv, /*isSend=*/0, /*peer=*/0, sliceStep, sliceBytes);
         }
-        if (SEND) {
-          if (seqSend != 0) {
-            profilerKernelStepStop(true, seqSend, /*isSend=*/1, /*peer=*/0, sliceStep, sliceBytes);
-          } else if (kernelStepDeferredSend.hasStart && !kernelStepDeferredSend.hasStop) {
-            kernelStepDeferredSend.endTs = globaltimer();
-            kernelStepDeferredSend.hasStop = 1;
-          }
+        if (SEND && seqSend != 0) {
+          profilerKernelStepStop(true, seqSend, /*isSend=*/1, /*peer=*/0, sliceStep, sliceBytes);
         }
       }
 
@@ -468,8 +432,7 @@ public:
                                  (collWork ? collWork->profilerStepSampleRate : 1);
     if (kernelStepSampleRate == 0) kernelStepSampleRate = 1;
     if (P2p && p2pWork) {
-      kernelStepWorkTag = (uint16_t)(ncclShmem.channel.workCounter +
-        (p2pWork - (struct ncclDevWorkP2p*)ncclShmem.workStorage) + 1);
+      kernelStepWorkTag = p2pWork->profilerWorkTag;
     } else if (collWork) {
       kernelStepWorkTag = (uint16_t)(ncclShmem.channel.workCounter +
         (collWork - (struct ncclDevWorkColl*)ncclShmem.workStorage) + 1);
@@ -495,10 +458,6 @@ public:
   }
 
   __device__ ~Primitives() {
-    if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
-      if (recvSameHost) profilerKernelStepPublishDeferred(&kernelStepDeferredRecv);
-      if (sendSameHost) profilerKernelStepPublishDeferred(&kernelStepDeferredSend);
-    }
     // Save steps for the next operation
     if (tid >= nthreads - WARP_SIZE && wid < fan.nrecv()) recvConn->step = recvConnHead;
     if (tid < fan.nsend()) sendConn->step = sendConnHead;

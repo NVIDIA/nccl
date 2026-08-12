@@ -17,19 +17,20 @@ static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection,
   return ncclSuccess;
 }
 
-// Try one start/end pair. Sequence allocation and CUDA-role completion order
-// are independent, so callers must not assume that sequence N completes before N+1.
-static bool profilerTryDrainKernelStep(struct ncclProxySubArgs* sub, struct ncclComm* comm, int ch, uint64_t seq) {
+// Deliver one completed start/end pair via work_tag parent routing.
+// Returns true if the sequence should be consumed (delivered or dropped).
+static bool profilerDeliverKernelStep(struct ncclProxySubArgs* sub, struct ncclComm* comm, int ch,
+                                      uint64_t seq) {
   int slot = (int)(seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
   struct ncclDevKernelStepEvent* st = &sub->stepStarted[ch].data[slot];
   struct ncclDevKernelStepEvent* co = &sub->stepCompleted[ch].data[slot];
-  if (st->counter != seq || co->counter != seq) return false;
 
   int dir = (st->flags & NCCL_KERNEL_STEP_FLAG_SEND) ? 1 : 0;
   int parentSlot = (int)(st->work_tag % MAX_KERNEL_STEP_PARENT_EVENTS);
   size_t parentIndex = ((size_t)ch * 2 + dir) * MAX_KERNEL_STEP_PARENT_EVENTS + parentSlot;
   struct ncclKernelStepParent* parent = comm->profiler.kernelStepParents + parentIndex;
-  if ((uint16_t)parent->workCounter != st->work_tag) return false;
+  // Unroutable (parent slot reused / never saved): drop so the drain cursor can advance.
+  if ((uint16_t)parent->workCounter != st->work_tag) return true;
 
   struct ncclProxyArgs routedArgs = {};
   routedArgs.subs[0].eActivationMask = parent->eActivationMask;
@@ -39,41 +40,82 @@ static bool profilerTryDrainKernelStep(struct ncclProxySubArgs* sub, struct nccl
   routedArgs.subs[0].channelId = ch;
   void* handle = nullptr;
   (void)ncclProfilerStartKernelStepEvent(&routedArgs, 0, st, &handle);
-  if (handle) (void)ncclProfilerStopKernelStepEvent(handle, co);
+  // Plugin rejected start: drop. Retrying cannot recover and must not stall NET.
+  if (!handle) return true;
+  (void)ncclProfilerStopKernelStepEvent(handle, co);
   return true;
 }
 
-// Drain completed pairs immediately and retain only unresolved sequence IDs.
-// This is O(new events + unresolved events), not O(the full device ring).
+// Sequential KernelStep drain (pre-sample-rate style) with work_tag parent routing.
+//
+// The sample-rate commit replaced this with a pending-list that jumped stepCounter to
+// `produced` and retried all unresolved seqs every progress call. Incomplete pairs
+// (or briefly not-yet-visible slots after atomicAdd on stepSeq) then made every NET
+// proxy tick O(pending). With sample rate > 1 that contamination persisted into later
+// send/recv in the same process (~10x ProxyStep latency). Without deferred-last,
+// start/stop pairs complete in order, so a sequential cursor is correct and O(1) when
+// the next seq is not ready yet.
 static void profilerDrainKernelSteps(struct ncclProxyArgs* args, int s, struct ncclComm* comm) {
   struct ncclProxySubArgs* sub = args->subs + s;
   if (!(sub->eActivationMask & ncclProfileKernelStep) || sub->stepStarted == nullptr ||
       sub->stepCompleted == nullptr || comm == nullptr || comm->profiler.stepSeq == nullptr ||
-      comm->profiler.kernelStepPending == nullptr || comm->profiler.kernelStepParents == nullptr) return;
+      comm->profiler.kernelStepParents == nullptr) return;
 
   int ch = sub->channelId;
-  uint64_t discovered = comm->profiler.stepCounter[ch];
+  uint64_t drained = comm->profiler.stepCounter[ch];
   uint64_t produced = comm->profiler.stepSeq[ch];
-  uint64_t* pending = comm->profiler.kernelStepPending + (size_t)ch * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL;
-  int count = comm->profiler.kernelStepPendingCount[ch];
-  int keep = 0;
 
-  for (int i = 0; i < count; i++) {
-    uint64_t seq = pending[i];
-    if (produced >= seq && produced - seq >= MAX_KERNEL_STEP_EVENTS_PER_CHANNEL) continue; // slot overwritten
-    if (!profilerTryDrainKernelStep(sub, comm, ch, seq)) pending[keep++] = seq;
+  while (drained < produced) {
+    uint64_t next = drained + 1;
+    int slot = (int)(next % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
+    struct ncclDevKernelStepEvent* st = &sub->stepStarted[ch].data[slot];
+    struct ncclDevKernelStepEvent* co = &sub->stepCompleted[ch].data[slot];
+
+    if (st->counter != next) {
+      // Start not visible yet (slot fill lags atomicAdd on stepSeq), or lost.
+      if (produced - next >= MAX_KERNEL_STEP_EVENTS_PER_CHANNEL) {
+        drained = next;
+        continue;
+      }
+      // If a later seq is already visible, this one was skipped/lost — advance.
+      if (next < produced) {
+        int slotN = (int)((next + 1) % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
+        uint64_t c1 = sub->stepStarted[ch].data[slotN].counter;
+        uint64_t c2 = sub->stepCompleted[ch].data[slotN].counter;
+        if (c1 == next + 1 || c2 == next + 1) {
+          drained = next;
+          continue;
+        }
+      }
+      break;
+    }
+    if (co->counter != next) {
+      // Start without stop. With sample-rate > 1 an orphan start can appear; do not
+      // stall the shared proxy thread forever (that previously starved ProxySteps).
+      if (produced - next >= MAX_KERNEL_STEP_EVENTS_PER_CHANNEL) {
+        drained = next;
+        continue;
+      }
+      if (next < produced) {
+        int slotN = (int)((next + 1) % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
+        uint64_t c1 = sub->stepStarted[ch].data[slotN].counter;
+        uint64_t c2 = sub->stepCompleted[ch].data[slotN].counter;
+        if (c1 == next + 1 || c2 == next + 1) {
+          drained = next; // drop orphan start; keep draining later pairs
+          continue;
+        }
+      }
+      break;
+    }
+
+    (void)profilerDeliverKernelStep(sub, comm, ch, next);
+    drained = next;
+    produced = comm->profiler.stepSeq[ch];
   }
 
-  uint64_t first = discovered + 1;
-  if (produced - discovered > MAX_KERNEL_STEP_EVENTS_PER_CHANNEL)
-    first = produced - MAX_KERNEL_STEP_EVENTS_PER_CHANNEL + 1;
-  for (uint64_t seq = first; seq <= produced; seq++) {
-    if (!profilerTryDrainKernelStep(sub, comm, ch, seq) && keep < MAX_KERNEL_STEP_EVENTS_PER_CHANNEL)
-      pending[keep++] = seq;
-  }
-
-  comm->profiler.kernelStepPendingCount[ch] = keep;
-  comm->profiler.stepCounter[ch] = produced;
+  comm->profiler.stepCounter[ch] = drained;
+  // Pending list unused by sequential drain; keep count clear so any stale state is inert.
+  if (comm->profiler.kernelStepPendingCount) comm->profiler.kernelStepPendingCount[ch] = 0;
 }
 
 // The following ncclProxySubArgs are overloaded by the profiler progress function:

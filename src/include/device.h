@@ -257,6 +257,9 @@ struct alignas(16) ncclDevWorkP2p {
   uint8_t profilerEnabled:1;
   uint8_t profilerStepEnabled:1;
   uint8_t profilerStepSampleRate;
+  // Filled on-device per channel: channel.workCounter + localIndex + 1, matching
+  // host saveKernelStepParent's per-channel profiler.workCounter.
+  uint16_t profilerWorkTag;
 };
 
 // Compute the subset of the data transfer corresponding to the given part index.
@@ -440,8 +443,8 @@ struct ncclDevProfiler {
 };
 
 // Per-slice/line KernelStep profiler rings (Simple / LL / LL128). Dual rings mirror KernelCh.
-// Sized for per-line LL stamps on training-sized messages (1024 was too small; overwrite observed).
-#define MAX_KERNEL_STEP_EVENTS_PER_CHANNEL 16384
+// Sized for dense AllToAll/MoE P2P fanout at sample-rate 1 (16384 still overwrote on 256MB).
+#define MAX_KERNEL_STEP_EVENTS_PER_CHANNEL 65536
 #define NCCL_KERNEL_STEP_FLAG_SEND (1u << 0)
 
 struct ncclDevKernelStepEvent {

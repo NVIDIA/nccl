@@ -30,7 +30,7 @@ NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 NCCL_PARAM(AllgathervEnable, "ALLGATHERV_ENABLE", 1);
 NCCL_PARAM(SymCeThreshold, "SYM_CE_THRESHOLD", 8 * 1024 * 1024);
 
-NCCL_PARAM(ProfilerKernelStepSampleRate, "PROFILER_KERNEL_STEP_SAMPLE_RATE", 8);
+NCCL_PARAM(ProfilerKernelStepSampleRate, "PROFILER_KERNEL_STEP_SAMPLE_RATE", 2);
 
 static uint8_t profilerKernelStepSampleRate() {
   int64_t rate = ncclParamProfilerKernelStepSampleRate();
@@ -1073,6 +1073,9 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   concurrentTasks[1] = std::min(planTotalTasks[1], maxConcurrent);
   for (int part = 0; part < nChannelsMax; part++) {
     int incWorkCounter = -1;
+    // Fresh per part: reuse of proxyOps[2] must not leave a stale increment flag.
+    proxyOps[0].incWorkCounter = false;
+    proxyOps[1].incWorkCounter = false;
     int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, part);
     plan->channelMask |= uint64_t(1) << channelId;
     // Add batch first.

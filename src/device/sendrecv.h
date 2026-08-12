@@ -93,6 +93,25 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
         shared->workSendMask = mask >> 16;
         shared->workRecvMask = mask & 0xffff;
       }
+      __syncwarp();
+      // Per-channel local KernelStep tags (must match host profiler.workCounter[ch]).
+      // Exclude AllToAll self-copy: host never increments for those (nProxyOps==0).
+      uint32_t active = shared->workSendMask | shared->workRecvMask;
+      uint32_t profActive = 0;
+      for (int wi = 0; wi < nWorks; wi++) {
+        if (!((active >> wi) & 1)) continue;
+        if (works[wi].sendRank == ncclShmem.comm.rank) continue;
+        profActive |= (1u << wi);
+      }
+      for (int wi = lane; wi < nWorks; wi += WARP_SIZE) {
+        if ((profActive >> wi) & 1) {
+          int localIx = __popc(profActive & ((1u << wi) - 1u));
+          works[wi].profilerWorkTag =
+            (uint16_t)(ncclShmem.channel.workCounter + localIx + 1);
+        } else {
+          works[wi].profilerWorkTag = 0;
+        }
+      }
     }
 
     // The fastest way to compute a warp uniform division x/y in [0,32) is to

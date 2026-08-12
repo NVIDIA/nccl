@@ -2159,7 +2159,7 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     // UDS support
     INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d", comm, comm->rank);
     comm->proxyState->threadUDS = std::thread(ncclProxyServiceUDS, comm->proxyState);
-    ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Service %2d", comm->cudaDev);
+    ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Svc%2d", comm->cudaDev);
   }
   return ncclSuccess;
 }

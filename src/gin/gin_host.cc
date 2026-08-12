@@ -382,7 +382,7 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
       ginState->proxyThreadsCreated = true;
       for (int t = 0; t < ginState->proxyNthreads; t++) {
         ginState->thread[t] = std::thread([ginState, t] { ncclGinProgress(ginState, t); });
-        ncclSetThreadName(ginState->thread[t], "NCCL GIN Progress%2d-%d", comm->cudaDev, t);
+        ncclSetThreadName(ginState->thread[t], "NCCL GIN P%d-%d", comm->cudaDev, t);
       }
     }
   }

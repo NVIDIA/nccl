@@ -13,6 +13,8 @@
 #include "rings.h"
 #include "topo.h"
 
+#include <cmath>
+
 /******************************************************************/
 /********************* Internode connection ***********************/
 /******************************************************************/
@@ -376,6 +378,7 @@ void exchangeValues(int* v0, int* v1) {
 }
 
 NCCL_PARAM(UnpackDoubleNChannels, "UNPACK_DOUBLE_NCHANNELS", 1);
+NCCL_PARAM(RubinSmBw, "RUBIN_SM_BW", 24);
 
 ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePatterns,
                              struct ncclTopoRanks** allTopoRanks, int* rings, struct ncclTopoGraph** graphs,
@@ -477,10 +480,19 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
     }
   }
 
-  // Use 4 compute channels per search channel to reach peak BW on <8 PPN
-  if (comm->minCompCap >= 90 && comm->nNodes > 1 && graphs[NCCL_ALGO_RING]->bwIntra > 45.0 && nChannels < 16) {
+  // Add compute channels until each CTA carries at most the configured bandwidth.
+  if (RUBIN_AND_LATER(comm->minCompCap)) {
+    int totalBw = std::ceil(graphs[NCCL_ALGO_RING]->nChannels * graphs[NCCL_ALGO_RING]->bwIntra);
+    int bwPerCta = std::max(1, (int)ncclParamRubinSmBw());
+    while (nChannels < DIVUP(totalBw, bwPerCta) && nChannels < MAXCHANNELS) {
+      nChannels = comm->nChannels =
+        copyChannels(comm, nChannels, std::min(MAXCHANNELS, nChannels * 2), ringPrev, ringNext);
+    }
+  } else if (comm->minCompCap >= 90 && comm->nNodes > 1 && graphs[NCCL_ALGO_RING]->bwIntra > 45.0 && nChannels < 16) {
     nChannels = comm->nChannels = copyChannels(comm, nChannels, 2 * nChannels, ringPrev, ringNext);
   }
+  graphs[NCCL_ALGO_RING]->nCtasPerChannel = DIVUP(nChannels, graphs[NCCL_ALGO_RING]->nChannels);
+  graphs[NCCL_ALGO_TREE]->nCtasPerChannel = DIVUP(nChannels, graphs[NCCL_ALGO_TREE]->nChannels);
 
   // Double the number of channels when using unpack networking (greater than 1 node)
   // We won't automatically double past 16 channels, users can specify 32 if they want

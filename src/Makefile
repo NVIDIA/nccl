@@ -47,6 +47,7 @@ LIBSRCFILES := \
 	$(wildcard rma/*.cc) \
 	$(wildcard devcomm/*.cc) \
 	$(wildcard tuning/*.cc) \
+	$(wildcard tuning/sym_model/*.cc) \
 	$(filter-out param/ncclparam.cc,$(wildcard param/*.cc)) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc

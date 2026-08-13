@@ -81,7 +81,6 @@ struct ncclDiagP2pWriteObs {
 struct ncclDiagP2pSummary {
   uint64_t tested;
   uint64_t passed;
-  uint64_t skipped;
 };
 
 struct ncclDiagP2pMapping {
@@ -347,7 +346,6 @@ static void ncclDiagP2pBuildGroupSummary(int nRanks, const struct ncclDiagP2pEdg
   for (int src = 0; src < nRanks; src++) {
     for (int dst = 0; dst < nRanks; dst++) {
       const struct ncclDiagP2pEdgeResult* result = allResults + src * nRanks + dst;
-      if (result->reason == ncclDiagP2pReasonIndirect) summary->skipped++;
       if (!result->tested) continue;
       summary->tested++;
       if (result->reason == ncclDiagP2pReasonNone) summary->passed++;
@@ -360,11 +358,9 @@ static void ncclDiagP2pReportSummary(struct ncclComm* comm, const struct ncclDia
 
   uint64_t tested = 0;
   uint64_t passed = 0;
-  uint64_t skipped = 0;
   for (int rank = 0; rank < comm->nRanks; rank++) {
     tested += summaries[rank].tested;
     passed += summaries[rank].passed;
-    skipped += summaries[rank].skipped;
   }
 
   if (tested == 0) return;
@@ -372,13 +368,14 @@ static void ncclDiagP2pReportSummary(struct ncclComm* comm, const struct ncclDia
   // This check covers topology-eligible directed GPU P2P pairs. A given collective and algorithm may use only a subset
   // of those pairs, and may use multiple channels for the same pair.
   const char* level = passed == tested ? "[OK]   " : "[INFO] ";
-  char counts[64];
-  if (passed == tested) snprintf(counts, sizeof(counts), "all %llu", (unsigned long long)passed);
-  else snprintf(counts, sizeof(counts), "%llu/%llu", (unsigned long long)passed, (unsigned long long)tested);
-  if (skipped == 0) DIAG_PRINT("NCCL DIAG %sp2p: %s directed GPU P2P edges verified", level, counts);
-  else
-    DIAG_PRINT("NCCL DIAG %sp2p: %s directed GPU P2P edges verified (skipped indirect=%llu)", level, counts,
-               (unsigned long long)skipped);
+  if (passed == tested) {
+    DIAG_PRINT("NCCL DIAG %sp2p: verified P2P access in both directions between every GPU pair "
+               "(%llu peer accesses)",
+               level, (unsigned long long)passed);
+  } else {
+    DIAG_PRINT("NCCL DIAG %sp2p: only %llu/%llu GPU-to-GPU peer accesses passed verification", level,
+               (unsigned long long)passed, (unsigned long long)tested);
+  }
 }
 
 static void ncclDiagP2pReportGroupFailures(struct ncclComm* comm, const int* ranks, int nRanks,

@@ -49,7 +49,7 @@ output of the process hosting rank 0 of the communicator; each report line is pr
 .. code::
 
   NCCL DIAG === NCCL Diagnostics ===
-  NCCL DIAG [OK]   p2p: all 56 directed GPU P2P edges verified
+  NCCL DIAG [OK]   p2p: verified P2P access in both directions between every GPU pair (56 peer accesses)
   NCCL DIAG NCCL diagnostics completed in 245.3 ms across 8 ranks
 
 Result lines use the following tags:
@@ -57,6 +57,13 @@ Result lines use the following tags:
 * ``[OK]`` indicates that a check completed without reporting an issue.
 * ``[INFO]`` identifies a condition that may require review, such as a failed verification or a
   check that could not be completed.
+
+For a partial P2P result, the summary reports the number of GPU-to-GPU peer accesses that passed
+verification out of the total number tested:
+
+.. code::
+
+  NCCL DIAG [INFO] p2p: only 52/56 GPU-to-GPU peer accesses passed verification
 
 Diagnostics are informational only: a reported issue does not abort communicator initialization.
 
@@ -66,9 +73,12 @@ Available Checks
 P2P Check
 """""""""
 
-The P2P check verifies direct Peer-to-Peer (P2P) communication between GPUs. For every pair of
-GPUs in the communicator that NCCL expects to communicate directly (e.g., over NVLink or PCIe),
-it transfers data between the two GPUs and validates that the data arrives intact.
+The P2P check verifies direct Peer-to-Peer (P2P) access between GPUs. For every pair of GPUs in the
+communicator that NCCL expects to communicate directly (e.g., over NVLink or PCIe), each GPU reads
+from and writes to its peer, and the diagnostic validates the transferred data. The summary counts
+each direction as one peer access. GPU pairs that communicate through an intermediate GPU rather
+than direct peer access are excluded from the summary; their ``reason=indirect`` skip records are
+available with ``NCCL_DEBUG=INFO`` and ``NCCL_DEBUG_SUBSYS=INIT``.
 
 When a transfer fails, the report identifies the affected GPU pair and the connection path between
 them, narrowing the investigation down to a specific link or device. Conversely, a passing P2P

@@ -58,6 +58,11 @@ static inline size_t ncclFuncRecvCount(ncclFunc_t func, int nRanks, size_t count
 static inline size_t ncclFuncMaxSendRecvCount(ncclFunc_t func, int nRanks, size_t count) {
   return func == ncclFuncAllGather || func == ncclFuncReduceScatter ? nRanks * count : count;
 }
+// Match the public AllGather in-place convention: each rank's input aliases
+// its own slice of the aggregate receive buffer.
+static inline bool ncclAllGatherIsInPlace(const void* sendbuff, const void* recvbuff, int rank, size_t perRankBytes) {
+  return (uintptr_t)sendbuff == (uintptr_t)recvbuff + size_t(rank) * perRankBytes;
+}
 
 ncclResult_t ncclGetCollNetSupport(struct ncclComm* comm, struct ncclTaskColl* task, int* collNetSupport);
 ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* task, int collNetSupport, int nvlsSupport,

@@ -188,6 +188,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       input.countMax = countMax;
       input.nWorks = nWorks;
       input.winRegType = headTask->winRegType;
+      input.inPlace = nWorks == 1 && headTask->func == ncclFuncAllGather &&
+                      ncclAllGatherIsInPlace(headTask->sendbuff, headTask->recvbuff, comm->rank,
+                                             headTask->count * ncclTypeSize(headTask->datatype));
       input.symAligned16B = symBatchAligned16B(headTask);
       input.minCTAs = headTask->minCTAs;
       input.maxCTAs = headTask->maxCTAs;

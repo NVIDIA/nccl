@@ -30,6 +30,8 @@ static void queryModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId ke
                        int* nBlocks) {
   if (ncclSymkGinKernelMask() >> kernelId & 1) {
     ncclSymkGinModel(input, kernelId, nBytes, timeUs, nBlocks);
+  } else if (ncclSymkLsaA2AModelEnabled(input, kernelId)) {
+    ncclSymkLsaA2AModel(input, kernelId, nBytes, timeUs, nBlocks);
   } else {
     ncclSymkLsaBaseModel(input, kernelId, nBytes, timeUs, nBlocks);
   }

@@ -44,6 +44,9 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   in->nWorks = 1;
   in->numPipeOps = 1;
   elementSize = ncclTypeSize(in->datatype);
+  // Treat an AllGather as in-place when each rank sends from its own receive slice.
+  in->inPlace = in->func == ncclFuncAllGather &&
+                ncclAllGatherIsInPlace(raw->sendbuff, raw->recvbuff, comm->rank, raw->count * elementSize);
   if (in->func == ncclFuncAllGather || in->func == ncclFuncBroadcast) {
     in->count *= elementSize;
     in->datatype = ncclInt8;

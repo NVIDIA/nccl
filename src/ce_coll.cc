@@ -11,6 +11,7 @@
 #include "cudawrap.h"
 #include "ce_coll.h"
 #include "alloc.h"
+#include "enqueue.h"
 #include "tuning.h"
 
 // User override: when set (>= 0) the cost model is bypassed and this byte
@@ -631,8 +632,9 @@ ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args,
 
   // declare-then-assign: NCCLCHECKGOTO's goto can't cross a scalar initialization.
   bool agUseMulticast;
-  agUseMulticast = ncclCeAllGatherUseMulticast(comm, chunkBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
-                                               mySendBuff == myRecvBuff);
+  agUseMulticast =
+    ncclCeAllGatherUseMulticast(comm, chunkBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
+                                ncclAllGatherIsInPlace(args->sendBuff, args->recvBuff, myLsaRank, chunkBytes));
 
   if (agUseMulticast) {
     // Multicast path: a single write to the multicast pointer covers
@@ -1308,9 +1310,8 @@ ncclResult_t ncclHierCeAllGather(struct ncclComm* comm, struct ncclKernelPlan* p
   // unicast loop (which is better at hiding tail latency).
   // declare-then-assign: NCCLCHECKGOTO's goto can't cross a scalar initialization.
   bool agUseMulticast;
-  agUseMulticast =
-    ncclCeAllGatherUseMulticast(comm, perRankBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
-                                (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes);
+  agUseMulticast = ncclCeAllGatherUseMulticast(comm, perRankBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
+                                               ncclAllGatherIsInPlace(sendbuff, recvbuff, myRank, perRankBytes));
 
   // ====================================================================
   // Phase 4: Self-broadcast (intra-node CE Broadcast of own chunk)

@@ -142,8 +142,8 @@ static void queryBaseLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   }
 }
 
-void ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                          int* nBlocks) {
+static bool queryLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
+                              float* timeUs, int* nBlocks) {
   struct ncclComm* comm = input->comm;
   int nMaxBlocks = maxBlocksLsa(comm, kernelId);
   bool isTma = ncclSymkTmaKernelMask() >> kernelId & 1;
@@ -174,7 +174,7 @@ void ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId
              "NCCL_SYM_KERNEL set to %s. At largest grouped work size %zu Bytes, kernel will not exercise TMA paths.",
              symKernelIdEnv, maxWorkBytes);
       } else {
-        return;
+        return false;
       }
     } else {
       while (nMaxBlocks > nMinBlocks && !ncclSymkTmaDeepEligible(comm, kernelId, maxWorkBytes, nMaxBlocks)) {
@@ -184,7 +184,17 @@ void ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId
   }
 
   queryBaseLsaModel(input, kernelId, nBytes, nMinBlocks, nMaxBlocks, timeUs, nBlocks);
-  if (*nBlocks > 0 && std::isfinite(*timeUs)) {
+  return *nBlocks > 0 && std::isfinite(*timeUs);
+}
+
+bool ncclSymkLsaBaseCtas(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int* nBlocks) {
+  float timeUs;
+  return queryLsaBaseModel(input, kernelId, nBytes, &timeUs, nBlocks);
+}
+
+void ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
+                          int* nBlocks) {
+  if (queryLsaBaseModel(input, kernelId, nBytes, timeUs, nBlocks)) {
     constexpr float smPenalty = .025f; // 2.5% increase in time per SM.
     *timeUs *= 1.0f + smPenalty * (*nBlocks);
   }

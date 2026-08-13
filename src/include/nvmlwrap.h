@@ -229,7 +229,7 @@ typedef struct {
 #define NVML_GPU_FABRIC_HEALTH_MASK_DEGRADED_BW_FALSE 2
 
 #define NVML_GPU_FABRIC_HEALTH_MASK_SHIFT_DEGRADED_BW 0
-#define NVML_GPU_FABRIC_HEALTH_MASK_WIDTH_DEGRADED_BW 0x11
+#define NVML_GPU_FABRIC_HEALTH_MASK_WIDTH_DEGRADED_BW 0x3
 
 /**
  * GPU Fabric Health Status Mask for various fields can be obtained

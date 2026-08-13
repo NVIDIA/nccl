@@ -797,6 +797,19 @@ NCCL_PARAM(MNNVLUUID, "MNNVL_UUID", -1);
 NCCL_PARAM(MNNVLCliqueId, "MNNVL_CLIQUE_ID", -1);
 NCCL_PARAM(MNNVLCrossClique, "MNNVL_CROSS_CLIQUE", 0);
 
+static const char* mnnvlDegradedBwStr(unsigned int healthMask) {
+  switch (NVML_GPU_FABRIC_HEALTH_GET(healthMask, _DEGRADED_BW)) {
+  case NVML_GPU_FABRIC_HEALTH_MASK_DEGRADED_BW_NOT_SUPPORTED:
+    return "not-supported";
+  case NVML_GPU_FABRIC_HEALTH_MASK_DEGRADED_BW_TRUE:
+    return "true";
+  case NVML_GPU_FABRIC_HEALTH_MASK_DEGRADED_BW_FALSE:
+    return "false";
+  default:
+    return "unknown";
+  }
+}
+
 static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, uint64_t commHash) {
   cudaDeviceProp prop;
   info->rank = comm->rank;
@@ -869,8 +882,14 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
       } else if (ncclParamMNNVLCliqueId() != -1) {
         info->fabricInfo.cliqueId = ncclParamMNNVLCliqueId();
       }
-      INFO(NCCL_INIT, "MNNVL busId 0x%lx fabric UUID %lx.%lx cliqueId 0x%x state %d healthMask 0x%x", info->busId,
-           uuid0, uuid1, info->fabricInfo.cliqueId, info->fabricInfo.state, info->fabricInfo.healthMask);
+      INFO(NCCL_INIT, "MNNVL busId 0x%lx fabric UUID %lx.%lx cliqueId 0x%x state %d healthMask 0x%x degradedBw %s",
+           info->busId, uuid0, uuid1, info->fabricInfo.cliqueId, info->fabricInfo.state, info->fabricInfo.healthMask,
+           mnnvlDegradedBwStr(info->fabricInfo.healthMask));
+      if (info->fabricInfo.state == NVML_GPU_FABRIC_STATE_COMPLETED &&
+          NVML_GPU_FABRIC_HEALTH_TEST(info->fabricInfo.healthMask, _DEGRADED_BW, _TRUE)) {
+        ATTN("MNNVL busId 0x%lx NVLink fabric health reports DEGRADED_BANDWIDTH (healthMask 0x%x)", info->busId,
+             info->fabricInfo.healthMask);
+      }
     }
   }
 

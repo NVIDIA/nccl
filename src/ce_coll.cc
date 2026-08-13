@@ -17,6 +17,10 @@
 // threshold decides multicast (sendSize <= threshold). -1 (unset) -> cost model.
 NCCL_PARAM(CeCollAgMulticastThreshold, "CE_COLL_AG_MULTICAST_THRESHOLD", -1);
 
+// Chunk size used when a cudaMemcpyBatchAsync CE data batch requests
+// round-robin chunking. Chunking is opt-in per batch.
+NCCL_PARAM(CeChunkSize, "CE_CHUNK_SIZE", 8 * 1024 * 1024);
+
 // Static constant for graph synchronization
 static const uint32_t GRAPH_SYNC_VALUE = 1;
 
@@ -365,6 +369,7 @@ exit:
   params->dsts = dsts;
   params->sizes = sizes;
   params->numOps = 0;
+  params->chunking = false;
   params->intraBatchSync = false;
 #if CUDART_VERSION >= 12080
   params->attrs = attrs;
@@ -396,6 +401,7 @@ void ncclCeFreeBatchOpsParams(struct ncclCeBatchOpsParams* params) {
   if (params->sizes) free(params->sizes);
   params->sizes = nullptr;
   params->numOps = 0;
+  params->chunking = false;
   params->intraBatchSync = false;
 #if CUDART_VERSION >= 12080
   if (params->attrs) free(params->attrs);
@@ -406,11 +412,65 @@ void ncclCeFreeBatchOpsParams(struct ncclCeBatchOpsParams* params) {
 #endif
 }
 
+#if CUDART_VERSION >= 12080
+static ncclResult_t ncclCeLaunchChunkedMemcpyBatchAsync(struct ncclCeBatchOpsParams* params, size_t chunkSize,
+                                                        cudaStream_t stream) {
+  ncclResult_t ret = ncclSuccess;
+  size_t maxSize = 0;
+  for (int i = 0; i < params->numOps; i++) {
+    maxSize = std::max(maxSize, params->sizes[i]);
+  }
+  size_t numRounds = maxSize == 0 ? 0 : 1 + (maxSize - 1) / chunkSize;
+
+  ncclUniqueArrayPtr<void*> tmpDsts{nullptr};
+  ncclUniqueArrayPtr<void*> tmpSrcs{nullptr};
+  ncclUniqueArrayPtr<size_t> tmpSizes{nullptr};
+  NCCLCHECKGOTO(ncclCalloc(tmpDsts, params->numOps), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(tmpSrcs, params->numOps), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(tmpSizes, params->numOps), ret, fail);
+
+  // Submit one batch per round. CUDA guarantees stream ordering between
+  // batches, but does not guarantee the execution order of copies within
+  // a batch, so flattening every chunk into one batch would not pace the
+  // destinations in round-robin waves.
+  for (size_t round = 0; round < numRounds; round++) {
+    size_t offset = round * chunkSize;
+    int nWaveOps = 0;
+    for (int i = 0; i < params->numOps; i++) {
+      if (offset >= params->sizes[i]) continue;
+      size_t bytes = std::min(params->sizes[i] - offset, chunkSize);
+      tmpDsts[nWaveOps] = (uint8_t*)params->dsts[i] + offset;
+      tmpSrcs[nWaveOps] = (uint8_t*)params->srcs[i] + offset;
+      tmpSizes[nWaveOps] = bytes;
+      nWaveOps++;
+    }
+
+    if (nWaveOps == 0) continue;
+#if CUDART_VERSION >= 13000
+    CUDACHECKGOTO(cudaMemcpyBatchAsync(tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), nWaveOps, params->attrs,
+                                       params->attrIdxs, params->numAttrs, stream),
+                  ret, fail);
+#else
+    CUDACHECKGOTO(cudaMemcpyBatchAsync(tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), nWaveOps, params->attrs,
+                                       params->attrIdxs, params->numAttrs, nullptr, stream),
+                  ret, fail);
+#endif
+  }
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+#endif
+
 ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsParams* params, cudaStream_t stream,
                                   struct ncclCeCollArgs* profilerArgs) {
   ncclResult_t ret = ncclSuccess;
   bool capturing;
   int driverVersion;
+  int64_t chunkSizeParam = ncclParamCeChunkSize();
+  size_t ceChunkSize = chunkSizeParam > 0 ? (size_t)chunkSizeParam : 0;
   void* ceBatchHandle = NULL;
 
   // cudaMemcpyBatchAsync does not accept the legacy null stream (e.g. PyTorch null stream).
@@ -459,7 +519,9 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
       params->attrIdxs[0] = 0;
       params->numAttrs = 1;
 
-      if (params->intraBatchSync) {
+      if (params->chunking && ceChunkSize > 0) {
+        NCCLCHECKGOTO(ncclCeLaunchChunkedMemcpyBatchAsync(params, ceChunkSize, stream), ret, fail);
+      } else if (params->intraBatchSync) {
       // Find the maximum transfer size to determine number of rounds
         size_t maxSize = 0;
         size_t totalSize = 0;
@@ -529,7 +591,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
       }
 #endif
     } else {
-      // For older CUDA versions, fall back to individual transfers
+      // For older CUDA versions, fall back to individual transfers.
       for (int i = 0; i < params->numOps; i++) {
         CUDACHECKGOTO(cudaMemcpyAsync((void*)params->dsts[i], (void*)params->srcs[i], params->sizes[i],
                                       cudaMemcpyDeviceToDevice, stream),

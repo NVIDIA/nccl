@@ -62,6 +62,8 @@ struct ncclCeBatchOpsParams {
   void** srcs;
   size_t* sizes;
   size_t numOps;
+  // Split operations into stream-ordered round-robin waves.
+  bool chunking;
   bool intraBatchSync;
 #if CUDART_VERSION >= 12080
   cudaMemcpyAttributes* attrs;

@@ -274,16 +274,17 @@ ncclResult_t ncclRmaProxyProgress(ncclRma_t* ncclRma, void* rmaProxyCtx) {
 
   if (ncclRma->rmaProgress) NCCLCHECK(ncclRma->rmaProgress(ctx->rmaCtx));
 
-  // Loop through each peer's queues
+  // Start at our own rank so different senders do not all visit peer 0 first.
   for (int i = 0; i < ctx->comm->nRanks; i++) {
+    int peer = (ctx->comm->rank + i) % ctx->comm->nRanks;
     // Step 1: Poll completion of InProgress Descs (non-graph)
-    NCCLCHECK(ncclRmaProxyPollNonPersistCompletion(ncclRma, ctx, i));
+    NCCLCHECK(ncclRmaProxyPollNonPersistCompletion(ncclRma, ctx, peer));
 
     // Step 2: Poll and issue ready Pending Descs (non-graph)
-    NCCLCHECK(ncclRmaProxyPollNonPersistDesc(ncclRma, ctx, i));
+    NCCLCHECK(ncclRmaProxyPollNonPersistDesc(ncclRma, ctx, peer));
 
     // Step 3: Poll persistent descriptors (graph mode)
-    NCCLCHECK(ncclRmaProxyPollPersistDesc(ncclRma, ctx, i));
+    NCCLCHECK(ncclRmaProxyPollPersistDesc(ncclRma, ctx, peer));
   }
   return ncclSuccess;
 }

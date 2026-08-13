@@ -1170,6 +1170,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
                    ncclParamCrossNic() :
                    0;
   graph->crossNic = crossNic == 1 ? 1 : 0;
+  graph->nCtasPerChannel = 1;
   graph->bwIntra = graph->bwInter = 0;
   graph->latencyInter = 0;
   int minTypeIntra = PATH_LOC, minTypeInter = PATH_PIX;

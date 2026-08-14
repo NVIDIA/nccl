@@ -173,12 +173,12 @@ static ncclResult_t ncclTuningSelectBestTuning(struct ncclTuningResultList_t* tu
 */
 ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
   ncclResult_t ret = ncclSuccess;
-  INFO(NCCL_TUNING,
-       "Input: { .comm = %p, .tuningMask = 0x%lx, .func = %s, .redOp = %d, .devRedop = %d, .dataType = %d, .nBytes = "
-       "%lu, .numPipesOps = %d, .count = %lu, .countMax = %lu, .nWorks = %d, .winRegType = %d, .regBuff = %d }",
-       input->comm, input->tuningMask, ncclFuncToString(input->func), input->redOp, input->devRedOp, input->datatype,
-       input->nBytes, input->numPipeOps, input->count, input->countMax, input->nWorks, input->winRegType,
-       input->regBuff);
+  TRACE(NCCL_TUNING,
+        "Input: { .comm = %p, .tuningMask = 0x%lx, .func = %s, .redOp = %d, .devRedop = %d, .dataType = %d, .nBytes = "
+        "%lu, .numPipesOps = %d, .count = %lu, .countMax = %lu, .nWorks = %d, .winRegType = %d, .regBuff = %d }",
+        input->comm, input->tuningMask, ncclFuncToString(input->func), input->redOp, input->devRedOp, input->datatype,
+        input->nBytes, input->numPipeOps, input->count, input->countMax, input->nWorks, input->winRegType,
+        input->regBuff);
   struct ncclTuningResultList_t tunings;
   tunings.head = nullptr;
   struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;
@@ -291,7 +291,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
     }
   }
 
-  INFO(
+  TRACE(
     NCCL_TUNING,
     "Best tuning { .id = %d, .valid = %d, timeUs = %f,  .algo = %s, .proto = %s, .symKernelId = %s, .ceMethodId = %d, "
     "nChannels = %d, maxChannels = %d, nWarps = %d, forced = %d }",

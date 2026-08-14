@@ -28,6 +28,7 @@ LIBSRCFILES := \
 	$(wildcard enqueue/task_sched/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(TRANSPORT_CC) \
+	$(wildcard transport/net_socket/*.cc) \
 	$(wildcard transport/net_ib/*.cc) \
 	$(wildcard transport/net_ib/gdaki/*.cc) \
 	$(wildcard transport/net_ib/gdaki/gpucontext/*.cc) \

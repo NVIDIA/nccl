@@ -26,8 +26,8 @@ NCCL_PARAM(RmaPluginRefCount, "RMA_PLUGIN_REF_COUNT", 0);
 int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {15, 14, 13};
 getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v15, getNcclRma_v14, getNcclRma_v13};
 
-#define NCCL_RMA_NUM_RESERVED_PLUGINS 3
-#define NCCL_RMA_NUM_INTERNAL_PLUGINS 1
+#define NCCL_RMA_NUM_RESERVED_PLUGINS 4
+#define NCCL_RMA_NUM_INTERNAL_PLUGINS 2
 
 typedef enum ncclRmaPluginState {
   ncclRmaPluginStateDisabled = -2,       // Plugin library failed to initialize
@@ -212,6 +212,13 @@ static void initPluginLibsOnceFunc() {
   pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclRmaVersion[0];
   pluginCounter++;
+
+  // Add internal socket RMA plugin.
+  pluginLibs[pluginCounter].ncclRma = &ncclRmaSocketProxy;
+  pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
+  pluginLibs[pluginCounter].version = ncclRmaVersion[0];
+  pluginCounter++;
+
   pluginCount = pluginCounter;
 }
 

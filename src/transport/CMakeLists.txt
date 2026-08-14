@@ -3,12 +3,22 @@
 set(TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/nvls.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/net_socket.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/net_socket/common.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/p2p.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/net.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/coll_net.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/shm.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/generic.cc
 )
+
+if(NCCL_OS_LINUX)
+    list(APPEND TRANSPORT_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/rma_socket.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/rma_socket_mem.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/rma_socket_setup.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/rma_socket_progress_recver.cc
+    )
+endif()
 
 # Real net_ib on Linux; stub on Windows (and other non-Linux) so ncclNetIb is defined exactly once
 if(NCCL_OS_LINUX)

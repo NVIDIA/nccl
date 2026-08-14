@@ -12,6 +12,7 @@
 #include "param.h"
 #include "profiler/net_socket.h"
 #include "os.h"
+#include "net_socket/common.h"
 
 #include <stdlib.h>
 #include <limits.h>
@@ -20,23 +21,7 @@
 #include <condition_variable>
 
 /* Init functions */
-static int ncclNetIfs = -1;
-struct ncclNetSocketDev {
-  union ncclSocketAddress addr;
-  char devName[MAX_IF_NAME_SIZE];
-  char* pciPath;
-};
-static struct ncclNetSocketDev ncclNetSocketDevs[MAX_IFS];
-
 static std::mutex ncclNetSocketMutex;
-
-static ncclResult_t ncclNetSocketGetPciPath(char* devName, char** pciPath) {
-  char devicePath[PATH_MAX];
-  snprintf(devicePath, PATH_MAX, "/sys/class/net/%s/device", devName);
-  // May return NULL if the file doesn't exist.
-  *pciPath = ncclOsRealpath(devicePath, NULL);
-  return ncclSuccess;
-}
 
 static ncclProfilerCallback_t ncclProfilerFunction;
 
@@ -50,124 +35,19 @@ static int netRefCount;
 ncclResult_t ncclNetSocketInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction,
                                ncclProfilerCallback_t profFunction) {
   std::lock_guard<std::mutex> lock(ncclNetSocketMutex);
-  ncclResult_t ret = ncclSuccess;
   if (netRefCount) {
     netRefCount++;
     return ncclSuccess;
   }
   ncclProfilerFunction = profFunction;
-  if (ncclNetIfs == -1) {
-    char names[MAX_IF_NAME_SIZE * MAX_IFS];
-    union ncclSocketAddress addrs[MAX_IFS];
-    NCCLCHECKGOTO(ncclFindInterfaces(names, addrs, MAX_IF_NAME_SIZE, MAX_IFS, &ncclNetIfs), ret, fail);
-    if (ncclNetIfs <= 0) {
-      WARN("NET/Socket : no interface found");
-      ret = ncclInternalError;
-      goto fail;
-    } else {
-#define MAX_LINE_LEN (2047)
-      char line[MAX_LINE_LEN + 1];
-      char addrline[SOCKET_NAME_MAXLEN + 1];
-      line[0] = '\0';
-      addrline[SOCKET_NAME_MAXLEN] = '\0';
-      for (int i = 0; i < ncclNetIfs; i++) {
-        strcpy(ncclNetSocketDevs[i].devName, names + i * MAX_IF_NAME_SIZE);
-        memcpy(&ncclNetSocketDevs[i].addr, addrs + i, sizeof(union ncclSocketAddress));
-        NCCLCHECKGOTO(ncclNetSocketGetPciPath(ncclNetSocketDevs[i].devName, &ncclNetSocketDevs[i].pciPath), ret, fail);
-        snprintf(line + strlen(line), MAX_LINE_LEN - strlen(line), " [%d]%s:%s", i, names + i * MAX_IF_NAME_SIZE,
-                 ncclSocketToString(&addrs[i], addrline));
-      }
-      line[MAX_LINE_LEN] = '\0';
-      INFO(NCCL_INIT | NCCL_NET, "NET/Socket : Using%s", line);
-    }
-  }
+  NCCLCHECK(ncclNetSocketInitDevices("NET/Socket"));
   netRefCount++;
   return ncclSuccess;
-fail:
-  ncclNetIfs = -1;
-  return ret;
 }
 
 ncclResult_t ncclNetSocketDevices(int* ndev) {
   *ndev = ncclNetIfs;
   return ncclSuccess;
-}
-
-static ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
-  ncclResult_t ret = ncclSuccess;
-  *speed = 0;
-
-#if defined(NCCL_OS_WINDOWS)
-  // On Windows, use GetAdaptersAddresses to get network interface speed
-  ULONG bufferSize = 15000;
-  IP_ADAPTER_ADDRESSES* adapterAddresses = NULL;
-  ULONG result;
-  int attempts = 0;
-
-  do {
-    adapterAddresses = (IP_ADAPTER_ADDRESSES*)malloc(bufferSize);
-    if (adapterAddresses == NULL) {
-      WARN("Failed to allocate memory for adapter addresses");
-      *speed = 10000;
-      return ncclSuccess;
-    }
-
-    result = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapterAddresses, &bufferSize);
-    if (result == ERROR_BUFFER_OVERFLOW) {
-      free(adapterAddresses);
-      adapterAddresses = NULL;
-    }
-    attempts++;
-  } while (result == ERROR_BUFFER_OVERFLOW && attempts < 3);
-
-  if (result == NO_ERROR) {
-    // Iterate through adapters to find the matching one
-    for (IP_ADAPTER_ADDRESSES* adapter = adapterAddresses; adapter != NULL; adapter = adapter->Next) {
-      // Convert adapter friendly name to UTF-8 for comparison
-      char adapterName[MAX_IF_NAME_SIZE];
-      WideCharToMultiByte(CP_UTF8, 0, adapter->FriendlyName, -1, adapterName, sizeof(adapterName), NULL, NULL);
-
-      // Check if this is the adapter we're looking for
-      if (strstr(adapterName, devName) != NULL || strstr(devName, adapterName) != NULL) {
-        // TransmitLinkSpeed is in bits per second, convert to Mbps
-        if (adapter->TransmitLinkSpeed > 0) {
-          *speed = (int)(adapter->TransmitLinkSpeed / 1000000);
-          INFO(NCCL_NET, "Found network interface %s with speed %d Mbps", devName, *speed);
-          break;
-        }
-      }
-    }
-  }
-
-  if (adapterAddresses) {
-    free(adapterAddresses);
-  }
-
-  if (*speed <= 0) {
-    INFO(NCCL_NET, "Could not get speed for interface %s. Defaulting to 10 Gbps.", devName);
-    *speed = 10000;
-  }
-#elif defined(NCCL_OS_LINUX)
-  char speedPath[PATH_MAX];
-  snprintf(speedPath, sizeof(speedPath), "/sys/class/net/%s/speed", devName);
-  int fd = -1;
-  SYSCHECKSYNC(open(speedPath, O_RDONLY), "open", fd);
-  if (fd != -1) {
-    char speedStr[] = "        ";
-    int n;
-    // Allow this to silently fail
-    n = read(fd, speedStr, sizeof(speedStr) - 1);
-    if (n > 0) {
-      *speed = strtol(speedStr, NULL, 0);
-    }
-  }
-  if (*speed <= 0) {
-    INFO(NCCL_NET, "Could not get speed from %s. Defaulting to 10 Gbps.", speedPath);
-    *speed = 10000;
-  }
-  if (fd != -1) SYSCHECK(close(fd), "close");
-#endif
-  return ret;
 }
 
 ncclResult_t ncclNetSocketGetProperties(int dev, ncclNetProperties_t* props) {
@@ -413,23 +293,14 @@ fail:
 }
 
 ncclResult_t ncclNetSocketListen(void* ctx, int dev, void* opaqueHandle, void** listenComm) {
-  if (dev < 0 || dev >= ncclNetIfs) {
-    // data transfer socket is based on specified dev
-    WARN("NET/Socket : ncclNetSocketListen dev=%d ncclNetIfs=%d", dev, ncclNetIfs);
-    return ncclInternalError;
-  }
   ncclResult_t ret = ncclSuccess;
   struct ncclNetSocketHandle* handle = (struct ncclNetSocketHandle*)opaqueHandle;
   memset(handle, 0, sizeof(struct ncclNetSocketHandle));
   static_assert(sizeof(struct ncclNetSocketHandle) <= NCCL_NET_HANDLE_MAXSIZE, "ncclNetSocketHandle size too large");
   struct ncclNetSocketListenComm* comm;
   NCCLCHECK(ncclCalloc(&comm, 1));
-  handle->magic = ncclSocketDefaultMagic();
-  NCCLCHECKGOTO(ncclSocketInit(&comm->sock, &ncclNetSocketDevs[dev].addr, handle->magic, ncclSocketTypeNetSocket, NULL,
-                               1),
-                ret, fail);
-  NCCLCHECKGOTO(ncclSocketListen(&comm->sock), ret, fail);
-  NCCLCHECKGOTO(ncclSocketGetAddr(&comm->sock, &handle->connectAddr), ret, fail);
+  NCCLCHECKGOTO(ncclNetSocketCreateListener("NET/Socket", dev, &comm->sock, &handle->connectAddr, &handle->magic), ret,
+                fail);
   NCCLCHECKGOTO(ncclNetSocketGetNsockNthread(dev, &comm->nSocks, &comm->nThreads), ret, fail);
   handle->nSocks = comm->nSocks;
   handle->nThreads = comm->nThreads;

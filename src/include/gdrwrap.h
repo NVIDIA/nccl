@@ -173,6 +173,53 @@ error:
   return NULL;
 }
 
+static ncclResult_t ncclGdrCudaUnmapPointer(gdr_mh_t mh, void* map, size_t mapSize) {
+  ncclResult_t ret = ncclSuccess;
+  NCCLCHECKIGNORE(wrap_gdr_unmap(ncclGdrCopy, mh, map, mapSize), ret);
+  NCCLCHECKIGNORE(wrap_gdr_unpin_buffer(ncclGdrCopy, mh), ret);
+  return ret;
+}
+
+static ncclResult_t ncclGdrCudaMapAligned(uint64_t alignedAddr, size_t alignedSize, gdr_mh_t* mh, void** map,
+                                          gdr_info_t* info, uint32_t pinFlags = 0) {
+  ncclResult_t ret = ncclSuccess;
+
+  if (ncclGdrPinV2Available() || pinFlags == GDR_PIN_FLAG_FORCE_PCIE) {
+    // If pinFlags is set to FORCE_PCIE, error out if it cannot be honored.
+    NCCLCHECKGOTO(wrap_gdr_pin_buffer_v2(ncclGdrCopy, (unsigned long)alignedAddr, alignedSize, pinFlags, mh), ret,
+                  exit);
+  } else {
+    NCCLCHECKGOTO(wrap_gdr_pin_buffer(ncclGdrCopy, (unsigned long)alignedAddr, alignedSize, 0, 0, mh), ret, exit);
+  }
+
+  NCCLCHECKGOTO(wrap_gdr_map(ncclGdrCopy, *mh, map, alignedSize), ret, fail_unpin);
+  NCCLCHECKGOTO(wrap_gdr_get_info(ncclGdrCopy, *mh, info), ret, fail_unmap);
+
+exit:
+  return ret;
+fail_unmap:
+  (void)wrap_gdr_unmap(ncclGdrCopy, *mh, *map, alignedSize);
+fail_unpin:
+  (void)wrap_gdr_unpin_buffer(ncclGdrCopy, *mh);
+  goto exit;
+}
+
+static ncclResult_t ncclGdrCudaMapPointer(void* data, size_t size, gdr_mh_t* mh, void** map, size_t* mapSize,
+                                          gdr_info_t* info, uint32_t pinFlags = 0) {
+  uint64_t dataAddr = (uint64_t)(uintptr_t)data;
+  uint64_t alignedAddr = dataAddr & GPU_PAGE_MASK;
+  *mapSize = size + (dataAddr - alignedAddr);
+  ALIGN_SIZE(*mapSize, GPU_PAGE_SIZE);
+
+  NCCLCHECK(ncclGdrCudaMapAligned(alignedAddr, *mapSize, mh, map, info, pinFlags));
+  if (dataAddr < info->va || dataAddr + size > info->va + info->mapped_size) {
+    WARN("GDRCOPY : mapping for pointer %p size %zu does not cover requested range", data, size);
+    (void)ncclGdrCudaUnmapPointer(*mh, *map, *mapSize);
+    return ncclInternalError;
+  }
+  return ncclSuccess;
+}
+
 template <typename T>
 static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** gdrHandle, struct ncclMemManager* manager, uint32_t pinFlags = 0) {
   ncclGdrInfo_t info = {};
@@ -190,18 +237,7 @@ static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** 
   uint64_t alignedAddr = (((uint64_t) devMem) + GPU_PAGE_OFFSET) & GPU_PAGE_MASK;
   size_t align = alignedAddr - (uint64_t)devMem;
 
-  if (ncclGdrPinV2Available() || pinFlags == GDR_PIN_FLAG_FORCE_PCIE) {
-    // If pingFlags is set to FORCE_PCIE, we will error out if we can't honnor it.
-    NCCLCHECK(wrap_gdr_pin_buffer_v2(ncclGdrCopy, alignedAddr, mapSize, pinFlags, &mh));
-  } else {
-    // TRACE(NCCL_INIT, "GDRCOPY: Pin buffer 0x%lx (%p) align %zu size %zu", alignedAddr, devMem, align, mapSize);
-    NCCLCHECK(wrap_gdr_pin_buffer(ncclGdrCopy, alignedAddr, mapSize, 0, 0, &mh));
-  }
-
-  NCCLCHECK(wrap_gdr_map(ncclGdrCopy, mh, &gdrMap, mapSize));
-  //TRACE(NCCL_INIT, "GDRCOPY : mapped %p (0x%lx) at %p", devMem, alignedAddr, gdrMap);
-
-  NCCLCHECK(wrap_gdr_get_info(ncclGdrCopy, mh, &info));
+  NCCLCHECK(ncclGdrCudaMapAligned(alignedAddr, mapSize, &mh, &gdrMap, &info, pinFlags));
 
   // Will offset ever be non zero ?
   ssize_t off = info.va - alignedAddr;
@@ -238,8 +274,7 @@ static ncclResult_t ncclGdrCudaRead(void* gdrHandle, void* dst, const void* src,
 
 static ncclResult_t ncclGdrCudaFree(void* gdrHandle, struct ncclMemManager* manager) {
   gdr_mem_desc_t *md = (gdr_mem_desc_t*)gdrHandle;
-  NCCLCHECK(wrap_gdr_unmap(ncclGdrCopy, md->gdrMh, md->gdrMap, md->gdrMapSize));
-  NCCLCHECK(wrap_gdr_unpin_buffer(ncclGdrCopy, md->gdrMh));
+  NCCLCHECK(ncclGdrCudaUnmapPointer(md->gdrMh, md->gdrMap, md->gdrMapSize));
   NCCLCHECK(ncclCudaFree(md->gdrDevMem, manager));
   free(md);
 

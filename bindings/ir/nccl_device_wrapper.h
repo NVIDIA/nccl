@@ -19,6 +19,24 @@
  */
 
 /*
+ * Emit __activemask() as inline asm, like CUDA's sm_30_intrinsics.hpp does.
+ * Clang's version returns __nvvm_activemask(), which libNVVM 13.3.27 fails to
+ * lower: the PTX calls an .extern llvm.nvvm.activemask that ptxas rejects.
+ *
+ * Must precede the NCCL and cooperative_groups includes below so all call sites
+ * expand. Device pass only: CUDA declares __activemask in the host pass.
+ */
+#if defined(__clang__) && defined(__CUDA_ARCH__)
+#undef __activemask
+#define __activemask()                                                        \
+  (__extension__({                                                            \
+    unsigned _nccl_activemask_ret;                                            \
+    asm volatile("activemask.b32 %0;" : "=r"(_nccl_activemask_ret));          \
+    _nccl_activemask_ret;                                                     \
+  }))
+#endif
+
+/*
  * Production's __forceinline__ (__inline__ __attribute__((always_inline))) is
  * linkonce_odr and emits no symbol. Drop __inline__ so the device API has
  * external linkage: the bitcode lib emits symbols that consumers resolve from

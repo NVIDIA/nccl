@@ -409,10 +409,20 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclValidateCollConfigLaunchCompletionEvents(struct ncclComm* comm) {
+  if (comm->planner.nCollConfigLaunchCompletionEvents > 1) {
+    WARN("Only one launch-completion event may be provided in one NCCL group");
+    return ncclInvalidUsage;
+  }
+  return ncclSuccess;
+}
+
 // Called once per ncclGroup to organize the user submitted tasks in
 // comm->planner so that they can be peeled off into plans.
 ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool* needConnect, ncclSimInfo_t* simInfo) {
   struct ncclKernelPlanner* planner = &comm->planner;
+
+  NCCLCHECK(ncclValidateCollConfigLaunchCompletionEvents(comm));
   planner->persistent = ncclCudaGraphValid(planner->capturingGraph);
 
   // Put bcast tasks into collSorter if there's only one bcast peer
@@ -887,6 +897,9 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
     plan->threadPerBlock = std::max(plan->threadPerBlock, task->nWarps * WARP_SIZE);
     // per-coll cgaClusterSize is applied to the plan. User should use consistent cgaClusterSize in a Group.
     plan->cgaClusterSize = task->cgaClusterSize;
+    if (task->launchCompletionEvent != nullptr) {
+      plan->launchCompletionEvent = task->launchCompletionEvent;
+    }
     if (!plan->kernelSpecialized) {
       plan->kernelFn = ncclDevKernelForFunc[task->devFuncId];
       plan->kernelSpecialized = ncclDevKernelForFuncIsSpecialized[task->devFuncId];
@@ -1281,6 +1294,9 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
           ncclIntruQueueDequeue(&peers[sendRank].sendQueue);
           // Profiler - We can overwrite groupAPI event handles here since all operations here belong to the same group
           plan->groupApiEventHandle = send->groupApiEventHandle;
+          if (send->launchCompletionEvent != nullptr) {
+            plan->launchCompletionEvent = send->launchCompletionEvent;
+          }
           ncclIntruQueueEnqueue(&plan->p2pTaskQueue, send);
           comm->planner.nTasksP2p -= 1;
           comm->planner.nTasksP2pSend -= 1;
@@ -1289,6 +1305,9 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
           ncclIntruQueueDequeue(&peers[recvRank].recvQueue);
           // Profiler - We can overwrite groupAPI event handles here since all operations here belong to the same group
           plan->groupApiEventHandle = recv->groupApiEventHandle;
+          if (recv->launchCompletionEvent != nullptr) {
+            plan->launchCompletionEvent = recv->launchCompletionEvent;
+          }
           ncclIntruQueueEnqueue(&plan->p2pTaskQueue, recv);
           comm->planner.nTasksP2p -= 1;
           comm->planner.nTasksP2pRecv -= 1;
@@ -1864,6 +1883,10 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
   dim3 block = {(unsigned)plan->threadPerBlock, 1, 1};
   int smem = plan->isSymColl ? plan->kernelDynSmem : ncclShmemDynamicSize(comm->cudaArch);
   cudaStream_t launchStream = planner->streams->stream;
+  bool userKernelEvent = plan->launchCompletionEvent != nullptr;
+  bool userKernelEventArmed = false;
+  bool relayUserLaunchCompletionEvent = false;
+  cudaStream_t relayStream = nullptr;
 
   NCCLCHECK(ncclProfilerStartKernelLaunchEvent(plan, launchStream));
 
@@ -1917,6 +1940,18 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
       launchAttrs[attrs].value.launchCompletionEvent.event = comm->sharedRes->launchEvent;
       launchAttrs[attrs].value.launchCompletionEvent.flags = 0;
       attrs++;
+      if (userKernelEvent) {
+        NCCLCHECKGOTO(ncclUncapturedStreamPoolAcquire(&comm->sharedRes->uncapturedStreamPool, &relayStream), ret,
+                      do_return);
+        relayUserLaunchCompletionEvent = true;
+        userKernelEventArmed = true;
+      }
+    } else if (userKernelEvent) {
+      launchAttrs[attrs].id = CU_LAUNCH_ATTRIBUTE_LAUNCH_COMPLETION_EVENT;
+      launchAttrs[attrs].value.launchCompletionEvent.event = plan->launchCompletionEvent;
+      launchAttrs[attrs].value.launchCompletionEvent.flags = 0;
+      attrs++;
+      userKernelEventArmed = true;
     }
     if (plan->isSymColl && compCap >= 90 && driverVersion >= 12030) {
       launchAttrs[attrs].id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
@@ -1941,10 +1976,22 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
     launchConfig.attrs = launchAttrs;
     launchConfig.numAttrs = attrs;
     launchConfig.hStream = launchStream;
+    if (userKernelEvent && !userKernelEventArmed) {
+      WARN("CUDA launch-completion events require CUDA 12.3 or newer; recording the user event before launch");
+      CUDACHECKGOTO(cudaEventRecord(plan->launchCompletionEvent, launchStream), ret, do_return);
+    }
     CUCHECKGOTO(cuLaunchKernelEx(&launchConfig, fn, nullptr, extra), ret, do_return);
+    if (relayUserLaunchCompletionEvent) {
+      CUDACHECKGOTO(cudaStreamWaitEvent(relayStream, comm->sharedRes->launchEvent, 0), ret, do_return);
+      CUDACHECKGOTO(cudaEventRecord(plan->launchCompletionEvent, relayStream), ret, do_return);
+    }
 #endif
   } else {
     // Standard kernel launch
+    if (userKernelEvent) {
+      WARN("CUDA launch-completion events require CUDA 12.3 or newer; recording the user event before launch");
+      CUDACHECKGOTO(cudaEventRecord(plan->launchCompletionEvent, launchStream), ret, do_return);
+    }
     CUCHECKGOTO(cuLaunchKernel(fn, grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, launchStream, nullptr,
                                extra),
                 ret, do_return);
@@ -2637,6 +2684,7 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
   p2p->root = peer;
   p2p->bytes = nBytes;
   p2p->allowUB = allowUB;
+  p2p->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
   p2p->eActivationMask = ncclProfilerApiState.eActivationMask;
   p2p->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
   p2p->p2pApiEventHandle = ncclProfilerApiState.p2pApiEventHandle;
@@ -2781,6 +2829,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->CTAPolicy = info->collConfig.CTAPolicy;
     t->forceAlgSelection = info->collConfig.forceAlgSelection;
     t->profilerTag = info->collConfig.userProfilerTag;
+    t->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
     t->eActivationMask = ncclProfilerApiState.eActivationMask;
     t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
     t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
@@ -2873,6 +2922,7 @@ static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* inf
   t->chunkSteps = info->chunkSteps;
   t->sliceSteps = info->sliceSteps;
   t->profilerTag = info->collConfig.userProfilerTag;
+  t->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
   t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
   t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
   t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
@@ -3143,6 +3193,7 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     t->sendRecv.peer = info->root;
     t->sendRecv.bytes = info->count * ncclTypeSize(info->datatype);
     t->sendRecv.stream = info->stream;
+    t->sendRecv.launchCompletionEvent = nullptr;
     ncclIntruQueueEnqueue(&rtq->genericQueue, t);
   } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal) {
     if (info->ctx < 0 || info->ctx >= comm->config.numRmaCtx) {
@@ -3226,7 +3277,8 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
 
     NCCLCHECK(hostToDevRedOp(&opDev, info->op, info->datatype, comm));
     if (comm->nRanks == 1) {
-      NCCLCHECK(ncclLaunchOneRank(info->recvbuff, info->sendbuff, info->count, opDev, info->datatype, info->stream));
+      NCCLCHECK(ncclLaunchOneRank(info->recvbuff, info->sendbuff, info->count, opDev, info->datatype, info->stream,
+                                  ncclCollConfigGetLaunchCompletionEvent(&info->collConfig)));
       return ncclSuccess;
     }
     t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
@@ -3255,11 +3307,27 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
   return ncclSuccess;
 }
 
-// Converts `info` to a task and adds it to `comm->planner`. The exception is with
-// single rank communicators, collectives are issued as `ncclMemcpyAsync`s and
-// thus don't need a task.
+static bool ncclInfoHasLaunchCompletionEvent(const struct ncclInfo* info) {
+  // Only collective Config APIs accept a CollConfig; P2P and RMA APIs leave it empty.
+  return info->count != 0 && ncclCollConfigGetLaunchCompletionEvent(&info->collConfig) != nullptr;
+}
+
+static void ncclRecordCollConfigLaunchCompletionEvent(struct ncclComm* comm) {
+  // Multi-rank operations join through their task append function. Single-rank collectives
+  // execute immediately, so join them here to retain the count until group validation.
+  if (comm->nRanks == 1) {
+    ncclGroupTaskType_t groupTaskType =
+      ncclParamEnqueueRearchEnable() ? ncclGroupTaskTypeRawTask : ncclGroupTaskTypeCollective;
+    ncclGroupCommJoin(comm, groupTaskType);
+  }
+  comm->planner.nCollConfigLaunchCompletionEvents += 1;
+}
+
+// Converts `info` to a task and adds it to `comm->planner`. Single-rank collectives
+// execute immediately and do not need a task.
 static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
   ncclFunc_t collAPI = info->coll;
+  bool hasLaunchCompletionEvent = ncclInfoHasLaunchCompletionEvent(info);
 
   if (ncclParamEnqueueRearchEnable()) {
     NCCLCHECK(rawTaskAppend(comm, info));
@@ -3294,7 +3362,9 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
     NCCLCHECK(hostToDevRedOp(&opDev, info->op, info->datatype, comm));
 
     if (comm->nRanks == 1) {
-      NCCLCHECK(ncclLaunchOneRank(info->recvbuff, info->sendbuff, info->count, opDev, info->datatype, info->stream));
+      NCCLCHECK(ncclLaunchOneRank(info->recvbuff, info->sendbuff, info->count, opDev, info->datatype, info->stream,
+                                  ncclCollConfigGetLaunchCompletionEvent(&info->collConfig)));
+      if (hasLaunchCompletionEvent) ncclRecordCollConfigLaunchCompletionEvent(comm);
       return ncclSuccess;
     } else {
       struct ncclDevrWindow* sendWin;
@@ -3390,6 +3460,8 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
       }
     }
   }
+
+  if (hasLaunchCompletionEvent) ncclRecordCollConfigLaunchCompletionEvent(comm);
 
   return ncclSuccess;
 }

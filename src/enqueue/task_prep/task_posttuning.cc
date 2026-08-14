@@ -106,6 +106,7 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
   task->opHost = raw->opHost;
   task->opDev = raw->opDev;
   postTuningSetChunkSteps(task);
+  task->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&raw->collConfig);
   task->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
   task->groupApiEventHandle = nullptr;
   task->collApiEventHandle = nullptr;
@@ -202,6 +203,7 @@ static ncclResult_t fillP2pTaskFromRaw(struct ncclComm* comm, struct ncclTaskTun
   task->datatype = raw->datatype;
   task->root = raw->peer;
   task->bytes = raw->bytes;
+  task->launchCompletionEvent = raw->launchCompletionEvent;
   if (task->collAPI == ncclFuncAlltoAll || task->collAPI == ncclFuncScatter || task->collAPI == ncclFuncGather) {
     task->allowUB = false;
   } else {

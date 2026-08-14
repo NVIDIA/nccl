@@ -58,4 +58,6 @@ ncclResult_t ncclCollConfigGetAlgMask(const ncclCollConfig_t* config, ncclFunc_t
 // value wins (ZERO over EFFICIENCY); an unset or out-of-range per-call value inherits commPolicy.
 int ncclCollConfigResolveCTAPolicy(int perCall, int commPolicy, bool envOverridden);
 
+cudaEvent_t ncclCollConfigGetLaunchCompletionEvent(const ncclCollConfig_t* c);
+
 #endif

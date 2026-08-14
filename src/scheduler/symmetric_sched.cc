@@ -289,6 +289,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
 
   plan->isSymColl = true;
   plan->threadPerBlock = headTask->nWarps * WARP_SIZE;
+  plan->launchCompletionEvent = headTask->launchCompletionEvent;
   plan->hasProxyOps = false;
   ncclSymkKernelId kernelId = (ncclSymkKernelId)headTask->devFuncId;
   int kernelIndex = ncclSymkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype);

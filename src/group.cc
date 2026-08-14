@@ -909,6 +909,16 @@ fail:
   goto exit;
 }
 
+// Preparation-job errors abort communicators. Validate launch-completion-event
+// usage first so invalid usage is returned without aborting the communicator.
+static ncclResult_t groupValidateLaunchCompletionEvents(struct ncclComm* comm) {
+  while (comm != nullptr) {
+    NCCLCHECK(ncclValidateCollConfigLaunchCompletionEvents(comm));
+    comm = comm->groupNext[ncclGroupTaskTypeRawTask];
+  }
+  return ncclSuccess;
+}
+
 static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimInfo_t* simInfo = NULL) {
   ncclResult_t ret = ncclSuccess;
   struct ncclGroupJob* gjob = (struct ncclGroupJob*)job_;
@@ -924,6 +934,9 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
   ncclIntruQueueConstruct(&asyncMgmtTaskJobs);
   ncclIntruQueueConstruct(&asyncPrepareJobs);
   ncclIntruQueueConstruct(&asyncScheduleJobs);
+
+  NCCLCHECKGOTO(groupValidateLaunchCompletionEvents(groupCommHeadMain[ncclGroupTaskTypeRawTask]), ret, fail);
+
   // launch management tasks
   cliqueHead = groupCommHeadMain[ncclGroupTaskTypeMgmtTask];
   while (cliqueHead) {

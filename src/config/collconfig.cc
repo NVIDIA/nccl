@@ -17,6 +17,10 @@ bool ncclCollConfigHasAlgSelection(const ncclCollConfig_t* config) {
   return config->algSelection != NCCL_CONFIG_UNDEF_PTR && config->algSelection[0] != '\0';
 }
 
+cudaEvent_t ncclCollConfigGetLaunchCompletionEvent(const ncclCollConfig_t* c) {
+  return (c == nullptr || c->size == 0) ? nullptr : c->launchCompletionEvent;
+}
+
 // Helper function to set aggregation isolation
 bool ncclCollConfigNeedAggIsolate(const ncclCollConfig_t* config) {
   if (config->size == 0) {
@@ -30,6 +34,7 @@ bool ncclCollConfigNeedAggIsolate(const ncclCollConfig_t* config) {
   // cap, so it does not force aggregation isolation; it is applied to the group as-is.
   // algorithm selection need aggregation isolation so that selection does not spill to other collectives in the group.
   if (ncclCollConfigHasAlgSelection(config)) return true;
+  if (ncclCollConfigGetLaunchCompletionEvent(config) != nullptr) return true;
   // CTAPolicy is resolved in place (env > per-call > comm) before this runs, so its isolation is
   // decided by the caller comparing the resolved value against the comm default.
   return false;
@@ -42,24 +47,17 @@ bool ncclCollConfigNeedAggIsolate(const ncclCollConfig_t* config) {
 // consumers via resolveCollRes.
 ncclResult_t ncclParseCollConfig(const ncclCollConfig_t* config, ncclCollConfig_t* internal_config) {
   *internal_config = NCCL_COLLCONFIG_INITIALIZER;
+  internal_config->magic = 0;
   if (config != nullptr) {
-    // ncclCollConfig_t is append-only (size only grows, fields never move). The smallest valid
-    // struct is the v23100 one, used as the minimal size check.
-    if (config->size < sizeof(struct ncclCollConfig_v23100)) {
-      WARN("ncclCollConfig_t size %zu too small (expected >= %zu)", config->size, sizeof(ncclCollConfig_t));
+    // Match ncclConfig_t parsing: callers provide a valid initialized struct prefix.
+    // Bound the copy by the current layout; initializer defaults remain for appended fields.
+    size_t realSize;
+    memcpy(&realSize, config, sizeof(realSize));
+    realSize = realSize > sizeof(*internal_config) ? sizeof(*internal_config) : realSize;
+    memcpy(internal_config, config, realSize);
+    if (internal_config->magic != NCCL_API_MAGIC) {
+      WARN("ncclCollConfig_t magic mismatch (got 0x%x, expected 0x%x)", internal_config->magic, NCCL_API_MAGIC);
       return ncclInvalidArgument;
-    }
-    if (config->magic != NCCL_API_MAGIC) {
-      WARN("ncclCollConfig_t magic mismatch (got 0x%x, expected 0x%x)", config->magic, NCCL_API_MAGIC);
-      return ncclInvalidArgument;
-    }
-    // copy user config to internal_config for safe access later
-    if (config->version <= NCCL_VERSION_CODE) {
-      // A same/older user config struct is smaller than (or equal to) current library's struct.
-      memcpy(internal_config, config, config->size);
-    } else {
-      // A newer user config struct is larger than current library's struct
-      memcpy(internal_config, config, internal_config->size);
     }
 
     // forceAlgSelection is boolean and only accepts 0 or 1

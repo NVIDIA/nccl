@@ -123,6 +123,18 @@ struct ncclCommEventCallback {
   ncclResult_t (*fn)(struct ncclComm* comm, struct ncclCommEventCallback* cb);
 };
 
+struct ncclUncapturedStreamPoolNode {
+  cudaStream_t stream;
+  struct ncclUncapturedStreamPoolNode* next;
+};
+
+struct ncclUncapturedStreamPool {
+  struct ncclUncapturedStreamPoolNode* head;
+};
+
+ncclResult_t ncclUncapturedStreamPoolAcquire(struct ncclUncapturedStreamPool* pool, cudaStream_t* stream);
+ncclResult_t ncclUncapturedStreamPoolDestroy(struct ncclUncapturedStreamPool* pool);
+
 struct ncclSharedResources {
   int refCount;
   struct ncclComm* owner; /* comm which creates this shared res. */
@@ -145,6 +157,7 @@ struct ncclSharedResources {
   struct ncclStrongStream deviceStream, hostStream;
   int persistentRefs;
   cudaEvent_t launchEvent, scratchEvent;
+  struct ncclUncapturedStreamPool uncapturedStreamPool;
 
   /* proxy related shared res */
   struct ncclProxyState* proxyState;
@@ -215,6 +228,7 @@ struct ncclTaskColl {
   uint32_t isCollnet:1, isNvls:1, isSymLast:1;
   uint32_t devFuncId:29;
   int regBufType;
+  cudaEvent_t launchCompletionEvent;
   // number of elements in planner->ipcMemQueue associated with this collective
   int nCleanupQueueElts;
 
@@ -290,6 +304,7 @@ struct ncclTaskP2p {
   int root;
   size_t bytes;
   bool allowUB;
+  cudaEvent_t launchCompletionEvent;
 
   // Profiler plugin
   int eActivationMask;
@@ -371,6 +386,7 @@ struct ncclKernelPlan {
   uint16_t p2pPairCounter;
   int threadPerBlock;
   int cgaClusterSize;  // per-launch CGA cluster size; defaults to comm->config.cgaClusterSize
+  cudaEvent_t launchCompletionEvent;
 
   int collOpCount; // Number of collectives in this plan.
   int nWorkBatches; // Number of work batches.
@@ -481,6 +497,7 @@ struct ncclKernelPlanner {
   struct Peer* peers /*[nRanks]*/;
   int nTasksColl, nTasksP2p, nTasksBcast, nTasksRma;
   int nTasksP2pSend, nTasksP2pRecv;
+  int nCollConfigLaunchCompletionEvents; // Original event-bearing collective requests in this group.
 
   struct {
     int minBcastPeer;  /* initialized to INT_MAX */

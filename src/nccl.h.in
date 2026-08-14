@@ -188,7 +188,7 @@ typedef struct ncclConfigExt {
  * reordered. The user owns the storage and must keep the struct (and any linked ncclConfigExt_t)
  * valid for the duration of every call that uses it. The same configuration must be
  * set on every rank; NCCL validates it only locally. */
-typedef struct ncclCollConfig_v23100 {
+typedef struct ncclCollConfig_v23200 {
   /* attributes that users should never touch. */
   size_t size;
   unsigned int magic;
@@ -211,6 +211,7 @@ typedef struct ncclCollConfig_v23100 {
    * profiler-tag values with the most-significant bit set (>= 0x8000000000000000) for possible future
    * predefined tags; applications should use values with the MSB clear. */
   uint64_t userProfilerTag;
+  cudaEvent_t launchCompletionEvent;
 } ncclCollConfig_t;
 
 /* NCCL_COLLCONFIG_INITIALIZER must be used to initialize a ncclCollConfig_t when it is
@@ -228,6 +229,7 @@ typedef struct ncclCollConfig_v23100 {
   1,                                        /* forceAlgSelection */   \
   NCCL_CONFIG_UNDEF_INT,                    /* CTAPolicy */           \
   0,                                        /* userProfilerTag */     \
+  NCCL_CONFIG_UNDEF_PTR,                    /* launchCompletionEvent */ \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */

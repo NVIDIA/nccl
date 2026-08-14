@@ -210,6 +210,10 @@ constexpr int ncclSymkDeepBytePerChunk = ncclSymkGetBytesPerChunk(ncclSymkMinWar
 // Multimem bcast deep loop (single warp; shares unroll with ncclSymkDeepUnrollPacks)
 constexpr int ncclSymkMultimemDeepBytePerChunk = ncclSymkGetBytesPerChunk(1, ncclSymkDeepUnrollPacks);
 
+// Spread concurrent MC operations across different addresses to avoid contention.
+constexpr int ncclSymkMcPerRankOffsetBytes = 32 * 1024 * 1024;
+static_assert(ncclSymkMcPerRankOffsetBytes % ncclSymkMultimemDeepBytePerChunk == 0);
+
 // Deep loop when input/output are 256 B-aligned
 constexpr int ncclSymkAlign256BDeepUnrollPacks = 16;
 constexpr int ncclSymkAlign256BDeepBytePerChunk =

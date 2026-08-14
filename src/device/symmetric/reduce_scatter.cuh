@@ -399,7 +399,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_TmaLD(ncclSymkDevWorkA
 }
 
 template <typename Red, typename T>
-static __device__ void reduceMultimem(int tn, int t, Red red, T* input, T* output, size_t nElts) {
+static __device__ void reduceMultimem(int tn, int t, Red red, T* input, T* output, size_t nElts, uint32_t rank = 0) {
   uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input);
   uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output);
   size_t nBytes = nElts * sizeof(T);
@@ -412,15 +412,24 @@ static __device__ void reduceMultimem(int tn, int t, Red red, T* input, T* outpu
   if (sizeof(T) == BytePerPack || (inputUptr - outputUptr) % BytePerPack == 0) {
     constexpr int UnrollPacks = 8 * (16 / BytePerPack);
     constexpr int BytePerChunk = UnrollPacks * WARP_SIZE * BytePerPack;
-    uintptr_t cursor = nPreBytes;
-    uint32_t nChunks = (nBytes - cursor) / BytePerChunk;
-    uintptr_t cursorAfter = cursor + uintptr_t(nChunks) * BytePerChunk;
+    static_assert(ncclSymkMcPerRankOffsetBytes % BytePerChunk == 0);
+    uint32_t nChunks = (nBytes - nPreBytes) / BytePerChunk;
+    uintptr_t cursorAfter = nPreBytes + uintptr_t(nChunks) * BytePerChunk;
     nSufBytes = nBytes - cursorAfter;
+    size_t nMainBytes = nBytes - nPreBytes - nSufBytes;
+
+    // Ranks use offset multipliers 0 1 3 2 4 5 7 6 etc. This ensures proper address distribution even if
+    // each rank has only 64MiB to process.
+    uint32_t startOffsetMultiplier = rank ^ ((rank >> 1) & 1);
+    size_t startBytes = nMainBytes > 0 ? (size_t)startOffsetMultiplier * ncclSymkMcPerRankOffsetBytes % nMainBytes : 0;
+    uintptr_t wrapAt = cursorAfter + (t % WARP_SIZE) * BytePerPack;
+    uintptr_t cursor = nPreBytes + uintptr_t(startBytes / BytePerChunk) * BytePerChunk;
     cursor += (t / WARP_SIZE) * UnrollPacks * WARP_SIZE * BytePerPack;
     cursor += (t % WARP_SIZE) * BytePerPack;
-    int nIters = nChunks - t / WARP_SIZE;
+    int nIters = (int)nChunks - (int)(t / WARP_SIZE);
     NVCC_PRAGMA_UNROLL_DISABLED
     while (0 < nIters) {
+      if (cursor >= wrapAt) cursor -= nMainBytes;
       BytePack<BytePerPack> tmp[UnrollPacks];
       NVCC_PRAGMA_UNROLL_AUTO
       for (int u = 0; u < UnrollPacks; u++) {
@@ -467,7 +476,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LDMC(ncclSymkDevWorkAr
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);
     int tn = nBlocks * blockDim.x;
 
-    reduceMultimem(tn, t, red, input.multimemPtr(multimem) + rank * nAllElts, output.localPtr(), nElts);
+    reduceMultimem(tn, t, red, input.multimemPtr(multimem) + rank * nAllElts, output.localPtr(), nElts, rank);
   });
 
   if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_BEFORE_CLOSE);

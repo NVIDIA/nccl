@@ -83,6 +83,7 @@ struct ncclDevrState {
   bool ginEnabled;
   bool rmaProxyEnabled;
   struct ncclDevrMemory* memHead;
+  uint64_t nextRegistryId; // next value for ncclDevrMemory::registryId
   struct ncclDevrWindowSorted* winSorted;
   int winSortedCapacity, winSortedCount;
   struct ncclDevrTeam* teamHead;

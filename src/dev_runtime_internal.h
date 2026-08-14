@@ -59,6 +59,9 @@ struct ncclDevrGinSegmentInfo {
 // Complete type for src/include/dev_runtime.h's forward declaration.
 struct ncclDevrMemory {
   int refCount;
+  // Communicator-wide identity of this backing registration: backing registrations are created
+  // collectively in the same order on every rank, so equal ids denote the same registration.
+  uint64_t registryId;
   struct ncclDevrMemory* next;
   CUmemGenericAllocationHandle* memHandles;
   void* primaryAddr; // What we hope is the VA of this memory's first mapping.

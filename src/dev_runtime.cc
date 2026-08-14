@@ -676,26 +676,35 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
     int registerMask;
     size_t totalSize;
     int hostCftMode;
+    uint64_t candidateRegistryId; // invalidRegistryId if this rank has no compatible registration
   };
   struct segmentInfo* globalSegmentInfo = nullptr;
   const int globalLsaTeamBaseIdx = devr->lsaSize * (comm->rank / devr->lsaSize);
   bool ucBound = false;
 
   struct ncclDevrMemory* mem = nullptr;
-  // New memory.
-  NCCLCHECKGOTO(ncclCalloc(&mem, 1), ret, fail_mem);
-  NCCLCHECKGOTO(ncclCalloc(&mem->memHandles, numSegments), ret, fail_mem);
-  memcpy(mem->memHandles, memHandles, sizeof(*mem->memHandles) * numSegments);
-  mem->primaryAddr = memAddr;
-  mem->size = size;
-  mem->winFlags = winFlags;
-  mem->hasSysmemSegment = hasSysmemSegment;
-  mem->numSegments = numSegments;
+  constexpr uint64_t invalidRegistryId = UINT64_MAX;
+  uint64_t candidateRegistryId = invalidRegistryId;
+  uint64_t registryId = invalidRegistryId;
+  int maxGlobalNumSegments = 0;
+  bool globalHasSysmemSegment = false;
 
-  NCCLCHECKGOTO(ncclCalloc(&mem->segmentSizes, numSegments), ret, fail_mem);
-  NCCLCHECKGOTO(ncclCalloc(&globalSegmentInfo, comm->nRanks), ret, fail_mem);
+  // Look for an existing registration of the same backing allocation with compatible flags. memHead
+  // is head-pushed, so the first match is the most recent one, which is the choice most likely to be
+  // shared by the other ranks. This is only a candidate: reuse requires all ranks to agree below.
+  for (struct ncclDevrMemory* m = devr->memHead; m != nullptr; m = m->next) {
+    if (m->primaryAddr != memAddr || m->size != size || m->numSegments != numSegments || m->winFlags != winFlags) {
+      continue;
+    }
+    // Check if all memHandles that [memAddr, memAddr + size] spans also match
+    if (std::equal(m->memHandles, m->memHandles + numSegments, memHandles)) {
+      mem = m;
+      candidateRegistryId = m->registryId;
+      break;
+    }
+  }
 
-  NCCLCHECKGOTO(ncclDevrPopulateSegmentSizes(mem, numSegments), ret, fail_mem);
+  NCCLCHECKGOTO(ncclCalloc(&globalSegmentInfo, comm->nRanks), ret, fail);
 
   // We need max segments and global sysmem info to selectively disable some features
   globalSegmentInfo[comm->rank].numSegments = numSegments;
@@ -703,24 +712,56 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
   globalSegmentInfo[comm->rank].registerMask = ncclDevrRegisterMaskFromWinFlags(winFlags);
   globalSegmentInfo[comm->rank].totalSize = size;
   globalSegmentInfo[comm->rank].hostCftMode = comm->config.hostCftMode;
-  NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, globalSegmentInfo, sizeof(*globalSegmentInfo)), ret, fail_mem);
-  mem->globalHasSysmemSegment = false;
+  globalSegmentInfo[comm->rank].candidateRegistryId = candidateRegistryId;
+  NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, globalSegmentInfo, sizeof(*globalSegmentInfo)), ret,
+                fail_global_segment_info);
   for (int r = 0; r < comm->nRanks; r++) {
     if (globalSegmentInfo[r].registerMask != globalSegmentInfo[comm->rank].registerMask) {
       WARN("Window registration capabilities disagree between rank %d and rank %d", comm->rank, r);
       ret = ncclInvalidUsage;
-      goto fail_mem;
+      goto fail_global_segment_info;
     }
-    if (mem->maxGlobalNumSegments < globalSegmentInfo[r].numSegments) {
-      mem->maxGlobalNumSegments = globalSegmentInfo[r].numSegments;
+    if (maxGlobalNumSegments < globalSegmentInfo[r].numSegments) {
+      maxGlobalNumSegments = globalSegmentInfo[r].numSegments;
     }
-    if (globalSegmentInfo[r].hasSysmemSegment) mem->globalHasSysmemSegment = true;
+    if (globalSegmentInfo[r].hasSysmemSegment) globalHasSysmemSegment = true;
+    // Reuse only if every rank found the same registration. A rank which found none has
+    // mem == nullptr already, so its invalidRegistryId only has to veto reuse on the others.
+    if (globalSegmentInfo[r].candidateRegistryId != candidateRegistryId) mem = nullptr;
     if (globalSegmentInfo[r].hostCftMode != comm->config.hostCftMode) {
       WARN("Communicator ranks have mismatched hostCftMode configuration.");
       ret = ncclInvalidArgument;
-      goto fail_mem;
+      goto fail_global_segment_info;
     }
   }
+
+  if (mem != nullptr) {
+    // The decision is unanimous, so all ranks skip the create path's LSA-team collectives.
+    for (int segment = 0; segment < numSegments; segment++) {
+      CUCHECKIGNORE(cuMemRelease(memHandles[segment]));
+    }
+    goto exit;
+  }
+
+  // Consumed before any fallible create work so that all ranks taking this branch consume the same
+  // id, keeping the counter in lockstep even if a rank fails below.
+  registryId = devr->nextRegistryId++;
+
+  // New memory.
+  NCCLCHECKGOTO(ncclCalloc(&mem, 1), ret, fail_mem);
+  NCCLCHECKGOTO(ncclCalloc(&mem->memHandles, numSegments), ret, fail_mem);
+  memcpy(mem->memHandles, memHandles, sizeof(*mem->memHandles) * numSegments);
+  mem->registryId = registryId;
+  mem->primaryAddr = memAddr;
+  mem->size = size;
+  mem->winFlags = winFlags;
+  mem->hasSysmemSegment = hasSysmemSegment;
+  mem->numSegments = numSegments;
+  mem->maxGlobalNumSegments = maxGlobalNumSegments;
+  mem->globalHasSysmemSegment = globalHasSysmemSegment;
+
+  NCCLCHECKGOTO(ncclCalloc(&mem->segmentSizes, numSegments), ret, fail_mem);
+  NCCLCHECKGOTO(ncclDevrPopulateSegmentSizes(mem, numSegments), ret, fail_mem);
 
   NCCLCHECKGOTO(ncclCalloc(&mem->lsaNumSegments, devr->lsaSize), ret, fail_mem);
   mem->lsaMinSize = size;
@@ -806,6 +847,8 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
   mem->next = devr->memHead;
   devr->memHead = mem;
 
+exit:
+  mem->refCount += 1;
   *outMem = mem;
   free(globalSegmentInfo);
   return ret;
@@ -829,7 +872,9 @@ fail_mem:
     free(mem->lsaNumSegments);
   }
   free(mem);
+fail_global_segment_info:
   free(globalSegmentInfo);
+fail:
   return ret;
 }
 
@@ -844,8 +889,8 @@ static void symMemoryUnmapLsaRank(struct ncclDevrState* devr, struct ncclDevrMem
   }
 }
 
-static void symMemoryDestroy(struct ncclComm* comm, struct ncclDevrMemory* mem) {
-  if (mem != nullptr) {
+static void symMemoryDropRef(struct ncclComm* comm, struct ncclDevrMemory* mem) {
+  if (mem != nullptr && 0 == --mem->refCount) {
     struct ncclDevrState* devr = &comm->devrState;
     if (devr->ginEnabled && mem->ginSegmentInfos != nullptr) {
       for (int segment = 0; segment < mem->numGinSegments; segment++) {
@@ -995,7 +1040,7 @@ static ncclResult_t symWindowDestroy(struct ncclComm* comm, struct ncclWindow_vi
   NCCLCHECKGOTO(ncclShadowPoolToHost(&devr->shadows, winDev, &winDevHost), ret, fail);
   winHost = (struct ncclDevrWindow*)winDevHost->winHost;
 
-  symMemoryDestroy(comm, winHost->memory);
+  symMemoryDropRef(comm, winHost->memory);
 
   {
     struct ncclDevCommWindowTable* tableDev = devr->windowTable;
@@ -1025,15 +1070,31 @@ static ncclResult_t symWindowDestroy(struct ncclComm* comm, struct ncclWindow_vi
 
 remove_winSorted:
   {
-    int i = listFindSortedLub(&ncclDevrWindowSorted::userAddr, devr->winSorted, devr->winSortedCount,
-                              reinterpret_cast<uintptr_t>(winHost->userPtr));
+    uintptr_t userAddr = (uintptr_t)winHost->userPtr;
+    int i = listFindSortedLub(&ncclDevrWindowSorted::userAddr, devr->winSorted, devr->winSortedCount, userAddr);
     i -= 1; // least upper bound is just after ours.
-    listRemove(devr->winSorted, &devr->winSortedCount, i);
+
+    // The same address may be registered by several windows, and their entries are contiguous
+    // below the least upper bound, so scan that block for the window being destroyed.
+    bool found = false;
+    for (; i >= 0; --i) {
+      if (devr->winSorted[i].userAddr != userAddr) break;
+      if (devr->winSorted[i].win != winHost) continue;
+
+      listRemove(devr->winSorted, &devr->winSortedCount, i);
+      found = true;
+      break;
+    }
+
+    if (!found) {
+      WARN("Window %p not found in sorted window list.", winHost);
+      if (ret == ncclSuccess) ret = ncclInternalError;
+    }
   }
   // Remove the just deallocated window from the table storing the communicator pointer
   {
     std::lock_guard<std::mutex> lock(ncclWindowMapMutex);
-    NCCLCHECKGOTO(ncclIntruAddressMapRemove(&ncclWindowMap, winDev), ret, fail);
+    NCCLCHECKIGNORE(ncclIntruAddressMapRemove(&ncclWindowMap, winDev), ret);
   }
 
   free(winHost);
@@ -1135,7 +1196,7 @@ fail_locReg_memHandle_mem_stream_win:
 fail_locReg_memHandle_mem_stream:
   cudaStreamDestroy(stream);
 fail_locReg_memHandle_mem:
-  symMemoryDestroy(comm, mem);
+  symMemoryDropRef(comm, mem);
 fail_locReg_memHandle:
   for (int idx = 0; idx < numSegments; idx++) {
     if (memHandles[idx] != 0x0ULL) CUCHECKIGNORE(cuMemRelease(memHandles[idx]));
@@ -1577,7 +1638,7 @@ fail_stream_mem_win:
   cudaStreamSynchronize(stream);
 fail_stream_mem:
   if (memHandle != 0x0) CUCHECKIGNORE(cuMemRelease(memHandle));
-  symMemoryDestroy(comm, mem);
+  symMemoryDropRef(comm, mem);
 fail_stream:
   cudaStreamDestroy(stream);
 fail:

@@ -185,6 +185,28 @@ static void queryModel_gin(struct ncclTuningInput_t* input, ncclSymkKernelId k, 
   }
 }
 
+static bool reduceScatterDeepGeometryEligible(
+    ncclSymkKernelId k, size_t nBytes, int nRanks, int nBlocks) {
+  if (nBlocks <= 0 || nRanks <= 0) return false;
+
+  size_t chunkBytes;
+  switch (k) {
+  case ncclSymkKernelId_ReduceScatter_LD:
+    chunkBytes = ncclSymkBytePerChunk;
+    break;
+  case ncclSymkKernelId_ReduceScatter_TmaLD:
+    chunkBytes = ncclSymkDeepBytePerChunk;
+    break;
+  default:
+    return false;
+  }
+
+  size_t chunks = nBytes / chunkBytes;
+  size_t chunkGroup = size_t(nRanks) * nBlocks;
+
+  return chunks >= chunkGroup && chunks % chunkGroup == 0;
+}
+
 static void queryModel_lsa(struct ncclTuningInput_t* input, ncclSymkKernelId k, size_t nBytes, float* timeUs,
                            int* nBlocks) {
   constexpr double LL_BusFactor = 9; // 2X the bytes, plus some processing, plus no unrolling
@@ -311,6 +333,22 @@ static void queryModel_lsa(struct ncclTuningInput_t* input, ncclSymkKernelId k, 
       // Decrease max block count until it is eligible for the current msg size.
       while (nMaxBlocks > nMinBlocks && !ncclSymkTmaDeepEligible(comm, k, maxWorkBytes, nMaxBlocks)) {
         nMaxBlocks -= (nMaxBlocks == 2 ? 1 : 2);
+      }
+    }
+  }
+
+  // ReduceScatter's deep path rounds work down to a multiple of
+  // nRanks * nBlocks. Prefer a CTA count that exactly divides the available
+  // deep-path chunks before falling back to the generic bandwidth model.
+  if (comm->cudaArch >= 1000 &&
+      (k == ncclSymkKernelId_ReduceScatter_LD ||
+       k == ncclSymkKernelId_ReduceScatter_TmaLD) &&
+      nMinBlocks != nMaxBlocks) {
+    for (int bn = nMaxBlocks; bn >= nMinBlocks; bn -= (bn == 2 ? 1 : 2)) {
+      if (reduceScatterDeepGeometryEligible(k, nBytes, nRanks, bn)) {
+        *nBlocks = bn;
+        *timeUs = model(busBytes, baseLat, bn, smBw, busMultiplier, peakBw);
+        return;
       }
     }
   }

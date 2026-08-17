@@ -1144,10 +1144,10 @@ fail:
   goto exit;
 }
 
-// Helper function to wait for one or more peers' signals.
+// Helper function to wait for one or more distinct peers' signals.
 static ncclResult_t ncclProxyWaitPeers(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-                                       struct ncclKernelPlan* plan, int ctx, cudaStream_t stream, int npeers,
-                                       const int* peersIn, const int* nsignalsIn) {
+                                       struct ncclKernelPlan* plan, cudaStream_t stream, int npeers, const int* peersIn,
+                                       const int* nsignalsIn) {
   ncclResult_t ret = ncclSuccess;
 
   int realPeers = 0;
@@ -1163,22 +1163,10 @@ static ncclResult_t ncclProxyWaitPeers(struct ncclComm* comm, struct ncclRmaProx
   NCCLCHECKGOTO(ncclCalloc(&waitSigCounts, npeers), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&waitSignalIdxs, npeers), ret, fail);
   for (int i = 0; i < npeers; i++) {
-    int sigCount = nsignalsIn[i];
-    if (sigCount <= 0) continue;
-    int peer = peersIn[i];
-    bool merged = false;
-    for (int j = 0; j < realPeers; j++) {
-      if (waitPeers[j] == peer) {
-        waitSigCounts[j] += sigCount;
-        merged = true;
-        break;
-      }
-    }
-    if (!merged) {
-      waitPeers[realPeers] = peer;
-      waitSigCounts[realPeers] = sigCount;
-      realPeers++;
-    }
+    if (nsignalsIn[i] <= 0) continue;
+    waitPeers[realPeers] = peersIn[i];
+    waitSigCounts[realPeers] = nsignalsIn[i];
+    realPeers++;
   }
   if (realPeers == 0) goto exit;
 
@@ -1206,12 +1194,12 @@ fail:
   goto exit;
 }
 
-// Variant specialized for the common 1-peer / 2-peer wait cases used by the
-// retained hierarchical ring allgather implementation. It avoids the generic
-// O(n^2) peer-merge walk when the effective wait set is already known to be tiny.
-static ncclResult_t ncclProxyWaitPeersRing(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-                                           struct ncclKernelPlan* plan, int ctx, cudaStream_t stream, int npeers,
-                                           const int* peersIn, const int* nsignalsIn) {
+// Variant specialized for the 1-peer / 2-peer wait cases used by the retained
+// hierarchical ring allgather implementation. It merges the clockwise and
+// counterclockwise entries when they resolve to the same peer.
+static ncclResult_t ncclProxyBuildWaitPeersRing(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                                struct ncclKernelPlan* plan, int npeers, const int* peersIn,
+                                                const int* nsignalsIn, struct ncclRmaProxyDesc** waitDescOut) {
   ncclResult_t ret = ncclSuccess;
 
   int realPeers = 0;
@@ -1221,10 +1209,10 @@ static ncclResult_t ncclProxyWaitPeersRing(struct ncclComm* comm, struct ncclRma
   int* waitSigCounts = nullptr;
   int* waitSignalIdxs = nullptr;
   struct ncclRmaProxyDesc* waitDesc = nullptr;
-  CUstreamBatchMemOpParams* waitBatch = nullptr;
 
+  *waitDescOut = nullptr;
   if (npeers <= 0) return ncclSuccess;
-  if (npeers > 2) return ncclProxyWaitPeers(comm, rmaProxyCtx, plan, ctx, stream, npeers, peersIn, nsignalsIn);
+  if (npeers > 2) return ncclInternalError;
 
   if (npeers == 1) {
     if (nsignalsIn[0] > 0) {
@@ -1264,17 +1252,10 @@ static ncclResult_t ncclProxyWaitPeersRing(struct ncclComm* comm, struct ncclRma
   NCCLCHECKGOTO(ncclRmaProxyWaitBuildDesc(comm, rmaProxyCtx, plan, realPeers, &waitPeers, &waitSigCounts,
                                           &waitSignalIdxs, waitDesc),
                 ret, fail);
-
-  {
-    int waitOps = ncclRmaProxyWaitNumStreamOps(waitDesc);
-    NCCLCHECKGOTO(ncclCalloc(&waitBatch, waitOps), ret, fail);
-    NCCLCHECKGOTO(ncclRmaProxyWaitParams(rmaProxyCtx, waitDesc, waitBatch), ret, fail);
-    NCCLCHECKGOTO(ncclRmaProxyEnqueueDesc(rmaProxyCtx, &waitDesc), ret, fail);
-    NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, waitOps, waitBatch), ret, fail);
-  }
+  *waitDescOut = waitDesc;
+  waitDesc = nullptr;
 
 exit:
-  free(waitBatch);
   if (waitDesc != nullptr) (void)ncclRmaProxyDestroyDesc(comm, &waitDesc);
   free(waitPeers);
   free(waitSigCounts);
@@ -1286,11 +1267,10 @@ fail:
 
 // Helper function to wait for a single peer's signals.
 static ncclResult_t ncclProxyWaitOnePeer(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-                                         struct ncclKernelPlan* plan, int ctx, cudaStream_t stream, int peer,
-                                         int nsignals) {
+                                         struct ncclKernelPlan* plan, cudaStream_t stream, int peer, int nsignals) {
   int peers[1] = {peer};
   int sigCounts[1] = {nsignals};
-  return ncclProxyWaitPeers(comm, rmaProxyCtx, plan, ctx, stream, 1, peers, sigCounts);
+  return ncclProxyWaitPeers(comm, rmaProxyCtx, plan, stream, 1, peers, sigCounts);
 }
 
 // Hierarchical AllGather: railed all-to-all inter-node + intra-node CE scatter.
@@ -1509,7 +1489,7 @@ static ncclResult_t ncclHierCeAllGatherDirect(struct ncclComm* comm, struct nccl
         // ----- Wait for this sub-chunk's signal from railPeer on the chunk's context -----
         int k = (c - chunkPlan.chunkStart[p]) % numCtx;
         NCCLCHECKGOTO(ncclProxyWaitOnePeer(comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k],
-                                           plan, baseCtx + k, stream, railPeer, /*nsignals=*/1),
+                                           plan, stream, railPeer, /*nsignals=*/1),
                       ret, fail);
 
         // ----- CE scatter this sub-chunk to all other LSA peers -----
@@ -1713,7 +1693,7 @@ static ncclResult_t ncclHierCeAllGatherRing(struct ncclComm* comm, struct ncclKe
   bool agUseMulticast =
     ncclCeAllGatherUseMulticast(comm, perRankBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
                                 (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes);
-  int numCtx = ncclHierCollNumCtx(rmaProxyState, perRankBytes);
+  int numCtx = ncclHierCollNumCtx(rmaProxyState, perRankBytes, persistent);
 
   struct ncclRmaProxyCtx* railProxyCtx = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[railCtx];
   struct ncclHierChunkPlan cwChunkPlan = {};
@@ -1733,11 +1713,13 @@ static ncclResult_t ncclHierCeAllGatherRing(struct ncclComm* comm, struct ncclKe
   int* waitNPeersByActiveCtx = nullptr;
   int** waitPeersByActiveCtx = nullptr;
   int** waitSignalsByActiveCtx = nullptr;
+  struct ncclRmaProxyDesc** waitDesc = nullptr;
   struct ncclRmaProxyDesc** groupDesc = nullptr;
   struct ncclRmaPutSignalOp** groupOps = nullptr;
   int nActiveCtx = 0;
   CUstreamBatchMemOpParams* groupStartParams[2] = {nullptr, nullptr};
   CUstreamBatchMemOpParams* groupDoneParams[2] = {nullptr, nullptr};
+  CUstreamBatchMemOpParams* waitBatch = nullptr;
   struct ncclCeBatchOpsParams ceBcastOps = {};
   struct ncclCeBatchOpsParams ceScatterOps = {};
   uint8_t* scatterMcBase = nullptr;
@@ -1759,6 +1741,7 @@ static ncclResult_t ncclHierCeAllGatherRing(struct ncclComm* comm, struct ncclKe
   NCCLCHECKGOTO(ncclCalloc(&waitNPeersByActiveCtx, numCtx), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&waitPeersByActiveCtx, numCtx), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&waitSignalsByActiveCtx, numCtx), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&waitDesc, numCtx), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&groupDesc, numCtx), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&groupOps, numCtx), ret, fail);
 
@@ -1951,13 +1934,30 @@ static ncclResult_t ncclHierCeAllGatherRing(struct ncclComm* comm, struct ncclKe
       int slot = (step - 1) & 1;
 
       // Wait for every active context before forwarding data read from recvBuff.
+      // Collect all contexts' waits into one stream memop batch.
+      int waitOpsTotal = 0;
       for (int ai = 0; ai < nActiveCtx; ai++) {
         int k = activeCtxs[ai];
-        NCCLCHECKGOTO(ncclProxyWaitPeersRing(comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k],
-                                             plan, baseCtx + k, stream, waitNPeersByActiveCtx[k],
-                                             waitPeersByActiveCtx[k], waitSignalsByActiveCtx[k]),
+        struct ncclRmaProxyCtx* pc = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k];
+        NCCLCHECKGOTO(ncclProxyBuildWaitPeersRing(comm, pc, plan, waitNPeersByActiveCtx[k], waitPeersByActiveCtx[k],
+                                                  waitSignalsByActiveCtx[k], &waitDesc[k]),
                       ret, fail);
+        if (waitDesc[k] != nullptr) waitOpsTotal += ncclRmaProxyWaitNumStreamOps(waitDesc[k]);
       }
+
+      // The active contexts and their wait peer sets are invariant across rounds.
+      if (waitBatch == nullptr) NCCLCHECKGOTO(ncclCalloc(&waitBatch, waitOpsTotal), ret, fail);
+      int waitOff = 0;
+      for (int ai = 0; ai < nActiveCtx; ai++) {
+        int k = activeCtxs[ai];
+        if (waitDesc[k] == nullptr) continue;
+        struct ncclRmaProxyCtx* pc = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k];
+        int waitOps = ncclRmaProxyWaitNumStreamOps(waitDesc[k]);
+        NCCLCHECKGOTO(ncclRmaProxyWaitParams(pc, waitDesc[k], waitBatch + waitOff), ret, fail);
+        NCCLCHECKGOTO(ncclRmaProxyEnqueueDesc(pc, &waitDesc[k]), ret, fail);
+        waitOff += waitOps;
+      }
+      NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, waitOpsTotal, waitBatch), ret, fail);
 
       // Enqueue the next round as soon as its inputs are known to be ready,
       // before spending host time constructing this round's CE scatter batch.
@@ -2064,6 +2064,13 @@ exit:
   free(waitNPeersByActiveCtx);
   free(waitPeersByActiveCtx);
   free(waitSignalsByActiveCtx);
+  if (waitDesc) {
+    for (int k = 0; k < numCtx; k++) {
+      if (waitDesc[k] != nullptr) (void)ncclRmaProxyDestroyDesc(comm, &waitDesc[k]);
+    }
+  }
+  free(waitDesc);
+  free(waitBatch);
   if (cwChunksByCtx) {
     for (int k = 0; k < numCtx; k++) free(cwChunksByCtx[k]);
   }

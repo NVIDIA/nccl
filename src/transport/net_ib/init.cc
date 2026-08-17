@@ -28,6 +28,7 @@ NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
 NCCL_PARAM(IbMergeVfs, "IB_MERGE_VFS", 1);
 NCCL_PARAM(IbMergeNics, "IB_MERGE_NICS", 1);
 NCCL_PARAM(IbDevicePciOrder, "IB_DEVICE_PCI_ORDER", 1);
+NCCL_PARAM(IbSortMergeNics, "IB_SORT_MERGE_NICS", 1);
 
 extern int64_t ncclParamIbArThreshold();
 
@@ -55,6 +56,16 @@ static int ncclIbCompareDevs(const void* dev1, const void* dev2) {
   pciPathToInt64(path2, &id2);
 
   return (id1 < id2) ? -1 : ((id1 == id2) ? 0 : 1);
+}
+
+static int ncclIbCompareVDevsByPlane(const void* a, const void* b) {
+  int idxA = *(const int*)a;
+  int idxB = *(const int*)b;
+  int16_t planeA = ncclIbDevs[idxA].planeId;
+  int16_t planeB = ncclIbDevs[idxB].planeId;
+  if (planeA != planeB) return (planeA < planeB) ? -1 : 1;
+  // Equal planes tie-break on PCIe BDF, same ordering as in the initial sort
+  return ncclIbCompareDevs(&ncclIbDevs[idxA], &ncclIbDevs[idxB]);
 }
 
 static ncclResult_t ncclIbGetPciPath(char* devName, char** path, char* fullPath) {
@@ -208,6 +219,13 @@ ncclResult_t ncclIbMakeVDeviceInternal(int* d, ncclNetVDeviceProps_t* props) {
   if (ncclNMergedIbDevs == MAX_IB_VDEVS) {
     WARN("NET/IB : Cannot allocate any more virtual devices (%d)", MAX_IB_VDEVS);
     return ncclInvalidUsage;
+  }
+
+  ncclNetVDeviceProps_t sortedProps = *props;
+  // Sort sub-devices by planeId so sub-device indices align by plane across all merged devices.
+  if (ncclParamIbSortMergeNics()) {
+    qsort(sortedProps.devs, sortedProps.ndevs, sizeof(int), ncclIbCompareVDevsByPlane);
+    props = &sortedProps;
   }
 
   // Always count up number of merged devices

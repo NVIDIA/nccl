@@ -51,6 +51,7 @@
 
 #define VERBS_TEST_DBR_SIZE (8)
 #define MAX_PCI_ADDRESS_LEN 32U
+#define DEFAULT_HOP_LIMIT (255)
 
 NCCL_PARAM(GinGdakiNicHandler, "GIN_GDAKI_NIC_HANDLER", 0);
 NCCL_PARAM(GinGdakiQpDepth, "GIN_GDAKI_QP_DEPTH", 128);
@@ -408,7 +409,6 @@ static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context* ctx, int ib_sl, int
 
   // set_port_num?
   DOCACHECKGOTO(doca_verbs_ah_attr_set_sgid_index(ctx->ah, ib_gid_index), status, destroy_verbs_ah);
-  DOCACHECKGOTO(doca_verbs_ah_attr_set_hop_limit(ctx->ah, 255), status, destroy_verbs_ah);
 
   return ncclSuccess;
 
@@ -489,9 +489,13 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
         }
       }
       DOCACHECK(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IB_GRH));
+      DOCACHECK(doca_verbs_ah_attr_set_hop_limit(ctx->ah, DEFAULT_HOP_LIMIT));
     } else {
       DOCACHECK(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IB_NO_GRH));
+      DOCACHECK(doca_verbs_ah_attr_set_hop_limit(ctx->ah, 0));
     }
+  } else {
+    DOCACHECK(doca_verbs_ah_attr_set_hop_limit(ctx->ah, DEFAULT_HOP_LIMIT));
   }
 
   NCCLCHECK(gdakiGetPathMtu(ctx->port_attr.active_mtu, exch_info->active_mtu, &path_mtu));

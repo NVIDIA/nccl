@@ -116,6 +116,11 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   int nLocalGinDevs;
   int localGinDevs[NCCL_TOPO_MAX_NODES];
   NCCLCHECK(ncclTopoGetLocalGinDevs(comm, localGinDevs, &nLocalGinDevs));
+  if (nLocalGinDevs > NCCL_GIN_MAX_CONNECTIONS) {
+    INFO(NCCL_NET | NCCL_INIT | NCCL_GRAPH,
+         "WARNING. Found %d local devices, but GIN supports at most %d connections. Using the first %d connections.",
+         nLocalGinDevs, NCCL_GIN_MAX_CONNECTIONS, NCCL_GIN_MAX_CONNECTIONS);
+  }
 
   void** handles = NULL;
   char* allHandles = NULL;

@@ -15,8 +15,10 @@ struct ncclSymkLsaA2AParameters {
   bool valid;
   double baseLatUs;
   double rankLatUs;
-  double ctaBwGBps;
-  double peakBwGBps;
+  double computeCtaBw; // GB/s; rank-independent LL CTA compute work; zero for other kernels.
+  double ctaBw; // GB/s.
+  double peakBw; // GB/s.
+  double fullOverlapCtas; // LLMC active CTA threshold for full overlap; zero otherwise.
   bool peakRankEfficiency;
 };
 

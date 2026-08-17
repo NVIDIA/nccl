@@ -13,8 +13,7 @@
 #include <algorithm>
 #include <cmath>
 
-static constexpr double gbpsToBytesPerUs = 1.e9 / 1.e6;
-static constexpr size_t allGatherA2AMinAggregateBytes = 256 * 1024;
+static constexpr double bwToBytesPerUs = 1.e9 / 1.e6;
 
 // Multimem AllGather CTA bandwidth is the measured store injection rate before
 // multicast fanout; peak bandwidth is aggregate traffic.
@@ -27,12 +26,16 @@ const struct ncclSymkLsaA2AParameters
       {}, // AllReduce_RSxTmaLD_AGxTmaST
       {}, // AllReduce_RSxLD_AGxST
       {}, // AllReduce_RSxLDMC_AGxSTMC
-      {}, // AllGather_LL
-      {}, // AllGather_LLMC
-      {true, 10.061860371492349, 0.067985251913265293, 64.15772392585157, 671.60525655802655, false}, // AllGather_TmaST
-      {true, 10.590215893817202, 0.056361727150537638, 64.48109855086463, 650.43780647742426, false}, // AllGather_ST
-      {true, 8.2723873901367178, 0.062372589111328119, 51.55, 715.14513870274175, true}, // AllGather_TmaSTMC
-      {true, 8.3313720703125007, 0.056103515625000003, 50.83, 715.14513870274175, true}, // AllGather_STMC
+      {true, 7.1084750551652, 0.10654011428850794, 2.2893660529970514, 15.644419484316165, 250.0, 0.0,
+       false}, // AllGather_LL
+      {true, 7.422942875504045, 0.10305284365579362, 2.1932792738155609, 27.46, 316.06998873472355, 3.3805041954925987,
+       true}, // AllGather_LLMC
+      {true, 10.061860371492349, 0.067985251913265293, 0.0, 64.15772392585157, 671.60525655802655, 0.0,
+       false}, // AllGather_TmaST
+      {true, 10.590215893817202, 0.056361727150537638, 0.0, 64.48109855086463, 650.43780647742426, 0.0,
+       false}, // AllGather_ST
+      {true, 8.2723873901367178, 0.062372589111328119, 0.0, 51.55, 715.14513870274175, 0.0, true}, // AllGather_TmaSTMC
+      {true, 8.3313720703125007, 0.056103515625000003, 0.0, 50.83, 715.14513870274175, 0.0, true}, // AllGather_STMC
       {}, // AllGather_RailRing_LsaSTMC
       {}, // ReduceScatter_LL
       {}, // ReduceScatter_TmaLD
@@ -48,12 +51,16 @@ const struct ncclSymkLsaA2AParameters
       {}, // AllReduce_RSxTmaLD_AGxTmaST
       {}, // AllReduce_RSxLD_AGxST
       {}, // AllReduce_RSxLDMC_AGxSTMC
-      {}, // AllGather_LL
-      {}, // AllGather_LLMC
-      {true, 10.061860371492349, 0.067985251913265293, 64.15772392585157, 671.60525655802655, false}, // AllGather_TmaST
-      {true, 10.590215893817202, 0.056361727150537638, 64.48109855086463, 650.43780647742426, false}, // AllGather_ST
-      {true, 8.2723873901367178, 0.062372589111328119, 51.55, 715.14513870274175, true}, // AllGather_TmaSTMC
-      {true, 8.3313720703125007, 0.056103515625000003, 50.83, 715.14513870274175, true}, // AllGather_STMC
+      {true, 7.1084750551652, 0.10654011428850794, 2.2893660529970514, 15.644419484316165, 250.0, 0.0,
+       false}, // AllGather_LL
+      {true, 7.422942875504045, 0.10305284365579362, 2.1932792738155609, 27.46, 316.06998873472355, 3.3805041954925987,
+       true}, // AllGather_LLMC
+      {true, 10.061860371492349, 0.067985251913265293, 0.0, 64.15772392585157, 671.60525655802655, 0.0,
+       false}, // AllGather_TmaST
+      {true, 10.590215893817202, 0.056361727150537638, 0.0, 64.48109855086463, 650.43780647742426, 0.0,
+       false}, // AllGather_ST
+      {true, 8.2723873901367178, 0.062372589111328119, 0.0, 51.55, 715.14513870274175, 0.0, true}, // AllGather_TmaSTMC
+      {true, 8.3313720703125007, 0.056103515625000003, 0.0, 50.83, 715.14513870274175, 0.0, true}, // AllGather_STMC
       {}, // AllGather_RailRing_LsaSTMC
       {}, // ReduceScatter_LL
       {}, // ReduceScatter_TmaLD
@@ -88,11 +95,7 @@ static const struct ncclSymkLsaA2AParameters* parametersFor(const struct ncclTun
     return nullptr;
   }
 
-  int nRanks = input->comm->nRanks;
-  size_t logicalBytes = input->count * ncclTypeSize(input->datatype);
-  return nRanks >= 2 && input->nWorks == 1 && logicalBytes >= divUp(allGatherA2AMinAggregateBytes, size_t(nRanks)) ?
-           &ncclSymkLsaA2AParameterTable[arch][kernel] :
-           nullptr;
+  return input->comm->nRanks >= 2 && input->nWorks == 1 ? &ncclSymkLsaA2AParameterTable[arch][kernel] : nullptr;
 }
 
 bool ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, int requestedCtas,
@@ -103,16 +106,30 @@ bool ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKer
   if (!parameters->valid) return false;
 
   size_t logicalBytes = input->count * ncclTypeSize(input->datatype);
-  bool isMulticast = kernelId == ncclSymkKernelId_AllGather_TmaSTMC || kernelId == ncclSymkKernelId_AllGather_STMC;
+  bool isLowLatencyMulticast = kernelId == ncclSymkKernelId_AllGather_LLMC;
+  bool isStoreMulticast = kernelId == ncclSymkKernelId_AllGather_TmaSTMC || kernelId == ncclSymkKernelId_AllGather_STMC;
   int nRanks = input->comm->nRanks;
 
   int modeledCtas = activeCtasForEachWork(logicalBytes, requestedCtas);
-  double latencyUs = parameters->baseLatUs + (nRanks - 1) * parameters->rankLatUs;
+  double rankLatencyUs = (nRanks - 1) * parameters->rankLatUs;
   double rankFactor = parameters->peakRankEfficiency ? (double)(nRanks - 1) / nRanks : 1.0;
-  double ctaCopies = isMulticast ? 1.0 : nRanks - (input->inPlace != 0);
-  double ctaTimeUs = ctaCopies * logicalBytes / (modeledCtas * parameters->ctaBwGBps * gbpsToBytesPerUs);
-  double peakTimeUs = (nRanks - 1) * logicalBytes / (parameters->peakBwGBps * rankFactor * gbpsToBytesPerUs);
-  double estimateUs = latencyUs + std::max(ctaTimeUs, peakTimeUs);
+  double ctaCopies = isLowLatencyMulticast ? nRanks : isStoreMulticast ? 1.0 : nRanks - (input->inPlace != 0);
+  double ctaTransferTimeUs = ctaCopies * logicalBytes / (modeledCtas * parameters->ctaBw * bwToBytesPerUs);
+  double computeTimeUs = 0.0;
+  if (parameters->computeCtaBw > 0.0) {
+    computeTimeUs = logicalBytes / (modeledCtas * parameters->computeCtaBw * bwToBytesPerUs);
+  }
+  double ctaTimeUs = computeTimeUs + ctaTransferTimeUs;
+  double peakTransferTimeUs = (nRanks - 1) * logicalBytes / (parameters->peakBw * rankFactor * bwToBytesPerUs);
+  double bandwidthBoundTime = std::max(ctaTimeUs, peakTransferTimeUs);
+  double estimateUs;
+  if (isLowLatencyMulticast) {
+    double overlapFraction = std::min(1.0, parameters->fullOverlapCtas / modeledCtas);
+    double exposedShorterTimeUs = (1.0 - overlapFraction) * std::min(rankLatencyUs, bandwidthBoundTime);
+    estimateUs = parameters->baseLatUs + std::max(rankLatencyUs, bandwidthBoundTime) + exposedShorterTimeUs;
+  } else {
+    estimateUs = parameters->baseLatUs + rankLatencyUs + bandwidthBoundTime;
+  }
   if (!std::isfinite(estimateUs) || !(estimateUs > 0.0)) return false;
 
   *timeUs = static_cast<float>(estimateUs);

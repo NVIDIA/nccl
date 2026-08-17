@@ -1012,9 +1012,13 @@ NCCL_PARAM(BuffSize, "BUFFSIZE", -2);
 NCCL_PARAM(LlBuffSize, "LL_BUFFSIZE", -2);
 NCCL_PARAM(Ll128BuffSize, "LL128_BUFFSIZE", -2);
 
-NCCL_PARAM(P2pNetChunkSize, "P2P_NET_CHUNKSIZE", (1 << 17)); /* 128 kB */
-NCCL_PARAM(P2pPciChunkSize, "P2P_PCI_CHUNKSIZE", (1 << 17)); /* 128 kB */
-NCCL_PARAM(P2pNvlChunkSize, "P2P_NVL_CHUNKSIZE", (1 << 19)); /* 512 kB */
+#define DEFAULT_P2P_NET_CHUNKSIZE (1 << 17) /* 128 kB */
+#define DEFAULT_P2P_PCI_CHUNKSIZE (1 << 17) /* 128 kB */
+#define DEFAULT_P2P_NVL_CHUNKSIZE (1 << 19) /* 512 kB */
+
+NCCL_PARAM(P2pNetChunkSize, "P2P_NET_CHUNKSIZE", -2);
+NCCL_PARAM(P2pPciChunkSize, "P2P_PCI_CHUNKSIZE", -2);
+NCCL_PARAM(P2pNvlChunkSize, "P2P_NVL_CHUNKSIZE", -2);
 
 ncclResult_t ncclComputeBuffSizes(struct ncclComm* comm) {
   int64_t envs[NCCL_NUM_PROTOCOLS] = {ncclParamLlBuffSize(), ncclParamLl128BuffSize(), ncclParamBuffSize()};
@@ -1025,19 +1029,28 @@ ncclResult_t ncclComputeBuffSizes(struct ncclComm* comm) {
   }
 
   if (comm->nNodes > 1) {
+    int ratio = 1;
     // GBx platforms only have 4 GPUs per host, which reduces the aggregation factor.
-    // Increase the ratio by a factor of 2 to compensate.
-    int ratio = (comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && comm->minCompCap >= 100) ? 2 : 1;
-    comm->p2pChunkSize = ratio * ncclParamP2pNetChunkSize();
+    // Account for only 4 GPUs per host instead of 8 on x86.
+    if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && comm->minCompCap >= 100) ratio = 2;
+    // Account for split across two NICs.
+    if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && RUBIN_AND_LATER(comm->minCompCap)) ratio *= 2;
+
+    comm->p2pChunkSize =
+      ncclParamP2pNetChunkSize() > 0 ? ncclParamP2pNetChunkSize() : ratio * DEFAULT_P2P_NET_CHUNKSIZE;
   } else if (comm->isAllNvlink) {
-    comm->p2pChunkSize = ncclParamP2pNvlChunkSize();
+    comm->p2pChunkSize = ncclParamP2pNvlChunkSize() > 0 ? ncclParamP2pNvlChunkSize() : DEFAULT_P2P_NVL_CHUNKSIZE;
   } else {
-    comm->p2pChunkSize = ncclParamP2pPciChunkSize();
+    comm->p2pChunkSize = ncclParamP2pPciChunkSize() > 0 ? ncclParamP2pPciChunkSize() : DEFAULT_P2P_PCI_CHUNKSIZE;
   }
 
   // Make sure P2P chunksize is not larger than coll chunksize.
-  if (comm->p2pChunkSize * NCCL_STEPS > comm->buffSizes[NCCL_PROTO_SIMPLE])
+  if (comm->p2pChunkSize * NCCL_STEPS > comm->buffSizes[NCCL_PROTO_SIMPLE]) {
+    INFO(NCCL_INIT, "P2P require buffer size %d is larger than Simple Buffer Size %d, reducing P2P Chunksize to %d",
+         comm->p2pChunkSize * NCCL_STEPS, comm->buffSizes[NCCL_PROTO_SIMPLE],
+         comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS);
     comm->p2pChunkSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
+  }
 
   if (comm->sharedRes->owner != comm) {
     /* make sure split comm p2pChunkSize won't exceed shared p2pChunkSize. */
@@ -1047,6 +1060,7 @@ ncclResult_t ncclComputeBuffSizes(struct ncclComm* comm) {
   }
 
   INFO(NCCL_INIT, "P2P Chunksize set to %d", comm->p2pChunkSize);
+  INFO(NCCL_INIT, "Simple Buffer Size set to %d", comm->buffSizes[NCCL_PROTO_SIMPLE]);
   return ncclSuccess;
 }
 

@@ -106,13 +106,16 @@ static void ncclRmaSocketProxyResetRecv(struct ncclRmaSocketProxyPeerReceiver* r
 
 static ncclResult_t ncclRmaSocketProxyCompleteRecvPayload(struct ncclRmaSocketProxyCollComm* comm, int peer) {
   struct ncclRmaSocketProxyPeerReceiver* receiver = &comm->peerReceiver[peer];
-  if (receiver->controlMsg.type != ncclRmaSocketProxyMsgTypeIput) {
+  if (receiver->controlMsg.type == ncclRmaSocketProxyMsgTypeIput) {
+    /* Each gdr_copy_to_mapping() call already fences its write-combined stores. */
+    // if (receiver->controlMsg.size > 0 && receiver->dataType == NCCL_PTR_CUDA) wc_store_fence();
+    NCCLCHECK(ncclRmaSocketProxyApplySignal(receiver));
+  } else if (receiver->controlMsg.type == ncclRmaSocketProxyMsgTypeRespondGetData) {
+    receiver->lastCompletedRequestGlobalId = receiver->controlMsg.requestId;
+  } else {
     WARN("RMA/Socket : completed payload for invalid message type=%u from peer=%d", receiver->controlMsg.type, peer);
     return ncclInternalError;
   }
-  /* Each gdr_copy_to_mapping() call already fences its write-combined stores. */
-  // if (receiver->controlMsg.size > 0 && receiver->dataType == NCCL_PTR_CUDA) wc_store_fence();
-  NCCLCHECK(ncclRmaSocketProxyApplySignal(receiver));
   ncclRmaSocketProxyResetRecv(receiver);
   return ncclSuccess;
 }
@@ -142,6 +145,60 @@ static ncclResult_t ncclRmaSocketProxyStartRecvPut(struct ncclRmaSocketProxyColl
   }
 
   receiver->recvState = ncclRmaSocketProxyRecvStatePayload;
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclRmaSocketProxyHandleRespondGetData(struct ncclRmaSocketProxyCollComm* comm, int peer) {
+  struct ncclRmaSocketProxyPeerReceiver* receiver = &comm->peerReceiver[peer];
+  struct ncclRmaSocketProxyHeader* controlMsg = &receiver->controlMsg;
+  if (controlMsg->status != ncclSuccess) {
+    WARN("RMA/Socket : GET_DATA from peer=%d reported status=%u requestId=%lu", peer, controlMsg->status,
+         controlMsg->requestId);
+    return ncclRemoteError;
+  }
+  if (controlMsg->size == 0 || controlMsg->size > INT_MAX || controlMsg->opFlags != 0) {
+    WARN("RMA/Socket : invalid GET_DATA size=%lu opFlags=0x%x from peer=%d", controlMsg->size, controlMsg->opFlags,
+         peer);
+    return ncclRemoteError;
+  }
+  NCCLCHECK(ncclRmaSocketProxyResolveDataTarget(comm, peer, receiver));
+  if (receiver->buffer == NULL) {
+    WARN("RMA/Socket : missing receive staging buffer for GET_DATA from peer=%d", peer);
+    return ncclInternalError;
+  }
+  receiver->recvState = ncclRmaSocketProxyRecvStatePayload;
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclRmaSocketProxyHandleRequestGetData(struct ncclRmaSocketProxyCollComm* comm, int peer) {
+  struct ncclRmaSocketProxyPeerReceiver* receiver = &comm->peerReceiver[peer];
+  struct ncclRmaSocketProxyHeader* requestMsg = &receiver->controlMsg;
+  uint32_t status = ncclSuccess;
+  void* srcPtr = NULL;
+  struct ncclRmaSocketProxyMrHandle* srcHandle = NULL;
+  int srcType = NCCL_PTR_HOST;
+  size_t replySize = 0;
+
+  if (requestMsg->status != ncclSuccess || requestMsg->size == 0 || requestMsg->size > INT_MAX ||
+      requestMsg->opFlags != 0) {
+    WARN("RMA/Socket : invalid GET_REQ status=%u size=%lu opFlags=0x%x from peer=%d", requestMsg->status,
+         requestMsg->size, requestMsg->opFlags, peer);
+    status = ncclRemoteError;
+  } else if (ncclRmaSocketProxyFindMr(comm, requestMsg->mrId, &srcHandle) != ncclSuccess) {
+    WARN("RMA/Socket : GET_REQ for unknown source mrId=%lu from peer=%d", requestMsg->mrId, peer);
+    status = ncclRemoteError;
+  } else if (ncclRmaSocketProxyValidateRange(srcHandle->size, requestMsg->dstOff, (size_t)requestMsg->size,
+                                             "GET source MR") != ncclSuccess) {
+    status = ncclRemoteError;
+  } else {
+    srcPtr = (void*)((uintptr_t)srcHandle->data + requestMsg->dstOff);
+    srcType = srcHandle->type;
+    replySize = (size_t)requestMsg->size;
+  }
+
+  NCCLCHECK(ncclRmaSocketProxyEnqueueRespondGetData(&comm->peerSender[peer], requestMsg, status, srcPtr, srcType,
+                                                    status == ncclSuccess ? srcHandle : NULL, replySize));
+  ncclRmaSocketProxyResetRecv(receiver);
   return ncclSuccess;
 }
 
@@ -207,6 +264,12 @@ ncclResult_t ncclRmaSocketProxyProgressPeerRecv(struct ncclRmaSocketProxyCollCom
     switch (receiver->controlMsg.type) {
     case ncclRmaSocketProxyMsgTypeIput:
       NCCLCHECKGOTO(ncclRmaSocketProxyStartRecvPut(comm, peer), ret, fail);
+      break;
+    case ncclRmaSocketProxyMsgTypeRequestGetData:
+      NCCLCHECKGOTO(ncclRmaSocketProxyHandleRequestGetData(comm, peer), ret, fail);
+      break;
+    case ncclRmaSocketProxyMsgTypeRespondGetData:
+      NCCLCHECKGOTO(ncclRmaSocketProxyHandleRespondGetData(comm, peer), ret, fail);
       break;
     default:
       WARN("RMA/Socket : unsupported message type=%u from peer=%d", receiver->controlMsg.type, peer);

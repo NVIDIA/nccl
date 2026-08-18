@@ -86,6 +86,7 @@ static ncclResult_t ncclRmaSocketProxyConnectPeers(struct ncclRmaSocketProxyColl
   NCCLCHECKGOTO(ncclCalloc(&comm->peerReceiver, nranks), ret, fail);
   for (int peer = 0; peer < nranks; peer++) {
     comm->peerSender[peer].lastCompletedRequestGlobalId = UINT64_MAX;
+    comm->peerReceiver[peer].lastCompletedRequestGlobalId = UINT64_MAX;
     NCCLCHECKGOTO(ncclRmaSocketProxyAllocChunkBuffer(&comm->peerSender[peer].buffer, NCCL_RMA_SOCKET_CHUNK_SIZE), ret,
                   fail);
     NCCLCHECKGOTO(ncclRmaSocketProxyAllocChunkBuffer(&comm->peerReceiver[peer].buffer, NCCL_RMA_SOCKET_CHUNK_SIZE), ret,

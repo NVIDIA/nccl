@@ -157,15 +157,54 @@ static ncclResult_t ncclRmaSocketProxyBuildHeader(struct ncclRmaSocketProxyHeade
   return ncclSuccess;
 }
 
+static ncclResult_t ncclRmaSocketProxyAcquireSendTask(struct ncclRmaSocketProxyPeerSender* sender,
+                                                      struct ncclRmaSocketProxySendTask** task) {
+  if (sender == NULL || task == NULL) return ncclInvalidArgument;
+  *task = NULL;
+  if (sender->tasks == NULL || sender->capacity <= 0 || sender->count < 0 || sender->count > sender->capacity) {
+    WARN("RMA/Socket : invalid send queue state count=%d capacity=%d", sender->count, sender->capacity);
+    return ncclInternalError;
+  }
+  if (sender->count == sender->capacity) {
+    WARN("RMA/Socket : send queue is full with %d tasks", sender->count);
+    return ncclInternalError;
+  }
+
+  *task = &sender->tasks[sender->tail];
+  sender->tail = (sender->tail + 1) % sender->capacity;
+  sender->count++;
+  return ncclSuccess;
+}
+
 static void ncclRmaSocketProxyPopAndCompleteSendTask(struct ncclRmaSocketProxyPeerSender* sender) {
   if (sender == NULL || sender->count == 0) return;
   struct ncclRmaSocketProxySendTask* task = &sender->tasks[sender->head];
-  if (task->controlMsg.type == ncclRmaSocketProxyMsgTypeIput) {
+  if (task->controlMsg.type == ncclRmaSocketProxyMsgTypeIput ||
+      task->controlMsg.type == ncclRmaSocketProxyMsgTypeRequestGetData) {
     sender->lastCompletedRequestGlobalId = task->controlMsg.requestId;
   }
   memset(task, 0, sizeof(*task));
   sender->head = (sender->head + 1) % sender->capacity;
   sender->count--;
+}
+
+ncclResult_t ncclRmaSocketProxyEnqueueRespondGetData(struct ncclRmaSocketProxyPeerSender* sender,
+                                                     const struct ncclRmaSocketProxyHeader* requestMsg, uint32_t status,
+                                                     void* srcPtr, int srcType,
+                                                     struct ncclRmaSocketProxyMrHandle* srcHandle, size_t size) {
+  if (sender == NULL || requestMsg == NULL) return ncclInvalidArgument;
+
+  struct ncclRmaSocketProxySendTask* task = NULL;
+  NCCLCHECK(ncclRmaSocketProxyAcquireSendTask(sender, &task));
+  memset(task, 0, sizeof(*task));
+  task->srcPtr = srcPtr;
+  task->srcHandle = srcHandle;
+  task->srcType = srcType;
+  task->size = size;
+  NCCLCHECK(ncclRmaSocketProxyBuildHeader(&task->controlMsg, ncclRmaSocketProxyMsgTypeRespondGetData, status,
+                                          requestMsg->requestId, 0, requestMsg->localMrId, requestMsg->localOff, size,
+                                          0, 0, 0, 0));
+  return ncclSuccess;
 }
 
 static ncclResult_t ncclRmaSocketProxyProgressSendTask(struct ncclRmaSocketProxyCollComm* comm, int peer,
@@ -341,20 +380,9 @@ static ncclResult_t ncclRmaSocketProxySubmitPut(void* rmaCtx, int context, uint6
   struct ncclRmaSocketProxyRequest* req = NULL;
   struct ncclRmaSocketProxyPeerSender* sender = &comm->peerSender[rank];
   struct ncclRmaSocketProxySendTask* task = NULL;
-  NCCLCHECKGOTO(ncclRmaSocketProxyGetRequest(ctx, rank, ncclRmaSocketProxyRequestTypePut, &req), ret, fail);
+  NCCLCHECK(ncclRmaSocketProxyGetRequest(ctx, rank, ncclRmaSocketProxyRequestTypePut, &req));
 
-  if (sender->tasks == NULL || sender->capacity <= 0 || sender->count < 0 || sender->count > sender->capacity) {
-    WARN("RMA/Socket : invalid send queue state count=%d capacity=%d", sender->count, sender->capacity);
-    ret = ncclInternalError;
-    goto fail;
-  }
-  if (sender->count == sender->capacity) {
-    WARN("RMA/Socket : send queue is full with %d tasks", sender->count);
-    ret = ncclInternalError;
-    goto fail;
-  }
-
-  task = &sender->tasks[sender->tail];
+  NCCLCHECKGOTO(ncclRmaSocketProxyAcquireSendTask(sender, &task), ret, fail);
   memset(task, 0, sizeof(*task));
   task->srcPtr = args.srcPtr;
   task->srcHandle = args.srcHandle;
@@ -364,8 +392,6 @@ static ncclResult_t ncclRmaSocketProxySubmitPut(void* rmaCtx, int context, uint6
                                               req->globalRequestId, args.opFlags, args.dstMrId, args.dstOff, size,
                                               args.signalMrId, signalOff, signalValue, hasSignal ? signalOp : 0),
                 ret, fail);
-  sender->tail = (sender->tail + 1) % sender->capacity;
-  sender->count++;
 
   *request = req;
   return ncclSuccess;
@@ -391,22 +417,118 @@ ncclResult_t ncclRmaSocketProxyIPutSignal(void* rmaCtx, int context, uint64_t sr
                                      signalOff, signalMhandle, signalValue, signalOp, isStrongSignal, request);
 }
 
-/* GET and flush are deferred; a NULL request represents an immediately completed no-op. */
-ncclResult_t ncclRmaSocketProxyIGet(void*, int, uint64_t, void*, size_t, uint64_t, void*, uint32_t, uint32_t,
-                                    void** request) {
-  if (request == NULL) return ncclInvalidArgument;
-  *request = NULL;
+static ncclResult_t ncclRmaSocketProxyValidateGet(void* rmaCtx, int context, uint64_t remoteOff, void* remoteMhandle,
+                                                  size_t size, uint64_t localOff, void* localMhandle, uint32_t rank,
+                                                  struct ncclRmaSocketProxyCtx** ctx,
+                                                  struct ncclRmaSocketProxyMrHandle** remoteHandle,
+                                                  struct ncclRmaSocketProxyMrHandle** localHandle) {
+  if (rmaCtx == NULL) {
+    WARN("RMA/Socket : get called with NULL rmaCtx");
+    return ncclInvalidArgument;
+  }
+  if (size == 0 || size > INT_MAX) {
+    WARN("RMA/Socket : get size %zu is zero or exceeds socket API limit", size);
+    return ncclInvalidArgument;
+  }
+  if (remoteMhandle == NULL || localMhandle == NULL) {
+    WARN("RMA/Socket : get requires remote/local handles remoteMhandle=%p localMhandle=%p", remoteMhandle,
+         localMhandle);
+    return ncclInvalidArgument;
+  }
+
+  struct ncclRmaSocketProxyCtx* contexts = (struct ncclRmaSocketProxyCtx*)rmaCtx;
+  if (context < 0 || context >= contexts[0].nContexts) {
+    WARN("RMA/Socket : invalid get context=%d nContexts=%d", context, contexts[0].nContexts);
+    return ncclInvalidArgument;
+  }
+  *ctx = &contexts[context];
+  struct ncclRmaSocketProxyCollComm* comm = (*ctx)->collComm;
+  if (rank >= (uint32_t)comm->nranks) {
+    WARN("RMA/Socket : invalid get rank=%u nranks=%d", rank, comm->nranks);
+    return ncclInvalidArgument;
+  }
+  if (comm->peerReceiver[rank].recvState == ncclRmaSocketProxyRecvStateClosed) {
+    WARN("RMA/Socket : cannot get from closed peer=%u", rank);
+    return ncclRemoteError;
+  }
+
+  *remoteHandle = (struct ncclRmaSocketProxyMrHandle*)remoteMhandle;
+  *localHandle = (struct ncclRmaSocketProxyMrHandle*)localMhandle;
+  if (!ncclRmaSocketProxySupportedPtrType((*remoteHandle)->type) ||
+      !ncclRmaSocketProxySupportedPtrType((*localHandle)->type)) {
+    WARN("RMA/Socket : unsupported get pointer types remote=%d local=%d", (*remoteHandle)->type, (*localHandle)->type);
+    return ncclInvalidArgument;
+  }
+  NCCLCHECK(ncclRmaSocketProxyValidateRange((*remoteHandle)->size, remoteOff, size, "remote source MR"));
+  NCCLCHECK(ncclRmaSocketProxyValidateRange((*localHandle)->size, localOff, size, "local destination MR"));
   return ncclSuccess;
 }
 
-ncclResult_t ncclRmaSocketProxyIFlush(void*, int, void*, uint32_t, void** request) {
-  if (request == NULL) return ncclInvalidArgument;
+ncclResult_t ncclRmaSocketProxyIGet(void* rmaCtx, int context, uint64_t remoteOff, void* remoteMhandle, size_t size,
+                                    uint64_t localOff, void* localMhandle, uint32_t rank, uint32_t optFlags,
+                                    void** request) {
+  (void)optFlags;
+  if (request == NULL) {
+    WARN("RMA/Socket : get called with NULL request");
+    return ncclInvalidArgument;
+  }
   *request = NULL;
+
+  ncclResult_t ret = ncclSuccess;
+  struct ncclRmaSocketProxyCtx* ctx = NULL;
+  struct ncclRmaSocketProxyMrHandle* remoteHandle = NULL;
+  struct ncclRmaSocketProxyMrHandle* localHandle = NULL;
+  struct ncclRmaSocketProxyRequest* req = NULL;
+  NCCLCHECK(ncclRmaSocketProxyValidateGet(rmaCtx, context, remoteOff, remoteMhandle, size, localOff, localMhandle, rank,
+                                          &ctx, &remoteHandle, &localHandle));
+
+  struct ncclRmaSocketProxyCollComm* comm = ctx->collComm;
+  struct ncclRmaSocketProxyPeerSender* sender = &comm->peerSender[rank];
+  struct ncclRmaSocketProxySendTask* task = NULL;
+  NCCLCHECK(ncclRmaSocketProxyGetRequest(ctx, rank, ncclRmaSocketProxyRequestTypeGet, &req));
+
+  NCCLCHECKGOTO(ncclRmaSocketProxyAcquireSendTask(sender, &task), ret, fail);
+  memset(task, 0, sizeof(*task));
+  task->srcType = NCCL_PTR_HOST;
+  NCCLCHECKGOTO(ncclRmaSocketProxyBuildHeader(&task->controlMsg, ncclRmaSocketProxyMsgTypeRequestGetData, ncclSuccess,
+                                              req->globalRequestId, 0, remoteHandle->mrId, remoteOff, size, 0, 0, 0, 0),
+                ret, fail);
+  task->controlMsg.localMrId = localHandle->mrId;
+  task->controlMsg.localOff = localOff;
+
+  *request = req;
+  return ncclSuccess;
+fail:
+  ncclRmaSocketProxyReleaseRequest(req);
+  return ret;
+}
+
+ncclResult_t ncclRmaSocketProxyIFlush(void* rmaCtx, int context, void* mhandle, uint32_t rank, void** request) {
+  (void)mhandle;
+  if (rmaCtx == NULL || request == NULL) {
+    WARN("RMA/Socket : invalid iflush arguments rmaCtx=%p request=%p", rmaCtx, request);
+    return ncclInvalidArgument;
+  }
+  *request = NULL;
+
+  struct ncclRmaSocketProxyCtx* contexts = (struct ncclRmaSocketProxyCtx*)rmaCtx;
+  if (context < 0 || context >= contexts[0].nContexts) {
+    WARN("RMA/Socket : invalid iflush context=%d nContexts=%d", context, contexts[0].nContexts);
+    return ncclInvalidArgument;
+  }
+  struct ncclRmaSocketProxyCollComm* comm = contexts[context].collComm;
+  if (rank >= (uint32_t)comm->nranks) {
+    WARN("RMA/Socket : invalid iflush rank=%u nranks=%d", rank, comm->nranks);
+    return ncclInvalidArgument;
+  }
+
+  /* Completed GET requests have already made their GDRCopy writes visible. no need for another wc_store_fence */
   return ncclSuccess;
 }
 
 ncclResult_t ncclRmaSocketProxyTest(void* collComm, void* request, int* done) {
   ncclResult_t ret = ncclSuccess;
+  bool complete = false;
   if (done == NULL) {
     WARN("RMA/Socket : test called with NULL done pointer");
     return ncclInvalidArgument;
@@ -426,14 +548,25 @@ ncclResult_t ncclRmaSocketProxyTest(void* collComm, void* request, int* done) {
 
   NCCLCHECKGOTO(ncclRmaSocketProxyProgressComm(comm), ret, fail);
 
-  if (req->type != ncclRmaSocketProxyRequestTypePut) {
+  uint64_t lastCompletedRequestId;
+  if (req->type == ncclRmaSocketProxyRequestTypePut) {
+    lastCompletedRequestId = comm->peerSender[req->peer].lastCompletedRequestGlobalId;
+  } else if (req->type == ncclRmaSocketProxyRequestTypeGet) {
+    lastCompletedRequestId = comm->peerReceiver[req->peer].lastCompletedRequestGlobalId;
+  } else {
     WARN("RMA/Socket : test called with invalid request type=%d", req->type);
     ret = ncclInternalError;
     goto fail;
   }
 
-  if (nccl::utility::rollingLessEq<uint64_t>(req->globalRequestId,
-                                             comm->peerSender[req->peer].lastCompletedRequestGlobalId)) {
+  complete = nccl::utility::rollingLessEq<uint64_t>(req->globalRequestId, lastCompletedRequestId);
+  if (!complete && req->type == ncclRmaSocketProxyRequestTypeGet &&
+      comm->peerReceiver[req->peer].recvState == ncclRmaSocketProxyRecvStateClosed) {
+    WARN("RMA/Socket : peer=%d closed before GET requestId=%lu completed", req->peer, req->globalRequestId);
+    ret = ncclRemoteError;
+    goto fail;
+  }
+  if (complete) {
     *done = 1;
     ncclRmaSocketProxyReleaseRequest(req);
   }
@@ -491,8 +624,8 @@ ncclRma_t ncclRmaSocketProxy = {
   ncclRmaSocketProxyCloseListen,        // rma_socket.cc
   ncclRmaSocketProxyIPut,               // rma_socket.cc
   ncclRmaSocketProxyIPutSignal,         // rma_socket.cc
-  ncclRmaSocketProxyIGet,               // no-op
-  ncclRmaSocketProxyIFlush,             // no-op
+  ncclRmaSocketProxyIGet,               // rma_socket.cc
+  ncclRmaSocketProxyIFlush,             // rma_socket.cc
   ncclRmaSocketProxyTest,               // rma_socket.cc
   ncclRmaSocketProxyProgress,           // rma_socket.cc
   ncclRmaSocketProxyQueryLastError,     // rma_socket.cc

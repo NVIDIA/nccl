@@ -24,13 +24,14 @@ struct ncclRmaSocketProxyCtx;
 
 enum ncclRmaSocketProxyMsgType {
   ncclRmaSocketProxyMsgTypeIput = 1,
-  ncclRmaSocketProxyMsgTypeGetReq = 2,   // iGet caller -> callee: request to read the callee's memory
-  ncclRmaSocketProxyMsgTypeGetData = 3,  // iGet callee -> caller: the fetched bytes (reply to GetReq)
+  ncclRmaSocketProxyMsgTypeRequestGetData = 2,  // iGet caller -> callee: request to read the callee's memory
+  ncclRmaSocketProxyMsgTypeRespondGetData = 3,  // iGet callee -> caller: respond with status and requested bytes
 };
 
 enum ncclRmaSocketProxyRequestType {
   ncclRmaSocketProxyRequestTypeFree = 0,
   ncclRmaSocketProxyRequestTypePut = 1,
+  ncclRmaSocketProxyRequestTypeGet = 2,
 };
 
 enum ncclRmaSocketProxyRecvState {
@@ -48,6 +49,8 @@ struct ncclRmaSocketProxyHeader {
   uint64_t mrId;
   uint64_t dstOff;
   uint64_t size;
+  uint64_t localMrId;
+  uint64_t localOff;
   uint64_t signalMrId;
   uint64_t signalOff;
   uint64_t signalValue;
@@ -106,6 +109,7 @@ struct ncclRmaSocketProxyPeerSender {
 struct ncclRmaSocketProxyPeerReceiver {
   struct ncclSocket sock;
   void* buffer;
+  uint64_t lastCompletedRequestGlobalId;  // rolling GET watermark; initially UINT64_MAX
 
   // State of the receiver
   enum ncclRmaSocketProxyRecvState recvState;
@@ -192,6 +196,10 @@ ncclResult_t ncclRmaSocketProxyTest(void* collComm, void* request, int* done);
 ncclResult_t ncclRmaSocketProxyProgress(void* rmaCtx);
 
 ncclResult_t ncclRmaSocketProxyValidateRange(size_t objectSize, uint64_t offset, size_t size, const char* objectName);
+ncclResult_t ncclRmaSocketProxyEnqueueRespondGetData(struct ncclRmaSocketProxyPeerSender* sender,
+                                                     const struct ncclRmaSocketProxyHeader* requestMsg, uint32_t status,
+                                                     void* srcPtr, int srcType,
+                                                     struct ncclRmaSocketProxyMrHandle* srcHandle, size_t size);
 
 /* Receive-side data-path progress (rma_socket_progress_recver.cc). */
 ncclResult_t ncclRmaSocketProxyProgressPeerRecv(struct ncclRmaSocketProxyCollComm* comm, int peer);

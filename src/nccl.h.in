@@ -211,6 +211,11 @@ typedef struct ncclCollConfig_v23200 {
    * profiler-tag values with the most-significant bit set (>= 0x8000000000000000) for possible future
    * predefined tags; applications should use values with the MSB clear. */
   uint64_t userProfilerTag;
+  /* Caller-owned, rank-local CUDA event recorded at collective kernel launch completion.
+   * Create it with cudaEventDisableTiming; interprocess and interop events are unsupported.
+   * Every rank must provide a non-NULL event or every rank must provide NULL. Keep the event
+   * alive through all queued waits and captured-graph executions. At most one non-NULL event
+   * per communicator is supported in a group. CUDA < 12.3 records it before launch. */
   cudaEvent_t launchCompletionEvent;
 } ncclCollConfig_t;
 

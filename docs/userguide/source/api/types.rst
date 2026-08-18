@@ -431,6 +431,42 @@ ncclConfig_t
   do not affect the communicator's reported Device API multimem capability and
   do not prevent explicit Device API calls from allocating multimem resources.
 
+.. _ncclcollconfig:
+
+ncclCollConfig_t
+----------------
+
+.. c:type:: ncclCollConfig_t
+
+ Per-collective configuration passed through an ``nccl*Config`` collective API.
+ Initialize a new configuration with :c:macro:`NCCL_COLLCONFIG_INITIALIZER`.
+
+ .. c:macro:: launchCompletionEvent
+
+  (since 2.32)
+
+  A caller-owned CUDA event that NCCL records at the collective kernel-launch completion
+  boundary. Create the event with `cudaEventCreateWithFlags and cudaEventDisableTiming
+  <https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__EVENT.html>`_. It must
+  not be an interprocess or interop event.
+
+  A NULL event requests no update. Event presence must match across ranks: every rank in the
+  corresponding collective must provide a rank-local non-NULL event, or every rank must provide
+  NULL. A group supports at most one non-NULL event per communicator.
+
+  Keep the event alive through all queued waits and graph executions that use it. For a grouped
+  collective, enqueue a dependent ``cudaStreamWaitEvent`` only after ``ncclGroupEnd`` returns
+  ``ncclSuccess``. With a nonblocking communicator, first poll ``ncclCommGetAsyncError`` until it
+  returns ``ncclSuccess``; do not enqueue the wait after an error.
+
+  NCCL records the event only for kernel launches; Copy Engine and RMA work do not record it.
+
+  CUDA 12.3 or newer provides launch-completion semantics. On older CUDA platforms, NCCL
+  emits a warning and records the event before the kernel launch; this fallback does not
+  provide a launch-completion guarantee. CUDA launch completion is best effort and does not
+  guarantee that dependent work overlaps the collective. Graph capture is supported with a
+  capture-compatible event; sharing a recorded event across graphs is not supported.
+
 .. _ncclsiminfo:
 
 ncclSimInfo_t

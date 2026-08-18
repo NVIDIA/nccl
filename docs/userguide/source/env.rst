@@ -205,6 +205,29 @@ It is therefore always recommended to add the ``=`` prefix to ensure an exact ma
 
 Note: There is a fixed upper limit of 32 Host Channel Adapter (HCA) devices supported in NCCL.
 
+NCCL_IB_RAIL_POLICY
+-------------------
+(since 2.30.5)
+
+Controls automatic rail and plane assignment for supported ConnectX SuperNIC devices. This can be used with
+``NCCL_NET_MERGE_POLICY=RAIL`` to fuse only ports that belong to the same auto-detected rail.
+The automatic rail and plane assignment will not overwrite the rails or planes given by the user (see ``NCCL_IB_HCA``).
+
+Values accepted
+^^^^^^^^^^^^^^^
+
+``NONE`` : Disable automatic rail and plane assignment.
+
+``CX9`` (default) : Currently only supported on aarch64 systems with CX9 HCAs, NCCL will assign the rails and planes assuming the reference architecture configuration.
+
+The per-socket rail layout can be selected explicitly with a suffix:
+
+``CX9:FLIP`` : Flipped layout ``[0 1 | 1 0]``. Same as ``CX9``.
+
+``CX9:ALT`` : Alternate layout ``[0 1 0 1]``.
+
+``CX9:BLOCK`` : Block layout ``[0 0 1 1]``.
+
 NCCL_IB_TIMEOUT
 ---------------
 The ``NCCL_IB_TIMEOUT`` variable controls the InfiniBand Verbs Timeout.

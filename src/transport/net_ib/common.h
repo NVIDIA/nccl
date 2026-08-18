@@ -82,10 +82,21 @@ struct ncclIbGidInfo {
 };
 
 extern int ncclNIbDevs;
+
+enum ncclIbRailPolicy {
+  NCCL_IB_RAIL_POLICY_NONE,
+  NCCL_IB_RAIL_POLICY_CX9_FLIP, // Enable CX9 rail flipped layout
+  NCCL_IB_RAIL_POLICY_CX9_ALT, // Enable CX9 rail alternate layout
+  NCCL_IB_RAIL_POLICY_CX9_BLOCK, // Enable CX9 rail blocked layout
+};
+
 struct alignas(64) ncclIbDev {
   std::mutex mutex;
   int device;
   uint64_t guid;
+  uint32_t vendorId;
+  uint32_t vendorPartId;
+  char fwVer[64];
   uint8_t portNum;
   uint8_t link;
   int speed;

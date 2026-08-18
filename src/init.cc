@@ -169,6 +169,11 @@ static void initOnceFunc() {
   NCCLCHECKGOTO(initGdrCopy(), initResult, exit);
   // Always initialize bootstrap network
   NCCLCHECKGOTO(bootstrapNetInit(), initResult, exit);
+  // Resolve the socket magic before background threads spawn: their getenv()
+  // would race with concurrent setenv() on glibc < 2.41 (glibc bug 15607).
+  // Cannot live in ncclEnvPluginInit(): it would re-enter ncclInitEnv()'s
+  // std::call_once via ncclGetEnv() and deadlock.
+  (void)ncclSocketDefaultMagic();
 
   initNvtxRegisteredEnums();
 exit:;

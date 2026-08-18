@@ -2,6 +2,7 @@
 #include "shim_core.h"
 #include <dlfcn.h>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 using namespace nccl_checkpoint;
@@ -26,12 +27,21 @@ static CommInitParams* allocInitParams(int nranks, int rank, const ncclConfig_t*
   params->net_name[0] = '\0';
   params->comm_name[0] = '\0';
   if (configPtr) {
-    params->config = *configPtr;
-    if (configPtr->netName) {
-      strncpy(params->net_name, configPtr->netName, sizeof(params->net_name) - 1);
+    // The caller may have been compiled against an older nccl.h and passed a
+    // shorter struct, so overlay only the bytes it owns onto the defaults;
+    // fields it never had keep their NCCL_CONFIG_UNDEF_INT sentinel.
+    params->config = NCCL_CONFIG_INITIALIZER;
+    size_t callerSize = configPtr->size;
+    // A caller newer than us: take what we understand, ignore the rest.
+    if (callerSize > sizeof(ncclConfig_t)) callerSize = sizeof(ncclConfig_t);
+    memcpy(&params->config, configPtr, callerSize);
+    // Read the names out of our own copy, not configPtr: if callerSize stopped
+    // short of them they are NCCL_CONFIG_UNDEF_PTR here.
+    if (params->config.netName) {
+      strncpy(params->net_name, params->config.netName, sizeof(params->net_name) - 1);
     }
-    if (configPtr->commName) {
-      strncpy(params->comm_name, configPtr->commName, sizeof(params->comm_name) - 1);
+    if (params->config.commName) {
+      strncpy(params->comm_name, params->config.commName, sizeof(params->comm_name) - 1);
     }
   } else {
     params->config = NCCL_CONFIG_INITIALIZER;

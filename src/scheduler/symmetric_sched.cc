@@ -294,6 +294,8 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   // cuLaunchKernel, so the mirrored counter can't advance across graph replays. Under
   // capture we launch the clean kernel and keep only host-side group/coll events.
   bool profilerEnabled = profilingRequested && !plan->persistent;
+  bool profilerPhaseEnabled =
+    profilerEnabled && (headTask->eActivationMask & ncclProfileKernelPhase);
   plan->kernelFn = (profilerEnabled && ncclSymkKernelListProfile[kernelIndex] != nullptr) ?
                      ncclSymkKernelListProfile[kernelIndex] :
                      ncclSymkKernelList[kernelIndex];
@@ -316,6 +318,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   argsBuf->nMaxChannels = nMaxChannels;
   argsBuf->maxDynamicSmem = maxDynamicSmem;
   argsBuf->profilerEnabled = profilerEnabled ? 1 : 0;
+  argsBuf->profilerPhaseEnabled = profilerPhaseEnabled ? 1 : 0;
 
   remainCell = cellPerChannel = DIVUP(DIVUP(totalCount, nMaxChannels), cellCount);
   workRangePtr = argsBuf->getWorkRange();

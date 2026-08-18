@@ -119,6 +119,7 @@ struct alignas(16) ncclSymkDevWorkArgs {
   int nMaxChannels;
   int maxDynamicSmem;
   int profilerEnabled; // when set, profilerWorkCounters[nMaxChannels] follows before channelWorkRange
+  int profilerPhaseEnabled;
   // Variable-length trailing data layout:
   //   if profilerEnabled: uint64_t profilerWorkCounters[nMaxChannels] (aligned to 16)
   //   ncclSymkChannelWorkRange[nChannels] (aligned to 16)

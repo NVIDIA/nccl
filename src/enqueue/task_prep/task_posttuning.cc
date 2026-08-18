@@ -654,6 +654,7 @@ static ncclResult_t postTuneLegacyEnqueueCollWork(
   devWork.oneNode = (comm->nNodes == 1);
   devWork.netRegUsed = devWork.regUsed = 0;
   devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
+  devWork.profilerPhaseEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelPhase);
   if (task->algorithm != NCCL_ALGO_NVLS && task->algorithm != NCCL_ALGO_NVLS_TREE) {
     devWork.isOneRPN = comm->isOneRPN;
   }

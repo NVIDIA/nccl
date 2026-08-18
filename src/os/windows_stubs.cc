@@ -194,6 +194,10 @@ int64_t ncclParamRasDiagnostics() {
   return 0;
 }
 
+int64_t ncclParamRasEnable() {
+  return 0;
+}
+
 int64_t ncclParamDiagnostics() {
   return 0;
 }

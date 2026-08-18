@@ -668,8 +668,7 @@ fail:
 
 NCCL_PARAM(StaggerRate, "UID_STAGGER_RATE", 7000);
 NCCL_PARAM(StaggerThreshold, "UID_STAGGER_THRESHOLD", 256);
-
-NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
+extern int64_t ncclParamRasEnable();
 
 ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, struct ncclComm* parent) {
   ncclResult_t result = ncclSuccess;

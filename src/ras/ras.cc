@@ -87,6 +87,7 @@ static void rasTerminate();
 
 // enable to run passive RAS diagnostics
 NCCL_PARAM(RasDiagnostics, "RUN_RAS_DIAGNOSTICS", 0);
+NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
 
 //////////////////////////////////////////////////
 // Functions invoked from regular NCCL threads. //
@@ -194,6 +195,11 @@ ncclResult_t ncclRasAddRanks(struct rasRankInit* ranks, int nranks) {
 ncclResult_t ncclRunRasDiagnostics(struct ncclComm* comm) {
   struct rasNotification msg;
   ncclResult_t ret = ncclSuccess;
+
+  if (ncclParamRasEnable() != 1) {
+    DIAG_PRINT("NCCL DIAG INFO RAS diagnostics skipped: NCCL_RAS_ENABLE=0");
+    return ncclSuccess;
+  }
 
   memset(&msg, '\0', sizeof(msg));
   msg.type = RAS_RUN_DIAG;

@@ -1076,14 +1076,19 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
         int numSegments = 1;
         bool multiSegment = false;
 
+        // Register the whole record, not just the segment under userbuff, so a
+        // later reuse of this import for a different segment stays in bounds.
+        void* regBeg = (void*)regRecord->begAddr;
+        size_t regSize = (size_t)(regRecord->endAddr - regRecord->begAddr);
+
         if (baseAddr == NULL) {
-          CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&baseAddr, &baseSize, (CUdeviceptr)userbuff), ret, fail);
+          CUCHECKGOTO(cuMemGetAddressRange((CUdeviceptr*)&baseAddr, &baseSize, (CUdeviceptr)regBeg), ret, fail);
           CUCHECKGOTO(cuPointerGetAttribute((void*)&legacyIpcCap, CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE,
                                             (CUdeviceptr)baseAddr),
                       ret, fail);
         }
 
-        if ((uint64_t)baseAddr + baseSize < (uint64_t)userbuff + buffSize) multiSegment = true;
+        if ((uint64_t)baseAddr + baseSize < (uint64_t)regBeg + regSize) multiSegment = true;
         if (multiSegment && (!ncclCuMemEnable() || !ncclParamMultiSegmentRegister())) goto exit;
 
         if (!multiSegment) {
@@ -1100,7 +1105,7 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
         // get the CUDA legacy mem handle, or through cuMem*.
         if (ncclCuMemEnable()) {
           if (multiSegment) {
-            NCCLCHECKGOTO(ipcHandleMultiSegmentRegistration((CUdeviceptr)userbuff, buffSize, comm, proxyConn,
+            NCCLCHECKGOTO(ipcHandleMultiSegmentRegistration((CUdeviceptr)regBeg, regSize, comm, proxyConn,
                                                             &totalMappedSize, &numSegments, &ipcInfo),
                           ret, fail);
           } else {

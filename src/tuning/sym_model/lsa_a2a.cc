@@ -6,21 +6,15 @@
  *************************************************************************/
 
 #include "lsa_a2a.h"
-#include "model.h"
 
 #include "comm.h"
 #include "core.h"
 
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
 
 static constexpr double gbpsToBytesPerUs = 1.e9 / 1.e6;
 static constexpr size_t allGatherA2AMinAggregateBytes = 256 * 1024;
-
-static size_t logicalBytes(const struct ncclTuningInput_t* input) {
-  return input->count * ncclTypeSize(input->datatype);
-}
 
 // Multimem AllGather CTA bandwidth is the measured store injection rate before
 // multicast fanout; peak bandwidth is aggregate traffic.
@@ -85,59 +79,43 @@ static int activeCtasForEachWork(size_t logicalBytes, int requestedCtas) {
   return (int)divUp(cells, cellsPerCta);
 }
 
-static bool eligibleInput(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nLogicalBytes) {
+static const struct ncclSymkLsaA2AParameters* parametersFor(const struct ncclTuningInput_t* input,
+                                                            enum ncclSymkKernelId kernelId) {
   int kernel = static_cast<int>(kernelId);
   int arch = input == nullptr || input->comm == nullptr ? -1 : ncclSymkLsaA2AArchBucket(input->comm);
   if (input == nullptr || input->comm == nullptr || kernel < 0 || kernel >= ncclSymkKernelId_Count || arch < 0 ||
       !ncclSymkLsaA2AParameterTable[arch][kernel].valid) {
-    return false;
+    return nullptr;
   }
 
   int nRanks = input->comm->nRanks;
-  return nRanks >= 2 && input->nWorks == 1 && nLogicalBytes >= divUp(allGatherA2AMinAggregateBytes, size_t(nRanks));
+  size_t logicalBytes = input->count * ncclTypeSize(input->datatype);
+  return nRanks >= 2 && input->nWorks == 1 && logicalBytes >= divUp(allGatherA2AMinAggregateBytes, size_t(nRanks)) ?
+           &ncclSymkLsaA2AParameterTable[arch][kernel] :
+           nullptr;
 }
 
-bool ncclSymkLsaA2AModelEnabled(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId) {
-  if (input == nullptr || input->comm == nullptr) return false;
-  return eligibleInput(input, kernelId, logicalBytes(input));
-}
+bool ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, int requestedCtas,
+                         float* timeUs, int* activeCtas, const struct ncclSymkLsaA2AParameters* parameters) {
+  const struct ncclSymkLsaA2AParameters* tableParameters = parametersFor(input, kernelId);
+  if (tableParameters == nullptr || requestedCtas < 1) return false;
+  if (parameters == nullptr) parameters = tableParameters;
+  if (!parameters->valid) return false;
 
-bool ncclSymkLsaA2AEvaluate(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t logicalBytes,
-                            int requestedCtas, const struct ncclSymkLsaA2AParameters& parameters, float* timeUs,
-                            int* activeCtas) {
-  if (!eligibleInput(input, kernelId, logicalBytes) || requestedCtas < 1 || !parameters.valid) {
-    return false;
-  }
-
+  size_t logicalBytes = input->count * ncclTypeSize(input->datatype);
   bool isMulticast = kernelId == ncclSymkKernelId_AllGather_TmaSTMC || kernelId == ncclSymkKernelId_AllGather_STMC;
   int nRanks = input->comm->nRanks;
 
   int modeledCtas = activeCtasForEachWork(logicalBytes, requestedCtas);
-  double latencyUs = parameters.baseLatUs + (nRanks - 1) * parameters.rankLatUs;
-  double rankFactor = parameters.peakRankEfficiency ? (double)(nRanks - 1) / nRanks : 1.0;
+  double latencyUs = parameters->baseLatUs + (nRanks - 1) * parameters->rankLatUs;
+  double rankFactor = parameters->peakRankEfficiency ? (double)(nRanks - 1) / nRanks : 1.0;
   double ctaCopies = isMulticast ? 1.0 : nRanks - (input->inPlace != 0);
-  double ctaTimeUs = ctaCopies * logicalBytes / (modeledCtas * parameters.ctaBwGBps * gbpsToBytesPerUs);
-  double peakTimeUs = (nRanks - 1) * logicalBytes / (parameters.peakBwGBps * rankFactor * gbpsToBytesPerUs);
+  double ctaTimeUs = ctaCopies * logicalBytes / (modeledCtas * parameters->ctaBwGBps * gbpsToBytesPerUs);
+  double peakTimeUs = (nRanks - 1) * logicalBytes / (parameters->peakBwGBps * rankFactor * gbpsToBytesPerUs);
   double estimateUs = latencyUs + std::max(ctaTimeUs, peakTimeUs);
   if (!std::isfinite(estimateUs) || !(estimateUs > 0.0)) return false;
 
   *timeUs = static_cast<float>(estimateUs);
   *activeCtas = modeledCtas;
   return true;
-}
-
-void ncclSymkLsaA2AModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                         int* nBlocks) {
-  *timeUs = FLT_MAX;
-  *nBlocks = 0;
-  if (!ncclSymkLsaA2AModelEnabled(input, kernelId) || !ncclSymkLsaBaseCtas(input, kernelId, nBytes, nBlocks)) return;
-
-  int kernel = static_cast<int>(kernelId);
-  int arch = ncclSymkLsaA2AArchBucket(input->comm);
-  int activeCtas;
-  if (!ncclSymkLsaA2AEvaluate(input, kernelId, logicalBytes(input), *nBlocks,
-                              ncclSymkLsaA2AParameterTable[arch][kernel], timeUs, &activeCtas)) {
-    *timeUs = FLT_MAX;
-    *nBlocks = 0;
-  }
 }

@@ -10,8 +10,6 @@
 #include "comm.h"
 #include "core.h"
 
-#include <algorithm>
-#include <cfloat>
 #include <cmath>
 
 static double softmin(double x, double ceiling, double softness) {
@@ -25,25 +23,8 @@ static double softplus(double x, double softness) {
   return 100.0 <= z ? x : softness * std::log1p(std::exp(z));
 }
 
-static double model(double busBytes, double baseLat, int nSMs, double smBw, double busMultiplier, double peakBw) {
-  double bw = softmin(nSMs * smBw * busMultiplier, peakBw, smBw);
-  return baseLat + softplus(busBytes / bw - 1, 1);
-}
-
-static int maxBlocksLsa(struct ncclComm* comm, enum ncclSymkKernelId kernelId) {
-  switch (kernelId) {
-  case ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC:
-  case ncclSymkKernelId_AllGather_TmaSTMC:
-  case ncclSymkKernelId_AllGather_STMC:
-  case ncclSymkKernelId_ReduceScatter_LDMC:
-    return divUp((comm->cudaArch < 1000 ? 16 : 32), comm->nRanks);
-  default:
-    return ncclSymkMaxBlocks;
-  }
-}
-
-static void queryBaseLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                              int nMinBlocks, int nMaxBlocks, float* timeUs, int* nBlocks) {
+bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int nBlocks,
+                          float* timeUs) {
   constexpr double LL_BusFactor = 9; // 2X the bytes, plus some processing, plus no unrolling
 
   struct ncclComm* comm = input->comm;
@@ -130,72 +111,9 @@ static void queryBaseLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     }
   }
 
-  *nBlocks = nMaxBlocks;
-  *timeUs = model(busBytes, baseLat, nMaxBlocks, smBw, busMultiplier, peakBw);
-  for (int bn = nMinBlocks; bn < nMaxBlocks; bn += (bn == 1) ? 1 : 2) {
-    double time = model(busBytes, baseLat, bn, smBw, busMultiplier, peakBw);
-    if (time <= 1.025 * (*timeUs)) {
-      *nBlocks = bn;
-      *timeUs = time;
-      break;
-    }
-  }
-}
-
-static bool queryLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                              float* timeUs, int* nBlocks) {
-  struct ncclComm* comm = input->comm;
-  int nMaxBlocks = maxBlocksLsa(comm, kernelId);
-  bool isTma = ncclSymkTmaKernelMask() >> kernelId & 1;
-
-  *timeUs = FLT_MAX;
-  *nBlocks = 0;
-
-  // minCTAs/maxCTAs are resolved (env > per-call > comm) at task-append time.
-  nMaxBlocks = std::min<int>(nMaxBlocks, input->maxCTAs);
-  int nMinBlocks = input->minCTAs;
-  nMinBlocks = std::min(nMinBlocks, nMaxBlocks);
-  // NCCL_SYM_CTAS is an explicit override of the resolved bounds.
-  int nUserCTAs = ncclSymkModelCtasEnvOverride();
-  if (nUserCTAs > 0) nMinBlocks = nMaxBlocks = nUserCTAs;
-
-  // Even CTA counts are preferred for optimal performance, except for when CTAs==1
-  if (nMinBlocks != nMaxBlocks) {
-    if (nMinBlocks != 1) nMinBlocks = roundUp(nMinBlocks, 2);
-    if (nMaxBlocks != 1) nMaxBlocks = roundDown(nMaxBlocks, 2);
-  }
-
-  if (isTma) {
-    size_t maxWorkBytes = input->countMax * ncclTypeSize(input->datatype);
-    if (!ncclSymkTmaDeepEligible(comm, kernelId, maxWorkBytes, nMinBlocks)) {
-      const char* symKernelIdEnv = ncclGetEnv("NCCL_SYM_KERNEL");
-      if (symKernelIdEnv) {
-        INFO(NCCL_TUNING,
-             "NCCL_SYM_KERNEL set to %s. At largest grouped work size %zu Bytes, kernel will not exercise TMA paths.",
-             symKernelIdEnv, maxWorkBytes);
-      } else {
-        return false;
-      }
-    } else {
-      while (nMaxBlocks > nMinBlocks && !ncclSymkTmaDeepEligible(comm, kernelId, maxWorkBytes, nMaxBlocks)) {
-        nMaxBlocks -= (nMaxBlocks == 2 ? 1 : 2);
-      }
-    }
-  }
-
-  queryBaseLsaModel(input, kernelId, nBytes, nMinBlocks, nMaxBlocks, timeUs, nBlocks);
-  return *nBlocks > 0 && std::isfinite(*timeUs);
-}
-
-bool ncclSymkLsaBaseCtas(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int* nBlocks) {
-  float timeUs;
-  return queryLsaBaseModel(input, kernelId, nBytes, &timeUs, nBlocks);
-}
-
-void ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                          int* nBlocks) {
-  if (queryLsaBaseModel(input, kernelId, nBytes, timeUs, nBlocks)) {
-    constexpr float smPenalty = .025f; // 2.5% increase in time per SM.
-    *timeUs *= 1.0f + smPenalty * (*nBlocks);
-  }
+  double bw = softmin(nBlocks * smBw * busMultiplier, peakBw, smBw);
+  *timeUs = static_cast<float>(baseLat + softplus(busBytes / bw - 1, 1));
+  constexpr float ctaResourcePenalty = .025f; // 2.5% time penalty per CTA for its SM resource use.
+  *timeUs *= 1.0f + ctaResourcePenalty * nBlocks;
+  return std::isfinite(*timeUs) && *timeUs > 0.0f;
 }

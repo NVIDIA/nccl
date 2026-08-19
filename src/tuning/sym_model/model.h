@@ -17,11 +17,9 @@ int ncclSymkModelCtasEnvOverride();
 
 void ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
                       int* nBlocks);
-bool ncclSymkLsaBaseCtas(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int* nBlocks);
-void ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                          int* nBlocks);
-bool ncclSymkLsaA2AModelEnabled(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId);
-void ncclSymkLsaA2AModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                         int* nBlocks);
+void ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
+                      int* nBlocks);
+bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int nBlocks,
+                          float* timeUs);
 
 #endif // NCCL_INT_SYM_MODEL_MODEL_H_

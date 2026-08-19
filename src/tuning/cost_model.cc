@@ -290,13 +290,21 @@ static ncclResult_t getModelEntry(int id, struct ncclTuningModelEntry_t** entry)
 }
 
 /*
+  Pre-initialize the cost model for a communicator.
+  Operations to run before the tuner plugin is initialized.
+*/
+ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm) {
+  comm->tuningContext.tuningConstants = ncclTunerConstantsDefaults;
+  return ncclSuccess;
+}
+
+/*
   Initialize the cost model for a communicator.
   This will initialize the cost model for all models that are enabled.
   If a model fails to initialize, it will be disabled and the error will be logged.
 */
 ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
-  comm->tuningContext.tuningConstants = ncclTunerConstantsDefaults;
   // Protocols/Algorithms enable/disable, and user overrides.
   // All are enabled except ll128 which is enabled by default only in certain cases.
   int protoEnable[NCCL_NUM_FUNCTIONS * NCCL_NUM_PROTOCOLS];

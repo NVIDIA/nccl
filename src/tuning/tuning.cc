@@ -44,6 +44,8 @@ ncclResult_t ncclTuningResultListPushFront(struct ncclTuningResultList_t* list, 
 ncclResult_t ncclTuningInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
 
+  NCCLCHECKGOTO(ncclTuningCostModelPreInit(comm), ret, fail);
+
   NCCLCHECKGOTO(ncclTunerPluginLoad(comm), ret, fail);
   if (comm->tuner) {
     NCCLCHECKGOTO(comm->tuner->init(&comm->tunerContext, comm->commHash, comm->nRanks, comm->nNodes, ncclDebugLog,

@@ -28,6 +28,7 @@ struct ncclTuningModelEntry_t {
 // factor is not ideal but works quite well. Powers of two, 64 B to 256MB.
 extern float treeCorrectionFactor[NCCL_NUM_PROTOCOLS][24];
 
+ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm);
 ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm);
 ncclResult_t ncclTuningCostModelFinalize(struct ncclComm* comm);
 ncclResult_t ncclTuningCostModelSimModel(int id, struct ncclTuningInput_t* const input,

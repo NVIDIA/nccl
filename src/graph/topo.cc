@@ -1883,6 +1883,64 @@ static ncclResult_t ncclTopoGetMergePolicy(int* mergePolicy) {
 
 static std::mutex netMutex;
 
+ncclResult_t ncclTopoGetNetPropertiesSnapshot(struct ncclComm* comm, bool requireCommInitialized,
+                                              struct ncclTopoNetPropertiesSnapshot** snapshots, int* nSnapshots) {
+  ncclResult_t ret = ncclSuccess;
+  int count = 0;
+
+  if (comm == nullptr || snapshots == nullptr || nSnapshots == nullptr) {
+    WARN("invalid arguments for network properties snapshot");
+    return ncclInvalidArgument;
+  }
+  *snapshots = nullptr;
+  *nSnapshots = 0;
+
+  std::lock_guard<std::mutex> lock(netMutex);
+  if (requireCommInitialized) {
+    ncclResult_t initState = COMPILER_ATOMIC_LOAD(&comm->initState, std::memory_order_acquire);
+    if (initState != ncclSuccess) return initState;
+  }
+
+  ncclNet_t* net = comm->ncclNet;
+  if (net == nullptr) return ncclSuccess;
+  if (net->devices == nullptr || net->getProperties == nullptr) {
+    WARN("network plugin has invalid properties callbacks");
+    return ncclInvalidArgument;
+  }
+  NCCLCHECKGOTO(net->devices(&count), ret, exit);
+  if (count < 0) {
+    WARN("network plugin returned invalid device count %d", count);
+    ret = ncclInternalError;
+    goto exit;
+  }
+  if (count == 0) goto exit;
+
+  NCCLCHECKGOTO(ncclCalloc(snapshots, count), ret, exit);
+  for (int dev = 0; dev < count; dev++) {
+    struct ncclTopoNetPropertiesSnapshot* snapshot = *snapshots + dev;
+    ncclNetProperties_t properties = {};
+
+    if (net->getProperties(dev, &properties) != ncclSuccess) continue;
+    snapshot->propertiesValid = true;
+    snapshot->vProps = properties.vProps;
+    snapshot->speed = properties.speed;
+    snapshot->port = properties.port;
+    snapshot->netDeviceType = properties.netDeviceType;
+    if (properties.name != nullptr) {
+      int n = snprintf(snapshot->name, sizeof(snapshot->name), "%s", properties.name);
+      if (n < 0 || (size_t)n >= sizeof(snapshot->name)) snapshot->name[0] = '\0';
+    }
+    if (properties.pciPath != nullptr) {
+      int n = snprintf(snapshot->pciPath, sizeof(snapshot->pciPath), "%s", properties.pciPath);
+      if (n < 0 || (size_t)n >= sizeof(snapshot->pciPath)) snapshot->pciPath[0] = '\0';
+    }
+  }
+  *nSnapshots = count;
+
+exit:
+  return ret;
+}
+
 ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** system, const char* dumpXmlFile) {
   ncclResult_t ret = ncclSuccess;
   struct ncclXml* xml;

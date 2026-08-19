@@ -230,6 +230,22 @@ struct ncclTopoNetInfo {
 ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct ncclTopoNetInfo* net);
 ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge);
 
+// Owned subset of network properties that remains valid after the topology lock is released.
+struct ncclTopoNetPropertiesSnapshot {
+  bool propertiesValid;
+  ncclNetVDeviceProps_t vProps;
+  int speed;
+  int port;
+  ncclNetDeviceType netDeviceType;
+  char name[PATH_MAX];
+  char pciPath[PATH_MAX];
+};
+
+// Caller keeps comm and its network plugin alive. When requireCommInitialized is true, the plugin is queried only
+// after communicator initialization succeeds. The caller owns *snapshots.
+ncclResult_t ncclTopoGetNetPropertiesSnapshot(struct ncclComm* comm, bool requireCommInitialized,
+                                              struct ncclTopoNetPropertiesSnapshot** snapshots, int* nSnapshots);
+
 #define NCCL_TOPO_XML_MAX_NODES 256
 #define NCCL_GRAPH_XML_MAX_NODES 65536
 ncclResult_t ncclTopoGetSystemFromXml(struct ncclXml* xml, struct ncclTopoSystem** topoSystem, uint64_t localHostHash);

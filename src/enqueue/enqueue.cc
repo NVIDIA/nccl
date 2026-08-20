@@ -2325,11 +2325,14 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
     // However, nChannels * comm->channels[0].nvls.nHeads should easily fit in 32 bits.
     // coverity[overflow_before_widen]
     uint64_t concurrentOps = nChannels * comm->channels[0].nvls.nHeads;
-    chunkSize = std::min(comm->nvlsChunkSize, comm->nvlsTreeMaxChunkSize);
     if ((nBytes < (32 * (concurrentOps * chunkSize))) && (chunkSize > 262144)) chunkSize = 262144;
     if ((nBytes < (16 * (concurrentOps * chunkSize))) && (chunkSize > 131072)) chunkSize = 131072;
     if ((nBytes < (4 * (concurrentOps * chunkSize))) && (chunkSize > 65536)) chunkSize = 65536;
     if ((nBytes < (1 * (concurrentOps * chunkSize))) && (chunkSize > 32768)) chunkSize = 32768;
+    int ratio = 1;
+    // Account for using multiple NICs on VR.
+    if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && RUBIN_AND_LATER(comm->minCompCap)) ratio = 2;
+    chunkSize = std::min({comm->nvlsChunkSize, comm->nvlsTreeMaxChunkSize, ratio * chunkSize});
   } else if (info->algorithm == NCCL_ALGO_TREE && info->protocol == NCCL_PROTO_LL128) {
     int nNodes = comm->nNodes;
     float ppn = comm->nRanks / (float)nNodes;

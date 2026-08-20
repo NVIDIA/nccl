@@ -58,6 +58,15 @@ NCCL_PARAM(NvlsEnable, "NVLS_ENABLE", 2);
 NCCL_PARAM(NvlsChunkSize, "NVLS_CHUNKSIZE", 128 * 1024);
 NCCL_PARAM(NvlsTreeMaxChunkSize, "NVLSTREE_MAX_CHUNKSIZE", -2);
 
+// Returns optimal NVLSTree tuning parameters for VeraRubin multi-node configurations.
+static ncclResult_t ncclNvlsTreeRubinTuning(struct ncclComm* comm, int* nChannels, int* chunkSize,
+                                            int* treeMaxChunkSize) {
+  *treeMaxChunkSize = 512 * 1024;
+  *chunkSize = *treeMaxChunkSize;
+  *nChannels = comm->nvlsChannels;
+  return ncclSuccess;
+}
+
 // Returns optimal NVLSTree tuning parameters for SM100 multi-node configurations.
 static ncclResult_t ncclNvlsTreeSm100Tuning(struct ncclComm* comm, int* nChannels, int* chunkSize,
                                             int* treeMaxChunkSize) {
@@ -100,8 +109,11 @@ static ncclResult_t ncclNvlsTreeSm100Tuning(struct ncclComm* comm, int* nChannel
 static ncclResult_t ncclNvlsChannels(struct ncclComm* comm, int* nChannels, int* chunkSize, int* treeMaxChunkSize) {
   int channels = 0;
 
-  if (comm->minCompCap >= 100 && comm->nNodes > 1) {
+  if (comm->minCompCap >= 100 && comm->nNodes > 1 && !RUBIN_AND_LATER(comm->minCompCap)) {
     NCCLCHECK(ncclNvlsTreeSm100Tuning(comm, &channels, chunkSize, treeMaxChunkSize));
+  }
+  if (RUBIN_AND_LATER(comm->minCompCap) && comm->nNodes > 1) {
+    NCCLCHECK(ncclNvlsTreeRubinTuning(comm, &channels, chunkSize, treeMaxChunkSize));
   }
 
   if (comm->config.nvlsCTAs != NCCL_CONFIG_UNDEF_INT) {

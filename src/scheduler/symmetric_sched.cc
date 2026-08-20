@@ -349,11 +349,6 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
           devWork.nChannels = 1;
         } else if (cellLeft <= remainCell) {
           // the last segment of the task
-          if (devWork.nChannels <= 0) {
-            WARN("Symmetric work channel count is %d", devWork.nChannels);
-            ret = ncclInternalError;
-            goto fail;
-          }
           // if the remaining cell is less than 1024 bytes, we can fuse the last channel
           if ((remainCell - cellLeft) * NCCL_SYM_KERNEL_CELL_SIZE <= (1 << 10) || ncclIntruQueueEmpty(symTaskQueue)) {
             devWork.nChannels++;

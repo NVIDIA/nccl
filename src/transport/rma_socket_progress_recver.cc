@@ -32,6 +32,7 @@ static ncclResult_t ncclRmaSocketProxyResolveDataTarget(struct ncclRmaSocketProx
   }
   NCCLCHECK(ncclRmaSocketProxyValidateRange(handle->size, controlMsg->dstOff, (size_t)controlMsg->size,
                                             "destination MR"));
+  ncclAtomicRefCountIncrement(&handle->recvActiveOps);
   receiver->dataPtr = (void*)((uintptr_t)handle->data + controlMsg->dstOff);
   receiver->dataType = handle->type;
   receiver->dataHandle = handle;
@@ -56,6 +57,7 @@ static ncclResult_t ncclRmaSocketProxyResolveSignalTarget(struct ncclRmaSocketPr
     return ncclInvalidUsage;
   }
   NCCLCHECK(ncclRmaSocketProxyValidateRange(handle->size, controlMsg->signalOff, sizeof(uint64_t), "signal MR"));
+  ncclAtomicRefCountIncrement(&handle->recvActiveOps);
   receiver->signalPtr = (void*)((uintptr_t)handle->data + controlMsg->signalOff);
   receiver->signalType = handle->type;
   receiver->signalDelta = controlMsg->signalOp == NCCL_NET_SIGNAL_OP_INC ? 1 : controlMsg->signalValue;
@@ -87,10 +89,23 @@ static ncclResult_t ncclRmaSocketProxyApplySignal(struct ncclRmaSocketProxyPeerR
   return ncclSuccess;
 }
 
+static void ncclRmaSocketProxyReleaseRecvMr(struct ncclRmaSocketProxyMrHandle* handle) {
+  if (handle == NULL) return;
+  if (COMPILER_ATOMIC_LOAD(&handle->recvActiveOps, std::memory_order_relaxed) <= 0) {
+    WARN("RMA/Socket : receive MR reference underflow mrId=%lu", handle->mrId);
+    return;
+  }
+  ncclAtomicRefCountDecrement(&handle->recvActiveOps);
+}
+
 static void ncclRmaSocketProxyResetRecv(struct ncclRmaSocketProxyPeerReceiver* receiver) {
+  ncclRmaSocketProxyReleaseRecvMr(receiver->dataHandle);
+  ncclRmaSocketProxyReleaseRecvMr(receiver->signalHandle);
   receiver->recvState = ncclRmaSocketProxyRecvStateControlMsg;
   memset(&receiver->controlMsg, 0, sizeof(receiver->controlMsg));
   receiver->controlMsgOffset = 0;
+  receiver->controlAck = 0;
+  receiver->controlAckOffset = 0;
   receiver->recvPayloadOffset = 0;
   receiver->recvChunkSize = 0;
   receiver->recvChunkOffset = 0;
@@ -144,7 +159,22 @@ static ncclResult_t ncclRmaSocketProxyStartRecvPut(struct ncclRmaSocketProxyColl
     return ncclInternalError;
   }
 
-  receiver->recvState = ncclRmaSocketProxyRecvStatePayload;
+  receiver->controlAck = NCCL_RMA_SOCKET_CONTROL_ACK_MAGIC;
+  receiver->recvState = ncclRmaSocketProxyRecvStateControlAck;
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclRmaSocketProxyProgressControlAck(struct ncclRmaSocketProxyPeerReceiver* receiver, int peer) {
+  int closed = 0;
+  NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &receiver->sock, &receiver->controlAck, sizeof(receiver->controlAck),
+                               &receiver->controlAckOffset, &closed));
+  if (closed) {
+    WARN("RMA/Socket : receive socket from peer=%d closed while sending iPut control ACK", peer);
+    return ncclRemoteError;
+  }
+  if (receiver->controlAckOffset == (int)sizeof(receiver->controlAck)) {
+    receiver->recvState = ncclRmaSocketProxyRecvStatePayload;
+  }
   return ncclSuccess;
 }
 
@@ -276,6 +306,9 @@ ncclResult_t ncclRmaSocketProxyProgressPeerRecv(struct ncclRmaSocketProxyCollCom
       ret = ncclRemoteError;
       goto fail;
     }
+  }
+  if (receiver->recvState == ncclRmaSocketProxyRecvStateControlAck) {
+    NCCLCHECKGOTO(ncclRmaSocketProxyProgressControlAck(receiver, peer), ret, fail);
   }
   if (receiver->recvState == ncclRmaSocketProxyRecvStatePayload) {
     NCCLCHECKGOTO(ncclRmaSocketProxyProgressRecvPayload(comm, peer), ret, fail);

@@ -8,6 +8,7 @@
 #include "rma_socket.h"
 
 #include <string.h>
+#include <thread>
 
 /* Memory layer: pointer-type checks, staging buffers, GDRCopy mapping,
  * receive-buffer copies, and symmetric MR registration. */
@@ -151,6 +152,8 @@ ncclResult_t ncclRmaSocketProxyDeregMrSym(void* collComm, void* mhandle) {
     WARN("RMA/Socket : deregMrSym called with unknown handle=%p", mhandle);
     return ncclInvalidArgument;
   }
+
+  while (COMPILER_ATOMIC_LOAD(&handle->recvActiveOps, std::memory_order_acquire) != 0) std::this_thread::yield();
 
   if (prev == NULL) {
     comm->mrHead = cur->next;

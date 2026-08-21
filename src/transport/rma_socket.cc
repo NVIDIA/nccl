@@ -222,6 +222,24 @@ static ncclResult_t ncclRmaSocketProxyProgressSendTask(struct ncclRmaSocketProxy
     if (task->controlMsgOffset < (int)sizeof(task->controlMsg)) return ncclSuccess;
   }
 
+  /* Put-ACK exists so sender knows that the receiver will deregister destination MR only after
+    writing the PUT data in destination GPU. We don't need this for GET, it is implicitly waiting
+    for ncclRmaSocketProxyMsgTypeRespondGetData operation to finish before the request is released */
+  if (task->controlMsg.type == ncclRmaSocketProxyMsgTypeIput &&
+      task->controlAckOffset < (int)sizeof(task->controlAck)) {
+    NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &sender->sock, &task->controlAck, sizeof(task->controlAck),
+                                 &task->controlAckOffset, &closed));
+    if (closed) {
+      WARN("RMA/Socket : send socket to peer=%d closed while waiting for iPut control ACK", peer);
+      return ncclRemoteError;
+    }
+    if (task->controlAckOffset < (int)sizeof(task->controlAck)) return ncclSuccess;
+    if (task->controlAck != NCCL_RMA_SOCKET_CONTROL_ACK_MAGIC) {
+      WARN("RMA/Socket : invalid iPut control ACK 0x%x from peer=%d", task->controlAck, peer);
+      return ncclRemoteError;
+    }
+  }
+
   if (task->size == 0) {
     ncclRmaSocketProxyPopAndCompleteSendTask(sender);
     return ncclSuccess;

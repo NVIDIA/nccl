@@ -16,9 +16,10 @@
 #include <mutex>
 
 #define NCCL_RMA_SOCKET_MAX_REQUESTS_PER_PEER NCCL_NET_MAX_REQUESTS
-#define NCCL_RMA_SOCKET_CHUNK_SIZE (64 * 1024 * 1024)
+#define NCCL_RMA_SOCKET_CHUNK_SIZE (4 * 1024 * 1024)
 
 #define NCCL_RMA_SOCKET_OP_HAS_SIGNAL (1U << 0)
+#define NCCL_RMA_SOCKET_CONTROL_ACK_MAGIC 0x524d4141U
 
 struct ncclRmaSocketProxyCtx;
 
@@ -36,8 +37,9 @@ enum ncclRmaSocketProxyRequestType {
 
 enum ncclRmaSocketProxyRecvState {
   ncclRmaSocketProxyRecvStateControlMsg = 0,
-  ncclRmaSocketProxyRecvStatePayload = 1,
-  ncclRmaSocketProxyRecvStateClosed = 2,
+  ncclRmaSocketProxyRecvStateControlAck = 1,
+  ncclRmaSocketProxyRecvStatePayload = 2,
+  ncclRmaSocketProxyRecvStateClosed = 3,
 };
 
 struct ncclRmaSocketProxyHeader {
@@ -62,6 +64,7 @@ struct ncclRmaSocketProxyMrHandle {
   size_t size;
   int type;
   uint64_t mrId;
+  int recvActiveOps;
   // GDRCopy mapping for CUDA MRs.
   struct {
     int mapped;
@@ -89,6 +92,8 @@ struct ncclRmaSocketProxySendTask {
   size_t size;
   int srcType;
   int controlMsgOffset;
+  uint32_t controlAck;
+  int controlAckOffset;
   size_t payloadOffset;
   int chunkSize;
   int chunkOffset;
@@ -117,6 +122,8 @@ struct ncclRmaSocketProxyPeerReceiver {
   // Last received / in-progress control message and its payload status
   struct ncclRmaSocketProxyHeader controlMsg;
   int controlMsgOffset;
+  uint32_t controlAck;
+  int controlAckOffset;
   size_t recvPayloadOffset;
   int recvChunkSize;
   int recvChunkOffset;

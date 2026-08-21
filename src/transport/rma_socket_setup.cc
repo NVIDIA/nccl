@@ -258,7 +258,8 @@ ncclResult_t ncclRmaSocketProxyCloseColl(void* collComm) {
     }
     if (comm->peerReceiver) {
       struct ncclRmaSocketProxyPeerReceiver* receiver = &comm->peerReceiver[peer];
-      if (receiver->recvState == ncclRmaSocketProxyRecvStatePayload || receiver->controlMsgOffset != 0) {
+      if (receiver->recvState == ncclRmaSocketProxyRecvStateControlAck ||
+          receiver->recvState == ncclRmaSocketProxyRecvStatePayload || receiver->controlMsgOffset != 0) {
         WARN("RMA/Socket : closeColl called with an incomplete receive from peer=%d state=%d controlOffset=%d", peer,
              receiver->recvState, receiver->controlMsgOffset);
         return ncclInvalidUsage;

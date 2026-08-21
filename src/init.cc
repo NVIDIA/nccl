@@ -832,7 +832,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   CUCHECK(cuDeviceGetUuid((CUuuid*)&info->gpuUuid, (CUdevice)comm->cudaDev));
 
   NCCLCHECK(ncclGpuGdrSupport(comm, &info->gdrSupport));
-  NCCLCHECK(ncclGpuCftSupport(comm, &info->gpuCftSupport));
+  NCCLCHECK(ncclGpuCftSupport(comm, &info->gpuCftSupport, &info->gpuCftMulticastSupport, &info->gpuCftCountedSupport));
   info->comm = comm;
   info->cudaCompCap = comm->minCompCap = comm->maxCompCap = comm->compCap;
 
@@ -1143,6 +1143,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->cuMemSupport = 1;
   comm->cuMemGdrSupport = 1;
   comm->gpuCftSupport = comm->peerInfo[0].gpuCftSupport;
+  comm->gpuCftMulticastSupport = comm->peerInfo[0].gpuCftMulticastSupport;
+  comm->gpuCftCountedSupport = comm->peerInfo[0].gpuCftCountedSupport;
   comm->minDriverVersion = comm->peerInfo[0].cudaDriverVersion;
   comm->contiguousRanksPerHost = 0;
   currentHostSize = 0;
@@ -1181,6 +1183,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     if (comm->peerInfo[i].gpuCftSupport < comm->gpuCftSupport) {
       comm->gpuCftSupport = comm->peerInfo[i].gpuCftSupport;
     }
+    comm->gpuCftMulticastSupport &= comm->peerInfo[i].gpuCftMulticastSupport;
+    comm->gpuCftCountedSupport &= comm->peerInfo[i].gpuCftCountedSupport;
     if (comm->peerInfo[i].mloPart != -1) comm->hasMloPart = true;
     for (int j = 0; j < i; j++) {
       // NVML device is agnostic to MloPart being used. With MloPart, each partition has a different GPU UUID.

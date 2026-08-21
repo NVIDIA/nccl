@@ -51,6 +51,8 @@ struct ncclPeerInfo {
   struct ncclComm* comm;
   int cudaCompCap;
   int gpuCftSupport;
+  bool gpuCftMulticastSupport;
+  bool gpuCftCountedSupport;
   size_t totalGlobalMem;
   // MNNVL support
   nvmlGpuFabricInfoV_t fabricInfo;

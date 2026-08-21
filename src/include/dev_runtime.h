@@ -77,7 +77,7 @@ struct ncclDevrState {
   int cftSize;
   int cftMcSelf;
   int cftMcSize;
-  struct ncclDevrStateCftUc le;
+  struct ncclDevrStateCftUc le[2]; // 0: UC LE ID base, 1: Counted UC LE ID base (rank_i le = base + i)
 
   size_t granularity; // cuMemGetAllocationGranularity
   bool ginEnabled;
@@ -113,7 +113,8 @@ bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
 bool ncclDevrIsOneLsaTeam(struct ncclComm* comm);
 
 // Returns the CUDA version supported by CFT on this GPU, or 0 when CFT is unsupported.
-ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport);
+ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport, bool* gpuCftMulticastSupport,
+                               bool* gpuCftCountedSupport);
 
 // We assume ncclComm has a `ncclDevrState symState` member.
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm);

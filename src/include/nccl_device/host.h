@@ -132,6 +132,9 @@ typedef struct ncclCommProperties {
   ncclGinConnectionType_t ginConnectionType;
   bool ginSupport[64]; // ginSupport[i] is true if gin type i is supported
   size_t devCommRuntimeVersionSize;
+  bool cftSupport;
+  bool cftMulticastSupport;
+  bool cftCountedSupport;
 } ncclCommProperties_t;
 
 #define NCCL_COMM_PROPERTIES_INITIALIZER \

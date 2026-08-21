@@ -23,8 +23,8 @@ struct ncclDevrTeam {
   struct ncclTeam team;
   CUmemGenericAllocationHandle mcHandle;
   void* mcBasePtr;
-  ncclCftLeId ucLeId;
-  ncclCftLeId mcLeId;
+  ncclCftLeId ucLeId[2]; // 0: UC LE ID, 1: counted UC LE ID
+  ncclCftLeId mcLeId[2]; // 0: MC LE ID, 1: counted MC LE ID
 #if defined(NCCL_OS_WINDOWS)
   int worldRankList[1]; // Variable length. [1] for MSVC.
 #else
@@ -34,8 +34,8 @@ struct ncclDevrTeam {
 
 // Non-static functions in dev_runtime.cc also called from cft_dev_runtime.cc:
 int computeLsaSize(struct ncclComm* comm);
-ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool multimem, bool wantsLeUc, bool wantsLeMc,
-                           struct ncclDevrTeam** outTeam, bool* needBarrier);
+ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool multimem, bool counted, bool wantsLeUc,
+                           bool wantsLeMc, struct ncclDevrTeam** outTeam, bool* needBarrier);
 ncclResult_t findCommAndHostWindowFromDeviceWindow(ncclWindow_t devWindow, ncclComm_t* foundComm,
                                                    struct ncclDevrWindow** hostWindow);
 
@@ -45,9 +45,9 @@ int computeCftMcSize(struct ncclComm* comm);
 ncclResult_t symBindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le);
 ncclResult_t symUnbindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le);
 ncclResult_t symTeamObtainUcLe(struct ncclComm* comm, struct ncclDevrTeam* t, struct ncclDevrState* devr,
-                               bool* needBarrier);
+                               bool* needBarrier, bool counted);
 ncclResult_t symTeamObtainMcLe(struct ncclComm* comm, struct ncclDevrTeam* t, struct ncclDevrState* devr,
-                               bool* needBarrier);
+                               bool* needBarrier, bool counted);
 
 struct ncclDevrGinSegmentInfo {
   void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS];

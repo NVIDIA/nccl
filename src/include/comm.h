@@ -843,6 +843,8 @@ struct ncclComm {
   bool isAllDirectNvlink; // All GPUs are directly connected to each other through NVLink.
   int symmetricSupport;
   int gpuCftSupport;
+  bool gpuCftMulticastSupport;
+  bool gpuCftCountedSupport;
   bool useNetPXN;
   bool useGdr;
   bool hasMloPart; // if mlopart is used

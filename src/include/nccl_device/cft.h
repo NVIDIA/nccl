@@ -47,7 +47,19 @@ struct ncclCft : ncclCft_internal<Coop> {
   NCCL_DEVICE_INLINE void flush(OpCoop coop, bool* hasReport = nullptr, uint32_t* report = nullptr);
 
   template <typename OpCoop>
+  NCCL_DEVICE_INLINE void waitCounted(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer,
+                                      uint64_t* counter, size_t expected, uint32_t* abortFlag);
+
+  template <typename OpCoop>
+  NCCL_DEVICE_INLINE ncclResult_t waitCounted(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer,
+                                              uint64_t* counter, size_t expected, uint64_t timeoutCycles);
+
+  template <typename OpCoop>
   NCCL_DEVICE_INLINE void put(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes);
+
+  template <typename OpCoop>
+  NCCL_DEVICE_INLINE void putCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset,
+                                     void* smemSource, uint32_t bytes);
 
   template <typename OpCoop>
   NCCL_DEVICE_INLINE void putCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes,
@@ -55,6 +67,10 @@ struct ncclCft : ncclCft_internal<Coop> {
 
   template <typename OpCoop>
   NCCL_DEVICE_INLINE void putMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes);
+
+  template <typename OpCoop>
+  NCCL_DEVICE_INLINE void putMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset,
+                                             void* smemSource, uint32_t bytes);
 
   template <typename OpCoop>
   NCCL_DEVICE_INLINE void putMultimemCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource,
@@ -68,12 +84,20 @@ struct ncclCft : ncclCft_internal<Coop> {
                               uint32_t bytes);
 
   template <typename RedOp, typename OpCoop>
+  NCCL_DEVICE_INLINE void redCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset,
+                                     RedOp const& red, void* smemSource, uint32_t bytes);
+
+  template <typename RedOp, typename OpCoop>
   NCCL_DEVICE_INLINE void redCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemSource,
                                     uint32_t bytes, uint16_t cpMask);
 
   template <typename RedOp, typename OpCoop>
   NCCL_DEVICE_INLINE void redMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,
                                       void* smemSource, uint32_t bytes);
+
+  template <typename RedOp, typename OpCoop>
+  NCCL_DEVICE_INLINE void redMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset,
+                                             RedOp const& red, void* smemSource, uint32_t bytes);
 
   template <typename RedOp, typename OpCoop>
   NCCL_DEVICE_INLINE void redMultimemCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,

@@ -66,6 +66,8 @@ typedef enum { ncclSuccess                 =  0,
 #define NCCL_WIN_STRICT_ORDERING 0x02
 /* Restrict window registration to GIN only. By default, register for all supported capabilities. */
 #define NCCL_WIN_GIN_ONLY 0x04
+/* Restrict window registration to CFT COUNTED only. By default, register for non-COUNTED LEs. */
+#define NCCL_WIN_CFT_COUNTED 0x08
 
 #define NCCL_WIN_REQUIRED_ALIGNMENT 4096
 

@@ -35,10 +35,12 @@ struct ncclWindow_vidmem {
   uint32_t stride4G;
   uint32_t mcOffset4K;
   uint32_t ginOffset4K;
+  uint32_t winFlags;
   ncclGinWindow_t ginWinsDefaultBackend[NCCL_GIN_MAX_CONNECTIONS];
   struct ncclSegmentWindow* ginMultiSegmentWins; // multi-segment: pointer to accommodate variable num segments
   int numSegments;
   int cftFlatRank;
+  ncclCftLeId_t ucLeIdBase;
 };
 
 // Inlined resource-window. A subset of ncclWindow_vidmem with only the fields used

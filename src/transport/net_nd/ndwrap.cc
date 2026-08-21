@@ -10,18 +10,39 @@
 #include "core.h"
 #include <ws2spi.h>
 #include <windows.h>
+#include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// Global provider handle
+typedef HRESULT(STDAPICALLTYPE* ncclNdDllGetClassObject)(REFCLSID, REFIID, LPVOID*);
+typedef HRESULT(STDAPICALLTYPE* ncclNdDllCanUnloadNow)(void);
+
+// Process-wide provider state is protected across plugin initialization and teardown.
+static std::mutex g_ndMutex;
 static struct IND2Provider* g_ndProvider = NULL;
 static int g_ndInitialized = 0;
 static HMODULE g_ndProviderModule = NULL;
+static ncclNdDllGetClassObject g_ndGetClassObject = NULL;
+static ncclNdDllCanUnloadNow g_ndCanUnloadNow = NULL;
+static GUID g_ndProviderId = {};
+static bool g_ndProviderIdValid = false;
 
 // Return the process-wide NDv2 provider selected during initialization.
 struct IND2Provider* wrap_nd_get_provider(void) {
+  // The transport reference count prevents teardown while callers use this pointer.
   return g_ndProvider;
+}
+
+// Match the NDv2 Winsock catalog contract used by the NetworkDirect reference code.
+static bool ncclNdIsV2Provider(const WSAPROTOCOL_INFOW& info) {
+  static const DWORD serviceFlags =
+    XP1_GUARANTEED_DELIVERY | XP1_GUARANTEED_ORDER | XP1_MESSAGE_ORIENTED | XP1_CONNECT_DATA;
+  static const DWORD providerFlags = PFL_HIDDEN | PFL_NETWORKDIRECT_PROVIDER;
+  return (info.dwServiceFlags1 & serviceFlags) == serviceFlags && info.iVersion == ND_VERSION_2 &&
+         (info.dwProviderFlags & providerFlags) == providerFlags &&
+         (info.iAddressFamily == AF_INET || info.iAddressFamily == AF_INET6) && info.iSocketType == -1 &&
+         info.iProtocol == 0 && info.iProtocolMaxOffset == 0;
 }
 
 // Find and load the first usable NDv2 provider in the Winsock catalog.
@@ -64,10 +85,7 @@ static ncclResult_t ncclNdEnumerateProviders(struct IND2Provider** ppProvider) {
 
   // Inspect each catalog entry until one exposes a working IND2Provider.
   for (int i = 0; i < numProtocols; i++) {
-    // The WinOF2 catalog exposes NDv1 before NDv2. The v1 compatibility DLL
-    // can return an IND2Provider interface but does not implement the v2
-    // connection sequence correctly, leaving CompleteConnect pending forever.
-    if (protocolInfo[i].iVersion < 2) continue;
+    if (!ncclNdIsV2Provider(protocolInfo[i])) continue;
 
     GUID providerId = protocolInfo[i].ProviderId;
 
@@ -126,9 +144,8 @@ static ncclResult_t ncclNdEnumerateProviders(struct IND2Provider** ppProvider) {
     }
 
     // Resolve the COM entry point used to request IND2Provider.
-    typedef HRESULT(STDAPICALLTYPE * PFNDllGetClassObject)(REFCLSID, REFIID, LPVOID*);
-    PFNDllGetClassObject pfn = (PFNDllGetClassObject)GetProcAddress(hProvider, "DllGetClassObject");
-    if (!pfn) {
+    ncclNdDllGetClassObject getClassObject = (ncclNdDllGetClassObject)GetProcAddress(hProvider, "DllGetClassObject");
+    if (!getClassObject) {
       FreeLibrary(hProvider);
       free(path);
       continue;
@@ -136,12 +153,17 @@ static ncclResult_t ncclNdEnumerateProviders(struct IND2Provider** ppProvider) {
 
     // Request IND2Provider using the catalog ProviderId as the CLSID.
     IND2Provider* provider = NULL;
-    HRESULT hr = pfn(providerId, IID_IND2Provider, (void**)&provider);
+    HRESULT hr = getClassObject(providerId, IID_IND2Provider, (void**)&provider);
     if (SUCCEEDED(hr) && provider != NULL) {
+      // Preserve catalog order by selecting the first usable NDv2 provider.
       *ppProvider = provider;
       // Keep the module loaded for the lifetime of the provider. It will be
       // released explicitly during plugin teardown.
       g_ndProviderModule = hProvider;
+      g_ndGetClassObject = getClassObject;
+      g_ndCanUnloadNow = (ncclNdDllCanUnloadNow)GetProcAddress(hProvider, "DllCanUnloadNow");
+      g_ndProviderId = providerId;
+      g_ndProviderIdValid = true;
       free(path);
       free(protocolInfo);
       return ncclSuccess;
@@ -159,42 +181,68 @@ static ncclResult_t ncclNdEnumerateProviders(struct IND2Provider** ppProvider) {
 
 // Initialize Winsock and load the process-wide NDv2 provider once.
 ncclResult_t wrap_nd_symbols(void) {
-  if (g_ndInitialized) {
-    return ncclSuccess;
+  std::lock_guard<std::mutex> lock(g_ndMutex);
+  if (g_ndProvider != NULL) return ncclSuccess;
+
+  // Reacquire the provider from a module that could not be unloaded earlier.
+  if (g_ndProviderModule != NULL && g_ndGetClassObject != NULL && g_ndProviderIdValid) {
+    HRESULT hr = g_ndGetClassObject(g_ndProviderId, IID_IND2Provider, (void**)&g_ndProvider);
+    if (SUCCEEDED(hr) && g_ndProvider != NULL) {
+      INFO(NCCL_NET, "NET/ND : Reused loaded NetworkDirect provider");
+      return ncclSuccess;
+    }
+    g_ndProvider = NULL;
+    WARN("NET/ND : Failed to reacquire loaded NetworkDirect provider: 0x%08x", hr);
+    return ncclInternalError;
   }
 
-  // Initialize Winsock
-  WSADATA wsaData;
-  int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-  if (result != 0) {
-    WARN("NET/ND : WSAStartup failed: %d", result);
-    return ncclSystemError;
+  // Initialize Winsock once for the provider module lifetime.
+  if (!g_ndInitialized) {
+    WSADATA wsaData;
+    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (result != 0) {
+      WARN("NET/ND : WSAStartup failed: %d", result);
+      return ncclSystemError;
+    }
+    g_ndInitialized = 1;
   }
 
-  // Enumerate and load ND provider
+  // Enumerate and load the first provider that satisfies the NDv2 contract.
   ncclResult_t ret = ncclNdEnumerateProviders(&g_ndProvider);
   if (ret != ncclSuccess || g_ndProvider == NULL) {
     INFO(NCCL_NET, "NET/ND : No NetworkDirect provider found");
     WSACleanup();
+    g_ndInitialized = 0;
     return ncclInternalError;
   }
 
-  g_ndInitialized = 1;
   INFO(NCCL_NET, "NET/ND : Successfully loaded NetworkDirect provider");
   return ncclSuccess;
 }
 
 // Release the provider, its module, and Winsock in reverse order.
 void wrap_nd_unload(void) {
+  std::lock_guard<std::mutex> lock(g_ndMutex);
   if (g_ndProvider) {
     wrap_nd_release(g_ndProvider);
     g_ndProvider = NULL;
   }
   if (g_ndProviderModule) {
-    FreeLibrary(g_ndProviderModule);
-    g_ndProviderModule = NULL;
+    HRESULT canUnload = g_ndCanUnloadNow != NULL ? g_ndCanUnloadNow() : S_FALSE;
+    if (canUnload == S_OK) {
+      FreeLibrary(g_ndProviderModule);
+      g_ndProviderModule = NULL;
+      g_ndGetClassObject = NULL;
+      g_ndCanUnloadNow = NULL;
+      g_ndProviderId = GUID{};
+      g_ndProviderIdValid = false;
+    } else if (g_ndCanUnloadNow == NULL) {
+      TRACE(NCCL_NET, "NET/ND : Provider does not export DllCanUnloadNow; retaining its module");
+    } else {
+      TRACE(NCCL_NET, "NET/ND : Provider is still in use (DllCanUnloadNow=0x%08x); retaining its module", canUnload);
+    }
   }
-  if (g_ndInitialized) {
+  if (g_ndInitialized && g_ndProviderModule == NULL) {
     WSACleanup();
     g_ndInitialized = 0;
   }
@@ -232,13 +280,20 @@ ncclResult_t wrap_nd_open_adapter(struct IND2Provider* provider, UINT64 adapterI
   return ncclSuccess;
 }
 
-// Query NDv2 capabilities for an open adapter.
-ncclResult_t wrap_nd_query_adapter(struct IND2Adapter* adapter, ND2_ADAPTER_INFO* pInfo, ULONG* pBufferSize) {
-  if (pInfo) memset(pInfo, 0, *pBufferSize);
-  if (pInfo && *pBufferSize >= sizeof(pInfo->InfoVersion)) pInfo->InfoVersion = ND_VERSION_2;
-  HRESULT hr = adapter->Query(pInfo, pBufferSize);
+// Query the standard NDv2 capability prefix for an open adapter.
+ncclResult_t wrap_nd_query_adapter(struct IND2Adapter* adapter, ND2_ADAPTER_INFO* pInfo) {
+  if (adapter == NULL || pInfo == NULL) return ncclInvalidArgument;
+
+  memset(pInfo, 0, sizeof(*pInfo));
+  pInfo->InfoVersion = ND_VERSION_2;
+  ULONG bufferSize = sizeof(*pInfo);
+  HRESULT hr = adapter->Query(pInfo, &bufferSize);
   if (FAILED(hr)) {
     WARN("NET/ND : Query adapter failed: 0x%08x", hr);
+    return ncclSystemError;
+  }
+  if (bufferSize < sizeof(*pInfo)) {
+    WARN("NET/ND : Query adapter returned truncated information (%lu bytes)", (unsigned long)bufferSize);
     return ncclSystemError;
   }
   return ncclSuccess;

@@ -21,7 +21,7 @@ ncclResult_t wrap_nd_query_address_list(struct IND2Provider* provider, SOCKET_AD
 ncclResult_t wrap_nd_open_adapter(struct IND2Provider* provider, UINT64 adapterId, struct IND2Adapter** ppAdapter);
 
 // Adapter functions
-ncclResult_t wrap_nd_query_adapter(struct IND2Adapter* adapter, ND2_ADAPTER_INFO* pInfo, ULONG* pBufferSize);
+ncclResult_t wrap_nd_query_adapter(struct IND2Adapter* adapter, ND2_ADAPTER_INFO* pInfo);
 ncclResult_t wrap_nd_create_overlapped_file(struct IND2Adapter* adapter, HANDLE* phOverlappedFile);
 ncclResult_t wrap_nd_create_completion_queue(struct IND2Adapter* adapter, HANDLE hOverlappedFile, ULONG queueDepth,
                                              struct IND2CompletionQueue** ppCq);

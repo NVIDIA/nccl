@@ -30,7 +30,11 @@
 #endif
 
 #ifndef ND_TIMEOUT
-#define ND_TIMEOUT ((HRESULT)0xC00000B5L)
+#define ND_TIMEOUT ((HRESULT)0x00000102L)
+#endif
+
+#ifndef ND_IO_TIMEOUT
+#define ND_IO_TIMEOUT ((HRESULT)0xC00000B5L)
 #endif
 
 #endif // _NDSTATUS_H_

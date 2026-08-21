@@ -2573,7 +2573,7 @@ static ncclResult_t hostToDevRedOp(ncclDevRedOpFull* opFull, ncclRedOp_t op, ncc
     case ncclInt32:
     case ncclInt64:
       datatype_signed = true;
-      // no break, we want to fall through...
+      // fall through...
     case ncclUint8:
     case ncclUint32:
     case ncclUint64:

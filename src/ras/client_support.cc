@@ -692,6 +692,7 @@ static ncclResult_t rasClientRun(struct rasClient* client, bool* closed) {
       ret = ncclSuccess;
       break;
     }
+    // fall through
   case RAS_CLIENT_COMMS:
     NCCLCHECKGOTO(rasClientRunComms(client), ret, exit);
     client->status = RAS_CLIENT_FINISHED;
@@ -702,6 +703,7 @@ static ncclResult_t rasClientRun(struct rasClient* client, bool* closed) {
       ret = ncclSuccess;
       break;
     }
+    // fall through
   case RAS_CLIENT_DIAG_FINI:
     NCCLCHECKGOTO(rasDiagnosticsResume(client), ret, exit);
     client->status = RAS_CLIENT_FINISHED;

@@ -295,6 +295,7 @@ static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncc
     if (red == ncclDevSum || red == ncclDevSumPostDiv) {
       return isFloat && ty != ncclFloat64;
     }
+    // fall through
   default:
     return false;
   }

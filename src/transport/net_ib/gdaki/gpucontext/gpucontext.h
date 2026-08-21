@@ -22,13 +22,14 @@ void ncclGinGdakiGPUContext_initCurrent(void* ctxArray, int idx, struct doca_gpu
                                         struct doca_gpu_dev_verbs_qp* companion_gdqp,
                                         struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> counters_table,
                                         struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> signals_table,
-                                        __be32 sink_buffer_lkey, uint64_t* last_issued_get, uint64_t* last_visible_get);
+                                        __be32 sink_buffer_lkey, uint64_t* last_issued_get, uint64_t* last_visible_get,
+                                        bool use_mcst);
 
 ncclResult_t ncclGinGdakiGPUContext_init(int version, void* ctxArray, int idx, struct doca_gpu_dev_verbs_qp* gdqp,
                                          struct doca_gpu_dev_verbs_qp* companion_gdqp,
                                          struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> counters_table,
                                          struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> signals_table,
-                                         __be32 sink_buffer_lkey, uint64_t* last_issued_get,
-                                         uint64_t* last_visible_get);
+                                         __be32 sink_buffer_lkey, uint64_t* last_issued_get, uint64_t* last_visible_get,
+                                         bool use_mcst);
 
 #endif // GIN_GDAKI_GPUCONTEXT_H_

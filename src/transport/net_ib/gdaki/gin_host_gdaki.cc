@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include <assert.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -635,6 +636,10 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   CUmemGenericAllocationHandle sink_buffer_mhandle;
 
   bool need_cpu_proxy = false;
+  int rdmaWritesOrder = 0;
+  bool preHopper = true;
+  bool dataDirectNic = false;
+  char dataDirectPath[PATH_MAX];
 
   struct doca_gpu_verbs_qp** gverbs_qps = nullptr;
   struct doca_gpu_verbs_qp** contiguous_gverbs_qps = nullptr;
@@ -695,6 +700,26 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
 
   CUDACHECK(cudaGetDevice(&gdaki_ctx->cuda_id));
   CUDACHECK(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, gdaki_ctx->cuda_id));
+
+  CUDACHECK(cudaDeviceGetAttribute(&rdmaWritesOrder, cudaDevAttrGPUDirectRDMAWritesOrdering, gdaki_ctx->cuda_id));
+  preHopper = (rdmaWritesOrder < CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER);
+  if (ncclParamIbDataDirect() > 0) {
+    ncclResult_t result =
+      wrap_mlx5dv_get_data_direct_sysfs_path(cComm->ib.context, dataDirectPath, sizeof(dataDirectPath));
+    if (result == ncclSuccess) {
+      dataDirectNic = true;
+      INFO(NCCL_NET, "GIN/GDAKI: Data Direct DMA Interface is detected for device %s (%s)", gdaki_ctx->ib_dev_name,
+           dataDirectPath);
+    } else if (result == ncclInvalidArgument) {
+      TRACE(NCCL_NET, "GIN/GDAKI: Device %s does not support Data Direct DMA.", gdaki_ctx->ib_dev_name);
+    } else {
+      // Query unvailable for older driver versions
+      INFO(NCCL_NET, "GIN/GDAKI: mlx5dv_get_data_direct_sysfs_path unavailable for device %s, assuming no Data Direct",
+           gdaki_ctx->ib_dev_name);
+    }
+  }
+  INFO(NCCL_NET | NCCL_INIT, "GIN/GDAKI: device %s preHopper=%d dataDirectNic=%d mcst=%d", gdaki_ctx->ib_dev_name,
+       (int)preHopper, (int)dataDirectNic, (int)(preHopper || dataDirectNic));
 
   DOCACHECKGOTO(doca_gpu_create(pciBusId, &gdaki_ctx->gdev), status, out);
 
@@ -983,11 +1008,13 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     gin_gdaki_gpu_ctx->last_issued_get = gdaki_ctx->last_issued_get + ctx_idx * nranks;
     gin_gdaki_gpu_ctx->last_visible_get = gdaki_ctx->last_visible_get + ctx_idx * nranks;
 
+    // MCST is needed on pre-Hopper or on post-Hopper with Data Direct
+    bool use_mcst = preHopper || dataDirectNic;
     NCCLCHECKGOTO(ncclGinGdakiGPUContext_init(backendVersion, gin_gdaki_gpu_ctx_hd_mhandle->host_buf, ctx_idx,
                                               gin_gdaki_gpu_ctx->gdqp, gin_gdaki_gpu_ctx->companion_gdqp,
                                               gin_gdaki_gpu_ctx->counters_table, gin_gdaki_gpu_ctx->signals_table,
                                               gin_gdaki_gpu_ctx->sink_buffer_lkey, gin_gdaki_gpu_ctx->last_issued_get,
-                                              gin_gdaki_gpu_ctx->last_visible_get),
+                                              gin_gdaki_gpu_ctx->last_visible_get, use_mcst),
                   status, out);
   }
 

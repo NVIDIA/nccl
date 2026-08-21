@@ -311,23 +311,27 @@ NCCL_DEVICE_INLINE static void flushAsyncImpl(ncclGinCtx ctx, int peer, ncclGinR
   req->peer = peer;
   ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
   doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
-  uint64_t* lastIssuedGetArr = loadConst(&gdaki->last_issued_get);
-  uint64_t* lastVisibleGetArr = loadConst(&gdaki->last_visible_get);
-  const uint64_t lastIssuedGet = loadAtIndex<gin_sharing_mode>(lastIssuedGetArr, peer);
-  const uint64_t lastVisibleGet = loadAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer);
-  if (lastIssuedGet > lastVisibleGet) {
-    doca_gpu_dev_verbs_addr daddr;
-    daddr.addr = 0;
-    daddr.key = loadConst(&gdaki->sink_buffer_lkey);
-    doca_gpu_dev_verbs_ticket_t mcstWqeIdx;
-    doca_gpu_dev_verbs_mcst<doca_sharing_mode, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>(qp, daddr, &mcstWqeIdx);
-    req->sq_rsvd_index = mcstWqeIdx + 1;
-     // Must be after mcst to avoid race with concurrent flushes
-    atomicMaxAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer, mcstWqeIdx + 1);
-  } else {
-    const uint64_t n = doca_gpu_dev_verbs_atomic_read<uint64_t, doca_sharing_mode>(&qp->sq_rsvd_index);
-    req->sq_rsvd_index = n;
+
+  if (loadConst(&gdaki->use_mcst)) {
+    uint64_t* lastIssuedGetArr = loadConst(&gdaki->last_issued_get);
+    uint64_t* lastVisibleGetArr = loadConst(&gdaki->last_visible_get);
+    const uint64_t lastIssuedGet = loadAtIndex<gin_sharing_mode>(lastIssuedGetArr, peer);
+    const uint64_t lastVisibleGet = loadAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer);
+    if (lastIssuedGet > lastVisibleGet) {
+      doca_gpu_dev_verbs_addr daddr;
+      daddr.addr = 0;
+      daddr.key = loadConst(&gdaki->sink_buffer_lkey);
+      doca_gpu_dev_verbs_ticket_t mcstWqeIdx;
+      doca_gpu_dev_verbs_mcst<doca_sharing_mode, DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>(qp, daddr, &mcstWqeIdx);
+      req->sq_rsvd_index = mcstWqeIdx + 1;
+       // Must be after mcst to avoid race with concurrent flushes
+      atomicMaxAtIndex<gin_sharing_mode>(lastVisibleGetArr, peer, mcstWqeIdx + 1);
+      return;
+    }
   }
+
+  const uint64_t n = doca_gpu_dev_verbs_atomic_read<uint64_t, doca_sharing_mode>(&qp->sq_rsvd_index);
+  req->sq_rsvd_index = n;
 }
 
 template <bool HasTimeout, enum doca_gpu_dev_verbs_resource_sharing_mode doca_sharing_mode>

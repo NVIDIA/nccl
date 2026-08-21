@@ -311,7 +311,8 @@ void* persistentSocketThread(void* args_) {
         repeat = 0;
         for (int j = 0; j < nSocksPerThread; j++) {
           struct ncclNetSocketTask* r = myQueue->tasks + i + j;
-          if (r != NULL && r->used == 1 && r->offset < r->size) {
+          /* Acquire load pairs with the release store in ncclNetSocketGetTask */
+          if (r != NULL && COMPILER_ATOMIC_LOAD(&r->used, std::memory_order_acquire) == 1 && r->offset < r->size) {
 #ifdef NCCL_ENABLE_NET_PROFILING
             if (!eHandle[i + j]) {
               ncclProfilerNetSockDescr_v1_t data;
@@ -596,7 +597,12 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
     r->offset = 0;
     r->result = ncclSuccess;
     comm->nextSock = (comm->nextSock + 1) % comm->nSocks;
-    r->used = 1;
+    /* Publish the task slot with a release store so the helper thread
+     * cannot observe used==1 before the op/data/size/sock/offset/result
+     * stores above are visible. A plain store races the helper's scan on
+     * weakly-ordered architectures (e.g. aarch64), which can read a NULL
+     * data pointer and fail the subsequent send() with EFAULT. */
+    COMPILER_ATOMIC_STORE(&r->used, 1, std::memory_order_release);
     *req = r;
     std::lock_guard<std::mutex> lock(res->threadMutex);
     queue->next = (queue->next + 1) % queue->len;
@@ -689,10 +695,10 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       if (nCompleted == r->nSubs) {
         if (size) *size = r->size;
         *done = 1;
-        r->used = 0;
+        COMPILER_ATOMIC_STORE(&r->used, 0, std::memory_order_release);
         for (int i = 0; i < r->nSubs; i++) {
           struct ncclNetSocketTask* sub = r->tasks[i];
-          sub->used = 0;
+          COMPILER_ATOMIC_STORE(&sub->used, 0, std::memory_order_release);
         }
       }
     } else {
@@ -714,7 +720,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       if (r->offset == r->size) {
         if (size) *size = r->size;
         *done = 1;
-        r->used = 0;
+        COMPILER_ATOMIC_STORE(&r->used, 0, std::memory_order_release);
 #ifdef NCCL_ENABLE_NET_PROFILING
         ncclProfilerFunction(&r->pInfo.eHandle, ncclProfilerNetEventStop, NULL, 0, NULL);
         r->pInfo.eHandle = NULL;

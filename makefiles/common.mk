@@ -102,7 +102,9 @@ else
 endif
 
 CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \
-              -Wall -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
+              -Wall -Wextra -Wno-attributes -Wno-empty-body -Wno-implicit-fallthrough \
+              -Wno-missing-field-initializers -Wno-unused-parameter \
+              -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
               -I $(CUDA_INC) -I $(CUDA_INC)/cccl \
               $(CXXFLAGS)
 # Maxrregcount needs to be set accordingly to NCCL_MAX_NTHREADS (otherwise it will cause kernel launch errors)

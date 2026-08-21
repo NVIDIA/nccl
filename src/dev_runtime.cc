@@ -2159,7 +2159,7 @@ ncclResult_t ncclDevrGetLsaRankPtr(struct ncclComm* comm, struct ncclDevrWindow*
   }
 
   // Validate offset is within bounds
-  if (offset < 0 || offset >= winHost->size) {
+  if (offset >= winHost->size) {
     return ncclInvalidArgument;
   }
 

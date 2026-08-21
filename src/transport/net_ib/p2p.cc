@@ -307,7 +307,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
 
     if (size > slots[r].size) size = slots[r].size;
     // Sanity checks
-    if (slots[r].size < 0 || slots[r].addr == 0 || slots[r].rkeys[0] == 0) {
+    if (slots[r].addr == 0 || slots[r].rkeys[0] == 0) {
       char line[SOCKET_NAME_MAXLEN + 1];
       union ncclSocketAddress addr;
       ncclSocketGetAddr(&comm->base.sock, &addr);

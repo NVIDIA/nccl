@@ -742,10 +742,11 @@ doca_error_t doca_gpu_verbs_unexport_uar(uint64_t *uar_addr_gpu) {
         DOCA_LOG(LOG_ERR, "UAR address %p not found in registered_uar_refcount", uar_addr_gpu);
         return DOCA_ERROR_INVALID_VALUE;
     }
-    registered_uar_refcount[uar_key]--;
-    assert(registered_uar_refcount[uar_key] >= 0);
-    if (registered_uar_refcount[uar_key] == 0) {
-        registered_uar_refcount.erase(uar_key);
+    auto uar_it = registered_uar_refcount.find(uar_key);
+    assert(uar_it->second > 0);
+    uar_it->second--;
+    if (uar_it->second == 0) {
+        registered_uar_refcount.erase(uar_it);
         cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostUnregister(uar_addr_gpu));
         if (cuda_status != cudaSuccess) {
             DOCA_LOG(LOG_ERR, "Failed to unregister UAR address %p", uar_addr_gpu);

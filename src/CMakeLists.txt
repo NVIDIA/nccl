@@ -21,6 +21,7 @@ set(LIBSRCFILES
     cft_dev_runtime.cc
     dev_runtime_segments.cc
     mem_manager.cc
+    plugin/net.cc
 )
 
 # Add NVTX support if enabled

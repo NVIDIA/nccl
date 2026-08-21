@@ -77,7 +77,8 @@ enum ncclSocketType {
   ncclSocketTypeProxy = 2,
   ncclSocketTypeNetSocket = 3,
   ncclSocketTypeNetIb = 4,
-  ncclSocketTypeRasNetwork = 5
+  ncclSocketTypeRasNetwork = 5,
+  ncclSocketTypeNetNd = 6
 };
 
 struct ncclSocket {

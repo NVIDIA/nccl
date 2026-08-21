@@ -8,7 +8,6 @@
 #include "nccl.h"
 #include "comm.h"
 #include "checks.h"
-#include "net.h"
 #include "ras.h"
 #include "profiler.h"
 #include "env.h"
@@ -19,13 +18,6 @@
 
 #include <cstring>
 #include <cstdlib>
-#include <mutex>
-
-/* Cached socket transport device counts (populated during ncclNetInit) */
-static int winNetPhysDev = 0;
-static int winNetVirtDev = -1;  /* NCCL_UNDEF_DEV_COUNT */
-static bool winNetInitialized = false;
-static std::mutex winNetInitMutex;
 
 /* --------------------------------------------------------------------------
  * RAS (Linux-only) stubs
@@ -58,52 +50,6 @@ ncclResult_t ncclRasCommFini(const struct ncclComm* comm) {
 }
 
 /* --------------------------------------------------------------------------
- * Net plugin stubs: use built-in socket transport without plugin layer
- * -------------------------------------------------------------------------- */
-ncclResult_t ncclNetInit(struct ncclComm* comm) {
-  comm->ncclNet = &ncclNetSocket;
-  comm->ncclCollNet = nullptr;
-  comm->netPluginIndex = -1;
-
-  // Initialize the socket transport to enumerate network interfaces.
-  ncclNetCommConfig_t commConfig = {};
-  commConfig.trafficClass = NCCL_NET_TRAFFIC_CLASS_UNDEF;
-  NCCLCHECK(comm->ncclNet->init(&comm->netContext, comm->commHash, &commConfig, ncclDebugLog, NULL));
-
-  {
-    std::lock_guard<std::mutex> lock(winNetInitMutex);
-    if (!winNetInitialized) {
-      int ndev = 0;
-      NCCLCHECK(comm->ncclNet->devices(&ndev));
-      winNetPhysDev = ndev;
-      winNetInitialized = true;
-    }
-  }
-
-  return ncclSuccess;
-}
-
-ncclResult_t ncclNetInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
-  comm->netContext = parent->netContext;
-  comm->collNetContext = parent->collNetContext;
-  comm->ncclNet = parent->ncclNet;
-  comm->ncclCollNet = parent->ncclCollNet;
-  comm->netPluginIndex = parent->netPluginIndex;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclNetFinalize(struct ncclComm* comm) {
-  if (comm->ncclNet && comm->netContext) NCCLCHECK(comm->ncclNet->finalize(comm->netContext));
-  return ncclSuccess;
-}
-
-ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport) {
-  (void)comm;
-  *gdrSupport = 0;
-  return ncclSuccess;
-}
-
-/* --------------------------------------------------------------------------
  * Env plugin stubs
  * -------------------------------------------------------------------------- */
 bool ncclEnvPluginInitialized(void) {
@@ -116,35 +62,6 @@ ncclResult_t ncclEnvPluginInit(void) {
 
 const char* ncclEnvPluginGetEnv(const char* name) {
   return std::getenv(name);
-}
-
-/* --------------------------------------------------------------------------
- * Net/CollNet dev count stubs (plugin provides these on Linux)
- * -------------------------------------------------------------------------- */
-ncclResult_t ncclNetGetDevCount(int netPluginIndex, int* nPhysDev, int* nVirtDev) {
-  (void)netPluginIndex;
-  *nPhysDev = winNetPhysDev;
-  *nVirtDev = winNetVirtDev;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclNetSetVirtDevCount(int netPluginIndex, int nVirtDev) {
-  (void)netPluginIndex;
-  winNetVirtDev = nVirtDev;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclCollNetGetDevCount(int netPluginIndex, int* nPhysDev, int* nVirtDev) {
-  (void)netPluginIndex;
-  *nPhysDev = 0;
-  *nVirtDev = 0;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclCollNetSetVirtDevCount(int netPluginIndex, int nVirtDev) {
-  (void)netPluginIndex;
-  (void)nVirtDev;
-  return ncclSuccess;
 }
 
 /* --------------------------------------------------------------------------

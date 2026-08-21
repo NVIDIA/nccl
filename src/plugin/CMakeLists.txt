@@ -8,7 +8,6 @@ add_subdirectory(env)
 
 # Plugin sources
 set(PLUGIN_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/net.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/gin.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/rma.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler.cc

@@ -1089,9 +1089,10 @@ ncclResult_t ncclTopoGetSubsystem(const char* sysPath, char* subSys) {
     free(path);
   }
 #elif NCCL_OS_WINDOWS
-  // Windows network plugins use a synthetic slash-prefixed PCI bus-id path
-  // (for example /0000:3b:00.0). It has the same leaf format consumed below,
-  // while the actual PCI properties are resolved through SetupAPI.
+  // Windows transports may report a resolved PCI adapter as a synthetic
+  // slash-prefixed BDF path (for example /0000:3b:00.0); actual PCI properties
+  // are resolved through SetupAPI. Adapters without a resolvable BDF leave the
+  // subsystem empty so ncclTopoFillNet falls back to attaching them to a CPU.
   const char* leaf = strrchr(sysPath, '/');
   unsigned int domain, bus, device, function;
   if (leaf != NULL && sscanf(leaf + 1, "%x:%x:%x.%x", &domain, &bus, &device, &function) == 4) {

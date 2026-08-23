@@ -110,9 +110,30 @@ ncclResult_t ncclTuningRingModelSim(struct ncclTuningInput_t* const inputs, stru
     (inputs->comm->nNodes > 1 && inputs->func == ncclFuncAllReduce) ||
     (inputs->comm->nNodes == 1 && isBlackwellNvLink &&
      (inputs->func == ncclFuncAllReduce || inputs->func == ncclFuncAllGather || inputs->func == ncclFuncReduceScatter));
+  size_t bytesPerRankPerChannel = inputs->nBytes / (inputs->comm->nChannels * inputs->comm->nRanks);
+
   if (tuning->algo == NCCL_ALGO_RING && tuning->proto == NCCL_PROTO_SIMPLE && ringSimplePlateau &&
-      inputs->nBytes / (inputs->comm->nChannels * inputs->comm->nRanks) >= 64) {
-    lat *= inputs->comm->minCompCap < 80 ? 1.9 : 1.4; // Plateau effect of ring
+      bytesPerRankPerChannel >= 64) {
+    float plateauFactor = inputs->comm->minCompCap < 80 ? 1.9 : 1.4;
+
+    // Adjust the plateau factor based on per-rank/channel bytes and intra-node Ring steps.
+    if (inputs->comm->nNodes == 1 && isBlackwellNvLink) {
+      constexpr float plateauDelta = 0.1f;
+      float maxPlateauDelta = plateauFactor - 1.0f;
+      int nSteps = ncclTuningGetNsteps(inputs->func, inputs->comm->nRanks);
+      // A one-step Ring has zero step scale. Each additional step retains plateauDelta / maxPlateauDelta
+      // of the remaining distance to full scale.
+      float stepScale = 1.0f - powf(plateauDelta / maxPlateauDelta, std::max(0, nSteps - 1));
+      float effectivePlateauDelta = maxPlateauDelta;
+
+      if (bytesPerRankPerChannel > 256 * 1024) {
+        // Normalize 256-512 KiB per rank/channel to [0, 1], reducing the effective delta by up to plateauDelta.
+        float bytesPerRankPerChannelScale = std::min(1.0f, (bytesPerRankPerChannel - 256 * 1024) / (256.0f * 1024));
+        effectivePlateauDelta -= plateauDelta * bytesPerRankPerChannelScale;
+      }
+      plateauFactor = 1.0f + stepScale * effectivePlateauDelta;
+    }
+    lat *= plateauFactor; // Plateau effect of ring
   }
   tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, &lat, &bw);
   return ret;

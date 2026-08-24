@@ -168,7 +168,6 @@ ncclResult_t ncclNvlsGraphRegisterBuffer(
 ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm* comm, const void* sendbuff, void* recvbuff,
                                          size_t sendbuffSize, size_t recvbuffSize, int* outRegBufUsed,
                                          void** outRegBufSend, void** outRegBufRecv);
-ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, struct ncclReg* reg);
 ncclResult_t ncclNvlsFree(struct ncclComm* comm);
 
 enum {

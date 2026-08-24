@@ -50,4 +50,10 @@ ncclResult_t ncclNvlsUbRegister(struct ncclComm* comm, const void* sendbuff, voi
 
 #endif // CUDART_VERSION >= 12010
 
+// Rank-local inverse of ncclNvlsUbRegister: retire the committed range, if any. The arena
+// space comes back through the converged reclaim exchange of a later registration, so no
+// collective is needed here. Declared unguarded because regCleanup calls it on every path;
+// nvls.cc stubs it out before CUDA 12.1.
+ncclResult_t ncclNvlsUbDeregister(struct ncclComm* comm, struct ncclReg* reg);
+
 #endif // NCCL_NVLS_UB_H_

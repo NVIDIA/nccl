@@ -58,6 +58,8 @@ struct ubEligibility {
   struct ubSlotEligibility slot[nvlsUbRoles];
   size_t granularity;   // this rank's range alignment; ranks bind at the cross-rank max
   bool sendRecvAliased; // send and recv resolve to the same registration record
+  bool hasNewRetired;   // this rank retired a range since its last reclaim exchange
+  int retiredCount;     // retired ranges held by this rank; sizes the reclaim exchange
 };
 
 // Per-rank payload of the bind-result gather. The arena offset must be identical on
@@ -90,7 +92,8 @@ struct ubRegState {
 } // namespace
 
 size_t ncclNvlsUbScratchTypeSize(void) {
-  return std::max(sizeof(struct ubEligibility), sizeof(struct ubBindResult));
+  // The reclaim exchange chunks over this scratch, so it must fit at least one entry.
+  return std::max(std::max(sizeof(struct ubEligibility), sizeof(struct ubBindResult)), sizeof(struct ncclMcRetiredReg));
 }
 
 bool ncclNvlsUbEnabled(struct ncclComm* comm) {
@@ -216,6 +219,8 @@ static ncclResult_t ubEligibilityExchange(struct ncclComm* comm, struct ubRegSta
   }
   myEligibility.granularity = ubRangeAlignment(&resources->ubArena);
   myEligibility.sendRecvAliased = (reg[nvlsUbSend] != nullptr && reg[nvlsUbSend] == reg[nvlsUbRecv]);
+  myEligibility.retiredCount = resources->ubArena.retiredQueue.nElems;
+  myEligibility.hasNewRetired = resources->ubArena.hasNewRetiredSinceLastReclaim;
 
   // Fits the per-rank scratch reserved at init (ncclNvlsUbScratchTypeSize).
   NCCLCHECK(ncclShmemAllgather(comm, &resources->nvlsShmem, &myEligibility, allEligibility, sizeof(myEligibility)));
@@ -236,6 +241,127 @@ static ncclResult_t ubEligibilityExchange(struct ncclComm* comm, struct ubRegSta
   if (sendRecvAliased && plan->action[nvlsUbSend] == ubActionNewRange && plan->action[nvlsUbRecv] == ubActionNewRange)
     plan->rangeOwner[nvlsUbRecv] = nvlsUbSend;
   return ncclSuccess;
+}
+
+// Reclaim is worth its exchange only when every rank holds a retired range and something was
+// retired since the last one. Inputs come from the eligibility gather, so the answer is uniform.
+static bool ubTriggerReclaim(const struct ubEligibility* allEligibility, int localRanks) {
+  int fewestRetired = allEligibility[0].retiredCount;
+  bool anyRetiredSinceLastReclaim = false;
+
+  for (int i = 0; i < localRanks; i++) {
+    fewestRetired = std::min(fewestRetired, allEligibility[i].retiredCount);
+    anyRetiredSinceLastReclaim |= allEligibility[i].hasNewRetired;
+  }
+  return fewestRetired > 0 && anyRetiredSinceLastReclaim;
+}
+
+// Gather every rank's retired list into one rank-major array of *outEntriesPerRank entries per
+// rank, chunked over the shmem scratch. The round count is a pure function of the gathered
+// counts. The caller owns *outAllRetired.
+static ncclResult_t ubRetiredExchange(struct ncclComm* comm, const struct ubEligibility* allEligibility,
+                                      int* outEntriesPerRank, struct ncclMcRetiredReg** outAllRetired) {
+  struct ncclMcArena* arena = &comm->nvlsResources->ubArena;
+  int localRanks = comm->localRanks;
+  int entriesPerRound = (int)(comm->nvlsResources->nvlsShmem.maxTypeSize / sizeof(struct ncclMcRetiredReg));
+  struct ncclMcRetiredReg* myRetired = nullptr;    // this rank's list, offset-sorted
+  struct ncclMcRetiredReg* roundChunk = nullptr;   // one round's worth, rank-major
+  struct ncclMcRetiredReg* allRetired = nullptr;   // every rank's list, rank-major
+  int mostRetired = 0;
+  int exchangeRounds, entriesPerRank;
+  ncclResult_t ret = ncclSuccess;
+
+  for (int i = 0; i < localRanks; i++) mostRetired = std::max(mostRetired, allEligibility[i].retiredCount);
+  exchangeRounds = DIVUP(mostRetired, entriesPerRound);
+  entriesPerRank = exchangeRounds * entriesPerRound;
+
+  NCCLCHECKGOTO(ncclCalloc(&myRetired, entriesPerRank), ret, exit);
+  NCCLCHECKGOTO(ncclCalloc(&roundChunk, (size_t)localRanks * entriesPerRound), ret, exit);
+  NCCLCHECKGOTO(ncclCalloc(&allRetired, (size_t)localRanks * entriesPerRank), ret, exit);
+
+  // The queue is offset-sorted, so the snapshot is too; peers read only the retiredCount
+  // entries this rank reported in the eligibility gather.
+  ncclMcArenaRetiredSnapshot(arena, myRetired, entriesPerRank);
+
+  for (int r = 0; r < exchangeRounds; r++) {
+    NCCLCHECKGOTO(ncclShmemAllgather(comm, &comm->nvlsResources->nvlsShmem, myRetired + r * entriesPerRound, roundChunk,
+                                     entriesPerRound * sizeof(*myRetired)),
+                  ret, exit);
+    for (int i = 0; i < localRanks; i++)
+      memcpy(allRetired + i * entriesPerRank + r * entriesPerRound, roundChunk + i * entriesPerRound,
+             entriesPerRound * sizeof(*myRetired));
+  }
+
+exit:
+  if (ret != ncclSuccess) {
+    free(allRetired);
+    allRetired = nullptr;
+  }
+  *outAllRetired = allRetired;
+  *outEntriesPerRank = entriesPerRank;
+  free(myRetired);
+  free(roundChunk);
+  return ret;
+}
+
+// Free every range that all ranks have retired. Collective over the local ranks.
+static ncclResult_t ubReclaimRetiredRanges(struct ncclComm* comm, const struct ubEligibility* allEligibility) {
+  struct ncclMcArena* arena = &comm->nvlsResources->ubArena;
+  struct ncclMcRetiredReg* allRetired = nullptr;    // every rank's retired list, rank-major
+  struct ncclMcRetiredReg* sharedRetired = nullptr; // ranges every rank retired; the driver's slice, rewritten in place
+  int* peerCursor = nullptr; // per-rank position in its gathered list
+  int entriesPerRank = 0;
+  int driverRank = 0; // The driver is based on the shortest reclaim list.
+  int nShared = 0;
+  size_t freedBytes = 0;
+  ncclResult_t ret = ncclSuccess;
+
+  for (int i = 1; i < comm->localRanks; i++)
+    if (allEligibility[i].retiredCount < allEligibility[driverRank].retiredCount) driverRank = i;
+
+  NCCLCHECKGOTO(ncclCalloc(&peerCursor, comm->localRanks), ret, exit);
+  NCCLCHECKGOTO(ubRetiredExchange(comm, allEligibility, &entriesPerRank, &allRetired), ret, exit);
+  // The shared set lands in the driver's own slice.
+  sharedRetired = allRetired + (size_t)driverRank * entriesPerRank;
+
+  // Copy the ranges present in every rank's retired list into sharedRetired, offset-sorted. The
+  // shortest list drives: the peers' cursors only move forward, and every shared range is in
+  // every list, so the walk ends once any peer's list is exhausted.
+  for (int j = 0; j < allEligibility[driverRank].retiredCount; j++) {
+    const struct ncclMcRetiredReg* cand = &allRetired[driverRank * entriesPerRank + j];
+    bool onEveryRank = true;
+    for (int i = 0; i < comm->localRanks && onEveryRank; i++) {
+      const struct ncclMcRetiredReg* peer;
+      if (i == driverRank) continue;
+
+      while (peerCursor[i] < allEligibility[i].retiredCount &&
+             allRetired[i * entriesPerRank + peerCursor[i]].offset < cand->offset)
+        peerCursor[i]++;
+      if (peerCursor[i] >= allEligibility[i].retiredCount) goto exit; // no possible matches left
+
+      peer = &allRetired[i * entriesPerRank + peerCursor[i]];
+      if (peer->offset != cand->offset) {
+        onEveryRank = false;
+      } else if (peer->bindSize != cand->bindSize) {
+        // Cannot happen: an offset names one commit event. Skip to keep the arenas identical.
+        WARN("rank %d NVLS UB retired range offset %zu has size %zu on rank %d but %zu on rank %d", comm->rank,
+             cand->offset, cand->bindSize, comm->localRankToRank[driverRank], peer->bindSize, comm->localRankToRank[i]);
+        onEveryRank = false;
+      }
+    }
+    if (onEveryRank) sharedRetired[nShared++] = *cand;
+  }
+
+exit:
+  // The shared set is the same on every rank, so the arenas stay identical. Reclaim runs on
+  // every exit path, including an empty set: it re-arms the gate this exchange consumed, so
+  // there is no re-fire until another retirement on some rank.
+  NCCLCHECKIGNORE(ncclMcArenaReclaim(arena, sharedRetired, nShared, &freedBytes), ret);
+  INFO(NCCL_REG, "rank %d NVLS UB reclaimed %d of %d retired arena ranges (%zu bytes)", comm->rank, nShared,
+       allEligibility[comm->localRank].retiredCount, freedBytes);
+  free(allRetired);
+  free(peerCursor);
+  return ret;
 }
 
 // Count what the domain did with one role's range, from the gathered binds alone, so every
@@ -325,29 +451,21 @@ static ncclResult_t ubBindNewRanges(struct ncclComm* comm, struct ubRegState* st
   return ret;
 
 dispose:
-  // The state is gathered (or a failed gather left the partly-bound default), so every rank
-  // mutates its arena identically here: an offset no rank bound goes straight back, and a range
-  // some rank bound is leaked, since a freed offset could still be bound somewhere. A bind
-  // refusal is a property of the buffer, not the offset, and the NVLS_REG_NO_SUPPORT latch
-  // stops the refused buffer from consuming another range.
+  // The state is gathered (or a failed gather left the retire default), so every rank mutates
+  // its arena identically here: an offset no rank bound goes straight back, and anything else
+  // recycles through reclaim. A bind refusal is a property of the buffer, not the offset, and
+  // the NVLS_REG_NO_SUPPORT latch stops the refused buffer from consuming another range.
   for (int r = 0; r < nvlsUbRoles; r++) {
     if (newArenaRegs[r] == nullptr) continue;
-    if (rangeState[r] == ubRangeStateUnbound) {
-      NCCLCHECKIGNORE(ncclMcArenaDeregister(arena, newArenaRegs[r]), ret);
-    } else {
-      if (newArenaRegs[r]->bound)
-        NCCLCHECKIGNORE(ncclMcPartitionUnbind(&arena->partition, newArenaRegs[r]->offset, newArenaRegs[r]->bindSize),
-                        ret);
-      WARN("rank %d NVLS UB leaking arena range offset %zu size %zu after partial bind", comm->rank,
-           newArenaRegs[r]->offset, newArenaRegs[r]->bindSize);
-      free(newArenaRegs[r]);
-    }
+    if (rangeState[r] == ubRangeStateUnbound) NCCLCHECKIGNORE(ncclMcArenaDeregister(arena, newArenaRegs[r]), ret);
+    else ncclMcArenaRetireReg(arena, newArenaRegs[r]);
   }
   return ret;
 }
 
 // UB registration is a converged protocol over the NVLS domain's local ranks:
 //   round one:  gather per-rank eligibility, settle a plan (reuse|newRange|fallback)
+//   reclaim:    if triggered, gather the retired lists and free the intersection
 //   round two:  reserve + bind new ranges, gather the verdicts, commit all or dispose all
 // Every decision is a pure function of gathered payloads, so all ranks act identically and
 // the arena's ncclSpace stays bit-identical across ranks. Local failures travel as payload;
@@ -376,6 +494,9 @@ ncclResult_t ncclNvlsUbRegister(struct ncclComm* comm, const void* sendbuff, voi
   }
   // Reuse and fallback are settled by the exchange; only a new range needs more.
   if (anyNewRange && everyRoleResolved) {
+    // Reclaiming what every rank retired is itself collective. A failure only leaves space
+    // unrecovered, so it does not stop the round.
+    if (ubTriggerReclaim(state.allEligibility, localRanks)) (void)ubReclaimRetiredRanges(comm, state.allEligibility);
     NCCLCHECKGOTO(ncclCalloc(&state.allBindResults, localRanks), ret, exit);
     NCCLCHECKGOTO(ubBindNewRanges(comm, &state), ret, exit);
   }
@@ -394,6 +515,22 @@ exit:
   free(state.allEligibility);
   free(state.allBindResults);
   return ret;
+}
+
+ncclResult_t ncclNvlsUbDeregister(struct ncclComm* comm, struct ncclReg* reg) {
+  struct ncclNvlsSharedRes* resources = comm->nvlsResources;
+  size_t offset, bindSize;
+
+  if ((reg->state & NVLS_REG_COMPLETE) == 0) return ncclSuccess;
+  offset = reg->nvlsUbReg->offset;
+  bindSize = reg->nvlsUbReg->bindSize;
+  // The unbind can fail when the user freed the buffer first; the binding is gone either
+  // way, so the range still recycles.
+  ncclMcArenaRetireReg(&resources->ubArena, reg->nvlsUbReg);
+  reg->state &= ~(uint32_t)NVLS_REG_COMPLETE;
+  reg->nvlsUbReg = NULL;
+  INFO(NCCL_NVLS, "rank %d - NVLS deregistered buffer at arena offset %zu size %zu", comm->rank, offset, bindSize);
+  return ncclSuccess;
 }
 
 #endif // CUDART_VERSION >= 12010

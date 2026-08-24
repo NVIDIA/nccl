@@ -38,24 +38,6 @@ struct ncclTransport nvlsTransport = {"NVLS",
                                       {NULL, NULL, nvlsSendFree, NULL, NULL, NULL, NULL, NULL},
                                       {NULL, NULL, nvlsRecvFree, NULL, NULL, NULL, NULL, NULL}};
 
-ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, struct ncclReg* reg) {
-  ncclResult_t ret = ncclSuccess;
-  if ((reg->state & NVLS_REG_COMPLETE) == 0) return ncclSuccess;
-  // unbind can trigger RM error if buffer is freed already by users
-  // however, it is safe to ignore the error, and unbind will succeed anyway
-  struct ncclNvlsSharedRes* resources = comm->nvlsResources;
-  ret = ncclMcPartitionUnbind(&resources->ubPartition, reg->nvlsUbReg->offset, reg->nvlsUbReg->bindSize);
-  if (ret == ncclSuccess) {
-    INFO(NCCL_NVLS, "rank %d - NVLS deregistered buffer at arena offset %zu size %zu", comm->rank,
-         reg->nvlsUbReg->offset, reg->nvlsUbReg->bindSize);
-    reg->state &= ~(uint32_t)NVLS_REG_COMPLETE;
-    // The arena range is not returned; it stays reserved until teardown.
-    free(reg->nvlsUbReg);
-    reg->nvlsUbReg = NULL;
-  }
-  return ret;
-}
-
 // Release a consumer's UC physical memory and its mapping (inverse of nvlsAllocBindUc's alloc).
 static ncclResult_t nvlsFreeUc(struct ncclComm* comm, struct ncclNvlsUcSegment* uc) {
   if (uc->ptr) {
@@ -852,7 +834,8 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm* comm, const void* send
   return ncclSuccess;
 }
 
-ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, struct ncclReg* reg) {
+// The real implementation lives in nvls_ub.cc, which is empty before CUDA 12.1.
+ncclResult_t ncclNvlsUbDeregister(struct ncclComm* comm, struct ncclReg* reg) {
   return ncclSuccess;
 }
 

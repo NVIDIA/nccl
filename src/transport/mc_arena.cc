@@ -13,6 +13,10 @@
 
 #if CUDART_VERSION >= 12010
 
+static bool mcRetiredOffsetLess(struct ncclMcArenaReg* a, struct ncclMcArenaReg* b) {
+  return a->offset < b->offset;
+}
+
 // The arena's reservation for a bind. Every alloc and free must derive the same reserved
 // extent, or a free returns a different range than was reserved.
 static size_t reserveSize(const struct ncclMcArena* arena, size_t bindSize) {
@@ -33,10 +37,14 @@ ncclResult_t ncclMcArenaInit(struct ncclComm* comm, struct ncclMcArena* arena,
   CUCHECK(cuMemGetAllocationGranularity(&arena->ucGranularity, &prop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED));
 
   ncclSpaceConstruct(&arena->space);
+  ncclIntruQueueConstruct(&arena->retiredQueue);
+  arena->hasNewRetiredSinceLastReclaim = false;
   return ncclSuccess;
 }
 
 void ncclMcArenaDestroy(struct ncclMcArena* arena) {
+  // Retired ranges are already unbound; releasing the MC group drops anything still bound.
+  while (!ncclIntruQueueEmpty(&arena->retiredQueue)) free(ncclIntruQueueDequeue(&arena->retiredQueue));
   ncclSpaceDestruct(&arena->space);
 }
 
@@ -104,6 +112,66 @@ ncclResult_t ncclMcArenaDeregister(struct ncclMcArena* arena, struct ncclMcArena
 
   NCCLCHECKIGNORE(ncclSpaceFree(&arena->space, (int64_t)reg->offset, (int64_t)reserveSize(arena, reg->bindSize)), ret);
   free(reg);
+  return ret;
+}
+
+void ncclMcArenaRetireReg(struct ncclMcArena* arena, struct ncclMcArenaReg* reg) {
+  ncclResult_t res = ncclSuccess;
+
+  // Best effort: an unbind fails routinely when the user freed the backing first, which
+  // already dropped the binding, so the range is safe to recycle either way.
+  if (reg->bound) NCCLCHECKIGNORE(ncclMcPartitionUnbind(&arena->partition, reg->offset, reg->bindSize), res);
+  reg->bound = false;
+  // The queue stays offset-sorted, so reclaim walks it in step with the intersection.
+  ncclIntruQueueInsertSorted(&arena->retiredQueue, reg, mcRetiredOffsetLess);
+  arena->hasNewRetiredSinceLastReclaim = true;
+}
+
+void ncclMcArenaRetiredSnapshot(const struct ncclMcArena* arena, struct ncclMcRetiredReg* regs, int cap) {
+  int n = 0;
+
+  for (const struct ncclMcArenaReg* node = arena->retiredQueue.head; node != nullptr && n < cap;
+       node = node->next, n++) {
+    regs[n].offset = node->offset;
+    regs[n].bindSize = node->bindSize;
+  }
+}
+
+ncclResult_t ncclMcArenaReclaim(struct ncclMcArena* arena, const struct ncclMcRetiredReg* regs, int count,
+                                size_t* outFreedBytes) {
+  struct ncclMcArenaReg* prev = nullptr;                  // queue cursor: node's predecessor
+  struct ncclMcArenaReg* node = arena->retiredQueue.head; // queue cursor
+  ncclResult_t ret = ncclSuccess;
+
+  *outFreedBytes = 0;
+  // regs is offset-sorted and a subset of this queue, so one forward walk covers it.
+  for (int i = 0; i < count && node != nullptr; i++) {
+    struct ncclMcArenaReg* next;
+    ncclResult_t res;
+
+    while (node != nullptr && node->offset < regs[i].offset) {
+      prev = node;
+      node = node->next;
+    }
+    if (node == nullptr || node->offset != regs[i].offset) continue;
+    next = node->next;
+    // Retired records are already unbound, so only the reservation is left to release.
+    res = ncclSpaceFree(&arena->space, (int64_t)node->offset, (int64_t)reserveSize(arena, node->bindSize));
+    if (res != ncclSuccess) {
+      WARN("NVLS MC arena failed to free retired range offset %zu size %zu", node->offset, node->bindSize);
+      if (ret == ncclSuccess) ret = res;
+      prev = node; // the refused record stays queued
+    } else {
+      *outFreedBytes += reserveSize(arena, node->bindSize);
+      if (prev) ncclIntruQueueDeleteNext(&arena->retiredQueue, prev);
+      else ncclIntruQueueDequeue(&arena->retiredQueue);
+      free(node);
+    }
+    node = next;
+  }
+  // The gate re-arms here even when nothing was freed: the exchange that produced regs has
+  // already seen every retirement so far.
+  arena->hasNewRetiredSinceLastReclaim = false;
   return ret;
 }
 

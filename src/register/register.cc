@@ -107,12 +107,7 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
     }
   }
   if (reg->state & NVLS_REG_COMPLETE) {
-    if (ncclNvlsDeregBuffer(comm, reg) != ncclSuccess) {
-      ATTN("rank %d deregister NVLS buffer failed", comm->rank);
-    }
-    // A failed dereg left the record owned here; its range stays reserved until teardown.
-    free(reg->nvlsUbReg);
-    reg->nvlsUbReg = NULL;
+    NCCLCHECK(ncclNvlsUbDeregister(comm, reg));
   }
   if (reg->state & COLLNET_REG_COMPLETE) {
     if (ncclCollnetDeregBuffer(comm, reg->collnetProxyconn, reg->collnetHandle) != ncclSuccess) {

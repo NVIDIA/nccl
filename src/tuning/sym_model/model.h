@@ -15,16 +15,11 @@
 
 int ncclSymkModelCtasEnvOverride();
 
-struct ncclSymkLsaEstimate {
-  double selectionTimeUs;
-  float timeUs;
-};
-
 void ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
                       int* nBlocks);
 void ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
                       int* nBlocks);
 bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int nBlocks,
-                          struct ncclSymkLsaEstimate* estimate);
+                          float* timeUs);
 
 #endif // NCCL_INT_SYM_MODEL_MODEL_H_

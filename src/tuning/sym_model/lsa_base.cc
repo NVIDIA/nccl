@@ -24,7 +24,7 @@ static double softplus(double x, double softness) {
 }
 
 bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int nBlocks,
-                          struct ncclSymkLsaEstimate* estimate) {
+                          float* timeUs) {
   constexpr double LL_BusFactor = 9; // 2X the bytes, plus some processing, plus no unrolling
 
   struct ncclComm* comm = input->comm;
@@ -112,8 +112,6 @@ bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId
   }
 
   double bw = softmin(nBlocks * smBw * busMultiplier, peakBw, smBw);
-  estimate->selectionTimeUs = baseLat + softplus(busBytes / bw - 1, 1);
-  constexpr float ctaResourcePenalty = .025f; // 2.5% time penalty per CTA for its SM resource use.
-  estimate->timeUs = static_cast<float>(estimate->selectionTimeUs) * (1.0f + ctaResourcePenalty * nBlocks);
-  return std::isfinite(estimate->timeUs) && estimate->timeUs > 0.0f;
+  *timeUs = static_cast<float>(baseLat + softplus(busBytes / bw - 1, 1));
+  return std::isfinite(*timeUs) && *timeUs > 0.0f;
 }

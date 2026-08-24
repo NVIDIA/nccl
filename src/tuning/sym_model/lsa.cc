@@ -28,13 +28,10 @@ static int maxBlocksLsa(struct ncclComm* comm, enum ncclSymkKernelId kernelId) {
 }
 
 static bool evaluateLsaEstimate(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                                int nBlocks, struct ncclSymkLsaEstimate* estimate) {
+                                int nBlocks, float* timeUs) {
   int activeCtas;
-  if (ncclSymkLsaA2AModel(input, kernelId, nBlocks, &estimate->timeUs, &activeCtas)) {
-    estimate->selectionTimeUs = estimate->timeUs;
-    return true;
-  }
-  return ncclSymkLsaBaseModel(input, kernelId, nBytes, nBlocks, estimate);
+  if (ncclSymkLsaA2AModel(input, kernelId, nBlocks, timeUs, &activeCtas)) return true;
+  return ncclSymkLsaBaseModel(input, kernelId, nBytes, nBlocks, timeUs);
 }
 
 // Select the CTA count with the shared policy using either the A2A or base model.
@@ -76,18 +73,15 @@ void ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId ker
     }
   }
 
-  struct ncclSymkLsaEstimate selectedEstimate;
-  if (!evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, &selectedEstimate)) return;
+  if (!evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, timeUs)) return;
   *nBlocks = nMaxBlocks;
-  float maxSelectionTimeUs = static_cast<float>(selectedEstimate.selectionTimeUs);
   for (int candidate = nMinBlocks; candidate < nMaxBlocks; candidate += candidate == 1 ? 1 : 2) {
-    struct ncclSymkLsaEstimate candidateEstimate;
-    if (evaluateLsaEstimate(input, kernelId, nBytes, candidate, &candidateEstimate) &&
-        candidateEstimate.selectionTimeUs <= 1.025 * maxSelectionTimeUs) {
-      selectedEstimate = candidateEstimate;
+    float candidateTimeUs;
+    if (evaluateLsaEstimate(input, kernelId, nBytes, candidate, &candidateTimeUs) &&
+        candidateTimeUs <= 1.025 * (*timeUs)) {
+      *timeUs = candidateTimeUs;
       *nBlocks = candidate;
       break;
     }
   }
-  *timeUs = selectedEstimate.timeUs;
 }

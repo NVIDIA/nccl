@@ -43,6 +43,7 @@
 #include <mutex>
 
 #include "common/doca_gpunetio_verbs_def.h"
+#include "compiler.h"
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
 
@@ -1289,7 +1290,7 @@ static inline void priv_cpu_proxy_progress_cq(struct doca_gpu_verbs_qp *qp, bool
     struct doca_gpunetio_ib_mlx5_cqe64 *cqe64 =
         reinterpret_cast<struct doca_gpunetio_ib_mlx5_cqe64 *>(cq->cqe_daddr);
 
-    [[unlikely]] if (qp->qp_gpu_h == nullptr)
+    if (COMPILER_EXPECT(qp->qp_gpu_h == nullptr, 0))
         goto out;
 
     old_cqe_ci = cq->cqe_ci;
@@ -1305,7 +1306,7 @@ static inline void priv_cpu_proxy_progress_cq(struct doca_gpu_verbs_qp *qp, bool
         ((opown & DOCA_GPUNETIO_IB_MLX5_CQE_OWNER_MASK) ^ !!(wqe_counter & cq->cqe_num)))
         goto out;
 
-    [[unlikely]] if (opcode == DOCA_GPUNETIO_IB_MLX5_CQE_REQ_ERR) {
+    if (COMPILER_EXPECT(opcode == DOCA_GPUNETIO_IB_MLX5_CQE_REQ_ERR, 0)) {
         DOCA_LOG(LOG_WARNING, "CQE indicates request error");
         goto out;
     }

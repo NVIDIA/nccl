@@ -102,8 +102,7 @@ else
 endif
 
 CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \
-              -Wall -Wextra -Wno-attributes \
-              -Wno-missing-field-initializers -Wno-unused-parameter \
+              -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter \
               -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
               -I $(CUDA_INC) -I $(CUDA_INC)/cccl \
               $(CXXFLAGS)

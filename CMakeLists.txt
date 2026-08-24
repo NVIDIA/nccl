@@ -172,7 +172,7 @@ message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 # Compiler-specific flags
 if(NCCL_COMPILER_GCC)
     # GCC/Clang-specific flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wextra -Wno-attributes -Wno-missing-field-initializers -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare -Wvla -g")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare -Wvla -g")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
 elseif(NCCL_COMPILER_MSVC)
     # MSVC-specific flags

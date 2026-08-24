@@ -212,7 +212,8 @@ static ncclResult_t loadConfig(TunerContext* ctx, const char* filename) {
     lineCopy[sizeof(lineCopy) - 1] = '\0';
 
     // Tokenize by comma
-    token = strtok(lineCopy, ",");
+    char* savePtr = NULL;
+    token = strtok_r(lineCopy, ",", &savePtr);
     while (token != NULL && tokenCount < CONFIG_FIELDS_MAX) {
       // Trim whitespace
       while (*token == ' ' || *token == '\t') token++;
@@ -222,7 +223,7 @@ static ncclResult_t loadConfig(TunerContext* ctx, const char* filename) {
         end--;
       }
       tokens[tokenCount++] = token;
-      token = strtok(NULL, ",");
+      token = strtok_r(NULL, ",", &savePtr);
     }
 
     // Validate field count: support required fields (8), with pipeOps (9), or with regBuff (10)

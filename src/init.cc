@@ -110,7 +110,8 @@ static void getEnvCtaPolicyOnce() {
   } else {
     // newer way allows the user to combine the modes
     char* str = strdup(env);
-    char* token = strtok(str, "|");
+    char* savePtr = NULL;
+    char* token = strtok_r(str, "|", &savePtr);
     while (token) {
       int tokenPolicy = NCCL_CONFIG_UNDEF_INT;
       if (strcasecmp(token, "DEFAULT") == 0) tokenPolicy = NCCL_CTA_POLICY_DEFAULT;
@@ -121,7 +122,7 @@ static void getEnvCtaPolicyOnce() {
         if (ctaPolicyEnv == NCCL_CONFIG_UNDEF_INT) ctaPolicyEnv = tokenPolicy;
         else ctaPolicyEnv |= tokenPolicy;
       }
-      token = strtok(NULL, "|");
+      token = strtok_r(NULL, "|", &savePtr);
     }
     if (ctaPolicyEnv == NCCL_CONFIG_UNDEF_INT) {
       INFO(NCCL_ENV, "No valid CTA policies found in NCCL_CTA_POLICY=%s.", env);

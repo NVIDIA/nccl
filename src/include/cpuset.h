@@ -9,9 +9,11 @@
 #define NCCL_CPUSET_H_
 
 #include "nccl.h"
+#include "utils.h" // strtok_r -> strtok_s shim on Windows
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #ifdef NCCL_OS_LINUX
 #include <sched.h>
@@ -30,10 +32,11 @@ static ncclResult_t ncclStrToCpuset(const char* maskStr, ncclAffinity* set) {
   // transform the string into an array of 32 bit masks, starting with the highest mask
   int m = CPU_SET_N_U32;
   char* str = strdup(maskStr);
-  char* token = strtok(str, ",");
+  char* savePtr = NULL;
+  char* token = strtok_r(str, ",", &savePtr);
   while (token != NULL && m > 0) {
     cpumasks[--m] = strtoul(token, NULL, /*base = hex*/ 16);
-    token = strtok(NULL, ",");
+    token = strtok_r(NULL, ",", &savePtr);
   }
   free(str);
 
@@ -76,13 +79,13 @@ static char* ncclCpusetToRangeStr(ncclAffinity* mask, char* str, size_t len) {
 static ncclResult_t ncclStrListToCpuset(const char* userStr, ncclAffinity* mask) {
   // reset the CPU set
   ncclOsCpuZero(*mask);
-  const char delim[] = ",";
   char* str = strdup(userStr);
-  char* token = strtok(str, delim);
+  char* savePtr = NULL;
+  char* token = strtok_r(str, ",", &savePtr);
   while (token != NULL) {
     uint64_t cpu = strtoull(token, NULL, 0);
     ncclOsCpuSet(*mask, cpu);
-    token = strtok(NULL, delim);
+    token = strtok_r(NULL, ",", &savePtr);
   }
   free(str);
   return ncclSuccess;

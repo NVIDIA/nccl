@@ -207,7 +207,7 @@ else {
 
 ```cpp
 for (int i = 0; i < n; ++i) maxPolicy |= policies[i];
-while (token) token = strtok(NULL, "|");
+while (token) token = strtok_r(NULL, "|", &savePtr);
 ```
 
 * If loop statement cannot fit on a single-line, it must be enclosed in braces.

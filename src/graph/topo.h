@@ -228,7 +228,7 @@ struct ncclTopoNetInfo {
 };
 
 ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct ncclTopoNetInfo* net);
-ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge);
+ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge, int cudaCompCap);
 
 // Owned subset of network properties that remains valid after the topology lock is released.
 struct ncclTopoNetPropertiesSnapshot {

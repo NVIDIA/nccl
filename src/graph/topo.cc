@@ -1859,26 +1859,38 @@ ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct nc
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge) {
+static bool ncclTopoIsVeraRubin(int cudaCompCap) {
+#if defined(__aarch64__)
+  return RUBIN_AND_LATER(cudaCompCap);
+#else
+  (void)cudaCompCap;
+  return false;
+#endif
+}
+
+ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge, int cudaCompCap) {
   if (forceMerge) *forceMerge = ncclGetEnv("NCCL_NET_FORCE_MERGE");
   const char* mergeLevelEnv = ncclGetEnv("NCCL_NET_MERGE_LEVEL");
   if (mergeLevelEnv) {
     kvConvertToInt(mergeLevelEnv, mergeLevel, nicPathKvList);
   } else {
-    *mergeLevel = PATH_PORT;
+    *mergeLevel = ncclTopoIsVeraRubin(cudaCompCap) ? PATH_PHB : PATH_PORT;
   }
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTopoGetMergePolicy(int* mergePolicy) {
-  *mergePolicy = NCCL_NET_MERGE_POLICY_ALL;
+static ncclResult_t ncclTopoGetMergePolicy(int* mergePolicy, int cudaCompCap) {
+  *mergePolicy = ncclTopoIsVeraRubin(cudaCompCap) ? NCCL_NET_MERGE_POLICY_RAIL : NCCL_NET_MERGE_POLICY_ALL;
   const char* env = ncclGetEnv("NCCL_NET_MERGE_POLICY");
   if (env) {
     if (strcasecmp(env, "RAIL") == 0) {
       *mergePolicy = NCCL_NET_MERGE_POLICY_RAIL;
       INFO(NCCL_ENV, "NCCL_NET_MERGE_POLICY set by environment to RAIL");
-    } else if (strcasecmp(env, "ALL") != 0) {
-      WARN("NCCL_NET_MERGE_POLICY: unknown value '%s', defaulting to ALL", env);
+    } else {
+      *mergePolicy = NCCL_NET_MERGE_POLICY_ALL;
+      if (strcasecmp(env, "ALL") != 0) {
+        WARN("NCCL_NET_MERGE_POLICY: unknown value '%s', defaulting to ALL", env);
+      }
     }
   }
   return ncclSuccess;
@@ -2044,8 +2056,8 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       netInfo.makeVDevice = comm->ncclCollNet->makeVDevice;
       netInfo.devices = comm->ncclCollNet->devices;
       netInfo.railKeyList = &railKeyList;
-      NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge));
-      NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy));
+      NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge, comm->minCompCap));
+      NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy, comm->minCompCap));
       NCCLCHECKGOTO(ncclTopoProcessNet(xml, dumpXmlFile, &netInfo), ret, fail);
     }
 
@@ -2063,8 +2075,8 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     netInfo.makeVDevice = comm->ncclNet->makeVDevice;
     netInfo.devices = comm->ncclNet->devices;
     netInfo.railKeyList = &railKeyList;
-    NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge));
-    NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy));
+    NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge, comm->minCompCap));
+    NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy, comm->minCompCap));
     NCCLCHECKGOTO(ncclTopoProcessNet(xml, dumpXmlFile, &netInfo), ret, fail);
   }
 

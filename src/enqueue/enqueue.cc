@@ -3462,9 +3462,9 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
                                   info->root, allowUB));
         } else if (!ncclCollConfigHasAlgSelection(&info->collConfig) && ceAvailable && comm->symmetricSupport &&
                    info->coll == ncclFuncAllGather && info->count > symCeAllGatherThreshold(comm) &&
-                   comm->minCompCap >= 100 && comm->isAllDirectNvlink) {
+                   comm->minCompCap >= 100 && !RUBIN_AND_LATER(comm->minCompCap) && comm->isAllDirectNvlink) {
           // Use CE for AllGather on Blackwell when size exceeds sym CE threshold. Skip this automatic
-          // route when the user passed an algorithm selection so the selection is honored.
+          // route on Rubin and when the user passed an algorithm selection so the selection is honored.
           NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev));
         } else {
           NCCLCHECK(collTaskAppend(comm, info, opDev));

@@ -51,4 +51,6 @@ struct ncclGinSyncHandle {
   ncclGinSignal_t railSignals;
 };
 
+struct ncclGin_None {};
+
 #endif /* _NCCL_DEVICE_GIN_SESSION_H_ */

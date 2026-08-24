@@ -166,9 +166,16 @@ NCCL_DEVICE_INLINE ncclResult_t ncclBarrierSession<Coop>::sync(Coop, cuda::memor
   bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier, needsProducerFlush;
   selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier, &needsProducerFlush);
 
+  ncclResult_t flushResult = ncclSuccess;
+
   if (needsProducerFlush) {
     // Push this rank's own puts out before the barrier so peers' auto-flush makes them visible.
-    this->gin.thing.flush(this->coop, nccl::utility::releaseOrderOf(ord));
+    uint64_t startCycle = clock64();
+    flushResult = this->gin.thing.flush(this->coop, nccl::utility::releaseOrderOf(ord), ncclGin_None{}, timeoutCycles);
+    uint64_t elapsed = clock64() - startCycle;
+    timeoutCycles -= min(elapsed, timeoutCycles);
+    // As with the barriers below, threads within a coop don't synchronize about the timeout
+    // condition, so we must not return early here: every thread has to reach the coop syncs below.
   }
 
   ncclResult_t lsaResult = ncclSuccess, railResult = ncclSuccess, denseResult = ncclSuccess;
@@ -195,6 +202,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclBarrierSession<Coop>::sync(Coop, cuda::memor
       this->coop, needsLsaBarrier ? nccl::utility::acquireOrderOf(ord) : ord, fence, timeoutCycles);
   }
 
+  if (flushResult != ncclSuccess) return flushResult;
   if (lsaResult != ncclSuccess) return lsaResult;
   if (railResult != ncclSuccess) return railResult;
   return denseResult;

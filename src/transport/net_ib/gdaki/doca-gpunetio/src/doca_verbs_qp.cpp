@@ -69,6 +69,7 @@ enum {
     PRIV_DOCA_MLX5_QP_OPT_PARAM_RWE = (1 << 3),
     PRIV_DOCA_MLX5_QP_OPT_PARAM_PKEY_INDEX = (1 << 4),
     PRIV_DOCA_MLX5_QP_OPT_PARAM_MIN_RNR_NAK = (1 << 6),
+    PRIV_DOCA_MLX5_QP_OPT_PARAM_LAG_TX_PORT_AFFINITY = (1 << 15),
     PRIV_DOCA_MLX5_QP_OPT_PARAM_PORT_NUM = (1 << 16),
     PRIV_DOCA_MLX5_QP_OPT_DSCP = (1 << 17),
     PRIV_DOCA_MLX5_QP_OPT_SGID_INDEX = (1 << 23),
@@ -141,14 +142,15 @@ int rtr2rts_requested_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
 int init2init_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(PKEY_INDEX) | QP_ATTR(PORT_NUM) |
-        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(ATOMIC_MODE),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(ATOMIC_MODE) |
+        QP_ATTR(LAG_TX_PORT_AFFINITY),
 };
 
 int init2rtr_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(PKEY_INDEX) |
         QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(ATOMIC_MODE) |
-        QP_ATTR(MAX_DEST_RD_ATOMIC),
+        QP_ATTR(MAX_DEST_RD_ATOMIC) | QP_ATTR(LAG_TX_PORT_AFFINITY),
 };
 
 int rtr2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
@@ -161,7 +163,7 @@ int rts2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(ALLOW_REMOTE_WRITE) |
         QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(ATOMIC_MODE) | QP_ATTR(MIN_RNR_TIMER) |
-        QP_ATTR(AH_ATTR),
+        QP_ATTR(AH_ATTR) | QP_ATTR(LAG_TX_PORT_AFFINITY),
 };
 
 const char *qp_attr_to_string(int attr) {
@@ -202,6 +204,8 @@ const char *qp_attr_to_string(int attr) {
             return "MAX_QP_RD_ATOMIC";
         case DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC:
             return "MAX_DEST_RD_ATOMIC";
+        case DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY:
+            return "LAG_TX_PORT_AFFINITY";
         default:
             break;
     }
@@ -235,6 +239,37 @@ void print_missing_attrs(int required_attr_mask, int attr_mask) {
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_AH_ATTR);
 }
 
+static doca_error_t validate_lag_tx_port_affinity_attr(
+    uint8_t lag_tx_port_affinity, struct doca_verbs_device_attr *verbs_device_attr,
+    doca_verbs_qp_state_mod state_mod) {
+    if (lag_tx_port_affinity > 0) {
+        if (verbs_device_attr->m_is_lag_tx_port_affinity_supported == 0) {
+            DOCA_LOG(LOG_ERR, "lag_tx_port_affinity is not supported by the device");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+
+        if ((state_mod == DOCA_VERBS_QP_INIT2INIT || state_mod == DOCA_VERBS_QP_INIT2RTR) &&
+            (!verbs_device_attr->m_is_init2_lag_tx_port_affinity_supported)) {
+            DOCA_LOG(LOG_ERR,
+                     "lag_tx_port_affinity is not supported in INIT2INIT or INIT2RTR state");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+
+        if ((state_mod == DOCA_VERBS_QP_RTS2RTS) &&
+            (!verbs_device_attr->m_is_rts2rts_lag_tx_port_affinity_supported)) {
+            DOCA_LOG(LOG_ERR, "lag_tx_port_affinity is not supported in RTS2RTS state");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    }
+
+    if (lag_tx_port_affinity > verbs_device_attr->m_num_lag_ports) {
+        DOCA_LOG(LOG_ERR, "The specified lag_tx_port_affinity is out of range");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    return DOCA_SUCCESS;
+}
+
 bool is_X2rst_attrs_valid(int attr_mask) {
     int valid_attr = (DOCA_VERBS_QP_ATTR_CURRENT_STATE | DOCA_VERBS_QP_ATTR_NEXT_STATE);
 
@@ -260,7 +295,8 @@ bool is_X2err_attrs_valid(int attr_mask) {
 bool is_rst2init_attrs_valid(int attr_mask, uint32_t qp_type) {
     int required_attr = rst2init_requested_attr[qp_type];
     int valid_attr = required_attr | DOCA_VERBS_QP_ATTR_CURRENT_STATE |
-                     DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ATOMIC_MODE;
+                     DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ATOMIC_MODE |
+                     DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY;
 
     if (attr_mask & ~(valid_attr)) {
         DOCA_LOG(LOG_ERR, "attr_mask contains invalid bit attr_masks (attr_mask=%d)", attr_mask);
@@ -341,17 +377,18 @@ void convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(
         // INIT2INIT
         DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ |
             DOCA_VERBS_QP_ATTR_ATOMIC_MODE | DOCA_VERBS_QP_ATTR_PKEY_INDEX |
-            DOCA_VERBS_QP_ATTR_PORT_NUM,
+            DOCA_VERBS_QP_ATTR_PORT_NUM | DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY,
         // INIT2RTR
         DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ |
-            DOCA_VERBS_QP_ATTR_ATOMIC_MODE | DOCA_VERBS_QP_ATTR_PKEY_INDEX,
+            DOCA_VERBS_QP_ATTR_ATOMIC_MODE | DOCA_VERBS_QP_ATTR_PKEY_INDEX |
+            DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY,
         // RTR2RTS
         DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ATOMIC_MODE |
             DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER,
         // RTS2RTS
         DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ |
             DOCA_VERBS_QP_ATTR_ATOMIC_MODE | DOCA_VERBS_QP_ATTR_AH_ATTR |
-            DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER,
+            DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER | DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY,
     };
 
     attr_mask &= valid_opt_mask[state_mod];
@@ -378,6 +415,10 @@ void convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(
 
     if (attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) {
         mlx5_opt_mask |= PRIV_DOCA_MLX5_QP_OPT_PARAM_RAE;
+    }
+
+    if (attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY) {
+        mlx5_opt_mask |= PRIV_DOCA_MLX5_QP_OPT_PARAM_LAG_TX_PORT_AFFINITY;
     }
 }
 
@@ -828,6 +869,16 @@ doca_error_t doca_verbs_qp_open::rst2init(struct doca_verbs_qp_attr_open *verbs_
         DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr->atomic_mode);
     }
 
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
+        doca_error_t status = validate_lag_tx_port_affinity_attr(
+            verbs_qp_attr->lag_tx_port_affinity, m_verbs_device_attr, DOCA_VERBS_QP_RST2INIT);
+        if (status != DOCA_SUCCESS) {
+            return status;
+        }
+
+        DEVX_SET(qpc, qpc, lag_tx_port_affinity, verbs_qp_attr->lag_tx_port_affinity);
+    }
+
     auto ret =
         doca_verbs_wrapper_mlx5dv_devx_obj_modify(m_qp_obj, in, sizeof(in), out, sizeof(out));
     if (ret != DOCA_SUCCESS) {
@@ -871,6 +922,16 @@ doca_error_t doca_verbs_qp_open::init2init(struct doca_verbs_qp_attr_open *verbs
         (verbs_qp_attr->atomic_mode != DOCA_VERBS_QP_ATOMIC_MODE_NONE)) {
         DEVX_SET(qpc, qpc, rae, 1);
         DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr->atomic_mode);
+    }
+
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
+        doca_error_t status = validate_lag_tx_port_affinity_attr(
+            verbs_qp_attr->lag_tx_port_affinity, m_verbs_device_attr, DOCA_VERBS_QP_INIT2INIT);
+        if (status != DOCA_SUCCESS) {
+            return status;
+        }
+
+        DEVX_SET(qpc, qpc, lag_tx_port_affinity, verbs_qp_attr->lag_tx_port_affinity);
     }
 
     int mlx5_opt_param_mask{0};
@@ -1005,6 +1066,16 @@ doca_error_t doca_verbs_qp_open::init2rtr(struct doca_verbs_qp_attr_open *verbs_
         DEVX_SET(qpc, qpc, log_rra_max,
                  doca_internal_utils_log2(verbs_qp_attr->max_dest_rd_atomic));
 
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
+        status = validate_lag_tx_port_affinity_attr(verbs_qp_attr->lag_tx_port_affinity,
+                                                    m_verbs_device_attr, DOCA_VERBS_QP_INIT2RTR);
+        if (status != DOCA_SUCCESS) {
+            return status;
+        }
+
+        DEVX_SET(qpc, qpc, lag_tx_port_affinity, verbs_qp_attr->lag_tx_port_affinity);
+    }
+
     int mlx5_opt_param_mask{0};
     convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(attr_mask, mlx5_opt_param_mask,
                                                                     DOCA_VERBS_QP_INIT2RTR);
@@ -1135,6 +1206,16 @@ doca_error_t doca_verbs_qp_open::rts2rts(struct doca_verbs_qp_attr_open *verbs_q
                 DEVX_SET(qpc, qpc, primary_address_path.dscp,
                          verbs_qp_attr->ah_attr.traffic_class >> 2);
         }
+    }
+
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
+        doca_error_t status = validate_lag_tx_port_affinity_attr(
+            verbs_qp_attr->lag_tx_port_affinity, m_verbs_device_attr, DOCA_VERBS_QP_RTS2RTS);
+        if (status != DOCA_SUCCESS) {
+            return status;
+        }
+
+        DEVX_SET(qpc, qpc, lag_tx_port_affinity, verbs_qp_attr->lag_tx_port_affinity);
     }
 
     int mlx5_opt_param_mask{0};
@@ -2994,6 +3075,28 @@ doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(doca_verbs_qp_attr_t *qp_
     }
 
     qp_attr->open->max_dest_rd_atomic = max_dest_rd_atomic;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_attr_set_lag_tx_port_affinity(doca_verbs_qp_attr_t *qp_attr,
+                                                         uint8_t lag_tx_port_affinity) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set lag_tx_port_affinity: parameter qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "Failed to set lag_tx_port_affinity: Not supported by DOCA SDK");
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->lag_tx_port_affinity = lag_tx_port_affinity;
 
     return DOCA_SUCCESS;
 }

@@ -137,6 +137,7 @@ struct doca_verbs_qp_attr_open {
     uint8_t max_rd_atomic{};
     uint8_t max_dest_rd_atomic{};
     uint32_t counter_set_id{};
+    uint8_t lag_tx_port_affinity{};
 
     doca_verbs_qp_attr_open(doca_verbs_qp_attr_open const &) = delete;
     doca_verbs_qp_attr_open &operator=(doca_verbs_qp_attr_open const &) = delete;

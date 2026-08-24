@@ -440,6 +440,17 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       t->datatype = bcastTask->datatype;
       // Carry the profiler tag onto the converted coll task so its coll event reports it.
       t->profilerTag = bcastTask->profilerTag;
+      // Carry the profiler activation mask and API event handles onto the converted coll task.
+      // The single-peer broadcast is rewritten into a fresh ncclTaskColl here, so without this
+      // copy its eActivationMask stays memset-zeroed and the ncclProfileKernelCh bit is dropped.
+      // hasProfilerOps would then be false and ncclProfilerPostPlanWork() would never bump the
+      // host workCounter for this task, while the device still advances channel.workCounter for
+      // its work. That drift makes every subsequent KernelCh event read the wrong device slot
+      // (observed as out-of-order timestamps and multi-second bogus durations under
+      // NCCL_ALLGATHERV_ENABLE=1).
+      t->eActivationMask = bcastTask->eActivationMask;
+      t->groupApiEventHandle = bcastTask->groupApiEventHandle;
+      t->collApiEventHandle = bcastTask->collApiEventHandle;
       t->trafficBytes = t->count * ncclFuncTrafficPerByte(t->func, comm->nRanks);
       t->chunkSteps = BROADCAST_CHUNKSTEPS;
       t->sliceSteps = BROADCAST_SLICESTEPS;
@@ -2776,6 +2787,15 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->root = info->root;
     // 0 for a plain broadcast; the user value for a profiler-tag-only ncclBroadcastConfig.
     t->profilerTag = info->collConfig.userProfilerTag;
+    // Carry the profiler activation mask and API event handles. ncclTaskBcast is allocated from a
+    // memset-zeroed pool, so without this its eActivationMask stays 0 and the ncclProfileKernelCh
+    // bit is lost. That desyncs the host and device workCounters (the host only bumps
+    // comm->profiler.workCounter[] for tasks whose eActivationMask has ncclProfileKernelCh, while
+    // the device advances channel.workCounter unconditionally), which corrupts every subsequent
+    // KernelCh timestamp mapping. Mirrors the regular coll task path below.
+    t->eActivationMask = ncclProfilerApiState.eActivationMask;
+    t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
+    t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
 
     // update bcast min/max peer
     planner->bcast_info.minBcastPeer = std::min(planner->bcast_info.minBcastPeer, info->root);

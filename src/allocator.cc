@@ -203,7 +203,7 @@ static void insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi
   a->count = w;
 }
 
-ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t limit, int64_t size, int align, int64_t* outOffset) {
+ncclResult_t ncclSpaceTryAlloc(struct ncclSpace* a, int64_t limit, int64_t size, int align, int64_t* outOffset) {
   // When allocating we try to locate the first empty segment which can hold
   // the allocation and move its lower cut upward.
   int i = a->count % 2; // First empty segment ends at cuts[i]
@@ -225,9 +225,15 @@ ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t limit, int64_t size, in
     }
     i += 2; // Next empty segment
   }
-  WARN("Allocation failed. No suitable space found to accommodate size=0x%lx within limit=0x%lx", (long)size,
-       (long)limit);
   return ncclInternalError;
+}
+
+ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t limit, int64_t size, int align, int64_t* outOffset) {
+  ncclResult_t res = ncclSpaceTryAlloc(a, limit, size, align, outOffset);
+  if (res != ncclSuccess)
+    WARN("Allocation failed. No suitable space found to accommodate size=0x%lx within limit=0x%lx", (long)size,
+         (long)limit);
+  return res;
 }
 
 ncclResult_t ncclSpaceFree(struct ncclSpace* a, int64_t offset, int64_t size) {

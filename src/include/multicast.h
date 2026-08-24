@@ -37,6 +37,13 @@ struct ncclMcPartition {
 
 struct ncclMcGroup;
 
+// How a best-effort driver bind ended
+enum ncclMcBindStatus {
+  ncclMcBindStatusOk = 0,    // Bind succeeded
+  ncclMcBindStatusNoSupport, // Bind failed due to a buffer property
+  ncclMcBindStatusTransient  // Bind failed due to other error
+};
+
 #if CUDART_VERSION >= 12010
 
 // Create one MC object and export its shareable handle (root rank), or import
@@ -62,6 +69,16 @@ ncclResult_t ncclMcPartitionBindMem(const struct ncclMcPartition* partition, siz
 // Unbind; a binding surviving a failed unbind lasts only until ncclMcGroupDestroy,
 // so callers may keep tearing down.
 ncclResult_t ncclMcPartitionUnbind(const struct ncclMcPartition* partition, size_t offsetInPartition, size_t bindSize);
+
+// Best effort cuMulticastBindAddr of a user VA: a driver bind failure returns ncclSuccess
+// with *outStatus classifying it; non-ncclSuccess means an NCCL pre-condition failed.
+ncclResult_t ncclMcPartitionTryBindAddr(const struct ncclMcPartition* partition, size_t offsetInPartition,
+                                        CUdeviceptr address, size_t bindSize, enum ncclMcBindStatus* outStatus);
+
+// Whether every physical segment backing [addr, addr+size) satisfies the documented
+// cuMulticastBindAddr preconditions (cuMem-allocated, device-located). The properties
+// are immutable, so callers may cache the answer.
+bool ncclMcAddrBindable(const void* addr, size_t size);
 
 #endif // CUDART_VERSION >= 12010
 

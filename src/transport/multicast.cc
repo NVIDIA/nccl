@@ -234,4 +234,59 @@ ncclResult_t ncclMcPartitionUnbind(const struct ncclMcPartition* partition, size
   return ncclSuccess;
 }
 
+ncclResult_t ncclMcPartitionTryBindAddr(const struct ncclMcPartition* partition, size_t offsetInPartition,
+                                        CUdeviceptr address, size_t bindSize, enum ncclMcBindStatus* outStatus) {
+  const char* errStr = NULL;
+
+  *outStatus = ncclMcBindStatusTransient;
+  if (offsetInPartition + bindSize > partition->size) {
+    WARN("NVLS UB TryBindAddr of size %zu at slice offset %zu exceeds slice size %zu", bindSize, offsetInPartition,
+         partition->size);
+    return ncclInternalError;
+  }
+  size_t mcOffset = partition->offset + offsetInPartition;
+  CUresult err = CUPFN(cuMulticastBindAddr(partition->mcHandle, mcOffset, address, bindSize, 0 /*flags*/));
+  if (err == CUDA_SUCCESS) {
+    *outStatus = ncclMcBindStatusOk;
+    return ncclSuccess;
+  }
+
+  (void)pfn_cuGetErrorString(err, &errStr);
+  // Only an outright rejection of the input is a property of the buffer. Anything else,
+  // notably OUT_OF_MEMORY, may succeed later, so it must not be reported as permanent.
+  if (err == CUDA_ERROR_INVALID_VALUE || err == CUDA_ERROR_NOT_SUPPORTED || err == CUDA_ERROR_NOT_PERMITTED) {
+    *outStatus = ncclMcBindStatusNoSupport;
+    INFO(NCCL_NVLS, "NVLS TryBindAddr MC group %llx offset %zu addr %p size %zu dev %d rejected: CUDA error %d '%s'",
+         partition->mcHandle, mcOffset, (void*)address, bindSize, partition->dev, err, errStr);
+  } else {
+    WARN("NVLS Multicast bind of size %zu at MC group %llx offset %zu dev %d failed transiently: CUDA error %d '%s'.\n"
+         "The buffer is left unregistered for this operation and will be retried; repeated occurrences indicate "
+         "sustained resource pressure.",
+         bindSize, partition->mcHandle, mcOffset, partition->dev, err, errStr);
+  }
+  return ncclSuccess;
+}
+
+bool ncclMcAddrBindable(const void* addr, size_t size) {
+  CUdeviceptr cur = (CUdeviceptr)addr;
+  CUdeviceptr end = cur + size;
+
+  while (cur < end) {
+    CUdeviceptr base = 0;
+    size_t baseSize = 0;
+    CUmemGenericAllocationHandle handle;
+    CUmemAllocationProp prop;
+    CUresult err;
+
+    if (CUPFN(cuMemGetAddressRange(&base, &baseSize, cur)) != CUDA_SUCCESS) return false;
+    if (CUPFN(cuMemRetainAllocationHandle(&handle, (void*)cur)) != CUDA_SUCCESS) return false;
+    err = CUPFN(cuMemGetAllocationPropertiesFromHandle(&prop, handle));
+    CUCHECKIGNORE(cuMemRelease(handle));
+    // Multicast can only back device-located allocations (same gate as symBindTeamMemory).
+    if (err != CUDA_SUCCESS || prop.location.type != CU_MEM_LOCATION_TYPE_DEVICE) return false;
+    cur = base + baseSize;
+  }
+  return true;
+}
+
 #endif // CUDART_VERSION >= 12010

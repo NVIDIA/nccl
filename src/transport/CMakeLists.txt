@@ -7,6 +7,8 @@
 
 set(TRANSPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/nvls.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/nvls_ub.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/mc_arena.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/multicast.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/net_socket.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/net_socket/common.cc

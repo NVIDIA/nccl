@@ -13,6 +13,7 @@
 #include "nvmlwrap.h"
 #include "core.h"
 #include "multicast.h"
+#include "nvls_ub.h"
 
 #define NTRANSPORTS 4
 #define TRANSPORT_UNDEFINED -1
@@ -96,7 +97,10 @@ struct ncclNvlsSharedRes {
   struct ncclMcPartition creditPartition;
   struct ncclMcPartition dataPartition;
   struct ncclNvlsUcSegment creditUc;
-  struct ncclNvlsUcSegment dataUc;  // unset until ncclNvlsBufferSetup
+  struct ncclNvlsUcSegment dataUc;       // unset until ncclNvlsBufferSetup
+  struct ncclMcPartition ubPartition;    // user buffer slice within the group
+  struct ncclMcArena ubArena;            // sub-allocator over ubPartition
+  bool ubEnabled;                        // a user buffer slice was carved out of the group
   int nChannels;
   int nHeads;
   int chunkSize;
@@ -164,8 +168,7 @@ ncclResult_t ncclNvlsGraphRegisterBuffer(
 ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm* comm, const void* sendbuff, void* recvbuff,
                                          size_t sendbuffSize, size_t recvbuffSize, int* outRegBufUsed,
                                          void** outRegBufSend, void** outRegBufRecv);
-ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle* mcHandler, CUdeviceptr ptr,
-                                 int dev, size_t ucsize, size_t mcsize);
+ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, struct ncclReg* reg);
 ncclResult_t ncclNvlsFree(struct ncclComm* comm);
 
 enum {

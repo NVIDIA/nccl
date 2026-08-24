@@ -1859,28 +1859,33 @@ ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct nc
   return ncclSuccess;
 }
 
-static bool ncclTopoIsVeraRubin(int cudaCompCap) {
-#if defined(__aarch64__)
-  return RUBIN_AND_LATER(cudaCompCap);
-#else
-  (void)cudaCompCap;
-  return false;
-#endif
+ncclResult_t ncclTopoGetXmlCpuArch(ncclXml* xml, int* cpuArch) {
+  struct ncclXmlNode* cpu = NULL;
+  NCCLCHECK(xmlFindTag(xml, "cpu", &cpu));
+  if (cpu == NULL) return ncclInternalError;
+  const char* str = NULL;
+  NCCLCHECK(xmlGetAttrStr(cpu, "arch", &str));
+  NCCLCHECK(kvConvertToInt(str, cpuArch, kvDictCpuArch));
+  return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge, int cudaCompCap) {
+static bool ncclTopoIsVeraRubin(int cudaCompCap, int cpuArch) {
+  return cpuArch == NCCL_TOPO_CPU_ARCH_ARM && RUBIN_AND_LATER(cudaCompCap);
+}
+
+ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge, int cudaCompCap, int cpuArch) {
   if (forceMerge) *forceMerge = ncclGetEnv("NCCL_NET_FORCE_MERGE");
   const char* mergeLevelEnv = ncclGetEnv("NCCL_NET_MERGE_LEVEL");
   if (mergeLevelEnv) {
     kvConvertToInt(mergeLevelEnv, mergeLevel, nicPathKvList);
   } else {
-    *mergeLevel = ncclTopoIsVeraRubin(cudaCompCap) ? PATH_PHB : PATH_PORT;
+    *mergeLevel = ncclTopoIsVeraRubin(cudaCompCap, cpuArch) ? PATH_PHB : PATH_PORT;
   }
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTopoGetMergePolicy(int* mergePolicy, int cudaCompCap) {
-  *mergePolicy = ncclTopoIsVeraRubin(cudaCompCap) ? NCCL_NET_MERGE_POLICY_RAIL : NCCL_NET_MERGE_POLICY_ALL;
+static ncclResult_t ncclTopoGetMergePolicy(int* mergePolicy, int cudaCompCap, int cpuArch) {
+  *mergePolicy = ncclTopoIsVeraRubin(cudaCompCap, cpuArch) ? NCCL_NET_MERGE_POLICY_RAIL : NCCL_NET_MERGE_POLICY_ALL;
   const char* env = ncclGetEnv("NCCL_NET_MERGE_POLICY");
   if (env) {
     if (strcasecmp(env, "RAIL") == 0) {
@@ -1963,6 +1968,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   int* localRanks = NULL;
   struct ncclXml* rankXml;
   int localRank = -1, nLocalRanks = 0;
+  int cpuArch = NCCL_TOPO_UNDEF;
   struct ncclTopoNetInfo netInfo = {0};
   struct ncclTopoNetRailKeyList railKeyList;
   NCCLCHECK(xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES));
@@ -2002,6 +2008,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     NCCLCHECKGOTO(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport), ret, fail);
     NCCLCHECKGOTO(xmlSetAttrInt(node, "mlopart", comm->peerInfo[comm->rank].mloPart), ret, fail);
   }
+  NCCLCHECKGOTO(ncclTopoGetXmlCpuArch(xml, &cpuArch), ret, fail);
 
   // Auto-detect NICs if needed, net/gin/collnet share the same xml/graph nodes.
   // Start with gin, then with collnet so that they precedence.
@@ -2056,8 +2063,8 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       netInfo.makeVDevice = comm->ncclCollNet->makeVDevice;
       netInfo.devices = comm->ncclCollNet->devices;
       netInfo.railKeyList = &railKeyList;
-      NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge, comm->minCompCap));
-      NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy, comm->minCompCap));
+      NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge, comm->minCompCap, cpuArch));
+      NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy, comm->minCompCap, cpuArch));
       NCCLCHECKGOTO(ncclTopoProcessNet(xml, dumpXmlFile, &netInfo), ret, fail);
     }
 
@@ -2075,8 +2082,8 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
     netInfo.makeVDevice = comm->ncclNet->makeVDevice;
     netInfo.devices = comm->ncclNet->devices;
     netInfo.railKeyList = &railKeyList;
-    NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge, comm->minCompCap));
-    NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy, comm->minCompCap));
+    NCCLCHECK(ncclTopoGetFusionEnv(&netInfo.mergeLevel, &netInfo.forceMerge, comm->minCompCap, cpuArch));
+    NCCLCHECK(ncclTopoGetMergePolicy(&netInfo.mergePolicy, comm->minCompCap, cpuArch));
     NCCLCHECKGOTO(ncclTopoProcessNet(xml, dumpXmlFile, &netInfo), ret, fail);
   }
 

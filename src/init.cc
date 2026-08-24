@@ -368,8 +368,6 @@ static ncclResult_t commFree(ncclComm_t comm) {
     }
   }
 
-  NCCLCHECK(ncclNvlsFree(comm));
-
   struct ncclDestructor* dtor = comm->destructorHead;
   while (dtor != nullptr) {
     NCCLCHECK(dtor->fn(dtor));
@@ -392,6 +390,9 @@ static ncclResult_t commFree(ncclComm_t comm) {
   free(comm->gproxyConn);
 
   NCCLCHECK(ncclRegCleanup(comm));
+
+  // Release the shared NVLS MC group only after the registration cache is cleaned.
+  NCCLCHECK(ncclNvlsFree(comm));
 
   // Destroy dynamic memory manager only after all device memory has been released.
   NCCLCHECK(ncclMemManagerDestroy(comm));

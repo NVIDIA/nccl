@@ -493,15 +493,14 @@ ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool mul
       CUmemGenericAllocationHandle mcHandle = 0;
       CUdeviceptr mcAddr = 0;
       CUmulticastObjectProp mcProp = {};
-      char shareableHandle[NVLS_HANDLE_SIZE];
+      char shareableHandle[NVLS_HANDLE_SIZE] = {};
 
       mcProp.numDevices = team.nRanks;
       mcProp.handleTypes = ncclCuMemHandleType;
       mcProp.flags = 0;
       mcProp.size = devr->bigSize;
       if (team.rank == 0) {
-        NCCLCHECKGOTO(ncclNvlsGroupCreate(comm, &mcProp, team.rank, team.nRanks, &mcHandle, shareableHandle), ret,
-                      fail);
+        NCCLCHECKGOTO(ncclMcCreate(comm, &mcProp, team.rank, team.nRanks, &mcHandle, shareableHandle), ret, fail);
         NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, t->worldRankList, team.rank, team.nRanks, 0,
                                                   shareableHandle, NVLS_HANDLE_SIZE),
                       ret, fail_mcHandle);
@@ -509,11 +508,14 @@ ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool mul
         NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, t->worldRankList, team.rank, team.nRanks, 0,
                                                   shareableHandle, NVLS_HANDLE_SIZE),
                       ret, fail);
-        NCCLCHECKGOTO(ncclNvlsGroupConnect(comm, shareableHandle, t->worldRankList[0], &mcHandle), ret, fail);
+        NCCLCHECKGOTO(ncclMcImport(comm, shareableHandle, t->worldRankList[0], &mcHandle), ret, fail);
       }
 
       CUCHECKGOTO(cuMulticastAddDevice(mcHandle, comm->cudaDev), ret, fail_mcHandle);
       CUCHECKGOTO(cuMemAddressReserve(&mcAddr, devr->bigSize, NCCL_MAX_PAGE_SIZE, 0, 0), ret, fail_mcHandle);
+      // NOTE(preexisting): cuMemMap blocks until every device has been added, and no
+      // abort-aware barrier precedes it, so a peer failing before its addDevice can
+      // strand survivors here during abort. ncclMcGroupBuildPartitions guards its map with one.
       CUCHECKGOTO(cuMemMap(mcAddr, devr->bigSize, 0, mcHandle, 0), ret, fail_mcHandle_mcAddr);
       {
         CUmemAccessDesc accessDesc = {};

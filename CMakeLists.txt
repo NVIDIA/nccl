@@ -226,6 +226,7 @@ if(WERROR)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
     else()
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Werror=all-warnings -Xcompiler -Werror")
     endif()
 endif()
 

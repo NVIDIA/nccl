@@ -180,6 +180,7 @@ endif
 
 ifneq ($(WERROR), 0)
 CXXFLAGS  += -Werror
+NVCUFLAGS += -Werror=all-warnings -Xcompiler -Werror
 endif
 
 ifneq ($(KEEP), 0)

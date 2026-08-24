@@ -10,6 +10,7 @@
 
 #include "dev_runtime.h"
 #include "nccl_device/core.h"
+#include "multicast.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 
@@ -21,8 +22,8 @@ struct ncclWindow_vidmem;
 struct ncclDevrTeam {
   struct ncclDevrTeam* next;
   struct ncclTeam team;
-  CUmemGenericAllocationHandle mcHandle;
-  void* mcBasePtr;
+  struct ncclMcGroup* mcGroup;         // NULL until multimem is enabled for this team
+  struct ncclMcPartition mcPartition;  // whole-group partition; .ptr is the team's MC base VA
   ncclCftLeId ucLeId[2]; // 0: UC LE ID, 1: counted UC LE ID
   ncclCftLeId mcLeId[2]; // 0: MC LE ID, 1: counted MC LE ID
 #if defined(NCCL_OS_WINDOWS)

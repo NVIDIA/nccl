@@ -22,6 +22,11 @@ NCCL_PARAM(CeCollAgMulticastThreshold, "CE_COLL_AG_MULTICAST_THRESHOLD", -1);
 // round-robin chunking. Chunking is opt-in per batch.
 NCCL_PARAM(CeChunkSize, "CE_CHUNK_SIZE", 8 * 1024 * 1024);
 
+// On CUDA 13.1+, cudaMemcpyFlagPreferOverlapWithCompute is honored on non-Tegra platforms for cudaMemcpyBatchAsync.
+// When set, intra-device copies offload to the CE. NCCL sets this flag on NCCL_CTA_POLICY=ZERO when NCCL_CE_INTRA_GPU_MEMCPY_ENABLE=1 (default).
+// Set to 0 to omit the flag and leave intra-device self-copies on SMs.
+NCCL_PARAM(CeMemcpyOverlapEnable, "CE_INTRA_GPU_MEMCPY_ENABLE", 1);
+
 // Static constant for graph synchronization
 static const uint32_t GRAPH_SYNC_VALUE = 1;
 
@@ -527,17 +532,19 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
   else {
     if (CUDART_VERSION >= 12080 && driverVersion >= 12080) {
 #if CUDART_VERSION >= 12080
-    // For CUDA 12.8+, use batch memory copy for better performance
+      // For CUDA 12.8+, use batch memory copy for better performance
       params->attrs[0] = {};
       params->attrs[0].srcAccessOrder = cudaMemcpySrcAccessOrderStream;
-      params->attrs[0].flags = cudaMemcpyFlagPreferOverlapWithCompute;
+      if (ncclParamCeMemcpyOverlapEnable()) {
+        params->attrs[0].flags = cudaMemcpyFlagPreferOverlapWithCompute;
+      }
       params->attrIdxs[0] = 0;
       params->numAttrs = 1;
 
       if (params->chunking && ceChunkSize > 0) {
         NCCLCHECKGOTO(ncclCeLaunchChunkedMemcpyBatchAsync(params, ceChunkSize, stream), ret, fail);
       } else if (params->intraBatchSync) {
-      // Find the maximum transfer size to determine number of rounds
+        // Find the maximum transfer size to determine number of rounds
         size_t maxSize = 0;
         size_t totalSize = 0;
         for (int i = 0; i < params->numOps; i++) {
@@ -552,8 +559,8 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
 
         size_t numTmpOps = params->numOps * numRounds;
 
-      // Allocate temporary arrays for all chunked operations
-      // Use ncclUniqueArrayPtr for automatic cleanup on any exit path
+        // Allocate temporary arrays for all chunked operations
+        // Use ncclUniqueArrayPtr for automatic cleanup on any exit path
         ncclUniqueArrayPtr<void*> tmpDsts{nullptr};
         ncclUniqueArrayPtr<void*> tmpSrcs{nullptr};
         ncclUniqueArrayPtr<size_t> tmpSizes{nullptr};
@@ -565,7 +572,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
         int opIdx = 0;
         for (int round = 0; round < numRounds; round++) {
           size_t offset = round * chunkSize;
-        // Prepare chunk transfers for this round
+          // Prepare chunk transfers for this round
           for (int i = 0; i < params->numOps; i++) {
             int index = (i + round) % params->numOps;
             if (offset < params->sizes[index]) {
@@ -580,7 +587,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
           }
         }
 
-      // Launch a single batch for all chunks
+        // Launch a single batch for all chunks
         if (opIdx > 0) {
 #if CUDART_VERSION >= 13000
           CUDACHECKGOTO(cudaMemcpyBatchAsync(tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), opIdx, params->attrs,
@@ -593,7 +600,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
 #endif
         }
       } else {
-      // Use single batch for all operations
+        // Use single batch for all operations
 #if CUDART_VERSION >= 13000
         CUDACHECKGOTO(cudaMemcpyBatchAsync(params->dsts, params->srcs, params->sizes, params->numOps, params->attrs,
                                            params->attrIdxs, params->numAttrs, stream),
@@ -922,10 +929,10 @@ bool ncclHierCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRe
 // span [chunkStart[p], chunkStart[p+1]); total chunks = chunkStart[nPeers].
 struct ncclHierChunkPlan {
   int nPeers;
-  int* chunkStart;   // [nPeers + 1]  -- prefix sums
-  size_t* chunkBytes;   // [chunkStart[nPeers]]  -- per-chunk byte size
-  size_t* chunkOff;     // [chunkStart[nPeers]]  -- per-chunk offset within
-                         //                          peer's perRankBytes slice
+  int* chunkStart; // [nPeers + 1]  -- prefix sums
+  size_t* chunkBytes; // [chunkStart[nPeers]]  -- per-chunk byte size
+  size_t* chunkOff; // [chunkStart[nPeers]]  -- per-chunk offset within
+  //                          peer's perRankBytes slice
 };
 
 // Build a uniform chunking plan
@@ -1024,7 +1031,7 @@ static size_t ncclHierCollChunkWidth(size_t perPeerBytes, int numCtx) {
   size_t maxChunk = HIER_COLL_MAX_CHUNK_SIZE;
   if (numCtx > 1) {
     size_t perCtx = DIVUP(perPeerBytes, (size_t)numCtx);
-    size_t chunksPerCtx = DIVUP(perCtx, HIER_COLL_MAX_CHUNK_SIZE);  // 1 unless the cap binds
+    size_t chunksPerCtx = DIVUP(perCtx, HIER_COLL_MAX_CHUNK_SIZE); // 1 unless the cap binds
     size_t target = alignUp(DIVUP(perPeerBytes, numCtx * chunksPerCtx), HIER_COLL_CHUNK_ALIGN);
     if (target < maxChunk) maxChunk = target;
   }
@@ -1324,15 +1331,15 @@ static ncclResult_t ncclHierCeAllGatherDirect(struct ncclComm* comm, struct nccl
   // arrays are calloc'd (null-initialized) so the exit path frees them uniformly.
   int startOps = ncclRmaProxyPutGroupStartNumOps(persistent);
   int doneOps = ncclRmaProxyPutGroupDoneNumOps(persistent);
-  int* ctxOps = nullptr;                                 // [numCtx] ops assigned per ctx
-  int* ctxFill = nullptr;                                // [numCtx] running fill index
-  struct ncclRmaProxyDesc** groupDesc = nullptr;         // [numCtx]
-  struct ncclRmaPutSignalOp** groupOps = nullptr;        // [numCtx]
+  int* ctxOps = nullptr; // [numCtx] ops assigned per ctx
+  int* ctxFill = nullptr; // [numCtx] running fill index
+  struct ncclRmaProxyDesc** groupDesc = nullptr; // [numCtx]
+  struct ncclRmaPutSignalOp** groupOps = nullptr; // [numCtx]
   // Start/done memop params for all active contexts, one contiguous slice per
   // context, so each phase fires a single stream batch instead of one per ctx.
   int nActiveCtx = 0;
-  CUstreamBatchMemOpParams* groupStartParams = nullptr;  // [nActiveCtx * startOps]
-  CUstreamBatchMemOpParams* groupDoneParams = nullptr;   // [nActiveCtx * doneOps]
+  CUstreamBatchMemOpParams* groupStartParams = nullptr; // [nActiveCtx * startOps]
+  CUstreamBatchMemOpParams* groupDoneParams = nullptr; // [nActiveCtx * doneOps]
   // Batch-ops scratch for intra-node broadcast.
   struct ncclCeBatchOpsParams ceBcastOps = {};
   // Batch-ops scratch for per-chunk intra-node CE scatter.
@@ -1381,7 +1388,7 @@ static ncclResult_t ncclHierCeAllGatherDirect(struct ncclComm* comm, struct nccl
 
     // Pass 2: build each chunk's put op into its context's ops array.
     for (int s = 1; s < nNodes; s++) {
-      int p = s - 1;                                 // peer index in plan
+      int p = s - 1; // peer index in plan
       int n = (comm->node + s) % nNodes;
       int railPeer = comm->nodeRanks[n].localRankToRank[localRank];
 
@@ -1473,7 +1480,7 @@ static ncclResult_t ncclHierCeAllGatherDirect(struct ncclComm* comm, struct nccl
   // ====================================================================
   {
     for (int s = 1; s < nNodes; s++) {
-      int p = s - 1;                                 // peer index in plan
+      int p = s - 1; // peer index in plan
       int n = (comm->node - s + nNodes) % nNodes;
       int railPeer = comm->nodeRanks[n].localRankToRank[localRank];
       size_t peerSliceOffset = railPeer * perRankBytes;

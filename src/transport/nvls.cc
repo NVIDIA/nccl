@@ -447,7 +447,8 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
       size_t ubSize = ncclNvlsUbSize(comm);
       struct ncclMcRequest requests[3] = {{creditSize, 0}, {dataSize, 0}, {ubSize, 0}};
       struct ncclMcPartition partitions[3];
-      NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, requests, 3, &resources->mcGroup, partitions), res, fail);
+      struct ncclMcRankSet ranks = {comm->localRank, comm->localRanks, comm->localRankToRank};
+      NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, &ranks, requests, 3, &resources->mcGroup, partitions), res, fail);
       resources->creditPartition = partitions[0];
       resources->dataPartition = partitions[1];
       if (ubSize) {

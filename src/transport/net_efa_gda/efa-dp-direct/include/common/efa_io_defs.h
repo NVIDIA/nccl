@@ -7,6 +7,7 @@
 #define EFA_IO_TX_DESC_NUM_BUFS              2
 #define EFA_IO_TX_DESC_NUM_RDMA_BUFS         1
 #define EFA_IO_TX_DESC_INLINE_MAX_SIZE       32
+#define EFA_IO_TX_DESC_INLINE_MAX_SIZE_128   80
 #define EFA_IO_TX_DESC_IMM_DATA_SIZE         4
 #define EFA_IO_TX_DESC_INLINE_PBL_SIZE       1
 
@@ -63,6 +64,8 @@ enum efa_io_comp_status {
 	EFA_IO_COMP_STATUS_REMOTE_ERROR_UNKNOWN_PEER = 14,
 	/* Unreachable remote - never received a response */
 	EFA_IO_COMP_STATUS_LOCAL_ERROR_UNREACH_REMOTE = 15,
+	/* Feature mismatch */
+	EFA_IO_COMP_STATUS_REMOTE_ERROR_FEATURE_MISMATCH = 18,
 };
 
 enum efa_io_frwr_pbl_mode {
@@ -73,6 +76,10 @@ enum efa_io_frwr_pbl_mode {
 enum efa_io_processing_hint {
 	/* Optimize for throughput */
 	EFA_IO_PROCESSING_HINT_BURST_PPS_SENSITIVE  = 1 << 0,
+};
+
+struct efa_io_req_id_ex {
+	uint16_t w[3];
 };
 
 struct efa_io_tx_meta_desc {
@@ -137,7 +144,9 @@ struct efa_io_tx_meta_desc {
 	/* Queue key */
 	uint32_t qkey;
 
-	uint8_t reserved2[12];
+	uint8_t reserved2[6];
+
+	struct efa_io_req_id_ex req_id_ex;
 };
 
 /*
@@ -181,6 +190,19 @@ struct efa_io_rdma_req {
 
 	/* Local memory address */
 	struct efa_io_tx_buf_desc local_mem[1];
+};
+
+struct efa_io_rdma_req_128 {
+	/* Remote memory address */
+	struct efa_io_remote_mem_addr remote_mem;
+
+	union {
+		/* Local memory address */
+		struct efa_io_tx_buf_desc local_mem[1];
+
+		/* inline data for RDMA */
+		uint8_t inline_data[80];
+	};
 };
 
 struct efa_io_fast_mr_reg_req {
@@ -241,8 +263,8 @@ struct efa_io_fast_mr_inv_req {
 };
 
 /*
- * Tx WQE, composed of tx meta descriptors followed by either tx buffer
- * descriptors or inline data
+ * 64-byte Tx WQE, composed of tx meta descriptors followed by either tx
+ * buffer descriptors or inline data
  */
 struct efa_io_tx_wqe {
 	/* TX meta */
@@ -256,6 +278,31 @@ struct efa_io_tx_wqe {
 
 		/* RDMA local and remote memory addresses */
 		struct efa_io_rdma_req rdma_req;
+
+		/* Fast registration */
+		struct efa_io_fast_mr_reg_req reg_mr_req;
+
+		/* Fast invalidation */
+		struct efa_io_fast_mr_inv_req inv_mr_req;
+	} data;
+};
+
+/*
+ * 128-byte Tx WQE, composed of tx meta descriptors followed by either tx
+ * buffer descriptors or inline data
+ */
+struct efa_io_tx_wqe_128 {
+	/* TX meta */
+	struct efa_io_tx_meta_desc meta;
+
+	union {
+		/* Send buffer descriptors */
+		struct efa_io_tx_buf_desc sgl[2];
+
+		uint8_t inline_data[80];
+
+		/* RDMA local and remote memory addresses */
+		struct efa_io_rdma_req_128 rdma_req;
 
 		/* Fast registration */
 		struct efa_io_fast_mr_reg_req reg_mr_req;
@@ -323,8 +370,10 @@ struct efa_io_tx_cdesc {
 	/* Common completion info */
 	struct efa_io_cdesc_common common;
 
+	struct efa_io_req_id_ex req_id_ex;
+
 	/* MBZ */
-	uint16_t reserved16;
+	uint8_t reserved[4];
 };
 
 /* Rx Completion Descriptor */
@@ -368,36 +417,36 @@ struct efa_io_rx_cdesc_ex {
 
 /* tx_meta_desc */
 #define EFA_IO_TX_META_DESC_OP_TYPE_MASK                    GENMASK(3, 0)
-#define EFA_IO_TX_META_DESC_HAS_IMM_MASK                    EFA_BIT(4)
-#define EFA_IO_TX_META_DESC_INLINE_MSG_MASK                 EFA_BIT(5)
-#define EFA_IO_TX_META_DESC_META_EXTENSION_MASK             EFA_BIT(6)
-#define EFA_IO_TX_META_DESC_META_DESC_MASK                  EFA_BIT(7)
-#define EFA_IO_TX_META_DESC_PHASE_MASK                      EFA_BIT(0)
-#define EFA_IO_TX_META_DESC_FIRST_MASK                      EFA_BIT(2)
-#define EFA_IO_TX_META_DESC_LAST_MASK                       EFA_BIT(3)
-#define EFA_IO_TX_META_DESC_COMP_REQ_MASK                   EFA_BIT(4)
+#define EFA_IO_TX_META_DESC_HAS_IMM_MASK                    BIT(4)
+#define EFA_IO_TX_META_DESC_INLINE_MSG_MASK                 BIT(5)
+#define EFA_IO_TX_META_DESC_META_EXTENSION_MASK             BIT(6)
+#define EFA_IO_TX_META_DESC_META_DESC_MASK                  BIT(7)
+#define EFA_IO_TX_META_DESC_PHASE_MASK                      BIT(0)
+#define EFA_IO_TX_META_DESC_FIRST_MASK                      BIT(2)
+#define EFA_IO_TX_META_DESC_LAST_MASK                       BIT(3)
+#define EFA_IO_TX_META_DESC_COMP_REQ_MASK                   BIT(4)
 #define EFA_IO_TX_META_DESC_PROCESSING_HINTS_MASK           GENMASK(1, 0)
 
 /* tx_buf_desc */
 #define EFA_IO_TX_BUF_DESC_LKEY_MASK                        GENMASK(23, 0)
 
 /* fast_mr_reg_req */
-#define EFA_IO_FAST_MR_REG_REQ_LOCAL_WRITE_ENABLE_MASK      EFA_BIT(0)
-#define EFA_IO_FAST_MR_REG_REQ_REMOTE_WRITE_ENABLE_MASK     EFA_BIT(1)
-#define EFA_IO_FAST_MR_REG_REQ_REMOTE_READ_ENABLE_MASK      EFA_BIT(2)
+#define EFA_IO_FAST_MR_REG_REQ_LOCAL_WRITE_ENABLE_MASK      BIT(0)
+#define EFA_IO_FAST_MR_REG_REQ_REMOTE_WRITE_ENABLE_MASK     BIT(1)
+#define EFA_IO_FAST_MR_REG_REQ_REMOTE_READ_ENABLE_MASK      BIT(2)
 #define EFA_IO_FAST_MR_REG_REQ_PHYS_PAGE_SIZE_SHIFT_MASK    GENMASK(4, 0)
 #define EFA_IO_FAST_MR_REG_REQ_PBL_MODE_MASK                GENMASK(6, 5)
 
 /* rx_desc */
 #define EFA_IO_RX_DESC_LKEY_MASK                            GENMASK(23, 0)
-#define EFA_IO_RX_DESC_FIRST_MASK                           EFA_BIT(30)
-#define EFA_IO_RX_DESC_LAST_MASK                            EFA_BIT(31)
+#define EFA_IO_RX_DESC_FIRST_MASK                           BIT(30)
+#define EFA_IO_RX_DESC_LAST_MASK                            BIT(31)
 
 /* cdesc_common */
-#define EFA_IO_CDESC_COMMON_PHASE_MASK                      EFA_BIT(0)
+#define EFA_IO_CDESC_COMMON_PHASE_MASK                      BIT(0)
 #define EFA_IO_CDESC_COMMON_Q_TYPE_MASK                     GENMASK(2, 1)
-#define EFA_IO_CDESC_COMMON_HAS_IMM_MASK                    EFA_BIT(3)
+#define EFA_IO_CDESC_COMMON_HAS_IMM_MASK                    BIT(3)
 #define EFA_IO_CDESC_COMMON_OP_TYPE_MASK                    GENMASK(6, 4)
-#define EFA_IO_CDESC_COMMON_UNSOLICITED_MASK                EFA_BIT(7)
+#define EFA_IO_CDESC_COMMON_UNSOLICITED_MASK                BIT(7)
 
 #endif /* _EFA_IO_H_ */

@@ -155,23 +155,29 @@ NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle
   uint64_t* local_cntr_ptr = ep->local_cntr_value;
   uint32_t sq_size_val = ep->sq_size;
 
+  /* WQE staging buffer. Always the 128B form: the builder zeroes and the MMIO
+   * loop copies only the QP's negotiated wqe_size, but sizing the storage to
+   * the larger layout keeps one buffer valid for both 64B and 128B QPs. */
+  efa_io_tx_wqe_128 wr_storage;
+  uint16_t wqe_size = qp->sq.wr_ctx.wqe_size;
+
   /* Only the SGE differs for PutValue, so set_sge is deferred. */
-  efa_io_tx_wqe wr;
+  EfaCudaWrBuilder wr(&qp->sq.wr_ctx, (uint8_t*)&wr_storage);
   /* The opcode is the only thing that differs between a Put and a Get here: both
    * carry the RDMA address pair (dstAddr, dstRkey) and the local buffer in the SGE,
    * and the opcode decides which way the bytes move. A read therefore arrives with
    * the REMOTE source in the RDMA pair and the LOCAL destination in the SGE. */
   if NCCL_IF_CONSTEXPR (op == EFA_GDA_RDMA_READ) {
-    efa_cuda_init_rdma_read_wr(&wr, (uint16_t)threadIdx.x, dstRkey, dstAddr);
+    wr.init_rdma_read((uint64_t)threadIdx.x, dstRkey, dstAddr);
   } else {
-    efa_cuda_init_rdma_write_wr(&wr, (uint16_t)threadIdx.x, dstRkey, dstAddr);
+    wr.init_rdma_write((uint64_t)threadIdx.x, dstRkey, dstAddr);
   }
-  efa_cuda_wr_set_remote(&wr, ah, (uint32_t)qpn, qkey);
+  wr.set_remote(ah, (uint32_t)qpn, qkey);
   /* Tag the WQE as PPS-sensitive. GIN puts are small, high-rate writes, so
    * ask the NIC to optimize for packets-per-second (burst PPS) rather than
    * bandwidth. This sets the PROCESSING_HINTS field in the WQE meta
    * descriptor (ctrl3); it is a hint, so the device may ignore it. */
-  efa_cuda_wr_set_processing_hints(&wr, EFA_CUDA_PROCESSING_HINT_BURST_PPS_SENSITIVE);
+  wr.set_processing_hints(EFA_CUDA_PROCESSING_HINT_BURST_PPS_SENSITIVE);
 
   /* Sliding-window SQ post with warp coalescing (Stage 2).
    *
@@ -302,18 +308,18 @@ NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle
       }
 
       /* Only the source SGE is per-lane, the rest of wr was already built above. */
-      efa_cuda_wr_set_sge(&wr, wrSrcLkey, wrSrcAddr, writeBytes);
+      wr.set_sge(wrSrcLkey, wrSrcAddr, writeBytes);
 
       uint32_t sq_idx = my_slot & qp->sq.wq.queue_mask;
       int wqe_phase = (int)((my_slot >> qp->sq.wq.queue_size_shift) & 1u);
-      EFA_SET(&wr.meta.ctrl2, EFA_IO_TX_META_DESC_PHASE, wqe_phase);
-      uint64_t* src = (uint64_t*)&wr;
-      uint64_t* dst = (uint64_t*)(qp->sq.wq.buf + sq_idx * sizeof(efa_io_tx_wqe));
+      EFA_SET(&wr_storage.meta.ctrl2, EFA_IO_TX_META_DESC_PHASE, wqe_phase);
+      uint64_t* src = (uint64_t*)&wr_storage;
+      uint64_t* dst = (uint64_t*)(qp->sq.wq.buf + sq_idx * wqe_size);
       /* One final system-scope fence publishes the complete WQE after these
        * relaxed MMIO stores. */
       uint64_t dstAddr = (uint64_t)__cvta_generic_to_global(dst);
-#pragma unroll
-      for (int i = 0; i < 8; i++) {
+      uint32_t num_words = wqe_size / (uint32_t)sizeof(uint64_t);
+      for (uint32_t i = 0; i < num_words; i++) {
         uint64_t value = src[i];
         asm volatile("st.mmio.relaxed.sys.global.b64 [%0], %1;"
                      :

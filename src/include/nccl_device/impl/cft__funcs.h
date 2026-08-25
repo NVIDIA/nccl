@@ -154,30 +154,6 @@ NCCL_DEVICE_INLINE const char* redOpUnsupported() {
                  : "memory"); \
   }
 
-#define NCCL_CFT_DEFINE_RED_CP_MASK(NAME, PTX_OP, PTX_TYPE) \
-  NCCL_DEVICE_INLINE void red_cp_mask_##NAME(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                             ncclCftSmem& cftSmem, uint16_t cpMask) { \
-    uint32_t srcSmemPtr = smemAddr(src); \
-    uint32_t mbarPtr = smemAddr(cftSmem); \
-    asm volatile("fabric.try_red.async.shared::cta.mbarrier::complete_tx::16B.mbarrier::report::fabric.cp_mask" \
-                 ".relaxed.sys." PTX_OP "." PTX_TYPE " [%0, %1], [%2], %3, [%4], %5;" \
-                 : \
-                 : "r"(leId), "l"(leOffset), "r"(srcSmemPtr), "r"(bytes), "r"(mbarPtr), "h"(cpMask) \
-                 : "memory"); \
-  }
-
-#define NCCL_CFT_DEFINE_RED_MULTIMEM_CP_MASK(NAME, PTX_OP, PTX_TYPE) \
-  NCCL_DEVICE_INLINE void red_multimem_cp_mask_##NAME(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                                      ncclCftSmem& cftSmem, uint16_t cpMask) { \
-    uint32_t srcSmemPtr = smemAddr(src); \
-    uint32_t mbarPtr = smemAddr(cftSmem); \
-    asm volatile("fabric.try_red.async.multimem.shared::cta.mbarrier::complete_tx::16B.mbarrier::report::fabric." \
-                 "cp_mask.relaxed.sys." PTX_OP "." PTX_TYPE " [%0, %1], [%2], %3, [%4], %5;" \
-                 : \
-                 : "r"(leId), "l"(leOffset), "r"(srcSmemPtr), "r"(bytes), "r"(mbarPtr), "h"(cpMask) \
-                 : "memory"); \
-  }
-
 #define NCCL_CFT_DEFINE_PULLRED(NAME, PTX_OP, PTX_TYPE) \
   NCCL_DEVICE_INLINE void pullred_##NAME(ncclCftLeId leId, size_t leOffset, void* dst, uint32_t bytes, \
                                          ncclCftSmem& cftSmem) { \
@@ -195,9 +171,7 @@ NCCL_DEVICE_INLINE const char* redOpUnsupported() {
   NCCL_CFT_DEFINE_RED(NAME, "", OP, TYPE) \
   NCCL_CFT_DEFINE_RED(multimem_##NAME, ".multimem", OP, TYPE) \
   NCCL_CFT_DEFINE_RED_COUNTED(NAME, "", OP, TYPE) \
-  NCCL_CFT_DEFINE_RED_COUNTED(multimem_##NAME, ".multimem", OP, TYPE) \
-  NCCL_CFT_DEFINE_RED_CP_MASK(NAME, OP, TYPE) \
-  NCCL_CFT_DEFINE_RED_MULTIMEM_CP_MASK(NAME, OP, TYPE)
+  NCCL_CFT_DEFINE_RED_COUNTED(multimem_##NAME, ".multimem", OP, TYPE)
 
 #define NCCL_CFT_DEFINE_ALL_FAMILY(NAME, OP, TYPE) \
   NCCL_CFT_DEFINE_RED_FAMILY(NAME, OP, TYPE) \
@@ -231,8 +205,6 @@ NCCL_CFT_DEFINE_RED_FAMILY(add_f64, "add", "f64")
 #undef NCCL_CFT_DEFINE_ALL_FAMILY
 #undef NCCL_CFT_DEFINE_RED_FAMILY
 #undef NCCL_CFT_DEFINE_PULLRED
-#undef NCCL_CFT_DEFINE_RED_MULTIMEM_CP_MASK
-#undef NCCL_CFT_DEFINE_RED_CP_MASK
 #undef NCCL_CFT_DEFINE_RED_COUNTED
 #undef NCCL_CFT_DEFINE_RED
 
@@ -250,10 +222,6 @@ struct Red;
                                               uint32_t bytes, ncclCftSmem& cftSmem) { \
       red_counted_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
     } \
-    static NCCL_DEVICE_INLINE void redCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                             ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
-    } \
     static NCCL_DEVICE_INLINE void redMultimem(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
                                                ncclCftSmem& cftSmem) { \
       red_multimem_##NAME(leId, leOffset, src, bytes, cftSmem); \
@@ -261,10 +229,6 @@ struct Red;
     static NCCL_DEVICE_INLINE void redMultimemCounted(ncclCftLeId leId, size_t leOffset, size_t counterOffset, \
                                                       void* src, uint32_t bytes, ncclCftSmem& cftSmem) { \
       red_counted_multimem_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
-    } \
-    static NCCL_DEVICE_INLINE void redMultimemCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                                     ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_multimem_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
     } \
     static NCCL_DEVICE_INLINE void pullred(ncclCftLeId leId, size_t leOffset, void* dst, uint32_t bytes, \
                                            ncclCftSmem& cftSmem) { \
@@ -283,10 +247,6 @@ struct Red;
                                               uint32_t bytes, ncclCftSmem& cftSmem) { \
       red_counted_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
     } \
-    static NCCL_DEVICE_INLINE void redCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                             ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
-    } \
     static NCCL_DEVICE_INLINE void redMultimem(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
                                                ncclCftSmem& cftSmem) { \
       red_multimem_##NAME(leId, leOffset, src, bytes, cftSmem); \
@@ -294,10 +254,6 @@ struct Red;
     static NCCL_DEVICE_INLINE void redMultimemCounted(ncclCftLeId leId, size_t leOffset, size_t counterOffset, \
                                                       void* src, uint32_t bytes, ncclCftSmem& cftSmem) { \
       red_counted_multimem_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
-    } \
-    static NCCL_DEVICE_INLINE void redMultimemCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                                     ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_multimem_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
     } \
   };
 
@@ -819,34 +775,6 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::redCounted(OpCoop coop, ncclCftLeId leId,
 
 template <typename Coop>
 template <typename RedOp, typename OpCoop>
-NCCL_DEVICE_INLINE void ncclCft<Coop>::redCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,
-                                                 void* smemSource, uint32_t bytes, uint16_t cpMask) {
-#if NCCL_CFT_ENABLE
-  coop.sync();
-  if (nccl::cft::internal::elected(coop)) {
-#ifdef NCCL_DEVICE_CFT_ENABLE_DEBUG
-    assert(reinterpret_cast<uintptr_t>(smemSource) % 16 == 0 &&
-           "ncclCft::redCpMask requires 'smemSource' to be 16 bytes aligned.");
-    assert(bytes % 16 == 0 && "ncclCft::redCpMask requires 'bytes' to be a multiple of 16.");
-#endif
-    nccl::cft::internal::Red<RedOp>::redCpMask(leId, leOffset, smemSource, bytes, this->cftSmem, cpMask);
-    this->txCount += (bytes / 16);
-  }
-  (void)red;
-#else
-  (void)coop;
-  (void)leId;
-  (void)leOffset;
-  (void)red;
-  (void)smemSource;
-  (void)bytes;
-  (void)cpMask;
-  assert(false && nccl::cft::internal::redOpUnsupported());
-#endif
-}
-
-template <typename Coop>
-template <typename RedOp, typename OpCoop>
 NCCL_DEVICE_INLINE void ncclCft<Coop>::redMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,
                                                    void* smemSource, uint32_t bytes) {
 #if NCCL_CFT_ENABLE
@@ -899,34 +827,6 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::redMultimemCounted(OpCoop coop, ncclCftLe
   (void)smemSource;
   (void)bytes;
   assert(false && nccl::cft::internal::redOpUnsupported());
-#endif
-}
-
-template <typename Coop>
-template <typename RedOp, typename OpCoop>
-NCCL_DEVICE_INLINE void ncclCft<Coop>::redMultimemCpMask(
-  OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemSource, uint32_t bytes, uint16_t cpMask) {
-#if NCCL_CFT_ENABLE
-  coop.sync();
-  if (nccl::cft::internal::elected(coop)) {
-#ifdef NCCL_DEVICE_CFT_ENABLE_DEBUG
-    assert(reinterpret_cast<uintptr_t>(smemSource) % 16 == 0 &&
-           "ncclCft::redMultimemCpMask requires 'smemSource' to be 16 bytes aligned.");
-    assert(bytes % 16 == 0 && "ncclCft::redMultimemCpMask requires 'bytes' to be a multiple of 16.");
-#endif
-    nccl::cft::internal::Red<RedOp>::redMultimemCpMask(leId, leOffset, smemSource, bytes, this->cftSmem, cpMask);
-    this->txCount += (bytes / 16);
-  }
-  (void)red;
-#else
-  (void)coop;
-  (void)leId;
-  (void)leOffset;
-  (void)red;
-  (void)smemSource;
-  (void)bytes;
-  (void)cpMask;
-  nccl::cft::internal::unsupported();
 #endif
 }
 

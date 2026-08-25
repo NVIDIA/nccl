@@ -374,8 +374,8 @@ the graph is recaptured.
 RAS Diagnostics
 ---------------
 
-RAS diagnostics provide a readiness probe for NCCL jobs by checking the selected GPU, PCI configuration, CUDA driver,
-and NCCL configuration information across ranks.
+RAS diagnostics provide a readiness probe for NCCL jobs by comparing GPU inventory, PCI configuration, CUDA and
+NVIDIA graphics driver versions, and NCCL configuration across ranks.
 
 Available Checks
 ^^^^^^^^^^^^^^^^
@@ -384,6 +384,8 @@ The report includes results for the following checks:
 
 * **GPU inventory:** Checks that communicator ranks report the same number of GPUs and use the same GPU model.
 * **CUDA driver version:** Checks that all ranks report the same CUDA version supported by the driver.
+* **NVIDIA graphics driver version:** Checks that the graphics driver version reported through NVML is consistent across
+  all ranks.
 * **Volatile ECC errors:** Checks volatile SRAM and DRAM ECC error counters for the GPU used by each rank.
 * **Xid and SXid events:** Scans the host kernel log for GPU Xids and NVSwitch SXids, maps each event to the host
   where it was detected, and classifies it into predefined guidance groups using the
@@ -503,6 +505,7 @@ For example, an on-demand report with no reported issues might look like:
   node042:12345 NCCL DIAG [OK]   NVLink: 18 links per GPU, all active at consistent speed across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   NCCL environment: NCCL_* env vars consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   rdma_topo check: passed on 8/8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   NVIDIA graphics driver version: 610.47.03 consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG RAS diagnostics completed in 12.3 ms across 8 RAS peers
 
 .. note::

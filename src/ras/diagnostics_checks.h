@@ -18,6 +18,10 @@ ncclResult_t rasDiagnosticsCudaDriverVersionCollectLocal(const struct rasDiagnos
                                                          struct rasDiagnosticsLocalData* data);
 ncclResult_t rasDiagnosticsCudaDriverVersionSummarize(
   const struct rasDiagnosticsContext* ctx, const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
+ncclResult_t rasDiagnosticsNvidiaDriverVersionCollectLocal(const struct rasDiagnosticsContext* ctx,
+                                                           struct rasDiagnosticsLocalData* data);
+ncclResult_t rasDiagnosticsNvidiaDriverVersionSummarize(
+  const struct rasDiagnosticsContext* ctx, const struct rasDiagnosticsReporter* reporter, const char* data, int nData);
 ncclResult_t rasDiagnosticsEccCollectLocal(const struct rasDiagnosticsContext* ctx,
                                            struct rasDiagnosticsLocalData* data);
 ncclResult_t rasDiagnosticsEccSummarize(const struct rasDiagnosticsContext* ctx,

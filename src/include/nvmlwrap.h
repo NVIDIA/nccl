@@ -30,6 +30,7 @@ typedef struct nvmlDevice_st* nvmlDevice_t;
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE 16
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE 32
 #define NVML_DEVICE_NAME_BUFFER_SIZE 64
+#define NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE 80
 
 typedef enum nvmlEnableState_enum {
   NVML_FEATURE_DISABLED = 0,     //!< Feature disabled
@@ -373,6 +374,7 @@ ncclResult_t ncclNvmlDeviceGetIndex(nvmlDevice_t device, unsigned* index);
 ncclResult_t ncclNvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t* device);
 ncclResult_t ncclNvmlDeviceGetName(nvmlDevice_t device, char* name, unsigned int length);
 ncclResult_t ncclNvmlDeviceGetCount(unsigned int* deviceCount);
+ncclResult_t ncclNvmlSystemGetDriverVersion(char* version, unsigned int length);
 ncclResult_t ncclNvmlDeviceGetMemoryErrorCounter(nvmlDevice_t device, nvmlMemoryErrorType_t errorType,
                                                  nvmlEccCounterType_t counterType, nvmlMemoryLocation_t locationType,
                                                  unsigned long long* count);

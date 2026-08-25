@@ -184,18 +184,111 @@ exit:
 }
 
 // *************************************************************************
-// CUDA driver version consistency check.
+// Version consistency checks.
 // *************************************************************************
-#define RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN 0
+static const void* rasDiagnosticsVersionDataFromRecord(const char* record) {
+  return record + sizeof(struct rasDiagnosticsRankHeader);
+}
+
+// format converts a check-specific value to text and returns whether it was collected successfully.
+static ncclResult_t rasDiagnosticsVersionSummarize(const struct rasDiagnosticsReporter* reporter, const char* data,
+                                                   int nData, const char* checkLabel, size_t dataSize,
+                                                   bool (*format)(const void* data, char* buf, size_t bufLen)) {
+  ncclResult_t ret = ncclSuccess;
+  char* records = nullptr;
+  const size_t recordStride = rasDiagnosticsLocalRecordStride(dataSize);
+  int nRecords;
+
+  if (reporter == nullptr || reporter->emit == nullptr) {
+    WARN("RAS diagnostics %s check received invalid reporter", checkLabel);
+    return ncclInternalError;
+  }
+  if (nData == 0) return ncclSuccess;
+  if (data == nullptr) {
+    WARN("RAS diagnostics %s check received null data with size %d", checkLabel, nData);
+    return ncclInternalError;
+  }
+  if (nData < 0 || nData % (int)recordStride != 0) {
+    WARN("RAS diagnostics %s check received malformed data size %d", checkLabel, nData);
+    return ncclInternalError;
+  }
+
+  nRecords = nData / (int)recordStride;
+  NCCLCHECK(ncclCalloc(&records, nData));
+  memcpy(records, data, nData);
+  qsort(records, nRecords, recordStride, rasDiagnosticsRankHeaderCompare);
+
+  for (int start = 0; start < nRecords;) {
+    const char* startRecord = records + start * recordStride;
+    const struct rasDiagnosticsRankHeader* startRank = rasDiagnosticsRankHeaderFromRecord(startRecord);
+    const void* expectedVersion = rasDiagnosticsVersionDataFromRecord(startRecord);
+    int expectedRank = startRank->commRank;
+    int commNRanks = startRank->commNRanks;
+    int mismatchRanks[RAS_DIAG_RANK_SET_MAX];
+    int nMismatchStored = 0, nMismatch = 0;
+    int end = start + 1;
+
+    while (end < nRecords) {
+      const char* record = records + end * recordStride;
+      const struct rasDiagnosticsRankHeader* rank = rasDiagnosticsRankHeaderFromRecord(record);
+      const void* version = rasDiagnosticsVersionDataFromRecord(record);
+
+      if (rasDiagnosticsCommIdCompare(&startRank->commId, &rank->commId) != 0) break;
+      // Version PODs are fully initialized, so their byte representation can be compared directly.
+      if (memcmp(version, expectedVersion, dataSize) != 0) {
+        if (nMismatchStored < RAS_DIAG_RANK_SET_MAX) mismatchRanks[nMismatchStored++] = rank->commRank;
+        nMismatch++;
+      }
+      end++;
+    }
+
+    if (end - start != commNRanks) {
+      NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, checkLabel, startRank, end - start), ret, exit);
+    } else if (nMismatch == 0) {
+      char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+      if (!format(expectedVersion, version, sizeof(version))) {
+        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO, "%s: %s across %d ranks in comm 0x%lx",
+                                           checkLabel, version, commNRanks, startRank->commId.commHash),
+                      ret, exit);
+      } else {
+        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_OK, "%s: %s consistent across %d ranks in comm 0x%lx",
+                                           checkLabel, version, commNRanks, startRank->commId.commHash),
+                      ret, exit);
+      }
+    } else {
+      char rankSet[128];
+      char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+      (void)format(expectedVersion, version, sizeof(version));
+      rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), mismatchRanks, nMismatchStored, nMismatch);
+      NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                                         "%s: mismatch across %d ranks in comm 0x%lx, "
+                                         "rank(s) %s differ from rank %d (%s)",
+                                         checkLabel, commNRanks, startRank->commId.commHash, rankSet, expectedRank,
+                                         version),
+                    ret, exit);
+    }
+
+    start = end;
+  }
+
+exit:
+  free(records);
+  return ret;
+}
+
+// CUDA driver version.
+#define RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN UINT32_MAX
 
 struct rasDiagnosticsCudaDriverVersionData {
   uint32_t version;
 };
 
-static const char* rasDiagnosticsCudaDriverVersionString(uint32_t version, char* buf, size_t bufLen) {
+static bool rasDiagnosticsCudaDriverVersionFormat(const void* data, char* buf, size_t bufLen) {
+  uint32_t version = ((const struct rasDiagnosticsCudaDriverVersionData*)data)->version;
   if (version == RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN) snprintf(buf, bufLen, "unavailable");
+  else if (version == 0) snprintf(buf, bufLen, "no driver installed");
   else snprintf(buf, bufLen, "%u", version);
-  return buf;
+  return version != RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN && version != 0;
 }
 
 static ncclResult_t rasDiagnosticsCudaDriverVersionFillLocalData(const struct rasDiagnosticsCommSnapshot* comm,
@@ -205,7 +298,7 @@ static ncclResult_t rasDiagnosticsCudaDriverVersionFillLocalData(const struct ra
 
   (void)comm;
   versionData->version = RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN;
-  if (ncclCudaDriverVersion(&version) == ncclSuccess && version > 0) {
+  if (ncclCudaDriverVersion(&version) == ncclSuccess) {
     versionData->version = (uint32_t)version;
   }
   return ncclSuccess;
@@ -218,97 +311,52 @@ ncclResult_t rasDiagnosticsCudaDriverVersionCollectLocal(const struct rasDiagnos
   return ncclSuccess;
 }
 
-static const struct rasDiagnosticsCudaDriverVersionData* rasDiagnosticsCudaDriverVersionDataFromRecord(
-  const char* record) {
-  return (const struct rasDiagnosticsCudaDriverVersionData*)(record + sizeof(struct rasDiagnosticsRankHeader));
-}
-
 ncclResult_t rasDiagnosticsCudaDriverVersionSummarize(
   const struct rasDiagnosticsContext* ctx, const struct rasDiagnosticsReporter* reporter, const char* data, int nData) {
-  ncclResult_t ret = ncclSuccess;
-  char* records = nullptr;
-  const size_t recordStride = rasDiagnosticsLocalRecordStride(sizeof(struct rasDiagnosticsCudaDriverVersionData));
-  int nRecords;
-
   (void)ctx;
+  return rasDiagnosticsVersionSummarize(reporter, data, nData, "CUDA driver version",
+                                        sizeof(struct rasDiagnosticsCudaDriverVersionData),
+                                        rasDiagnosticsCudaDriverVersionFormat);
+}
 
-  if (reporter == nullptr || reporter->emit == nullptr) {
-    WARN("RAS diagnostics CUDA driver version check received invalid reporter");
-    return ncclInternalError;
-  }
-  if (nData == 0) return ncclSuccess;
-  if (data == nullptr) {
-    WARN("RAS diagnostics CUDA driver version check received null data with size %d", nData);
-    return ncclInternalError;
-  }
-  if (nData < 0 || nData % (int)recordStride != 0) {
-    WARN("RAS diagnostics CUDA driver version check received malformed data size %d", nData);
-    return ncclInternalError;
-  }
+// NVIDIA graphics driver version.
+struct rasDiagnosticsNvidiaDriverVersionData {
+  char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+};
 
-  nRecords = nData / (int)recordStride;
-  NCCLCHECK(ncclCalloc(&records, nData));
-  memcpy(records, data, nData);
-  qsort(records, nRecords, recordStride, rasDiagnosticsRankHeaderCompare);
+static bool rasDiagnosticsNvidiaDriverVersionFormat(const void* data, char* buf, size_t bufLen) {
+  const struct rasDiagnosticsNvidiaDriverVersionData* versionData =
+    (const struct rasDiagnosticsNvidiaDriverVersionData*)data;
+  if (versionData->version[0] == '\0') snprintf(buf, bufLen, "unavailable via NVML");
+  else snprintf(buf, bufLen, "%.*s", NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE, versionData->version);
+  return versionData->version[0] != '\0';
+}
 
-  for (int start = 0; start < nRecords;) {
-    const char* startRecord = records + start * recordStride;
-    const struct rasDiagnosticsRankHeader* startRank = rasDiagnosticsRankHeaderFromRecord(startRecord);
-    uint32_t expectedVersion = rasDiagnosticsCudaDriverVersionDataFromRecord(startRecord)->version;
-    int expectedRank = startRank->commRank;
-    int commNRanks = startRank->commNRanks;
-    int mismatchRanks[RAS_DIAG_RANK_SET_MAX];
-    int nMismatchStored = 0, nMismatch = 0;
-    int end = start + 1;
+static ncclResult_t rasDiagnosticsNvidiaDriverVersionFillLocalData(const struct rasDiagnosticsCommSnapshot* comm,
+                                                                   void* checkData) {
+  struct rasDiagnosticsNvidiaDriverVersionData* versionData = (struct rasDiagnosticsNvidiaDriverVersionData*)checkData;
 
-    while (end < nRecords) {
-      const char* record = records + end * recordStride;
-      const struct rasDiagnosticsRankHeader* rank = rasDiagnosticsRankHeaderFromRecord(record);
-      uint32_t version = rasDiagnosticsCudaDriverVersionDataFromRecord(record)->version;
+  (void)comm;
+  memset(versionData, 0, sizeof(*versionData));
+  if (ncclNvmlSystemGetDriverVersion(versionData->version, sizeof(versionData->version)) != ncclSuccess)
+    memset(versionData, 0, sizeof(*versionData));
+  versionData->version[sizeof(versionData->version) - 1] = '\0';
+  return ncclSuccess;
+}
 
-      if (rasDiagnosticsCommIdCompare(&startRank->commId, &rank->commId) != 0) break;
-      if (version != expectedVersion) {
-        if (nMismatchStored < RAS_DIAG_RANK_SET_MAX) mismatchRanks[nMismatchStored++] = rank->commRank;
-        nMismatch++;
-      }
-      end++;
-    }
+ncclResult_t rasDiagnosticsNvidiaDriverVersionCollectLocal(const struct rasDiagnosticsContext* ctx,
+                                                           struct rasDiagnosticsLocalData* data) {
+  NCCLCHECK(rasDiagnosticsCollectLocalRecords(ctx, sizeof(struct rasDiagnosticsNvidiaDriverVersionData),
+                                              rasDiagnosticsNvidiaDriverVersionFillLocalData, data));
+  return ncclSuccess;
+}
 
-    if (end - start != commNRanks) {
-      NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, "CUDA driver version", startRank, end - start), ret, exit);
-    } else if (nMismatch == 0) {
-      char version[32];
-      if (expectedVersion == RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN) {
-        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                           "CUDA driver version: unavailable across %d ranks in comm 0x%lx", commNRanks,
-                                           startRank->commId.commHash),
-                      ret, exit);
-      } else {
-        NCCLCHECKGOTO(rasDiagnosticsReport(
-                        reporter, RAS_DIAG_TAG_OK, "CUDA driver version: %s consistent across %d ranks in comm 0x%lx",
-                        rasDiagnosticsCudaDriverVersionString(expectedVersion, version, sizeof(version)), commNRanks,
-                        startRank->commId.commHash),
-                      ret, exit);
-      }
-    } else {
-      char rankSet[128];
-      char version[32];
-      rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), mismatchRanks, nMismatchStored, nMismatch);
-      NCCLCHECKGOTO(
-        rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                             "CUDA driver version: mismatch across %d ranks in comm 0x%lx, "
-                             "rank(s) %s differ from rank %d (%s)",
-                             commNRanks, startRank->commId.commHash, rankSet, expectedRank,
-                             rasDiagnosticsCudaDriverVersionString(expectedVersion, version, sizeof(version))),
-        ret, exit);
-    }
-
-    start = end;
-  }
-
-exit:
-  free(records);
-  return ret;
+ncclResult_t rasDiagnosticsNvidiaDriverVersionSummarize(
+  const struct rasDiagnosticsContext* ctx, const struct rasDiagnosticsReporter* reporter, const char* data, int nData) {
+  (void)ctx;
+  return rasDiagnosticsVersionSummarize(reporter, data, nData, "NVIDIA graphics driver version",
+                                        sizeof(struct rasDiagnosticsNvidiaDriverVersionData),
+                                        rasDiagnosticsNvidiaDriverVersionFormat);
 }
 
 // *************************************************************************

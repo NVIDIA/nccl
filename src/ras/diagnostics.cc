@@ -71,6 +71,8 @@ static const struct rasDiagnosticsCheck rasDiagnosticsChecks[RAS_DIAG_CHECK_COUN
   {RAS_DIAG_CHECK_IOMMU_MODE, rasDiagnosticsIommuCollectLocal, rasDiagnosticsIommuSummarize},
   {RAS_DIAG_CHECK_ATS, rasDiagnosticsAtsCollectLocal, rasDiagnosticsAtsSummarize},
   {RAS_DIAG_CHECK_XID_SXID, rasDiagnosticsXidCollectLocal, rasDiagnosticsXidSummarize},
+  {RAS_DIAG_CHECK_NVIDIA_DRIVER_VERSION, rasDiagnosticsNvidiaDriverVersionCollectLocal,
+   rasDiagnosticsNvidiaDriverVersionSummarize},
 };
 
 static ncclResult_t rasDiagnosticsSummarizePeerPayloads(

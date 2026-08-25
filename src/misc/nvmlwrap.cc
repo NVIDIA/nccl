@@ -34,6 +34,7 @@ NCCL_NVML_FN(nvmlDeviceGetHandleByPciBusId, nvmlReturn_t, (const char* pciBusId,
 NCCL_NVML_FN(nvmlDeviceGetHandleByIndex, nvmlReturn_t, (unsigned int index, nvmlDevice_t* device))
 NCCL_NVML_FN(nvmlDeviceGetIndex, nvmlReturn_t, (nvmlDevice_t device, unsigned* index))
 NCCL_NVML_FN(nvmlDeviceGetName, nvmlReturn_t, (nvmlDevice_t device, char* name, unsigned int length))
+NCCL_NVML_FN(nvmlSystemGetDriverVersion, nvmlReturn_t, (char* version, unsigned int length))
 NCCL_NVML_FN(nvmlDeviceGetMemoryErrorCounter, nvmlReturn_t,
              (nvmlDevice_t device, nvmlMemoryErrorType_t errorType, nvmlEccCounterType_t counterType,
               nvmlMemoryLocation_t locationType, unsigned long long* count))
@@ -108,6 +109,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
       {(void**)&pfn_nvmlDeviceGetHandleByIndex, "nvmlDeviceGetHandleByIndex"},
       {(void**)&pfn_nvmlDeviceGetIndex, "nvmlDeviceGetIndex"},
       {(void**)&pfn_nvmlDeviceGetName, "nvmlDeviceGetName"},
+      {(void**)&pfn_nvmlSystemGetDriverVersion, "nvmlSystemGetDriverVersion"},
       {(void**)&pfn_nvmlDeviceGetMemoryErrorCounter, "nvmlDeviceGetMemoryErrorCounter"},
       {(void**)&pfn_nvmlErrorString, "nvmlErrorString"},
       {(void**)&pfn_nvmlDeviceGetNvLinkState, "nvmlDeviceGetNvLinkState"},
@@ -249,6 +251,13 @@ ncclResult_t ncclNvmlDeviceGetName(nvmlDevice_t device, char* name, unsigned int
   NCCLCHECK(ncclNvmlEnsureInitialized());
   std::lock_guard<std::mutex> locked(lock);
   NVMLTRY(nvmlDeviceGetName, device, name, length);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvmlSystemGetDriverVersion(char* version, unsigned int length) {
+  NCCLCHECK(ncclNvmlEnsureInitialized());
+  std::lock_guard<std::mutex> locked(lock);
+  NVMLTRY(nvmlSystemGetDriverVersion, version, length);
   return ncclSuccess;
 }
 

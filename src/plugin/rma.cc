@@ -18,13 +18,14 @@
 
 typedef ncclRma_t* getNcclRma_t(void* rmaPluginLib);
 
+extern getNcclRma_t getNcclRma_v16;
 extern getNcclRma_t getNcclRma_v15;
 extern getNcclRma_t getNcclRma_v14;
 extern getNcclRma_t getNcclRma_v13;
 NCCL_PARAM(RmaPluginRefCount, "RMA_PLUGIN_REF_COUNT", 0);
-#define NCCL_RMA_VERSION_COUNT 3
-int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {15, 14, 13};
-getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v15, getNcclRma_v14, getNcclRma_v13};
+#define NCCL_RMA_VERSION_COUNT 4
+int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {16, 15, 14, 13};
+getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v16, getNcclRma_v15, getNcclRma_v14, getNcclRma_v13};
 
 #define NCCL_RMA_NUM_RESERVED_PLUGINS 4
 #define NCCL_RMA_NUM_INTERNAL_PLUGINS 2

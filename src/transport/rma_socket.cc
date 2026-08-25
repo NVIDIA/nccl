@@ -42,6 +42,12 @@ ncclResult_t ncclRmaSocketProxyDevices(int* ndev) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclRmaSocketProxyGetRmaProperties(void* collComm, ncclRmaProperties_t* rmaProps) {
+  (void)collComm;
+  rmaProps->flushesAllPutsOnAnySignal = false;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclRmaSocketProxyGetProperties(int dev, ncclNetProperties_t* props) {
   NCCLCHECK(ncclNetSocket.getProperties(dev, props));
   // props->ptrSupport = NCCL_PTR_HOST | NCCL_PTR_CUDA;
@@ -630,6 +636,7 @@ ncclRma_t ncclRmaSocketProxy = {
   "RMA_SOCKET_PROXY",
   ncclRmaSocketProxyInit,               // rma_socket.cc
   ncclRmaSocketProxyDevices,            // rma_socket.cc
+  ncclRmaSocketProxyGetRmaProperties,   // rma_socket.cc
   ncclRmaSocketProxyGetProperties,      // rma_socket.cc
   ncclRmaSocketProxyListen,             // rma_socket.cc
   ncclRmaSocketProxyConnect,            // rma_socket_setup.cc

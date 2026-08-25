@@ -347,6 +347,13 @@ ncclResult_t ncclRmaIbProxyInit(void** ctx, uint64_t commId, ncclDebugLogger_t l
   return ncclGinIbInitType(ctx, commId, logFunction, NCCL_GIN_TYPE_PROXY);
 }
 
+ncclResult_t ncclRmaIbProxyGetRmaProperties(void* collComm, ncclRmaProperties_t* rmaProps) {
+  (void)collComm;
+  // Determined in a later commit; reported as false here.
+  rmaProps->flushesAllPutsOnAnySignal = false;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclRmaIbProxyGetProperties(int dev, ncclNetProperties_t* props) {
   NCCLCHECK(ncclNetIb.getProperties(dev, props));
   props->netDeviceType = NCCL_NET_DEVICE_GIN_PROXY;
@@ -827,6 +834,7 @@ ncclResult_t ncclRmaIbProxyIFlush(void* rmaCtx, int context, void* mhandle, uint
 ncclRma_t ncclRmaIbProxy = {"RMA_IB_PROXY",
                             ncclRmaIbProxyInit,
                             ncclIbDevices,
+                            ncclRmaIbProxyGetRmaProperties,
                             ncclRmaIbProxyGetProperties,
                             ncclIbListen,
                             ncclRmaIbProxyConnect,

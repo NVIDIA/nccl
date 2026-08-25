@@ -13,6 +13,12 @@
 static ncclRma_v14_t* ncclRma_v14;
 static ncclRma_t ncclRma;
 
+static ncclResult_t ncclRma_v14_getRmaProperties(void* collComm, ncclRmaProperties_t* rmaProps) {
+  (void)collComm;
+  rmaProps->flushesAllPutsOnAnySignal = false;
+  return ncclSuccess;
+}
+
 static ncclResult_t ncclRma_v14_iput(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
                                      uint64_t dstOff, void* dstMhandle, uint32_t rank, uint32_t optFlags,
                                      void** request) {
@@ -44,6 +50,7 @@ ncclRma_t* getNcclRma_v14(void* lib) {
     ncclRma.name = ncclRma_v14->name;
     ncclRma.init = ncclRma_v14->init;
     ncclRma.devices = ncclRma_v14->devices;
+    ncclRma.getRmaProperties = ncclRma_v14_getRmaProperties;
     ncclRma.getProperties = ncclRma_v14->getProperties;
     ncclRma.listen = ncclRma_v14->listen;
     ncclRma.connect = ncclRma_v14->connect;

@@ -22,6 +22,11 @@
 #include "../gin_device_common.h"
 #include "gin_gpi_device_host_common.h"
 
+static_assert(sizeof(gpi_gfd_t) <= sizeof(ncclGinDescriptorSmem),
+              "ncclGinDescriptorSmem must be large enough for gpi_gfd_t");
+static_assert(alignof(gpi_gfd_t) <= alignof(ncclGinDescriptorSmem),
+              "ncclGinDescriptorSmem must satisfy gpi_gfd_t alignment");
+
 #ifdef NCCL_DEVICE_GIN_GPI_ENABLE_DEBUG
 #include <stdio.h>
 #endif

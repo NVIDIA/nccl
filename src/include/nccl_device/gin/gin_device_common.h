@@ -83,7 +83,7 @@ template <unsigned backendMask>
 struct ncclGinCtx_M : ncclGinCtx {};
 
 struct ncclGinDescriptorSmem {
-  alignas(16) char space[64];
+  alignas(64) char space[128];
 };
 
 enum ncclGinSignalType {

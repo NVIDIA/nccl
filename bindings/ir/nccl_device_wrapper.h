@@ -145,6 +145,9 @@ NCCL_IR_EXTERN_C __device__
 void ncclLsaBarrierSessionWait(ncclLsaBarrierSession_C* session, ncclCoopAny coop, cuda::memory_order order);
 NCCL_IR_EXTERN_C __device__
 void ncclLsaBarrierSessionSync(ncclLsaBarrierSession_C* session, ncclCoopAny coop, cuda::memory_order order);
+// Collectively finalize the placement-new object and persist its epoch. Does not free storage.
+NCCL_IR_EXTERN_C __device__
+void ncclLsaBarrierSessionDestroy(ncclLsaBarrierSession_C* session);
 
 /* GIN Barrier Session APIs */
 NCCL_IR_EXTERN_C __device__ void ncclGinBarrierSessionInit(
@@ -170,6 +173,10 @@ NCCL_IR_EXTERN_C __device__ void ncclGinBarrierSessionSync(
     ncclCoopAny coop,
     cuda::memory_order order,
     ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
+// Finalize the placement-new object. Currently a no-op -- the underlying destructor is
+// empty -- but required for lifetime symmetry with Init. Does not free storage.
+NCCL_IR_EXTERN_C __device__
+void ncclGinBarrierSessionDestroy(ncclGinBarrierSession_C* session);
 
 /* Barrier Session APIs */
 NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionInit(
@@ -188,6 +195,9 @@ NCCL_IR_EXTERN_C __device__ void ncclBarrierSessionSync(
     ncclCoopAny coop,
     cuda::memory_order order,
     ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
+// Collectively finalize all nested sessions and persist the inner LSA epoch. Does not free storage.
+NCCL_IR_EXTERN_C __device__
+void ncclBarrierSessionDestroy(ncclBarrierSession_C* session);
 
 /* ReduceCopy APIs */
 NCCL_IR_EXTERN_C __device__ void ncclLsaReduceSum_I8(

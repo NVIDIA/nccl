@@ -101,6 +101,11 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE
 void ncclLsaBarrierSessionSync(ncclLsaBarrierSession_C* session, ncclCoopAny coop, cuda::memory_order order) {
     session->bar.sync(coop, order);
 }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE
+void ncclLsaBarrierSessionDestroy(ncclLsaBarrierSession_C* session) {
+    using Session = ncclLsaBarrierSession<ncclCoopAny>;
+    session->bar.~Session();
+}
 
 /* GIN barrier session */
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinBarrierSessionInit(
@@ -130,6 +135,11 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinBarrierSessionSync(
     ncclGinFenceLevel fence) {
     session->bar.sync(coop, order, fence);
 }
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE
+void ncclGinBarrierSessionDestroy(ncclGinBarrierSession_C* session) {
+    using Session = ncclGinBarrierSession<ncclCoopAny>;
+    session->bar.~Session();
+}
 
 /* Barrier Session*/
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclBarrierSessionInit(
@@ -152,6 +162,11 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclBarrierSessionSync(
     cuda::memory_order order,
     ncclGinFenceLevel fence) {
     session->bar.sync(coop, order, fence);
+}
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE
+void ncclBarrierSessionDestroy(ncclBarrierSession_C* session) {
+    using Session = ncclBarrierSession<ncclCoopAny>;
+    session->bar.~Session();
 }
 
 // ReduceCopy APIs

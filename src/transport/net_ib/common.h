@@ -544,6 +544,11 @@ struct ncclIbSendComm {
   int ar; // Use adaptive routing when all merged devices have it enabled
   uint64_t putSignalScratchpad;
 
+  struct {
+    uint64_t posted;
+    uint64_t completed;
+  } ginSeq;
+
   struct ncclIbRemoteSpeedBuf remoteSpeedBuf;
   struct ibv_mr* remoteSpeedMr;
   uint64_t remoteSpeedCounter;
@@ -632,6 +637,10 @@ struct ncclIbRecvComm {
   uint16_t lastSentSpeeds[NCCL_IB_MAX_DEVS_PER_NIC];
   uint64_t lastSentCounter;
   bool postedSpeedUpdate;
+  struct {
+    uint64_t posted;
+    uint64_t completed;
+  } ginSeq;
 };
 static_assert((offsetof(struct ncclIbRecvComm, remCtsFifo) % 32) == 0,
               "ncclIbRecvComm ctsFifo must be 32-byte aligned");

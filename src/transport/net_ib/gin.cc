@@ -429,6 +429,10 @@ static ncclResult_t ncclRmaIbProxyPostBatch(struct ncclRmaIbProxyCtx* ctx) {
   struct ncclRmaIbProxyWrBatch* batch = &ctx->batch;
   if (batch->nWrs == 0) return ncclSuccess;  // no wrs to post
 
+  // make sure the last wr is signaled and NULL-terminated
+  batch->wrs[batch->nWrs - 1].send_flags |= IBV_SEND_SIGNALED;
+  batch->wrs[batch->nWrs - 1].next = NULL;
+
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(batch->qp, &batch->wrs[0], &bad_wr));
 
@@ -456,7 +460,9 @@ static ncclResult_t ncclRmaIbProxyReserveWrs(struct ncclRmaIbProxyCtx* ctx, stru
 // fill the slot (link the wrs)
 static ncclResult_t ncclRmaIbProxyCommitWrs(struct ncclRmaIbProxyCtx* ctx, int nWrs, bool aggregate) {
   struct ncclRmaIbProxyWrBatch* batch = &ctx->batch;
-  if (batch->nWrs) batch->wrs[batch->nWrs - 1].next = batch->wrs + batch->nWrs;
+  for (int i = 0; i < nWrs; i++) {
+    batch->wrs[batch->nWrs + i].next = batch->wrs + batch->nWrs + i + 1;
+  }
   batch->nWrs += nWrs;
 
   // in case we don't have enough space to fit the next put+signal
@@ -657,6 +663,7 @@ ncclResult_t ncclRmaIbProxyIPut(void* rmaCtx, int context, uint64_t srcOff, void
   req->type = NCCL_NET_IB_REQ_GIN_IPUT;
   req->sock = &comm->base.sock;
   req->iput.rank = rank;
+  req->id = ++comm->ginSeq.posted;
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
     req->devBases[i] = &comm->devs[i].base;
   }
@@ -704,6 +711,7 @@ ncclResult_t ncclRmaIbProxyIGet(void* rmaCtx, int context, uint64_t remoteOffset
   req->type = NCCL_NET_IB_REQ_GIN_IGET;
   req->sock = &comm->base.sock;
   req->iget.rank = rank;
+  req->id = ++comm->ginSeq.posted;
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
     req->devBases[i] = &comm->devs[i].base;
   }
@@ -729,7 +737,6 @@ ncclResult_t ncclRmaIbProxyIGet(void* rmaCtx, int context, uint64_t remoteOffset
   sge->length = size;
   sge->lkey = lkey;
 
-  ncclIbAddEvent(req, qp->devIndex);
   NCCLCHECK(ncclRmaIbProxyCommitWrs(rmaProxyCtx, 1, optFlags & ncclRmaOptFlagsAggregateRequests));
 
   *request = req;
@@ -763,6 +770,7 @@ ncclResult_t ncclRmaIbProxyIPutSignal(void* rmaCtx, int context, uint64_t srcOff
   req->type = NCCL_NET_IB_REQ_GIN_IPUT;
   req->sock = &comm->base.sock;
   req->iput.rank = rank;
+  req->id = ++comm->ginSeq.posted;
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
     req->devBases[i] = &comm->devs[i].base;
   }
@@ -816,7 +824,6 @@ ncclResult_t ncclRmaIbProxyIPutSignal(void* rmaCtx, int context, uint64_t srcOff
   signalSge->lkey = comm->devs[devIndex].putSignalScratchpadMr->lkey;
 
   // Send the put and the signal in one go
-  ncclIbAddEvent(req, qp->devIndex);
   NCCLCHECK(ncclRmaIbProxyCommitWrs(rmaProxyCtx, nWrs, optFlags & ncclRmaOptFlagsAggregateRequests));
   *request = req;
   return ncclSuccess;
@@ -826,31 +833,37 @@ ncclResult_t ncclRmaIbProxyTest(void* collComm, void* request, int* done) {
   struct ncclIbRequest* req = (struct ncclIbRequest*)request;
   struct ncclRmaIbProxyCtx* rmaProxyCtx = (struct ncclRmaIbProxyCtx*)req->rmaProxyCtx;
   int rank = req->iput.rank;
+  bool isFlush = req->type == NCCL_NET_IB_REQ_FLUSH;
   *done = 0;
 
   // The caller is already waiting on this op, so a deferred doorbell must not
   // hold it back.
   NCCLCHECK(ncclRmaIbProxyPostBatch(rmaProxyCtx));
 
-  if (req->events[0] == 0) {
-    *done = 1;
-    NCCLCHECK(ncclIbFreeRequest(req));
-    return ncclSuccess;
-  }
-  int wrDone = 0;
-  struct ibv_wc wc[4];
-
   ncclIbNetCommBase* commBase;
   ncclIbNetCommDevBase* devBase;
-  if (req->type == NCCL_NET_IB_REQ_FLUSH) {
+
+  uint64_t* completedSeq;
+  if (isFlush) {
     struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)rmaProxyCtx->fullRecvComm[rank];
     commBase = &comm->base;
     devBase = &comm->devs[0].base;
+    completedSeq = &comm->ginSeq.completed;
   } else {
     struct ncclIbSendComm* comm = (struct ncclIbSendComm*)rmaProxyCtx->fullSendComm[rank];
     commBase = &comm->base;
     devBase = &comm->devs[0].base;
+    completedSeq = &comm->ginSeq.completed;
   }
+
+  if (req->id <= *completedSeq) {
+    *done = 1;
+    NCCLCHECK(ncclIbFreeRequest(req));
+    return ncclSuccess;
+  }
+
+  int wrDone = 0;
+  struct ibv_wc wc[4];
   NCCLCHECK(wrap_ibv_poll_cq(devBase->cq, 4, wc, &wrDone));
   for (int i = 0; i < wrDone; i++) {
     if (wc[i].status != IBV_WC_SUCCESS) {
@@ -876,11 +889,13 @@ ncclResult_t ncclRmaIbProxyTest(void* collComm, void* request, int* done) {
 
     struct ncclIbRequest* wcReq = commBase->reqs + wc[i].wr_id;
 
-    wcReq->events[0]--;
-    if (wcReq == req && wcReq->events[0] == 0) {
-      *done = 1;
-      NCCLCHECK(ncclIbFreeRequest(wcReq));
-    }
+    if (wcReq->id > *completedSeq) *completedSeq = wcReq->id;
+  }
+
+    // quick check if we get completion during this poll
+  if (req->id <= *completedSeq) {
+    *done = 1;
+    NCCLCHECK(ncclIbFreeRequest(req));
   }
   return ncclSuccess;
 }
@@ -906,6 +921,10 @@ ncclResult_t ncclRmaIbProxyIFlush(void* rmaCtx, int context, void* mhandle, uint
   req->sock = &comm->base.sock;
   req->iput.rank = rank;
   req->rmaProxyCtx = rmaProxyCtx;
+  req->id = ++comm->ginSeq.posted;
+  for (int i = 0; i < comm->base.vProps.ndevs; i++) {
+    req->devBases[i] = &comm->devs[i].base;
+  }
 
   struct ibv_send_wr wr;
   memset(&wr, 0, sizeof(wr));
@@ -925,8 +944,6 @@ ncclResult_t ncclRmaIbProxyIFlush(void* rmaCtx, int context, void* mhandle, uint
   struct ibv_send_wr* bad_wr;
   NCCLCHECK(wrap_ibv_post_send(qp->qp, &wr, &bad_wr));
   TIME_STOP(4);
-
-  ncclIbAddEvent(req, qp->devIndex);
 
   TRACE(NCCL_NET, "NET/IB: %s: Flush request posted (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base, wr.wr_id);
 

@@ -154,7 +154,8 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   }
 
   if (*nBlocks > 0 && std::isfinite(*timeUs)) {
-    constexpr float smPenalty = .025f; // 2.5% increase in time per SM.
+    bool ldmc = kernelId == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
+    float smPenalty = ldmc ? .025f : 1.0f; // 2.5% increase in time per SM for MC, 100% for UC.
     *timeUs *= 1.0f + smPenalty * (*nBlocks);
   }
   return ncclSuccess;

@@ -751,9 +751,9 @@ ncclResult_t ncclRmaIbProxyTest(void* collComm, void* request, int* done) {
       char localGidString[INET6_ADDRSTRLEN] = "";
       char remoteGidString[INET6_ADDRSTRLEN] = "";
       const char *localGidStr = NULL, *remoteGidStr = NULL;
-      if (req->devBases[i]->gidInfo.link_layer == IBV_LINK_LAYER_ETHERNET) {
+      if (devBase->gidInfo.link_layer == IBV_LINK_LAYER_ETHERNET) {
         localGidStr = ibvGetGidStr(&devBase->gidInfo.localGid, localGidString, sizeof(localGidString));
-        remoteGidStr = ibvGetGidStr(&commBase->remDevs[i].remoteGid, remoteGidString, sizeof(remoteGidString));
+        remoteGidStr = ibvGetGidStr(&commBase->remDevs[0].remoteGid, remoteGidString, sizeof(remoteGidString));
       }
 
       char line[SOCKET_NAME_MAXLEN + 1];

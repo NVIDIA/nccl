@@ -16,7 +16,7 @@ int64_t ncclIbArThreshold = 8192;
 // By default, use ncclIbRequestMatchingScheme::BY_INDEX matching scheme.
 NCCL_PARAM(IbReceiverSideMatchingScheme, "IB_RECEIVER_SIDE_MATCHING_SCHEME", -2);
 
-const char* ncclIbReqTypeStr[] = {"Unused", "Send", "Recv", "Flush", "IPut"};
+const char* ncclIbReqTypeStr[] = {"Unused", "Send", "Recv", "Flush", "IPut", "IGet"};
 
 ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbRequest** req) {
   for (int i = 0; i < NET_IB_MAX_REQUESTS; i++) {

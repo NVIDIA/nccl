@@ -116,41 +116,61 @@ static ncclResult_t ncclGinIbAllGather(struct ncclGinIbCollComm* cComm, void* sr
   ncclResult_t status = ncclSuccess;
   void *rMhandle = NULL, *sMhandle = NULL;
   void *srequest = NULL, *rrequest = NULL;
+  int sendDone, recvDone;
   int speer;
   int rpeer;
+  int step = 0;
   void* rbuf;
   int tag;
-  int done;
 
   NCCLCHECKGOTO(ncclNetIb.regMr(cComm->recvComm, recvBuf, cComm->nranks * len, NCCL_PTR_HOST, &rMhandle), status, out);
   NCCLCHECKGOTO(ncclNetIb.regMr(cComm->sendComm, recvBuf, cComm->nranks * len, NCCL_PTR_HOST, &sMhandle), status, out);
 
   speer = cComm->rank;
   memcpy((void*)((uintptr_t)recvBuf + speer * len), srcBuf, len);
-  for (int i = 0; i < cComm->nranks - 1; i++) {
+  for (step = 0; step < cComm->nranks - 1; step++) {
     rpeer = (speer - 1 + cComm->nranks) % cComm->nranks;
-    while (srequest == NULL || rrequest == NULL) {
-      rbuf = (void*)((uintptr_t)recvBuf + rpeer * len);
-      tag = NCCL_GIN_IB_ALLGATHER_TAG;
-      if (srequest == NULL) {
+    rbuf = (void*)((uintptr_t)recvBuf + rpeer * len);
+    tag = NCCL_GIN_IB_ALLGATHER_TAG;
+    sendDone = recvDone = 0;
+
+    // post and complete both directions in a single while loop until both send and recv are done
+    while (!sendDone || !recvDone) {
+      // 1. post send & recv
+      if (!srequest && !sendDone) {
         NCCLCHECKGOTO(ncclNetIb.isend(cComm->sendComm, (void*)((uintptr_t)recvBuf + speer * len), len, tag, sMhandle,
                                       NULL, &srequest),
                       status, out);
       }
-      if (rrequest == NULL) {
+      if (!rrequest && !recvDone) {
         NCCLCHECKGOTO(ncclNetIb.irecv(cComm->recvComm, 1, &rbuf, &len, &tag, &rMhandle, NULL, &rrequest), status, out);
       }
-    }
-    while (srequest || rrequest) {
-      if (rrequest) NCCLCHECKGOTO(ncclNetIb.test(rrequest, &done, NULL), status, out);
-      if (done) rrequest = NULL;
-      if (srequest) NCCLCHECKGOTO(ncclNetIb.test(srequest, &done, NULL), status, out);
-      if (done) srequest = NULL;
+
+      // 2. poll completion
+      if (rrequest) {
+        recvDone = 0;
+        NCCLCHECKGOTO(ncclNetIb.test(rrequest, &recvDone, NULL), status, out);
+        if (recvDone) {
+          rrequest = NULL;
+        }
+      }
+      if (srequest) {
+        sendDone = 0;
+        NCCLCHECKGOTO(ncclNetIb.test(srequest, &sendDone, NULL), status, out);
+        if (sendDone) {
+          srequest = NULL;
+        }
+      }
     }
     speer = rpeer;
   }
 
 out:
+  if (status != ncclSuccess) {
+    WARN("NET/IB/GIN: allgather failed (res=%d) on rank %d/%d at step %d/%d", status, cComm->rank, cComm->nranks, step,
+         cComm->nranks - 1);
+  }
+
   if (rMhandle) ncclNetIb.deregMr(cComm->recvComm, rMhandle);
 
   if (sMhandle) ncclNetIb.deregMr(cComm->sendComm, sMhandle);

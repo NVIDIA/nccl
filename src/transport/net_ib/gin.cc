@@ -71,6 +71,20 @@ ncclResult_t ncclGinIbGdakiInitOnce() {
   return ncclSuccess;
 }
 
+// True iff device `dev`'s NICs are all MLX5. Returns false for any non-MLX5 or out-of-range device.
+// net_ib-internal: the only caller is the IB RMA proxy's getRmaProperties below.
+static bool ncclNetIbDevIsMlx5(int dev) {
+  if (dev < 0 || dev >= ncclNMergedIbDevs) return false;
+  struct ncclIbMergedDev* mDev = &ncclIbMergedDevs[dev];
+  if (mDev->vProps.ndevs <= 0) return false;
+  for (int i = 0; i < mDev->vProps.ndevs; i++) {
+    int phys = mDev->vProps.devs[i];
+    if (phys < 0 || phys >= ncclNIbDevs) return false;
+    if (ncclIbDevs[phys].ibProvider != IB_PROVIDER_MLX5) return false;
+  }
+  return true;
+}
+
 // Initlialize GDAKI or PROXY backend. ginType can force a particular backend.
 // If provided, overwrite ginIb with the backend (generic ginIb case).
 ncclResult_t ncclGinIbInitType(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction, int type) {
@@ -348,9 +362,8 @@ ncclResult_t ncclRmaIbProxyInit(void** ctx, uint64_t commId, ncclDebugLogger_t l
 }
 
 ncclResult_t ncclRmaIbProxyGetRmaProperties(void* collComm, ncclRmaProperties_t* rmaProps) {
-  (void)collComm;
-  // Determined in a later commit; reported as false here.
-  rmaProps->flushesAllPutsOnAnySignal = false;
+  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+  rmaProps->flushesAllPutsOnAnySignal = ncclNetIbDevIsMlx5(cComm->dev);
   return ncclSuccess;
 }
 

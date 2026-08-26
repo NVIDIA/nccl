@@ -80,6 +80,7 @@ struct ginProxyCtx {
   int nCountersPerContext;
   int nSignalsPerContext;
   int pollBatch;
+  bool flushesAllPutsOnAnySignal;
   void* rmaCtx; // from plugin
 };
 
@@ -346,7 +347,6 @@ struct ncclGinProxyListenComm {
 static ncclResult_t ncclGinProxyGetProperties(ncclGinProperties_t* ginProps) {
   ginProps->supportsStrongSignals = true;
   ginProps->supportsVASignals = true;
-  ginProps->flushesAllPutsOnAnySignal = false;
   return ncclSuccess;
 }
 
@@ -375,6 +375,14 @@ struct ncclGinProxyCollComm {
   int nRanks;
   void* collComm;
 };
+
+ncclResult_t ncclGinProxyFlushesAllPutsOnAnySignal(void* collComm, bool* flushesAll) {
+  struct ncclGinProxyCollComm* cComm = (struct ncclGinProxyCollComm*)collComm;
+  ncclRmaProperties_t rmaProps = {};
+  NCCLCHECK(rmaBackend->getRmaProperties(cComm->collComm, &rmaProps));
+  *flushesAll = rmaProps.flushesAllPutsOnAnySignal;
+  return ncclSuccess;
+}
 
 static ncclResult_t ncclGinProxyConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
                                         void** collComm) {
@@ -472,6 +480,9 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
   ncclRmaConfig_t rmaConfig = {config->nContexts, config->trafficClass, config->rankStride};
   NCCLCHECK(rmaBackend->createContext(cComm->collComm, &rmaConfig, &proxyCtx->rmaCtx));
 
+  // query flush capabilities
+  NCCLCHECK(ncclGinProxyFlushesAllPutsOnAnySignal(collComm, &proxyCtx->flushesAllPutsOnAnySignal));
+
   // Parse poll batch size
   int64_t pollBatchParam = ncclParamGinProxyPollBatch();
   proxyCtx->pollBatch = (pollBatchParam < 1) ? 1 : (int)pollBatchParam;
@@ -558,7 +569,7 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
       config->backendVersion, devGpuCtxArray_h, contextId, cComm->nRanks, hostGpuCtx->queueSize, queuesDev,
       hostGpuCtx->pis, cisDev, proxyCtx->countersDev + contextId * config->nCounters,
       proxyCtx->signalsDev + contextId * config->nSignals, proxyCtx->signalOffsetsDev + contextId * config->nSignals,
-      hostGpuCtx->lastIssuedGet, hostGpuCtx->lastVisibleGet, false /* flushesAllPutsOnAnySignal */));
+      hostGpuCtx->lastIssuedGet, hostGpuCtx->lastVisibleGet, proxyCtx->flushesAllPutsOnAnySignal));
   }
 
   void* devGpuCtxArray_d = nullptr;

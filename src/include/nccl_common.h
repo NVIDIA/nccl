@@ -91,4 +91,8 @@ typedef enum {
   ncclNumFuncs = 15
 } ncclFunc_t;
 
+// Progress-counter slots use ncclFunc_t values plus one synthetic P2P slot.
+#define NCCL_PROGRESS_P2P_COUNTER_INDEX ncclNumFuncs
+#define NCCL_NUM_PROGRESS_COUNTERS (ncclNumFuncs + 1)
+
 #endif

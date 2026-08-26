@@ -25,3 +25,8 @@ __global__ void ncclDevKernel_Generic(ncclDevKernelArgs4K NCCL_GRID_CONSTANT con
 }
 
 __device__ void ncclDevFunc_Nop() {}
+
+// Capture %globaltimer for optional CPU/GPU clock calibration in init.cc.
+__global__ void ncclProgressCounterCaptureGpuTime(uint64_t* out) {
+  if (threadIdx.x == 0) *out = globaltimer();
+}

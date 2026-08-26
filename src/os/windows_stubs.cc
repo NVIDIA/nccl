@@ -9,6 +9,7 @@
 #include "comm.h"
 #include "checks.h"
 #include "ras.h"
+#include "progress_monitor.h"
 #include "profiler.h"
 #include "env.h"
 #include "tuner.h"
@@ -46,6 +47,16 @@ ncclResult_t ncclRunRasDiagnostics(struct ncclComm* comm) {
 
 ncclResult_t ncclRasCommFini(const struct ncclComm* comm) {
   (void)comm;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProgressCounterMonitorInit(struct ncclComm* comm) {
+  comm->nextProgressRegistration = nullptr;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProgressCounterMonitorDestroy(struct ncclComm* comm) {
+  comm->nextProgressRegistration = nullptr;
   return ncclSuccess;
 }
 

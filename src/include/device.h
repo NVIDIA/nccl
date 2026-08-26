@@ -389,6 +389,14 @@ __host__ __device__ constexpr int ncclMaxDevWorkBatchBytes(int cudaArch = NCCL_C
 #define NCCL_MAX_DEV_WORK_BATCH_BYTES 1024
 #define NCCL_MAX_DEV_WORK_BATCH_COLLS (NCCL_MAX_DEV_WORK_BATCH_BYTES / sizeof(ncclDevWorkColl))
 #define NCCL_MAX_DEV_WORK_P2P_PER_BATCH 8
+// funcId needs 11 bits for the generated device function count; the rest of the
+// word carries ncclDevWorkBatch::func, so the progress-counter slot arrives with
+// the batch descriptor the kernel already loads rather than costing a lookup in
+// device memory.
+constexpr int NCCL_DEV_WORK_BATCH_FUNC_ID_BITS = 11;
+constexpr int NCCL_DEV_WORK_BATCH_FUNC_BITS = 4;
+static_assert(NCCL_NUM_PROGRESS_COUNTERS <= (1 << NCCL_DEV_WORK_BATCH_FUNC_BITS),
+              "Progress-counter slots must fit in ncclDevWorkBatch::func");
 struct alignas(16) ncclDevWorkBatch {
   union {
     struct {
@@ -396,7 +404,10 @@ struct alignas(16) ncclDevWorkBatch {
       // nextJump=0: end of this channel's batch list
       // nextJump>0: batches[thisIndex+nextJump] is next batch in this list
       uint32_t nextJump:14, nextExtends:1;
-      uint32_t workType:2, funcId:15;
+      // func is the ncclFunc_t this batch's completions are counted under; the
+      // device would otherwise have to translate funcId through a table in
+      // global memory on the batch-entry path.
+      uint32_t workType:2, funcId : NCCL_DEV_WORK_BATCH_FUNC_ID_BITS, func : NCCL_DEV_WORK_BATCH_FUNC_BITS;
     };
     // Unioning bitfields with underlying type hints compiler to emit the best
     // SASS LD/ST accesses.
@@ -454,6 +465,14 @@ struct ncclDevProfilerPhases {
   } data[MAX_PROFILER_EVENTS_PER_CHANNEL];
 };
 
+// Shared layout for device progress counters and their pinned host mirror.
+// Each channel owns one active-slot bitmask to avoid inter-channel atomics.
+struct ncclProgressCountersBlock {
+  uint64_t completedWorkCount[NCCL_NUM_PROGRESS_COUNTERS];
+  uint64_t completedTimeNs[NCCL_NUM_PROGRESS_COUNTERS];
+  uint64_t collOpActive[MAXCHANNELS];
+};
+
 struct ncclKernelComm {
   int rank;
   int nRanks;
@@ -477,6 +496,9 @@ struct ncclKernelComm {
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
   struct ncclDevProfilerPhases* workPhases /*[MAXCHANNELS]*/;
+
+  // GPU-resident progress-counter block; null when GPU progress counters are disabled.
+  struct ncclProgressCountersBlock* progressCounters;
 };
 
 struct alignas(16) ncclKernelCommAndChannels {

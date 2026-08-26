@@ -11,6 +11,7 @@ set(RAS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ras.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/ras_param.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/client_support.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/progress_monitor.cc
 )
 
 # Add RAS sources to parent scope

@@ -5,6 +5,7 @@ set(RAS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_checks_common.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_env.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_gpu.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_paths.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_pci.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_xid.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/rasnet.cc

@@ -10,7 +10,8 @@
 
 void ncclGinProxyGpuCtx_initCurrent(void* ctxArray, int idx, int nranks, uint32_t queueSize, ncclGinProxyGfd_t* queues,
                                     uint32_t* pis, uint32_t* cis, uint64_t* counters, uint64_t* signals,
-                                    uint64_t* signalOffsets, uint32_t* lastIssuedGet, uint32_t* lastVisibleGet) {
+                                    uint64_t* signalOffsets, uint32_t* lastIssuedGet, uint32_t* lastVisibleGet,
+                                    bool flushesAllPutsOnAnySignal) {
   ncclGinProxyGpuCtx_t* ctx = (ncclGinProxyGpuCtx_t*)ctxArray + idx;
   ctx->nranks = nranks;
   ctx->queueSize = queueSize;
@@ -22,19 +23,24 @@ void ncclGinProxyGpuCtx_initCurrent(void* ctxArray, int idx, int nranks, uint32_
   ctx->signalOffsets = signalOffsets;
   ctx->lastIssuedGet = lastIssuedGet;
   ctx->lastVisibleGet = lastVisibleGet;
+  ctx->flushesAllPutsOnAnySignal = flushesAllPutsOnAnySignal;
 }
 
 ncclResult_t ncclGinProxyGpuCtx_init(int version, void* ctxArray, int idx, int nranks, uint32_t queueSize,
                                      ncclGinProxyGfd_t* queues, uint32_t* pis, uint32_t* cis, uint64_t* counters,
                                      uint64_t* signals, uint64_t* signalOffsets, uint32_t* lastIssuedGet,
-                                     uint32_t* lastVisibleGet) {
+                                     uint32_t* lastVisibleGet, bool flushesAllPutsOnAnySignal) {
   switch (version) {
   case 1:
     ncclGinProxyGpuCtx_v1_init(ctxArray, idx, nranks, queueSize, queues, pis, cis, counters, signals);
     break;
+  case 2:
+    ncclGinProxyGpuCtx_v2_init(ctxArray, idx, nranks, queueSize, queues, pis, cis, counters, signals, signalOffsets,
+                               lastIssuedGet, lastVisibleGet);
+    break;
   case NCCL_GIN_PROXY_GPU_CONTEXT_VERSION:
     ncclGinProxyGpuCtx_initCurrent(ctxArray, idx, nranks, queueSize, queues, pis, cis, counters, signals, signalOffsets,
-                                   lastIssuedGet, lastVisibleGet);
+                                   lastIssuedGet, lastVisibleGet, flushesAllPutsOnAnySignal);
     break;
   default:
     WARN("Invalid GIN proxy backend version %d", version);

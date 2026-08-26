@@ -557,7 +557,7 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
       config->backendVersion, devGpuCtxArray_h, contextId, cComm->nRanks, hostGpuCtx->queueSize, queuesDev,
       hostGpuCtx->pis, cisDev, proxyCtx->countersDev + contextId * config->nCounters,
       proxyCtx->signalsDev + contextId * config->nSignals, proxyCtx->signalOffsetsDev + contextId * config->nSignals,
-      hostGpuCtx->lastIssuedGet, hostGpuCtx->lastVisibleGet));
+      hostGpuCtx->lastIssuedGet, hostGpuCtx->lastVisibleGet, false /* flushesAllPutsOnAnySignal */));
   }
 
   void* devGpuCtxArray_d = nullptr;

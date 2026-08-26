@@ -19,7 +19,7 @@
 NCCL_PARAM(GinEnable, "GIN_ENABLE", 1);
 
 // Backend version compatibility. Index: backend version. Value: min compatible NCCL version
-const int proxyBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 3), NCCL_VERSION(2, 30, 5)};
+const int proxyBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 3), NCCL_VERSION(2, 30, 5), NCCL_VERSION(2, 32, 0)};
 const int gdakiBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 3), NCCL_VERSION(2, 30, 5)};
 const int gpiBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 5)};
 const int efaGdaBackendMinVersions[] = {0, NCCL_VERSION(2, 31, 0)};

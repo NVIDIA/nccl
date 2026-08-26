@@ -10,21 +10,23 @@
 
 #include "nccl.h"
 #include "gpucontext_v1.h"
+#include "gpucontext_v2.h"
 #include "nccl_device/gin/proxy/gin_proxy_device_host_common.h"
 #include <algorithm>
 
 constexpr size_t NCCL_GIN_PROXY_GPU_CONTEXT_MAX_SIZE =
-  std::max({sizeof(ncclGinProxyGpuCtx_v1_t), sizeof(ncclGinProxyGpuCtx_t)});
+  std::max({sizeof(ncclGinProxyGpuCtx_v1_t), sizeof(ncclGinProxyGpuCtx_v2_t), sizeof(ncclGinProxyGpuCtx_t)});
 
-const int NCCL_GIN_PROXY_GPU_CONTEXT_VERSION = 2;
+const int NCCL_GIN_PROXY_GPU_CONTEXT_VERSION = 3;
 
 void ncclGinProxyGpuCtx_initCurrent(void* ctxArray, int idx, int nranks, uint32_t queueSize, ncclGinProxyGfd_t* queues,
                                     uint32_t* pis, uint32_t* cis, uint64_t* counters, uint64_t* signals,
-                                    uint64_t* signalOffsets, uint32_t* lastIssuedGet, uint32_t* lastVisibleGet);
+                                    uint64_t* signalOffsets, uint32_t* lastIssuedGet, uint32_t* lastVisibleGet,
+                                    bool flushesAllPutsOnAnySignal);
 
 ncclResult_t ncclGinProxyGpuCtx_init(int version, void* ctxArray, int idx, int nranks, uint32_t queueSize,
                                      ncclGinProxyGfd_t* queues, uint32_t* pis, uint32_t* cis, uint64_t* counters,
                                      uint64_t* signals, uint64_t* signalOffsets, uint32_t* lastIssuedGet,
-                                     uint32_t* lastVisibleGet);
+                                     uint32_t* lastVisibleGet, bool flushesAllPutsOnAnySignal);
 
 #endif // GIN_PROXY_GPUCONTEXT_H_

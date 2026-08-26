@@ -1740,8 +1740,7 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
       xmlGetAttrIntDefault(netNode, "net", &net, dev >= 0); // no "net" attribute uses the presence of dev
       xmlGetAttrIntDefault(netNode, "gin", &gin, 0);
       xmlGetAttrIntDefault(netNode, "rma", &rma, 0);
-      INFO(NCCL_GRAPH | NCCL_INIT | NCCL_NET,
-           "TOPO/NET : Changing %s dev index from %d to %d. This device is shared by %s %s %s plugin(s). This can be "
+      ATTN("TOPO/NET : Changing %s dev index from %d to %d. This device is shared by %s %s %s plugin(s). This can be "
            "due to outdated plugin or topology xml file. The former may cause performance degradation. Try setting "
            "NCCL_IB_DEVICE_PCI_ORDER=0 or upgrading your net plugin to resolve this warning.",
            netInfo->name, dev, n, net ? "NET" : "", gin ? "GIN" : "", rma ? "RMA" : "");

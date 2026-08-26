@@ -374,8 +374,8 @@ the graph is recaptured.
 RAS Diagnostics
 ---------------
 
-RAS diagnostics provide a readiness probe for NCCL jobs by checking the selected GPU, CUDA driver, and NCCL
-configuration information across ranks.
+RAS diagnostics provide a readiness probe for NCCL jobs by checking the selected GPU, PCI configuration, CUDA driver,
+and NCCL configuration information across ranks.
 
 The report includes results for the following checks:
 
@@ -385,16 +385,41 @@ The report includes results for the following checks:
 * **NVLink state:** Checks that ranks report the same number of NVLinks, that every link is active, and that all active
   links run at the same speed.
 * **NCCL environment:** Checks that ``NCCL_*`` environment-variable names and values are consistent across ranks.
+* **PCI configuration:** Runs ``rdma_topo check`` to validate the PCI topology and PCI Access Control Services (ACS)
+  configuration used for GPUDirect RDMA.
+* **IOMMU mode and groups:** If ``rdma_topo check`` cannot provide a conclusive result, checks the IOMMU mode of
+  topology-selected GPUs and NICs and compares the IOMMU groups of associated GPU/NIC pairs.
+* **ATS state:** If ``rdma_topo check`` cannot provide a conclusive result, checks the Address Translation Services
+  (ATS) state of topology-selected NICs.
 
 .. note::
 
    RAS diagnostics do not exercise NCCL data paths and do not provide a comprehensive assessment of cluster health.
+
+PCI Diagnostics
+^^^^^^^^^^^^^^^
+
+RAS first runs ``rdma_topo check``. If the check passes or identifies a configuration problem, the result is conclusive
+and reported directly. Otherwise, RAS performs heuristic fallback checks on the GPU/NIC pairs selected by NCCL:
+
+* Determines the IOMMU mode of each relevant GPU and NIC (disabled, passthrough, or DMA remapping).
+* Compares the IOMMU groups of associated GPU/NIC pairs when groups are present.
+* Inspects ``ATSCtl`` in ``lspci -D -vvv`` output to determine the ATS state of each relevant NIC.
+
+The fallback checks can identify conditions that merit review, but do not provide the same platform-aware conclusion
+as ``rdma_topo check``.
 
 Prerequisites
 ^^^^^^^^^^^^^
 
 RAS diagnostics require the RAS subsystem to be enabled, which is the default; see
 :ref:`env_NCCL_RAS_ENABLE`.
+
+.. note::
+
+   Some checks can provide more complete results when optional system tools are available or the process has elevated
+   privileges. PCI diagnostics use ``rdma_topo`` for the platform-aware audit and ``lspci`` for ATS inspection. Access
+   to the required PCI information may require elevated privileges.
 
 Running During Communicator Initialization
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -454,6 +479,7 @@ For example, an on-demand report with no reported issues might look like:
   node042:12345 NCCL DIAG [OK]   ECC: no uncorrected volatile errors across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   NVLink: 18 links per GPU, all active at consistent speed across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   NCCL environment: NCCL_* env vars consistent across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   rdma_topo check: passed on 8/8 ranks in comm 0x1234
   node042:12345 NCCL DIAG RAS diagnostics completed in 12.3 ms across 8 RAS peers
 
 .. note::

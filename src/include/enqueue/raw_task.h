@@ -87,10 +87,10 @@ struct ncclRawTaskSignal {
   cudaStream_t stream;
 };
 
-// ncclWaitSignal API inputs captured at enqueue time.
+// ncclWaitSignal API inputs captured at enqueue time. A descriptor carries its own ctx
+// and peer, so a multi-descriptor ncclWaitSignal is split into one task per descriptor.
 struct ncclRawTaskWaitSignal {
-  int nDesc;
-  ncclWaitSignalDesc_t* signalDescs;
+  ncclWaitSignalDesc_t signalDesc;
   cudaStream_t stream;
 };
 

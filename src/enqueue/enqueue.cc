@@ -3276,14 +3276,16 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
         return ncclInvalidArgument;
       }
     }
-    t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
-    t->kind = ncclTaskKindRma;
-    t->rma.func = ncclFuncWaitSignal;
-    t->rma.rmaOp.waitSignal.nDesc = info->nDesc;
-    t->rma.rmaOp.waitSignal.signalDescs = ncclMemoryStackAlloc<ncclWaitSignalDesc_t>(&comm->memScoped, info->nDesc);
-    memcpy(t->rma.rmaOp.waitSignal.signalDescs, info->signalDescs, info->nDesc * sizeof(ncclWaitSignalDesc_t));
-    t->rma.rmaOp.waitSignal.stream = info->stream;
-    ncclIntruQueueEnqueue(&rtq->genericQueue, t);
+    // Each descriptor has its own ctx and peer, so capture one task per descriptor and
+    // let the scheduler route them independently.
+    for (int i = 0; i < info->nDesc; i++) {
+      t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
+      t->kind = ncclTaskKindRma;
+      t->rma.func = ncclFuncWaitSignal;
+      t->rma.rmaOp.waitSignal.signalDesc = info->signalDescs[i];
+      t->rma.rmaOp.waitSignal.stream = info->stream;
+      ncclIntruQueueEnqueue(&rtq->genericQueue, t);
+    }
   } else {
     struct ncclDevRedOpFull opDev;
 

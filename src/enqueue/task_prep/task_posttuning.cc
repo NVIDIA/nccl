@@ -251,8 +251,7 @@ static ncclResult_t postTuneRmaTaskAppend(struct ncclComm* comm, const struct nc
   int sigIdx = 0;
   int ctx = 0;
   unsigned int flags = 0;
-  int nDesc = 0;
-  const ncclWaitSignalDesc_t* signalDescs = nullptr;
+  ncclWaitSignalDesc_t signalDesc = {};
 
   switch (func) {
   case ncclFuncPutSignal:
@@ -274,8 +273,7 @@ static ncclResult_t postTuneRmaTaskAppend(struct ncclComm* comm, const struct nc
     break;
   case ncclFuncWaitSignal:
     datatype = ncclInt32;
-    nDesc = raw->rmaOp.waitSignal.nDesc;
-    signalDescs = raw->rmaOp.waitSignal.signalDescs;
+    signalDesc = raw->rmaOp.waitSignal.signalDesc;
     break;
   default:
     return ncclInternalError;
@@ -355,73 +353,54 @@ static ncclResult_t postTuneRmaTaskAppend(struct ncclComm* comm, const struct nc
       return ncclInvalidArgument;
     }
   } else if (func == ncclFuncWaitSignal) {
-    // Check if signalDescs is valid
-    if (signalDescs == NULL || nDesc == 0) {
-      WARN("ncclWaitSignal: invalid arguments");
+    if (signalDesc.opCnt <= 0) {
+      WARN("ncclWaitSignal: descriptor has invalid opCnt %d", signalDesc.opCnt);
       return ncclInvalidArgument;
     }
-    // Validate each descriptor
-    for (int i = 0; i < nDesc; i++) {
-      if (signalDescs[i].opCnt <= 0) {
-        WARN("ncclWaitSignal: descriptor %d has invalid opCnt %d", i, signalDescs[i].opCnt);
-        return ncclInvalidArgument;
-      }
-      if (signalDescs[i].sigIdx < 0 || signalDescs[i].sigIdx >= comm->config.numRmaSig) {
-        WARN("ncclWaitSignal: descriptor %d has invalid sigIdx %d (must be in [0, %d))", i, signalDescs[i].sigIdx,
-             comm->config.numRmaSig);
-        return ncclInvalidArgument;
-      }
+    if (signalDesc.sigIdx < 0 || signalDesc.sigIdx >= comm->config.numRmaSig) {
+      WARN("ncclWaitSignal: descriptor has invalid sigIdx %d (must be in [0, %d))", signalDesc.sigIdx,
+           comm->config.numRmaSig);
+      return ncclInvalidArgument;
+    }
+    if (signalDesc.ctx < 0 || signalDesc.ctx >= comm->config.numRmaCtx) {
+      WARN("ncclWaitSignal: descriptor has invalid context %d (must be in [0, %d))", signalDesc.ctx,
+           comm->config.numRmaCtx);
+      return ncclInvalidArgument;
     }
   }
 
   // Handle WaitSignal separately
   if (func == ncclFuncWaitSignal) {
-    // A single ncclWaitSignal may span multiple contexts (ctx is per-descriptor).
-    // Group descriptors by ctx and emit one task per distinct ctx, filed into that
-    // ctx's queue. numRmaCtx is small, so a numRmaCtx x nDesc scan is fine; every
-    // descriptor ctx is already validated to be in [0, numRmaCtx) above.
-    for (int c = 0; c < comm->config.numRmaCtx; c++) {
-      // Count descriptors targeting context c.
-      int nForCtx = 0;
-      for (int i = 0; i < nDesc; i++) {
-        if (signalDescs[i].ctx == c) nForCtx++;
-      }
-      if (nForCtx == 0) continue;
+    // ctx is per-descriptor, and rawTaskAppend already split a multi-descriptor
+    // ncclWaitSignal into one raw task per descriptor, so this files a single task
+    // into the queue of the context that descriptor names.
+    struct ncclTaskRma* t = ncclMemoryPoolAlloc<struct ncclTaskRma>(&comm->memPool_ncclTaskRma, &comm->memPermanent);
 
-      struct ncclTaskRma* t = ncclMemoryPoolAlloc<struct ncclTaskRma>(&comm->memPool_ncclTaskRma, &comm->memPermanent);
+    t->func = ncclFuncWaitSignal;
+    t->ctx = signalDesc.ctx;
+    t->count = 0;
+    t->bytes = 0;
+    t->srcBuff = NULL;
+    t->srcWinOffset = 0;
+    t->srcWinHost = NULL;
+    t->peer = 0;
+    t->peerWinOffset = 0;
+    t->peerWinHost = NULL;
+    t->signalMode = NCCL_SIGNAL;
+    t->signalIdx = 0;
 
-      t->func = ncclFuncWaitSignal;
-      t->ctx = c;
-      t->count = 0;
-      t->bytes = 0;
-      t->srcBuff = NULL;
-      t->srcWinOffset = 0;
-      t->srcWinHost = NULL;
-      t->peer = 0;
-      t->peerWinOffset = 0;
-      t->peerWinHost = NULL;
-      t->signalMode = NCCL_SIGNAL;
-      t->signalIdx = 0;
+    // The downstream wait path is array-based, so present the descriptor as a one-entry set.
+    t->npeers = 1;
+    t->peers = ncclMemoryStackAlloc<int>(&comm->memScoped, 1);
+    t->nsignals = ncclMemoryStackAlloc<int>(&comm->memScoped, 1);
+    t->signalIdxs = ncclMemoryStackAlloc<int>(&comm->memScoped, 1);
+    t->peers[0] = signalDesc.peer;
+    t->nsignals[0] = signalDesc.opCnt;
+    t->signalIdxs[0] = signalDesc.sigIdx;
 
-      // Convert the descriptors targeting ctx c into peers, nsignals and signalIdxs arrays.
-      t->npeers = nForCtx;
-      t->peers = ncclMemoryStackAlloc<int>(&comm->memScoped, nForCtx);
-      t->nsignals = ncclMemoryStackAlloc<int>(&comm->memScoped, nForCtx);
-      t->signalIdxs = ncclMemoryStackAlloc<int>(&comm->memScoped, nForCtx);
-
-      int k = 0;
-      for (int i = 0; i < nDesc; i++) {
-        if (signalDescs[i].ctx != c) continue;
-        t->peers[k] = signalDescs[i].peer;
-        t->nsignals[k] = signalDescs[i].opCnt;
-        t->signalIdxs[k] = signalDescs[i].sigIdx;
-        k++;
-      }
-
-      t->eActivationMask = ncclProfilerCurrentEventMask();
-      planner->nTasksRma++;
-      ncclIntruQueueEnqueue(&planner->rmaTaskQueues[t->ctx], t);
-    }
+    t->eActivationMask = ncclProfilerCurrentEventMask();
+    planner->nTasksRma++;
+    ncclIntruQueueEnqueue(&planner->rmaTaskQueues[t->ctx], t);
 
   } else if (func == ncclFuncPutSignal || func == ncclFuncSignal) {
     // Calculate total bytes for the operation
@@ -501,38 +480,8 @@ static ncclResult_t postTuneCeTasksLazyInit(
 
 static ncclResult_t postTuneSymTasks(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* symTaskQueue) {
-  struct ncclKernelPlanner* planner = &comm->planner;
-
   NCCLCHECK(postTuneSymTasksLazyInit(comm, symTaskQueue));
   NCCLCHECK(postTuneTasksDebug(comm));
-  if (ncclIntruQueueEmpty(symTaskQueue)) return ncclSuccess;
-
-  while (!ncclIntruQueueEmpty(symTaskQueue)) {
-    struct ncclTaskTuningInfo* tInfo = ncclIntruQueueDequeue(symTaskQueue);
-    struct ncclTaskColl* task =
-      ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
-
-    NCCLCHECK(fillCollTaskFromRaw(comm, tInfo, task));
-    if (!tInfo->tuningOut.valid) return ncclInternalError;
-    if (tInfo->tuningOut.symKernelId < 0 || tInfo->tuningOut.symKernelId >= ncclSymkKernelId_Count) {
-      return ncclInternalError;
-    }
-
-    NCCLCHECK(ncclDevrFindWindow(comm, task->sendbuff, &task->sendWin));
-    NCCLCHECK(ncclDevrFindWindow(comm, task->recvbuff, &task->recvWin));
-    NCCLCHECK(ncclGetSymRegType(task->sendWin, task->recvWin, &task->winRegType));
-
-    task->devFuncId = (uint32_t)tInfo->tuningOut.symKernelId;
-    task->nMaxChannels = tInfo->tuningOut.nChannels;
-    task->nWarps = tInfo->tuningOut.nWarps;
-    task->minChunkPayloadBytes = tInfo->tuningOut.minChunkPayloadBytes;
-    task->isSymLast = 1;
-    convertSymTaskDevOp(comm, task);
-
-    ncclIntruQueueEnqueue(&planner->collSymTaskQueue, task);
-    NCCLCHECK(postTuneSymFreeTuningInfoRaw(comm, tInfo));
-  }
-
   return ncclSuccess;
 }
 
@@ -976,8 +925,8 @@ ncclResult_t ncclTaskPostTuning(struct ncclComm* comm, struct ncclClassifiedTask
   NCCLCHECK(postTuneLegacyTasks(comm, &ctq->legacyTaskQueue));
   NCCLCHECK(postTuneAllGatherVTasks(comm, &ctq->allgathervTaskQueue));
   NCCLCHECK(postTuneP2pTasks(comm, &ctq->p2pTaskQueue));
-  NCCLCHECK(postTuneRmaTasks(comm, &ctq->rmaTaskQueue));
-  NCCLCHECK(postTuneCeTasks(comm, &ctq->ceTaskQueue));
+  // NCCLCHECK(postTuneRmaTasks(comm, &ctq->rmaTaskQueue));
+  // NCCLCHECK(postTuneCeTasks(comm, &ctq->ceTaskQueue));
 
   return ncclSuccess;
 }

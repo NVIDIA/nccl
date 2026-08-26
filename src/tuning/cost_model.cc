@@ -188,7 +188,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {39.0, 39.0, 20.4}, /* Volta-N1/Intel-N2/Intel-N4) */
     {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
     {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
-    {2 * 141.0, 2 * 45.0 /*avg of ring & tree*/, 2 * 35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
+    {2 * 141.2, 2 * 45.0 /*avg of ring & tree*/, 2 * 35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
   },
     // perChMaxRingLL128Bws
   {

@@ -694,7 +694,7 @@ ncclResult_t rasDiagnosticsXidCollectLocal(const struct rasDiagnosticsContext* c
   struct rasDiagnosticsXidData* scanData = (struct rasDiagnosticsXidData*)records.get();
   scanData->kind = RAS_DIAG_XID_RECORD_SCAN_STATUS;
   scanData->scan.hostHash = hostHash;
-  strncpy(scanData->scan.hostName, hostName, sizeof(scanData->scan.hostName) - 1);
+  snprintf(scanData->scan.hostName, sizeof(scanData->scan.hostName), "%s", hostName);
   scanData->scan.scanned = scan.scanned;
   scanData->scan.truncated = scan.truncated;
   scanData->scan.preAmpere = preAmpere;

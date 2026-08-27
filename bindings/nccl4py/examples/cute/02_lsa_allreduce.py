@@ -138,12 +138,18 @@ def main():
     """Run the LSA all-reduce and validate the result host-side.
 
     Returns:
-        Exit code; 0 on success, 1 if the payload mismatched.
+        Exit code; 0 on success, 1 on a wrong rank count, topology error,
+        or payload mismatch.
     """
     comm_mpi = MPI.COMM_WORLD
     rank = comm_mpi.Get_rank()
     nranks = comm_mpi.Get_size()
     root = 0
+
+    if nranks < 2:
+        if rank == root:
+            print(f"\n[{NAME}] ERROR: needs at least 2 ranks, got {nranks}")
+        return 1
 
     if rank == root:
         print(f"\n===== {NAME} =====", flush=True)

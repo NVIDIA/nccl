@@ -16,7 +16,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from nccl.bindings import nccl as _nccl_bindings
-
 from nccl.core._binding_helpers import LowppView
 from nccl.core.constants import WindowFlag
 from nccl.core.team import NCCLTeam
@@ -35,6 +34,17 @@ __all__ = [
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class CftLeInfo:
+    """CFT logical endpoint address returned by window LE-info queries."""
+
+    le_id: int
+    """Logical endpoint identifier."""
+
+    le_offset: int
+    """Byte offset within the logical endpoint."""
+
+
 class MultimemHandle(LowppView, lowpp_cls=_nccl_bindings.MultimemHandle):
     """Multimem handle, returned by
     :py:meth:`~nccl.core.DevCommResource.multimem_handle` for a team requested
@@ -48,7 +58,7 @@ class MultimemHandle(LowppView, lowpp_cls=_nccl_bindings.MultimemHandle):
 
 
 class LsaBarrierHandle(LowppView, lowpp_cls=_nccl_bindings.LsaBarrierHandle):
-    """LSA barrier handle, returned by
+    """Load/Store Accessible (LSA) barrier handle, returned by
     :py:attr:`~nccl.core.DevCommResource.resource_handles` for each
     :py:class:`~nccl.core.LsaBarrierRequirement`. Pass it to device-side
     barrier sessions.
@@ -66,7 +76,7 @@ class LsaBarrierHandle(LowppView, lowpp_cls=_nccl_bindings.LsaBarrierHandle):
 
 
 class GinBarrierHandle(LowppView, lowpp_cls=_nccl_bindings.GinBarrierHandle):
-    """GIN barrier handle, returned by
+    """GPU-Initiated Networking (GIN) barrier handle, returned by
     :py:attr:`~nccl.core.DevCommResource.resource_handles` for each
     :py:class:`~nccl.core.GinBarrierRequirement`. Pass it to device-side
     barrier sessions.
@@ -79,7 +89,7 @@ class GinBarrierHandle(LowppView, lowpp_cls=_nccl_bindings.GinBarrierHandle):
 
 
 class LLA2AHandle(LowppView, lowpp_cls=_nccl_bindings.LLA2AHandle):
-    """Low-latency all-to-all handle, returned by
+    """Low-latency all-to-all (LLA2A) handle, returned by
     :py:attr:`~nccl.core.DevCommResource.resource_handles` for each
     :py:class:`~nccl.core.LLA2ARequirement`. Pass it to device-side all-to-all
     sessions.
@@ -283,12 +293,12 @@ class RegisteredWindowHandle(CommResource):
     @property
     def is_valid(self) -> bool:
         """Whether the window is still registered (not closed, handle non-null)."""
-        return not self._closed and bool(self._handle.ptr)
+        return not self._closed and bool(self._window)
 
     @property
     def handle(self) -> int:
-        """Window handle for NCCL operations, or ``0`` once deregistered."""
-        return int(self._handle.ptr)
+        """Window handle value, or ``0`` while unavailable or after deregistration."""
+        return self._window.handle
 
     @property
     def size(self) -> int:
@@ -641,13 +651,6 @@ class DevCommResource(CommResource):
 
         The returned handle references storage owned by this resource and
         remains valid until the device communicator is closed.
-
-        Args:
-            team: The team the handle was requested for, as an entry of the
-                ``teams`` requirement used to create this device communicator.
-
-        Returns:
-            The :py:class:`~nccl.core.MultimemHandle` NCCL filled in for ``team``.
 
         Args:
             team: The team the handle was requested for, as an entry of the

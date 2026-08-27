@@ -129,12 +129,18 @@ def main():
     """Request an LSA barrier resource and translate its handle.
 
     Returns:
-        Exit code; 0 on success, 1 if the topology or multimem is missing.
+        Exit code; 1 on a wrong rank count or topology error, otherwise 0.
+        Missing multicast support is reported as a skipped run.
     """
     comm_mpi = MPI.COMM_WORLD
     rank = comm_mpi.Get_rank()
     nranks = comm_mpi.Get_size()
     root = 0
+
+    if nranks < 2:
+        if rank == root:
+            print(f"\n[{NAME}] ERROR: needs at least 2 ranks, got {nranks}")
+        return 1
 
     if rank == root:
         print(f"\n===== {NAME} =====", flush=True)

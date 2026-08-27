@@ -141,6 +141,217 @@ class NCCLConfig(LowppSpec, lowpp_cls=_nccl_bindings.Config):
     graph_stream_ordering: int | None = None
     """Whether NCCL preserves stream-ordering semantics for collectives captured into CUDA graphs. Supported values are 0 (disabled) or 1 (enabled). The value 0 cannot be combined with ``graph_usage_mode=2``. Also controllable via the ``NCCL_GRAPH_STREAM_ORDERING`` environment variable. If unset, NCCL uses 1."""
 
+    launch_order_implicit: bool | None = None
+    """Whether this communicator takes part in implicit launch ordering (NCCL 2.31+). Within one CUDA context, operations on communicators that enable it must not overlap with operations on communicators that do not. Also controllable via the ``NCCL_LAUNCH_ORDER_IMPLICIT`` environment variable, which takes precedence. If unset, NCCL uses False."""
+
+    num_rma_sig: int | None = None
+    """Number of one-sided RMA signal indexes available per context (NCCL 2.31+). Non-negative integer; bounds the ``signal_index`` accepted by the signal and wait-signal operations. If unset, NCCL uses 1."""
+
+    rma_eager_init: bool | None = None
+    """Whether the collective one-sided RMA signal setup is initialized at communicator creation rather than at the first window registration (NCCL 2.31+). True is required if the communicator issues signal or wait-signal operations without first registering a symmetric window. Also controllable via the ``NCCL_RMA_EAGER_INIT`` environment variable, which takes precedence. If unset, NCCL uses False."""
+
+    host_cft_mode: NcclHostCftMode | None = None
+    """Host-side Compute Fabric Transport mode (NCCL 2.31+). Controls whether the communicator creates the CUDA fabric logical endpoints backing the host-side CFT queries. If unset, NCCL uses :py:attr:`NcclHostCftMode.DEFAULT`."""
+
+
+@dataclass(frozen=True)
+class VendorOption:
+    """A single vendor-specific option attached to an :py:class:`NCCLCollConfig`.
+
+    Mirrors one :c:type:`ncclConfigExt_t` node. Options are identified by the
+    ``(vendor_id, option_id)`` pair; the official NCCL library ignores every
+    extension, so an option only has an effect on a vendor library that
+    recognizes its ``vendor_id``. Vendors pick a non-zero ``vendor_id``
+    less than 2**24 that is unlikely to collide.
+
+    Exactly one of the three value fields must be set.
+
+    See Also:
+        :c:type:`ncclConfigExt_t`
+    """
+
+    vendor_id: int
+    """Vendor-chosen identifier, unique across vendor libraries."""
+
+    option_id: int
+    """Vendor-defined identifier distinguishing options within a vendor."""
+
+    int_value: int | None = None
+    """Integer value (``val.i``)."""
+
+    str_value: str | None = None
+    """String value (``val.s``), encoded to UTF-8."""
+
+    raw_value: int | None = None
+    """Value of any other type (``val.raw``), as an integer. If it is an
+    address, the referent must stay valid for the duration of the call."""
+
+    def __post_init__(self):
+        set_fields = [
+            name for name in ("int_value", "str_value", "raw_value")
+            if getattr(self, name) is not None
+        ]
+        if len(set_fields) != 1:
+            raise NcclInvalid(
+                "VendorOption requires exactly one of int_value, str_value, "
+                f"raw_value to be set, got {set_fields or 'none'}"
+            )
+
+
+def _validate_vendor_options(options: Sequence[Any]) -> None:
+    if isinstance(options, (VendorOption, str, bytes)) or not isinstance(options, Sequence):
+        raise NcclInvalid(
+            "vendor_options must be a sequence of VendorOption, got "
+            f"{type(options).__name__}"
+        )
+    seen = set()
+    for opt in options:
+        if not isinstance(opt, VendorOption):
+            raise NcclInvalid(
+                "vendor_options must contain VendorOption instances, got "
+                f"{type(opt).__name__}"
+            )
+        key = (opt.vendor_id, opt.option_id)
+        if key in seen:
+            raise NcclInvalid(
+                f"Duplicate vendor option key (vendor_id={opt.vendor_id}, "
+                f"option_id={opt.option_id}); keys must be unique"
+            )
+        seen.add(key)
+
+
+@dataclass(kw_only=True)
+class NCCLCollConfig(LowppSpec, lowpp_cls=_nccl_bindings.CollConfig):
+    """Per-call configuration for a single collective.
+
+    Accepted as the ``config`` argument of every collective on
+    :py:class:`Communicator`, tuning that one call. Fields left unset fall
+    back to the communicator's value, or to NCCL's own default. The same
+    configuration must be set on every rank; NCCL validates it only locally,
+    when the call is issued.
+
+    See Also:
+        :c:type:`ncclCollConfig_t`
+    """
+
+    min_ctas: int | None = None
+    """Lower bound on channels/CTAs for this call. Also set by
+    ``NCCL_MIN_CTAS``, which takes precedence. If unset, inherits
+    :py:attr:`NCCLConfig.min_ctas`."""
+
+    max_ctas: int | None = None
+    """Upper bound on channels/CTAs for this call, clamped to the
+    communicator's ``max_ctas``. Also set by ``NCCL_MAX_CTAS``, which takes
+    precedence. If unset, inherits :py:attr:`NCCLConfig.max_ctas`."""
+
+    nvls_ctas: int | None = None
+    """NVLS-pool-specific channel cap for this call. Also set by
+    ``NCCL_NVLS_NCHANNELS``, which takes precedence. If unset, inherits
+    :py:attr:`NCCLConfig.nvls_ctas`."""
+
+    cga_cluster_size: int | None = None
+    """CUDA thread-block-cluster size (0-8, Hopper+). Inconsistent values
+    within one group are undefined behavior. Also set by
+    ``NCCL_CGA_CLUSTER_SIZE``, which takes precedence. If unset, inherits
+    :py:attr:`NCCLConfig.cga_cluster_size`."""
+
+    alg_selection: str | None = None
+    """Selection string filtering which algorithms this call may use, e.g.
+    ``"ring"``, ``"tree,ring"``, ``"^symk"``. If unset or empty, NCCL selects
+    automatically."""
+
+    force_alg_selection: bool | None = None
+    """Whether an unsatisfiable :py:attr:`alg_selection` is an error rather
+    than a fallback to automatic selection. If unset, NCCL uses True."""
+
+    cta_policy: CTAPolicy | None = None
+    """CTA scheduling policy for this call. Also set by ``NCCL_CTA_POLICY``,
+    which takes precedence. If unset, inherits
+    :py:attr:`NCCLConfig.cta_policy`."""
+
+    user_profiler_tag: int | None = None
+    """Opaque value delivered verbatim to profiler plugins with this call's
+    profiler events; does not affect execution. Values with the
+    most-significant bit set are reserved by NCCL. If unset, NCCL uses 0."""
+
+    vendor_options: tuple[VendorOption, ...] = ()
+    """Vendor-specific options; ``(vendor_id, option_id)`` keys must be
+    unique."""
+
+    def __post_init__(self):
+        _validate_vendor_options(self.vendor_options)
+
+
+@dataclass(frozen=True, kw_only=True)
+class NCCLCommProperties:
+    """The properties NCCL reports for a communicator.
+
+    Returned by :py:attr:`Communicator.properties`. These values are fixed
+    for the lifetime of the communicator. Fields marked NCCL 2.31+ are
+    ``None`` when nccl4py was built against an older NCCL.
+
+    See Also:
+        :c:type:`ncclCommProperties` for the description of each field.
+    """
+
+    rank: int
+    """This caller's rank within the communicator."""
+
+    n_ranks: int
+    """Number of ranks in the communicator."""
+
+    cuda_dev: int
+    """CUDA device ID associated with the communicator."""
+
+    nvml_dev: int
+    """NVML device ID for the GPU. Uses the NVML indexing space, which may
+    differ from CUDA indexing."""
+
+    device_api_support: bool
+    """Whether device-side NCCL operations are supported."""
+
+    multimem_support: bool
+    """Whether ranks in the same LSA team can communicate using multimem."""
+
+    gin_type: NcclGinType
+    """GIN transport reaching every rank. ``NONE`` unless
+    :py:attr:`gin_connection_type` is ``FULL``, even when a rail-restricted
+    transport is available."""
+
+    n_lsa_teams: int
+    """Number of LSA teams."""
+
+    host_rma_support: bool
+    """Whether host RMA is supported."""
+
+    railed_gin_type: NcclGinType
+    """GIN transport reaching ranks within a rail. ``NONE`` only when no GIN
+    transport is available at all."""
+
+    comm_hash: int | None = None
+    """Hash identifying the communicator, shared by all its ranks (NCCL 2.31+)."""
+
+    gin_min_stride: int | None = None
+    """Granularity of the GIN rank stride this communicator supports. A stride
+    passed as :py:attr:`NCCLDevCommRequirements.gin_custom_stride` must be a
+    multiple of this value, and no larger than the rail team's stride. It is 1
+    when :py:attr:`gin_connection_type` is ``FULL`` (NCCL 2.31+)."""
+
+    gin_connection_type: NcclGinConnectionType | None = None
+    """Widest GIN connection topology this communicator supports: ``NONE``,
+    ``RAIL`` or ``FULL``. A device communicator may request this topology or a
+    narrower one via
+    :py:attr:`NCCLDevCommRequirements.gin_connection_type` (NCCL 2.31+)."""
+
+    available_gin_types: frozenset[NcclGinType] | None = None
+    """The GIN transports this communicator can use, e.g.
+    ``NcclGinType.GDAKI in props.available_gin_types``. Empty when GIN is
+    unavailable (NCCL 2.31+)."""
+
+    dev_comm_runtime_version_size: int | None = None
+    """Size, in bytes, of the device communicator structure in the running NCCL
+    library (NCCL 2.31+)."""
+
 
 @dataclass(frozen=True)
 class WaitSignalDesc(LowppSpec, lowpp_cls=_nccl_bindings.WaitSignalDesc):
@@ -1198,7 +1409,7 @@ class Communicator:
 
     @property
     def gin_type(self) -> NcclGinType:
-        """GPU-Initiated Networking (GIN) type.
+        """GPU-Initiated Networking (GIN) type reaching every rank.
 
         If equal to :py:attr:`NcclGinType.NONE`, a device communicator
         cannot be created with GIN connection type

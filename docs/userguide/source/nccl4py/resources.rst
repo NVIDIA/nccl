@@ -31,6 +31,15 @@ RegisteredWindowHandle
    :members:
    :inherited-members:
 
+CftLeInfo
+=========
+
+Returned by the :py:class:`RegisteredWindowHandle` logical-endpoint queries.
+CFT operations address memory by this pair rather than by pointer.
+
+.. autoclass:: CftLeInfo
+   :members:
+
 CustomRedOp
 ===========
 .. autoclass:: CustomRedOp

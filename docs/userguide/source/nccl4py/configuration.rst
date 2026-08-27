@@ -19,6 +19,29 @@ consumed.
 .. autoclass:: NCCLConfig
    :members:
 
+NcclHostCftMode
+---------------
+
+Value of :py:attr:`NCCLConfig.host_cft_mode`.
+
+.. autoclass:: NcclHostCftMode
+   :members:
+
+NCCLCollConfig
+==============
+
+Accepted as the ``config`` argument of every collective on
+:py:class:`Communicator`. Fields left unset fall back to the communicator's
+value for the resource knobs, and to NCCL's own default otherwise.
+
+.. autoclass:: NCCLCollConfig
+   :members:
+
+VendorOption
+------------
+.. autoclass:: VendorOption
+   :members:
+
 CTAPolicy
 =========
 
@@ -33,6 +56,14 @@ Used by :py:meth:`Communicator.create_dev_comm`. Fields left unset
 (``None``) remain at NCCL's internal default.
 
 .. autoclass:: NCCLDevCommRequirements
+   :members:
+
+NcclCftCap
+----------
+
+Bitmask value of :py:attr:`NCCLDevCommRequirements.cft_caps`.
+
+.. autoclass:: NcclCftCap
    :members:
 
 Requirement entries

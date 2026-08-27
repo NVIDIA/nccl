@@ -14,20 +14,6 @@
     check is performed; a mismatch can cause link errors or incorrect kernel
     behavior.
 
-.. warning::
-
-    Experimental and unstable. This subpackage carries no semantic-versioning
-    guarantee: symbols may change or be removed in any release before nccl4py
-    1.0.
-
-    The selected ``libnccl_device.bc`` must match exactly the NCCL version
-    nccl4py was built against -- the ``bindings`` version reported by
-    ``nccl.core.show_versions()``. Resolution prefers
-    ``$NCCL_HOME/lib/libnccl_device.bc`` and otherwise uses the copy from the
-    installed ``nvidia-nccl-cu12`` / ``nvidia-nccl-cu13`` wheel. No version
-    check is performed; a mismatch can cause link errors or incorrect kernel
-    behavior.
-
 See ``examples/cute/00_basic.py`` for a complete, runnable example.
 """
 
@@ -41,7 +27,7 @@ except ImportError as e:
         "    pip install 'nccl4py[cu13]'   # for CUDA 13"
     ) from e
 
-from . import types, coop, handles, comm, window, gin, barrier, reduce_copy
+from . import types, coop, handles, comm, window, gin, barrier, reduce_copy, runtime
 from .types import *    # MemoryOrder, ThreadScope, GinFenceLevel, GinBackendMask, GinResourceSharingMode
 from .coop import *     # Coop, cta, warp, thread, lanes, warp_span
 from .handles import *  # MultimemHandle, LsaBarrierHandle, GinBarrierHandle
@@ -60,6 +46,7 @@ __all__ = [
     "gin",
     "barrier",
     "reduce_copy",
+    "runtime",
     *types.__all__,
     *coop.__all__,
     *handles.__all__,

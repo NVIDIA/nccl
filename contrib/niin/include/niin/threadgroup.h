@@ -90,8 +90,6 @@ __device__ __forceinline__ void niin_coop_put(
   if (niin_is_lsa_peer(pe)) {
     void* peerDst = niin_get_peer_ptr(offset, pe);
     niin_coop_copy(peerDst, src, bytes, tid, nthreads);
-    // Release fence at system scope to ensure all peer stores are visible
-    cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
     return;
   }
 

@@ -367,7 +367,7 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
           for (size_t elemOffset = 0; elemOffset < channelCount; elemOffset += chunkCount) {
             offset = gridOffset + elemOffset;
             nelem = min(chunkCount, channelCount - elemOffset);
-            prims.gather(offset, nvls->nHeads * count, nelem, count, -1, 0);
+            prims.gatherRemap(offset, nvls->nHeads * count, nelem, count, -1, 0, ncclShmem.comm.denseToUserRank);
           }
           // coverity[overrun-call] => Coverity think prims.index can be greater than 1
         } else if (tid < tidEndBcast) {

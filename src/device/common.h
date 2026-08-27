@@ -358,6 +358,11 @@ __device__ __forceinline__ bool profilerKernelStepSample(bool enabled, uint8_t r
   return (logicalIndex % rate) == 0;
 }
 
+// KernelStep.peer is communicator-local dest rank. The profiler field is uint8_t.
+__device__ __forceinline__ bool profilerKernelStepRankFits(int destRank) {
+  return (unsigned)destRank <= 255u;
+}
+
 __device__ __forceinline__ void profilerKernelStepStart(bool enabled, int isSend, int peerIdx, uint32_t step,
                                                          uint32_t size, uint16_t workTag, uint64_t startTs,
                                                          uint64_t* seqOut) {

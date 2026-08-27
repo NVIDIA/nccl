@@ -453,7 +453,7 @@ struct ncclDevKernelStepEvent {
   uint64_t start_ts;  // start ring: wait/step begin (0 if none/recv); stop ring: unused 0
   uint32_t step;      // protocol step id
   uint32_t size;      // slice bytes
-  uint8_t peer;       // peer index within the primitive fan
+  uint8_t peer;       // communicator-local dest rank (intra-host only)
   uint8_t flags;      // NCCL_KERNEL_STEP_FLAG_*
   uint16_t work_tag;  // low work-counter bits route sparse steps to their profiler parent
 };

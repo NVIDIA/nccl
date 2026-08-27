@@ -17,6 +17,16 @@ static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection,
   return ncclSuccess;
 }
 
+// KernelStep is intra-host only (P2P/SHM/NVLS). Drop NET/inter-host leftovers
+// so CoMMA never sees a KernelStep whose peer lives on another host.
+static bool ncclKernelStepSameHost(struct ncclComm* comm, int peer) {
+  if (comm == nullptr || comm->peerInfo == nullptr) return false;
+  if (peer < 0 || peer >= comm->nRanks) return false;
+  int rank = comm->rank;
+  if (rank < 0 || rank >= comm->nRanks || peer == rank) return false;
+  return comm->peerInfo[rank].hostHash == comm->peerInfo[peer].hostHash;
+}
+
 // Deliver one completed start/end pair via work_tag parent routing.
 // Returns true if the sequence should be consumed (delivered or dropped).
 static bool profilerDeliverKernelStep(struct ncclProxySubArgs* sub, struct ncclComm* comm, int ch,
@@ -24,6 +34,8 @@ static bool profilerDeliverKernelStep(struct ncclProxySubArgs* sub, struct ncclC
   int slot = (int)(seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
   struct ncclDevKernelStepEvent* st = &sub->stepStarted[ch].data[slot];
   struct ncclDevKernelStepEvent* co = &sub->stepCompleted[ch].data[slot];
+
+  if (!ncclKernelStepSameHost(comm, (int)st->peer)) return true;
 
   int dir = (st->flags & NCCL_KERNEL_STEP_FLAG_SEND) ? 1 : 0;
   int parentSlot = (int)(st->work_tag % MAX_KERNEL_STEP_PARENT_EVENTS);

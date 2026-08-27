@@ -16,6 +16,7 @@
 #include "plugin.h"
 #include "compiler.h"
 #include <mutex>
+#include <vector>
 #include "os.h"
 
 extern ncclProfiler_t* getNcclProfiler_v1(void* lib);
@@ -243,6 +244,31 @@ static void printProfilerEventMask(int mask) {
   INFO(NCCL_INIT, "Profiler event mask: 0x%x (%d) - Enabled: %s", mask, mask, enabled);
 }
 
+// After plugin init, dump the full communicator membership (local rank →
+// world rank, node, hostHash, cudaDev) into CoMMA so the monitor can map
+// communicator-local `peer` ids without reconstructing them at runtime.
+static void dumpCommMembership(struct ncclComm* comm) {
+  if (profilerPluginLib == nullptr || comm == nullptr || comm->nRanks <= 0) return;
+  if (comm->peerInfo == nullptr || comm->topParentRanks == nullptr) return;
+  using DumpFn = void (*)(uint64_t, const char*, int, int, int, const int*, const int*, const uint64_t*, const int*,
+                          const int64_t*);
+  auto dump = (DumpFn)ncclOsDlsym((ncclOsLibraryHandle)profilerPluginLib, "comma_dump_comm_membership");
+  if (dump == nullptr) return;
+  const int n = comm->nRanks;
+  std::vector<uint64_t> hostHashes(n);
+  std::vector<int> cudaDevs(n);
+  std::vector<int64_t> busIds(n);
+  for (int i = 0; i < n; i++) {
+    hostHashes[i] = comm->peerInfo[i].hostHash;
+    cudaDevs[i] = comm->peerInfo[i].cudaDev;
+    busIds[i] = comm->peerInfo[i].busId;
+  }
+  dump(comm->commHash, comm->config.commName, comm->nNodes, comm->nRanks, comm->rank, comm->topParentRanks,
+       comm->rankToNode, hostHashes.data(), cudaDevs.data(), busIds.data());
+  INFO(NCCL_INIT, "Profiler dumped membership for comm %lx nRanks %d rank %d world %d", comm->commHash, comm->nRanks,
+       comm->rank, comm->topParentRanks[comm->rank]);
+}
+
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
   TIME_START_EVENT(elapsed);
   TIME_START_EVENT(init);
@@ -253,6 +279,8 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
     if (err) {
       ncclProfilerPluginUnload();
       INFO(NCCL_INIT, "Profiler init failed with error '%d': %s. Continue without profiler.", err, strerror(errno));
+    } else {
+      dumpCommMembership(comm);
     }
 
     printProfilerEventMask(ncclProfilerEventMask);
@@ -717,7 +745,7 @@ ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s,
       eDescr.rank = sub->rank;
       eDescr.kernelStep.channelId = (uint8_t)sub->channelId;
       eDescr.kernelStep.isSend = (ev->flags & NCCL_KERNEL_STEP_FLAG_SEND) ? 1 : 0;
-      eDescr.kernelStep.peer = ev->peer;
+      eDescr.kernelStep.peer = ev->peer; // communicator-local dest rank; drain drops inter-host
       eDescr.kernelStep.step = ev->step;
       eDescr.kernelStep.size = ev->size;
       eDescr.kernelStep.startTs = ev->start_ts;

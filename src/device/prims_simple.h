@@ -48,6 +48,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
   uint64_t kernelStepLogicalIndex = 0; // Per-work slice index; independent of persistent connection credits
   uint64_t kernelStepStartTs = 0; // send credit wait start from last waitPeer (0 if none)
   bool connSameHost = false; // peer on same host (NCCL_CONN_SAME_HOST); gate KernelStep stamps
+  int connPeer = -1; // communicator-local dest rank for this connector
 
   // Don't use barrier 0 as it's used by the final sync
   __device__ void barrier() {
@@ -114,7 +115,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
       // Send-phase credit wait: record wait-start; CoMMA derives duration vs transfer start.
       // Only when KernelStep will stamp (same-host peer).
       const bool timeSendWait =
-        COMPILER_EXPECT(stepProf, 0) && connSameHost && (flags & (Send * RoleWaitSend));
+        COMPILER_EXPECT(stepProf, 0) && connSameHost && profilerKernelStepRankFits(connPeer) &&
+        (flags & (Send * RoleWaitSend));
       uint64_t waitStart = timeSendWait ? globaltimer() : 0;
       while (connStepCache + (isSendNotRecv ? NCCL_STEPS : 0) < step + StepPerSlice) {
         connStepCache = loadStepValue(connStepPtr);
@@ -247,11 +249,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
           const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
           uint64_t seq = 0;
-          if (connSameHost && workSize > 0) {
+          if (connSameHost && profilerKernelStepRankFits(connPeer) && workSize > 0) {
             uint64_t waitStart = isSendNotRecv ? kernelStepStartTs : 0;
             kernelStepStartTs = 0;
             if (profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex)) {
-              profilerKernelStepStart(true, isSendNotRecv, index, (uint32_t)step,
+              profilerKernelStepStart(true, isSendNotRecv, connPeer, (uint32_t)step,
                                       (uint32_t)(workSize * sizeof(T)), kernelStepWorkTag, waitStart, &seq);
             }
             kernelStepLogicalIndex += 1;
@@ -314,7 +316,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
           uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[index] :
                                           ncclShmem.groups[group].kernelStepSeqRecv[index];
           if (seq != 0) {
-            profilerKernelStepStop(true, seq, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
+            profilerKernelStepStop(true, seq, isSendNotRecv, connPeer, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
           }
         }
         offset += sliceSize;
@@ -340,11 +342,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
       if (COMPILER_EXPECT(stepProf, 0) && workSize > 0 && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
         const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
         uint64_t seq = 0;
-        if (connSameHost) {
+        if (connSameHost && profilerKernelStepRankFits(connPeer)) {
           uint64_t waitStart = isSendNotRecv ? kernelStepStartTs : 0;
           kernelStepStartTs = 0;
           if (profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex)) {
-            profilerKernelStepStart(true, isSendNotRecv, index, (uint32_t)step,
+            profilerKernelStepStart(true, isSendNotRecv, connPeer, (uint32_t)step,
                                     (uint32_t)(workSize * sizeof(T)), kernelStepWorkTag, waitStart, &seq);
           }
           kernelStepLogicalIndex += 1;
@@ -366,7 +368,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[index] :
                                         ncclShmem.groups[group].kernelStepSeqRecv[index];
         if (seq != 0) {
-          profilerKernelStepStop(true, seq, isSendNotRecv, index, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
+          profilerKernelStepStop(true, seq, isSendNotRecv, connPeer, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
         }
       }
       offset += sliceSize;
@@ -712,6 +714,7 @@ public:
 
       if (flags & (RoleWaitRecv | RolePostRecv)) peer = recvPeers[index];
       if (flags & (RoleWaitSend | RolePostSend)) peer = sendPeers[index];
+      connPeer = peer;
 
       // Coverity thinks that index could be -1 here but that's not actually the case.
       // coverity[negative_returns:FALSE]

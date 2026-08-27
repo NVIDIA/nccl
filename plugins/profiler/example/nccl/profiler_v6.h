@@ -89,7 +89,7 @@ typedef struct {
     struct {
       uint8_t channelId;
       uint8_t isSend;
-      uint8_t peer;      // peer index within the primitive fan
+      uint8_t peer;      // communicator-local dest rank (intra-host only)
       uint32_t step;     // protocol step id at stamp time
       uint32_t size;     // slice bytes
       uint64_t startTs;  // wait/step begin (0 if none/recv)

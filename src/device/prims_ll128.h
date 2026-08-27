@@ -48,6 +48,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
   uint64_t kernelStepLogicalIndex = 0;
   bool sendSameHost = false;
   bool recvSameHost = false;
+  int sendPeerRank = -1;
+  int recvPeerRank = -1;
 
   inline __device__ int recvOffset(int i) {
     return (recvStep[i] % NCCL_STEPS) * stepSize;
@@ -78,7 +80,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
     uint64_t waitStart = 0;
     if (sendConnHeadPtr) {
       int spins = 0;
-      const bool timeWait = COMPILER_EXPECT(stepProf, 0) && sendSameHost;
+      const bool timeWait = COMPILER_EXPECT(stepProf, 0) && sendSameHost && profilerKernelStepRankFits(sendPeerRank);
       if (timeWait) waitStart = globaltimer();
       while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
         sendConnHeadCache = *sendConnHeadPtr;
@@ -329,21 +331,22 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
       const uint32_t sliceStep = (uint32_t)wireOffset;
       const uint64_t sampleIndex = kernelStepLogicalIndex;
       if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
-        if (RECV && recvSameHost) {
+        if (RECV && recvSameHost && profilerKernelStepRankFits(recvPeerRank)) {
           if (profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex)) {
-            profilerKernelStepStart(true, /*isSend=*/0, /*peer=*/0, sliceStep, sliceBytes, kernelStepWorkTag, /*startTs=*/0, &seqRecv);
+            profilerKernelStepStart(true, /*isSend=*/0, recvPeerRank, sliceStep, sliceBytes, kernelStepWorkTag, /*startTs=*/0, &seqRecv);
           }
         }
-        if (SEND && sendSameHost) {
+        if (SEND && sendSameHost && profilerKernelStepRankFits(sendPeerRank)) {
           uint64_t waitStart = kernelStepStartTs;
           kernelStepStartTs = 0; // attach waitSend to first send KernelStep only
           if (profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex)) {
-            profilerKernelStepStart(true, /*isSend=*/1, /*peer=*/0, sliceStep, sliceBytes, kernelStepWorkTag, waitStart, &seqSend);
+            profilerKernelStepStart(true, /*isSend=*/1, sendPeerRank, sliceStep, sliceBytes, kernelStepWorkTag, waitStart, &seqSend);
           }
         } else if (SEND) {
           kernelStepStartTs = 0;
         }
-        if ((RECV && recvSameHost) || (SEND && sendSameHost)) kernelStepLogicalIndex += 1;
+        if ((RECV && recvSameHost && profilerKernelStepRankFits(recvPeerRank)) ||
+            (SEND && sendSameHost && profilerKernelStepRankFits(sendPeerRank))) kernelStepLogicalIndex += 1;
       }
 
       uint64_t regs[NCCL_LL128_SHMEM_ELEMS_PER_THREAD];
@@ -353,10 +356,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
 
       if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
         if (RECV && seqRecv != 0) {
-          profilerKernelStepStop(true, seqRecv, /*isSend=*/0, /*peer=*/0, sliceStep, sliceBytes);
+          profilerKernelStepStop(true, seqRecv, /*isSend=*/0, recvPeerRank, sliceStep, sliceBytes);
         }
         if (SEND && seqSend != 0) {
-          profilerKernelStepStop(true, seqSend, /*isSend=*/1, /*peer=*/0, sliceStep, sliceBytes);
+          profilerKernelStepStop(true, seqSend, /*isSend=*/1, sendPeerRank, sliceStep, sliceBytes);
         }
       }
 
@@ -377,12 +380,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
+  __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i, int destRank) {
     recvBuff[i] = (uint64_t*)conn->buffs[NCCL_PROTO_LL128];
     recvStep[i] = conn->step;
     if (wid == i) {
       recvConn = conn;
       recvSameHost = (conn->flags & NCCL_CONN_SAME_HOST) != 0;
+      recvPeerRank = destRank;
     }
   }
   __device__ __forceinline__ void loadRecvSync() {
@@ -392,12 +396,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
+  __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i, int destRank) {
     sendBuff[i] = (uint64_t*)conn->buffs[NCCL_PROTO_LL128];
     sendStep[i] = conn->step;
     if (wid == i) {
       sendConn = conn;
       sendSameHost = (conn->flags & NCCL_CONN_SAME_HOST) != 0;
+      sendPeerRank = destRank;
     }
   }
   __device__ __forceinline__ void loadSendSync() {
@@ -440,11 +445,11 @@ public:
     auto* channel = &ncclShmem.channel;
     int nrecv = 0, nsend = 0;
     while (nrecv < MaxRecv && recvPeers[nrecv] >= 0) {
-      loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv);
+      loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv, recvPeers[nrecv]);
       nrecv++;
     }
     while (nsend < MaxSend && sendPeers[nsend] >= 0) {
-      loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend);
+      loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend, sendPeers[nsend]);
       nsend++;
     }
     this->fan = Fan(nrecv, nsend);

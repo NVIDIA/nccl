@@ -47,6 +47,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   uint64_t kernelStepLogicalIndex = 0;
   bool sendSameHost = false; // send peer same host → stamp KernelSteps
   bool recvSameHost = false; // recv peer same host → stamp KernelSteps
+  int sendPeerRank = -1; // communicator-local dest rank of sendPeers[0]
+  int recvPeerRank = -1; // communicator-local dest rank of recvPeers[0]
 
   inline __device__ int recvOffset(int i) {
     return (recvStep[i] % NCCL_STEPS) * stepLines;
@@ -81,7 +83,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
     uint64_t waitStart = 0;
     if (sendConnHeadPtr) {
       int spins = 0;
-      const bool timeWait = COMPILER_EXPECT(stepProf, 0) && sendSameHost;
+      const bool timeWait = COMPILER_EXPECT(stepProf, 0) && sendSameHost && profilerKernelStepRankFits(sendPeerRank);
       if (timeWait) waitStart = globaltimer();
       while (sendConnHeadCache + NCCL_STEPS < sendConnHead + 1) {
         sendConnHeadCache = *sendConnHeadPtr;
@@ -279,21 +281,22 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       // Continuous sample index across LLGenericOp calls.
       const uint64_t sampleIndex = kernelStepLogicalIndex;
       if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
-        if (RECV && recvSameHost) {
+        if (RECV && recvSameHost && profilerKernelStepRankFits(recvPeerRank)) {
           if (profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex)) {
-            profilerKernelStepStart(true, /*isSend=*/0, /*peer=*/0, lineStep, lineBytes, kernelStepWorkTag, /*startTs=*/0, &seqRecv);
+            profilerKernelStepStart(true, /*isSend=*/0, recvPeerRank, lineStep, lineBytes, kernelStepWorkTag, /*startTs=*/0, &seqRecv);
           }
         }
-        if (SEND && sendSameHost) {
+        if (SEND && sendSameHost && profilerKernelStepRankFits(sendPeerRank)) {
           uint64_t waitStart = kernelStepStartTs;
           kernelStepStartTs = 0; // attach waitSend to first send KernelStep only
           if (profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex)) {
-            profilerKernelStepStart(true, /*isSend=*/1, /*peer=*/0, lineStep, lineBytes, kernelStepWorkTag, waitStart, &seqSend);
+            profilerKernelStepStart(true, /*isSend=*/1, sendPeerRank, lineStep, lineBytes, kernelStepWorkTag, waitStart, &seqSend);
           }
         } else if (SEND) {
           kernelStepStartTs = 0;
         }
-        if ((RECV && recvSameHost) || (SEND && sendSameHost)) kernelStepLogicalIndex += 1;
+        if ((RECV && recvSameHost && profilerKernelStepRankFits(recvPeerRank)) ||
+            (SEND && sendSameHost && profilerKernelStepRankFits(sendPeerRank))) kernelStepLogicalIndex += 1;
       }
 
       DataLoader dl;
@@ -339,10 +342,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       // KernelStep stop: after this line's stores.
       if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
         if (RECV && seqRecv != 0) {
-          profilerKernelStepStop(true, seqRecv, /*isSend=*/0, /*peer=*/0, lineStep, lineBytes);
+          profilerKernelStepStop(true, seqRecv, /*isSend=*/0, recvPeerRank, lineStep, lineBytes);
         }
         if (SEND && seqSend != 0) {
-          profilerKernelStepStop(true, seqSend, /*isSend=*/1, /*peer=*/0, lineStep, lineBytes);
+          profilerKernelStepStop(true, seqSend, /*isSend=*/1, sendPeerRank, lineStep, lineBytes);
         }
       }
 
@@ -362,12 +365,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
     }
   }
 
-  __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
+  __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i, int destRank) {
     recvBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     recvStep[i] = conn->step;
     if (wid == i) {
       recvConn = conn;
       recvSameHost = (conn->flags & NCCL_CONN_SAME_HOST) != 0;
+      recvPeerRank = destRank;
     }
   }
   __device__ __forceinline__ void loadRecvSync() {
@@ -377,12 +381,13 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
     }
   }
 
-  __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
+  __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i, int destRank) {
     sendBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     sendStep[i] = conn->step;
     if (wid == i) {
       sendConn = conn;
       sendSameHost = (conn->flags & NCCL_CONN_SAME_HOST) != 0;
+      sendPeerRank = destRank;
     }
   }
   __device__ __forceinline__ void loadSendSync() {
@@ -422,12 +427,12 @@ public:
     // Yes, for some template arguments this code will be unreachable.  That's fine.
     // coverity[dead_error_line]
     while (nrecv < Fan::MaxRecv && recvPeers[nrecv] >= 0) {
-      loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv);
+      loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv, recvPeers[nrecv]);
       nrecv++;
     }
     // coverity[dead_error_line]
     while (nsend < MaxSend && sendPeers[nsend] >= 0) {
-      loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend);
+      loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend, sendPeers[nsend]);
       nsend++;
     }
     this->fan = Fan(nrecv, nsend);

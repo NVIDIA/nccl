@@ -379,6 +379,8 @@ static ncclResult_t commFree(ncclComm_t comm) {
     dtor = dtor->next;
   }
 
+  NCCLCHECK(ncclProfilerThreadDestroy(comm));
+
   ncclMemoryStackDestruct(&comm->memScoped);
   ncclMemoryStackDestruct(&comm->memPermanent);
 
@@ -407,7 +409,6 @@ static ncclResult_t commFree(ncclComm_t comm) {
        comm->rank, comm->nRanks, comm->cudaDev, comm->busId, comm->commHash, abort ? "Abort" : "Destroy");
 
   commPoison(comm); // poison comm before free to avoid comm reuse.
-  NCCLCHECK(ncclProfilerThreadDestroy(comm));
   NCCLCHECK(ncclProfilerPluginFinalize(comm));
   if (sharedResRefCount == 0) {
     NCCLCHECK(ncclNetFinalize(comm));

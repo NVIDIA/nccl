@@ -1840,6 +1840,8 @@ Values accepted
 ^^^^^^^^^^^^^^^
 0 or 1. 1 indicates blocking communicators, and 0 indicates nonblocking communicators. The default value is undefined.
 
+.. _NCCL_CGA_CLUSTER_SIZE:
+
 NCCL_CGA_CLUSTER_SIZE
 ---------------------
 (since 2.16)
@@ -1854,6 +1856,8 @@ automatically choose the best value.
 Values accepted
 ^^^^^^^^^^^^^^^
 0 to 8. Default value is undefined.
+
+.. _NCCL_MAX_CTAS:
 
 NCCL_MAX_CTAS
 -------------
@@ -1882,6 +1886,8 @@ Values accepted
 ^^^^^^^^^^^^^^^
 Set to a positive integer value up to 64 (32 prior to 2.25). Default value is
 undefined.
+
+.. _NCCL_MIN_CTAS:
 
 NCCL_MIN_CTAS
 -------------

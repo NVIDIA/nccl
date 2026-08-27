@@ -404,9 +404,10 @@ private:
   // Scatter/Gather generic op
   // skip: my own rank order in the buffer chunks
   // shift: peer offset to avoid all ranks sending to or receiving from same peer
-  template <int DirectRecv1, int DirectSend1, int Recv, int Send>
+  template <int DirectRecv1, int DirectSend1, int Recv, int Send, bool Remap = false>
   __device__ __forceinline__ void ScatterGatherOp(intptr_t inpIx, intptr_t outIx, ssize_t totalElem, int peerElem,
-                                                  ssize_t peerOffset, int skip, int shift, bool postOp) {
+                                                  ssize_t peerOffset, int skip, int shift, bool postOp,
+                                                  const int* remap = nullptr) {
     constexpr int DirectRecv = 1 && Direct && DirectRecv1;
     constexpr int DirectSend = 1 && Direct && DirectSend1;
     int offset = 0; // slice offset
@@ -423,13 +424,16 @@ private:
           constexpr int PreOpSrcs = DirectSend ? 0 : 1;
           if (tid == 0) ncclShmem.groups[group].srcs[0] = (T*)ncclShmem.groups[group].userInput + inpIx + offset;
           // realSize is not accurate here; but intra-node does not rely on sizes FIFO
-          waitPeer<0, DirectSend, 0, 1, 1, 0>(0, inpIx, offset, realSize);
+          waitPeer<0, DirectSend, 0, 1, 1, 0>(0, DirectSend ? inpIx : 0, offset, realSize);
           subBarrier();
           NVCC_PRAGMA_UNROLL_AUTO
           // Loop over peers
           for (int j = 0; j < fan.nsend(); j++) {
             int i = (j + shift) % fan.nsend();
-            ssize_t pOffset = i * peerOffset;
+            // Optionally remap the per-peer offset (e.g. the NVLS dense-head index ->
+            // user rank). remap wrappers pass skip<0, so the skip test below stays on i.
+            int slot = Remap ? remap[i] : i;
+            ssize_t pOffset = slot * peerOffset;
             // Skip the data I am responsible of reducing myself
             if (skip >= 0 && i >= skip) pOffset += peerOffset;
             void* src0 = (T*)ncclShmem.groups[group].srcs[0] + pOffset;
@@ -445,15 +449,20 @@ private:
           }
         } else if (Recv) {
           if (tid == 0) ncclShmem.groups[group].dsts[0] = (T*)ncclShmem.groups[group].userOutput + outIx + offset;
-          ssize_t pOffset = index * peerOffset;
-          if (skip >= 0 && index >= skip) pOffset += peerOffset;
-          // Adjust remote index with peer offset in case we are directly pulling from peer's output buffer
-          waitPeer<DirectRecv, 0, 1, 0, 0, 1>(outIx + pOffset, outIx + pOffset, offset, realSize);
+          intptr_t directIx = 0;
+          if (DirectRecv && (flags & RoleWaitRecv)) {
+            int slot = Remap ? remap[index] : index;
+            ssize_t pOffset = slot * peerOffset;
+            if (skip >= 0 && index >= skip) pOffset += peerOffset;
+            directIx = outIx + pOffset;
+          }
+          waitPeer<DirectRecv, 0, 1, 0, 0, 1>(directIx, directIx, offset, realSize);
           subBarrier();
           NVCC_PRAGMA_UNROLL_AUTO
           for (int j = 0; j < fan.nrecv(); j++) {
             int i = (j + shift) % fan.nrecv();
-            pOffset = i * peerOffset;
+            int slot = Remap ? remap[i] : i;
+            ssize_t pOffset = slot * peerOffset;
             if (skip >= 0 && i >= skip) pOffset += peerOffset;
             void* dst0 = (T*)ncclShmem.groups[group].dsts[0] + pOffset;
             ssize_t realPeerSize = min(realSize, totalElem - pOffset);
@@ -1022,6 +1031,13 @@ public:
                                           int shift) {
     ScatterGatherOp<0, 0, 0, 1>(inpIx, -1, totalElem, peerElem, peerOffset, skip, shift, /*postOp=*/false);
   }
+  // Like scatter(), but remaps each peer's source offset through `remap` (e.g. the NVLS
+  // dense-head-index -> user-rank table). Assumes skip < 0.
+  __device__ __forceinline__ void scatterRemap(intptr_t inpIx, ssize_t totalElem, int peerElem, ssize_t peerOffset,
+                                               int skip, int shift, const int* remap) {
+    ScatterGatherOp<0, 0, 0, 1, /*Remap=*/true>(inpIx, -1, totalElem, peerElem, peerOffset, skip, shift,
+                                                /*postOp=*/false, remap);
+  }
   __device__ __forceinline__ void directScatter(intptr_t inpIx, ssize_t totalElem, int peerElem, ssize_t peerOffset,
                                                 int skip, int shift) {
     ScatterGatherOp<0, 1, 0, 1>(inpIx, -1, totalElem, peerElem, peerOffset, skip, shift, /*postOp=*/false);
@@ -1092,6 +1108,12 @@ public:
   __device__ __forceinline__ void gather(intptr_t outIx, ssize_t totalElem, int peerElem, ssize_t peerOffset, int skip,
                                          int shift, bool postOp = false) {
     ScatterGatherOp<0, 0, 1, 0>(-1, outIx, totalElem, peerElem, peerOffset, skip, shift, postOp);
+  }
+  // Like gather(), but remaps each peer's destination offset through `remap` (e.g. the NVLS
+  // dense-head-index -> user-rank table). Assumes skip < 0.
+  __device__ __forceinline__ void gatherRemap(intptr_t outIx, ssize_t totalElem, int peerElem, ssize_t peerOffset,
+                                              int skip, int shift, const int* remap, bool postOp = false) {
+    ScatterGatherOp<0, 0, 1, 0, /*Remap=*/true>(-1, outIx, totalElem, peerElem, peerOffset, skip, shift, postOp, remap);
   }
   __device__ __forceinline__ void directGather(intptr_t outIx, ssize_t totalElem, int peerElem, ssize_t peerOffset,
                                                int skip, int shift) {

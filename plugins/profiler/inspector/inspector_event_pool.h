@@ -44,6 +44,16 @@ struct inspectorPoolChunk {
   struct inspectorPoolChunk* next;  // Next chunk in the list
 };
 
+struct inspectorEventPoolConfig {
+  uint32_t collPoolSize;
+  uint32_t p2pPoolSize;
+  uint32_t commPoolSize;
+  uint32_t proxyOpPoolSize;
+  uint32_t proxyStepPoolSize;
+  bool growEnabled;
+  bool enableProxy;
+};
+
 struct inspectorEventPool {
   // Collective info pool
   struct inspectorPoolChunk* collChunkList;
@@ -88,9 +98,6 @@ struct inspectorEventPool {
 
   // Controls whether the Coll, P2P, and Comm pools are allowed to grow beyond
   // their initial size. Proxy pools remain fixed-capacity.
-  // Proxy pool storage is allocated up front.
-  // Its capacity does not change after initialization.
-  // Exhaustion is reported to the caller.
   // Disabled via NCCL_INSPECTOR_POOL_GROW=0.
   bool growEnabled;
 };
@@ -98,9 +105,8 @@ struct inspectorEventPool {
 extern struct inspectorEventPool g_eventPool;
 
 // Memory pool functions
-inspectorResult_t inspectorEventPoolInit(uint32_t collPoolSize,
-                                        uint32_t p2pPoolSize,
-                                        uint32_t commPoolSize);
+inspectorResult_t inspectorEventPoolInit(
+  const struct inspectorEventPoolConfig& config);
 inspectorResult_t inspectorEventPoolFinalize();
 
 struct inspectorCollInfo* inspectorEventPoolAllocColl();

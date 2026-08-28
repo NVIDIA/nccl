@@ -134,6 +134,9 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
   if (enableNcclInspectorP2p) {
     *eActivationMask |= ncclProfileP2p;
   }
+  if (enableNcclInspectorProxy) {
+    *eActivationMask |= ncclProfileProxyOp | ncclProfileProxyStep;
+  }
 
   // Ask NCCL to stamp event timestamps (v8). The inspector reports epoch
   // microseconds, so it asks for CLOCK_REALTIME, and gpuClockSync puts kernel

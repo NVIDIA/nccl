@@ -129,8 +129,9 @@ typedef enum {
 
 typedef enum {
   NCCL_INSP_EVT_TRK_PROXY_OP_START = 0,
-  NCCL_INSP_EVT_TRK_PROXY_OP_STOP = 1,
-  NCCL_INSP_EVT_TRK_PROXY_OP_NEVT = 2,
+  NCCL_INSP_EVT_TRK_PROXY_OP_IN_PROGRESS,
+  NCCL_INSP_EVT_TRK_PROXY_OP_STOP,
+  NCCL_INSP_EVT_TRK_PROXY_OP_NEVT,
 } inspectorEventTrkProxyOp_t;
 
 typedef enum {
@@ -314,7 +315,8 @@ struct inspectorProxyOpInfo {
   uint32_t nStepsStarted;
   uint32_t nStepsCompleted;
   uint32_t nStepsDropped;
-  uint64_t nextEventSeqNum;
+  uint64_t nextProxyStepSn;
+  uint64_t eventSeqNum;
   size_t transSizeBytes;
   struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_OP_NEVT];
   pthread_rwlock_t guard;

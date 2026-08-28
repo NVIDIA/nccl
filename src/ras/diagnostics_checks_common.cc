@@ -16,8 +16,21 @@
 #include "comm.h"
 #include "compiler.h"
 #include "diagnostics_checks_common.h"
+#include "graph/topo.h"
 #include "ras_internal.h"
 #include "transport.h"
+
+// Matches a known verbs plugin name (InfiniBand or RoCE) exactly or followed by a delimiter, rejecting
+// prefix-sharing names. Only these plugins name their devices the way sysfs does.
+static bool rasDiagnosticsNetPluginSupported(const char* name) {
+  static const char* const kPluginNames[] = {"IB", "IBext", "SPCX", "NCCL RDMA Plugin"};
+  if (name == nullptr) return false;
+  for (const char* plugin : kPluginNames) {
+    const size_t len = strlen(plugin);
+    if (strncmp(name, plugin, len) == 0 && (name[len] == '\0' || name[len] == '_' || name[len] == ' ')) return true;
+  }
+  return false;
+}
 
 void rasDiagnosticsCommSnapshotInit(struct rasDiagnosticsCommSnapshot* snapshot, const struct ncclComm* comm) {
   snapshot->rank.commId.commHash = comm->commHash;
@@ -30,6 +43,10 @@ void rasDiagnosticsCommSnapshotInit(struct rasDiagnosticsCommSnapshot* snapshot,
   snapshot->busId = comm->busId;
   snapshot->localRank = comm->localRank;
   snapshot->localRanks = comm->localRanks;
+  snapshot->hostHash = comm->peerInfo[comm->rank].hostHash;
+  snapshot->netIbVerbs = comm->ncclNet != nullptr && rasDiagnosticsNetPluginSupported(comm->ncclNet->name);
+  snapshot->netProps = nullptr;
+  snapshot->nNetProps = 0;
 }
 
 int rasDiagnosticsCommIdCompare(const struct rasCommId* id1, const struct rasCommId* id2) {
@@ -63,10 +80,52 @@ static ncclResult_t rasDiagnosticsFillLocalRecord(char* record, const struct ras
   return ncclSuccess;
 }
 
+ncclResult_t rasDiagnosticsCollectCommSnapshots(const struct rasDiagnosticsContext* ctx, bool collectNetDevices,
+                                                struct rasDiagnosticsCommSnapshot** snapshots, int* nSnapshots) {
+  ncclUniquePtr<struct rasDiagnosticsCommSnapshot> result;
+
+  *snapshots = nullptr;
+  *nSnapshots = 0;
+  std::lock_guard<std::mutex> lock(ncclCommsMutex);
+  for (int i = 0; i < nNcclComms; i++) {
+    struct ncclComm* comm = ncclComms[i];
+    if (comm != nullptr && COMPILER_ATOMIC_LOAD(&comm->peerInfoValid, std::memory_order_acquire) &&
+        rasDiagnosticsCommMatchesContext(ctx, comm))
+      (*nSnapshots)++;
+  }
+  if (*nSnapshots == 0) return ncclSuccess;
+  NCCLCHECK(ncclCalloc(result, *nSnapshots));
+  for (int i = 0, j = 0; i < nNcclComms && j < *nSnapshots; i++) {
+    struct ncclComm* comm = ncclComms[i];
+    if (comm != nullptr && COMPILER_ATOMIC_LOAD(&comm->peerInfoValid, std::memory_order_acquire) &&
+        rasDiagnosticsCommMatchesContext(ctx, comm)) {
+      struct rasDiagnosticsCommSnapshot* snapshot = result.get() + j++;
+      rasDiagnosticsCommSnapshotInit(snapshot, comm);
+      // Unscoped (client-triggered) runs wait for the comm to finish initializing; a comm-scoped run
+      // is triggered by that comm's own initialization.
+      if (collectNetDevices && snapshot->netIbVerbs) {
+        (void)ncclTopoGetNetPropertiesSnapshot(comm, /*requireCommInitialized=*/!ctx->hasCommFilter,
+                                               &snapshot->netProps, &snapshot->nNetProps);
+      }
+    }
+  }
+  *snapshots = result.release();
+  return ncclSuccess;
+}
+
+void rasDiagnosticsFreeCommSnapshots(struct rasDiagnosticsCommSnapshot* snapshots, int nSnapshots) {
+  if (snapshots == nullptr) return;
+  for (int i = 0; i < nSnapshots; i++) {
+    free(snapshots[i].netProps);
+  }
+  free(snapshots);
+}
+
 ncclResult_t rasDiagnosticsCollectLocalRecords(const struct rasDiagnosticsContext* ctx, size_t checkDataSize,
                                                rasDiagnosticsFillLocalDataFn fillCheckData,
                                                struct rasDiagnosticsLocalData* data) {
-  ncclUniquePtr<struct rasDiagnosticsCommSnapshot> snapshots;
+  ncclResult_t ret = ncclSuccess;
+  struct rasDiagnosticsCommSnapshot* snapshotData = nullptr;
   ncclUniquePtr<char> records;
   size_t recordStride;
   int nRecords = 0;
@@ -93,48 +152,31 @@ ncclResult_t rasDiagnosticsCollectLocalRecords(const struct rasDiagnosticsContex
     return ncclInternalError;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(ncclCommsMutex);
-
-    for (int i = 0; i < nNcclComms; i++) {
-      struct ncclComm* comm = ncclComms[i];
-      if (comm == nullptr) continue;
-      if (!COMPILER_ATOMIC_LOAD(&comm->peerInfoValid, std::memory_order_acquire)) continue;
-      if (!rasDiagnosticsCommMatchesContext(ctx, comm)) continue;
-      nRecords++;
-    }
-
-    if (nRecords == 0) return ncclSuccess;
-    if ((size_t)nRecords > (size_t)INT_MAX / recordStride) {
-      WARN("RAS diagnostics check local data too large");
-      return ncclInternalError;
-    }
-
-    NCCLCHECK(ncclCalloc(snapshots, nRecords));
-    for (int i = 0, recordIdx = 0; i < nNcclComms && recordIdx < nRecords; i++) {
-      struct ncclComm* comm = ncclComms[i];
-      if (comm == nullptr) continue;
-      if (!COMPILER_ATOMIC_LOAD(&comm->peerInfoValid, std::memory_order_acquire)) continue;
-      if (!rasDiagnosticsCommMatchesContext(ctx, comm)) continue;
-      rasDiagnosticsCommSnapshotInit(snapshots.get() + recordIdx, comm);
-      recordIdx++;
-    }
+  NCCLCHECK(rasDiagnosticsCollectCommSnapshots(ctx, /*collectNetDevices=*/false, &snapshotData, &nRecords));
+  if (nRecords == 0) return ncclSuccess;
+  if ((size_t)nRecords > (size_t)INT_MAX / recordStride) {
+    WARN("RAS diagnostics check local data too large");
+    ret = ncclInternalError;
+    goto exit;
   }
 
   nBytes = (size_t)nRecords * recordStride;
-  NCCLCHECK(ncclCalloc(records, nBytes));
+  NCCLCHECKGOTO(ncclCalloc(records, nBytes), ret, exit);
 
   // Check-specific probes consume snapshots after releasing ncclCommsMutex.
   for (int recordIdx = 0; recordIdx < nRecords; recordIdx++) {
-    NCCLCHECK(rasDiagnosticsFillLocalRecord(records.get() + recordIdx * recordStride, snapshots.get() + recordIdx,
-                                            fillCheckData));
+    NCCLCHECKGOTO(rasDiagnosticsFillLocalRecord(records.get() + recordIdx * recordStride, snapshotData + recordIdx,
+                                                fillCheckData),
+                  ret, exit);
   }
 
   data->records = records.release();
   data->recordsBytes = (int)nBytes;
   data->recordStride = (int)recordStride;
   data->nRecords = nRecords;
-  return ncclSuccess;
+exit:
+  rasDiagnosticsFreeCommSnapshots(snapshotData, nRecords);
+  return ret;
 }
 
 const struct rasDiagnosticsRankHeader* rasDiagnosticsRankHeaderFromRecord(const char* record) {

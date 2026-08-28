@@ -45,7 +45,19 @@ static ncclResult_t ncclGinIbGdrGpuSupport(bool gdaki) {
 
 NCCL_PARAM(GinType, "GIN_TYPE", -1);
 NCCL_PARAM(GinIbTc, "GIN_IB_TC", -1);
+NCCL_PARAM(GinIbAllGatherTimeoutSec, "GIN_IB_ALLGATHER_TIMEOUT_SEC", 180);
 extern int64_t ncclParamIbTc();
+
+// Break out of the GIN ring allgather if a ring neighbor never responds (e.g. when NICs on
+// disjoint rails are not mutually reachable over RDMA).
+static ncclResult_t ncclGinIbAllGatherCheckDeadline(struct ncclGinIbCollComm* cComm, uint64_t deadline) {
+  if (ncclParamGinIbAllGatherTimeoutSec() <= 0 || clockNano() < deadline) return ncclSuccess;
+  WARN("NET/IB GIN: ring allgather timed out after %llds (rank %d/%d). "
+       "Ring-neighbor NICs are likely not reachable over RDMA, e.g., due to cross-rail disconnectivity. "
+       "Check fabric connectivity, or increase NCCL_GIN_IB_ALLGATHER_TIMEOUT_SEC.",
+       (long long)ncclParamGinIbAllGatherTimeoutSec(), cComm->rank, cComm->nranks);
+  return ncclRemoteError;
+}
 
 static std::mutex ncclGinIbGdakiLockMutex;
 static int ncclGinIbGdakiNDevs = -1;
@@ -115,7 +127,9 @@ static ncclResult_t ncclGinIbAllGather(struct ncclGinIbCollComm* cComm, void* sr
   memcpy((void*)((uintptr_t)recvBuf + speer * len), srcBuf, len);
   for (int i = 0; i < cComm->nranks - 1; i++) {
     rpeer = (speer - 1 + cComm->nranks) % cComm->nranks;
+    uint64_t deadline = clockNano() + (uint64_t)ncclParamGinIbAllGatherTimeoutSec() * 1000000000ull;
     while (srequest == NULL || rrequest == NULL) {
+      NCCLCHECKGOTO(ncclGinIbAllGatherCheckDeadline(cComm, deadline), status, out);
       rbuf = (void*)((uintptr_t)recvBuf + rpeer * len);
       tag = NCCL_GIN_IB_ALLGATHER_TAG;
       if (srequest == NULL) {
@@ -128,6 +142,7 @@ static ncclResult_t ncclGinIbAllGather(struct ncclGinIbCollComm* cComm, void* sr
       }
     }
     while (srequest || rrequest) {
+      NCCLCHECKGOTO(ncclGinIbAllGatherCheckDeadline(cComm, deadline), status, out);
       if (rrequest) NCCLCHECKGOTO(ncclNetIb.test(rrequest, &done, NULL), status, out);
       if (done) rrequest = NULL;
       if (srequest) NCCLCHECKGOTO(ncclNetIb.test(srequest, &done, NULL), status, out);

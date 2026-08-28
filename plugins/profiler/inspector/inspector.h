@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <vector>
 
 #include "json.h"
@@ -126,6 +127,29 @@ typedef enum {
   NCCL_INSP_EVT_TRK_KERNEL_NEVT = 3,
 } inspectorEventTrkKernel_t;
 
+typedef enum {
+  NCCL_INSP_EVT_TRK_PROXY_OP_START = 0,
+  NCCL_INSP_EVT_TRK_PROXY_OP_STOP = 1,
+  NCCL_INSP_EVT_TRK_PROXY_OP_NEVT = 2,
+} inspectorEventTrkProxyOp_t;
+
+typedef enum {
+  NCCL_INSP_EVT_TRK_PROXY_STEP_START = 0,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_GPU_WAIT,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_PEER_WAIT,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_WAIT,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_WAIT,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_FLUSH_WAIT,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_GPU_WAIT,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_STOP,
+  NCCL_INSP_EVT_TRK_PROXY_STEP_NEVT,
+} inspectorEventTrkProxyStep_t;
+
+typedef enum {
+  NCCL_INSP_PROXY_RECORD_OP = 0,
+  NCCL_INSP_PROXY_RECORD_STEP,
+} inspectorProxyRecordType_t;
+
 struct inspectorEventTrkKernelInfo {
   struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_KERNEL_NEVT];
 };
@@ -155,6 +179,42 @@ struct inspectorCompletedOpInfo {
   const char* proto;  // coll only (nullptr for P2P)
   int peer;           // P2P only (unused for coll)
   struct inspectorEventTrkOpInfo evtTrk;
+};
+
+// Pointer-free metadata shared by active and completed Proxy records.
+struct inspectorProxyOpMetadata {
+  uint64_t parentType;
+  uint64_t parentSn;
+  uint64_t proxyOpSn;
+  pid_t originPid;
+  int rank;
+  int peer;
+  uint8_t channelId;
+  bool isSend;
+};
+
+// Self-contained record copied into the completed proxy ring. It must not
+// retain pointers to active events because those objects return to their pools.
+struct inspectorCompletedProxyRecord {
+  inspectorProxyRecordType_t recordType;
+  uint64_t recordSn;
+  struct inspectorProxyOpMetadata metadata;
+  union {
+    struct {
+      int nSteps;
+      int chunkSize;
+      uint32_t nStepsCompleted;
+      uint32_t nStepsDropped;
+      size_t transSizeBytes;
+      struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_OP_NEVT];
+    } proxyOp;
+    struct {
+      uint64_t proxyStepSn;
+      int step;
+      size_t transSizeBytes;
+      struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_STEP_NEVT];
+    } proxyStep;
+  };
 };
 
 #include "inspector_ring.h"
@@ -234,6 +294,37 @@ struct inspectorKernelChInfo {
   uint64_t tsCompletedUsec;
   uint64_t startGpuClk;
   uint64_t stopGpuClk;
+};
+
+// Live ProxyOp handle. Parent Coll/P2P correlation is copied at start;
+// completed records copy the pointer-free metadata instead.
+struct inspectorProxyOpInfo {
+  uint64_t type;
+  int refCount;
+  struct inspectorCommInfo* commInfo;
+  struct inspectorProxyOpMetadata metadata;
+  int nSteps;
+  int chunkSize;
+  bool stopped;
+  uint32_t nStepsStarted;
+  uint32_t nStepsCompleted;
+  uint32_t nStepsDropped;
+  uint64_t nextEventSeqNum;
+  size_t transSizeBytes;
+  struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_OP_NEVT];
+  pthread_rwlock_t guard;
+};
+
+// Live ProxyStep handle. Its parent reference keeps the ProxyOp alive until
+// the step has produced a pointer-free completed record.
+struct inspectorProxyStepInfo {
+  uint64_t type;
+  struct inspectorProxyOpInfo* parent;
+  uint64_t proxyStepSn;
+  int step;
+  size_t transSizeBytes;
+  bool transSizeRecorded;
+  struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_STEP_NEVT];
 };
 
 struct inspectorCollInfo {
@@ -325,6 +416,8 @@ inline int ncclTypeSize(ncclDataType_t type) {
 
 // Global flag to control P2P tracking
 extern bool enableNcclInspectorP2p;
+// Global flag to control ProxyOp/ProxyStep tracking
+extern bool enableNcclInspectorProxy;
 extern bool requireKernelTiming;
 // Opt-in flag for extra per-device Prometheus stats metrics (totals + drops)
 extern bool enableNcclInspectorPromStats;

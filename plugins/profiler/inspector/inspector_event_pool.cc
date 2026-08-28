@@ -239,6 +239,128 @@ static inspectorResult_t growP2pPool() {
 
 /*
  * Description:
+ *   Initialize the fixed-capacity ProxyOp info pool.
+ *
+ * Parameters:
+ *
+ *   proxyOpPoolSize - Maximum number of concurrently active ProxyOps.
+ *
+ * Return:
+ *
+ *   inspectorSuccess     - Success.
+ *   inspectorMemoryError - Invalid capacity or failed allocation.
+ *   inspectorLockError   - Failed to initialize the pool mutex.
+ */
+static inspectorResult_t initProxyOpPool(uint32_t proxyOpPoolSize) {
+  if (g_eventPool.collChunkList == nullptr) {
+    return inspectorUninitializedError;
+  }
+  if (g_eventPool.proxyOpChunkList != nullptr) {
+    return inspectorSuccess;
+  }
+  if (proxyOpPoolSize == 0) {
+    return inspectorMemoryError;
+  }
+
+  g_eventPool.proxyOpCapacity = proxyOpPoolSize;
+  g_eventPool.proxyOpAllocCount = 0;
+  g_eventPool.proxyOpChunkList = nullptr;
+  g_eventPool.proxyOpFreeList = nullptr;
+
+  if (pthread_mutex_init(&g_eventPool.proxyOpPoolLock, nullptr) != 0) {
+    g_eventPool.proxyOpCapacity = 0;
+    return inspectorLockError;
+  }
+
+  struct inspectorPoolChunk* chunk = allocatePoolChunk(
+    sizeof(struct inspectorProxyOpInfoPoolEntry), proxyOpPoolSize);
+  if (chunk == nullptr) {
+    pthread_mutex_destroy(&g_eventPool.proxyOpPoolLock);
+    g_eventPool.proxyOpCapacity = 0;
+    return inspectorMemoryError;
+  }
+
+  g_eventPool.proxyOpChunkList = chunk;
+
+  struct inspectorProxyOpInfoPoolEntry* entries
+    = (struct inspectorProxyOpInfoPoolEntry*)chunk->entries;
+  g_eventPool.proxyOpFreeList = &entries[0];
+  for (uint32_t i = 0; i < proxyOpPoolSize - 1; i++) {
+    entries[i].next = &entries[i + 1];
+    entries[i].inUse = false;
+  }
+  entries[proxyOpPoolSize - 1].next = nullptr;
+  entries[proxyOpPoolSize - 1].inUse = false;
+
+  INFO_INSPECTOR(
+    "NCCL Inspector: Initialized fixed-capacity ProxyOp pool with %u entries",
+    proxyOpPoolSize);
+  return inspectorSuccess;
+}
+
+/*
+ * Description:
+ *   Initialize the fixed-capacity ProxyStep info pool.
+ *
+ * Parameters:
+ *
+ *   proxyStepPoolSize - Maximum number of concurrently active ProxySteps.
+ *
+ * Return:
+ *
+ *   inspectorSuccess     - Success.
+ *   inspectorMemoryError - Invalid capacity or failed allocation.
+ *   inspectorLockError   - Failed to initialize the pool mutex.
+ */
+static inspectorResult_t initProxyStepPool(uint32_t proxyStepPoolSize) {
+  if (g_eventPool.proxyOpChunkList == nullptr) {
+    return inspectorUninitializedError;
+  }
+  if (g_eventPool.proxyStepChunkList != nullptr) {
+    return inspectorSuccess;
+  }
+  if (proxyStepPoolSize == 0) {
+    return inspectorMemoryError;
+  }
+
+  g_eventPool.proxyStepCapacity = proxyStepPoolSize;
+  g_eventPool.proxyStepAllocCount = 0;
+  g_eventPool.proxyStepChunkList = nullptr;
+  g_eventPool.proxyStepFreeList = nullptr;
+
+  if (pthread_mutex_init(&g_eventPool.proxyStepPoolLock, nullptr) != 0) {
+    g_eventPool.proxyStepCapacity = 0;
+    return inspectorLockError;
+  }
+
+  struct inspectorPoolChunk* chunk = allocatePoolChunk(
+    sizeof(struct inspectorProxyStepInfoPoolEntry), proxyStepPoolSize);
+  if (chunk == nullptr) {
+    pthread_mutex_destroy(&g_eventPool.proxyStepPoolLock);
+    g_eventPool.proxyStepCapacity = 0;
+    return inspectorMemoryError;
+  }
+
+  g_eventPool.proxyStepChunkList = chunk;
+
+  struct inspectorProxyStepInfoPoolEntry* entries
+    = (struct inspectorProxyStepInfoPoolEntry*)chunk->entries;
+  g_eventPool.proxyStepFreeList = &entries[0];
+  for (uint32_t i = 0; i < proxyStepPoolSize - 1; i++) {
+    entries[i].next = &entries[i + 1];
+    entries[i].inUse = false;
+  }
+  entries[proxyStepPoolSize - 1].next = nullptr;
+  entries[proxyStepPoolSize - 1].inUse = false;
+
+  INFO_INSPECTOR(
+    "NCCL Inspector: Initialized fixed-capacity ProxyStep pool with %u entries",
+    proxyStepPoolSize);
+  return inspectorSuccess;
+}
+
+/*
+ * Description:
  *   Initialize comm info pool with first chunk.
  *
  * Parameters:
@@ -374,6 +496,22 @@ static void cleanupPartialPoolInit() {
     pthread_mutex_destroy(&g_eventPool.p2pPoolLock);
     freeChunkList(g_eventPool.p2pChunkList);
     g_eventPool.p2pChunkList = nullptr;
+  }
+  if (g_eventPool.proxyStepChunkList != nullptr) {
+    pthread_mutex_destroy(&g_eventPool.proxyStepPoolLock);
+    freeChunkList(g_eventPool.proxyStepChunkList);
+    g_eventPool.proxyStepChunkList = nullptr;
+    g_eventPool.proxyStepFreeList = nullptr;
+    g_eventPool.proxyStepCapacity = 0;
+    g_eventPool.proxyStepAllocCount = 0;
+  }
+  if (g_eventPool.proxyOpChunkList != nullptr) {
+    pthread_mutex_destroy(&g_eventPool.proxyOpPoolLock);
+    freeChunkList(g_eventPool.proxyOpChunkList);
+    g_eventPool.proxyOpChunkList = nullptr;
+    g_eventPool.proxyOpFreeList = nullptr;
+    g_eventPool.proxyOpCapacity = 0;
+    g_eventPool.proxyOpAllocCount = 0;
   }
   if (g_eventPool.commChunkList != nullptr) {
     pthread_mutex_destroy(&g_eventPool.commPoolLock);
@@ -548,6 +686,88 @@ struct inspectorP2pInfo* inspectorEventPoolAllocP2p() {
 
 /*
  * Description:
+ *   Allocate a ProxyOp info object from its fixed-capacity pool.
+ *
+ * Thread Safety:
+ *
+ *   Thread-safe.
+ *
+ * Return:
+ *
+ *   struct inspectorProxyOpInfo* - Allocated ProxyOp info, or nullptr when
+ *                                  the pool is exhausted.
+ */
+struct inspectorProxyOpInfo* inspectorEventPoolAllocProxyOp() {
+  if (g_eventPool.proxyOpChunkList == nullptr) {
+    return nullptr;
+  }
+
+  pthread_mutex_lock(&g_eventPool.proxyOpPoolLock);
+
+  if (g_eventPool.proxyOpFreeList == nullptr) {
+    pthread_mutex_unlock(&g_eventPool.proxyOpPoolLock);
+    WARN_INSPECTOR(
+      "NCCL Inspector: ProxyOp pool exhausted (capacity: %u) - allocation failed!",
+      g_eventPool.proxyOpCapacity);
+    return nullptr;
+  }
+
+  struct inspectorProxyOpInfoPoolEntry* entry
+    = g_eventPool.proxyOpFreeList;
+  g_eventPool.proxyOpFreeList = entry->next;
+  entry->inUse = true;
+  entry->next = nullptr;
+  g_eventPool.proxyOpAllocCount++;
+
+  pthread_mutex_unlock(&g_eventPool.proxyOpPoolLock);
+
+  memset(&entry->obj, 0, sizeof(struct inspectorProxyOpInfo));
+  return &entry->obj;
+}
+
+/*
+ * Description:
+ *   Allocate a ProxyStep info object from its fixed-capacity pool.
+ *
+ * Thread Safety:
+ *
+ *   Thread-safe.
+ *
+ * Return:
+ *
+ *   struct inspectorProxyStepInfo* - Allocated ProxyStep info, or nullptr
+ *                                    when the pool is exhausted.
+ */
+struct inspectorProxyStepInfo* inspectorEventPoolAllocProxyStep() {
+  if (g_eventPool.proxyStepChunkList == nullptr) {
+    return nullptr;
+  }
+
+  pthread_mutex_lock(&g_eventPool.proxyStepPoolLock);
+
+  if (g_eventPool.proxyStepFreeList == nullptr) {
+    pthread_mutex_unlock(&g_eventPool.proxyStepPoolLock);
+    WARN_INSPECTOR(
+      "NCCL Inspector: ProxyStep pool exhausted (capacity: %u) - allocation failed!",
+      g_eventPool.proxyStepCapacity);
+    return nullptr;
+  }
+
+  struct inspectorProxyStepInfoPoolEntry* entry
+    = g_eventPool.proxyStepFreeList;
+  g_eventPool.proxyStepFreeList = entry->next;
+  entry->inUse = true;
+  entry->next = nullptr;
+  g_eventPool.proxyStepAllocCount++;
+
+  pthread_mutex_unlock(&g_eventPool.proxyStepPoolLock);
+
+  memset(&entry->obj, 0, sizeof(struct inspectorProxyStepInfo));
+  return &entry->obj;
+}
+
+/*
+ * Description:
  *   Allocate a comm info object from the pool. Grows the pool if
  *   necessary.
  *
@@ -680,6 +900,89 @@ void inspectorEventPoolReleaseP2p(struct inspectorP2pInfo* p2pInfo) {
   g_eventPool.p2pAllocCount--;
 
   pthread_mutex_unlock(&g_eventPool.p2pPoolLock);
+}
+
+/*
+ * Description:
+ *   Release a ProxyOp info object back to its fixed-capacity pool.
+ *
+ * Thread Safety:
+ *
+ *   Thread-safe.
+ *
+ * Parameters:
+ *
+ *   proxyOpInfo - ProxyOp info object to release.
+ *
+ * Return:
+ *
+ *   None.
+ */
+void inspectorEventPoolReleaseProxyOp(struct inspectorProxyOpInfo* proxyOpInfo) {
+  if (proxyOpInfo == nullptr || g_eventPool.proxyOpChunkList == nullptr) {
+    return;
+  }
+
+  struct inspectorProxyOpInfoPoolEntry* entry
+    = (struct inspectorProxyOpInfoPoolEntry*)((char*)proxyOpInfo -
+        offsetof(struct inspectorProxyOpInfoPoolEntry, obj));
+
+  pthread_mutex_lock(&g_eventPool.proxyOpPoolLock);
+
+  if (!entry->inUse) {
+    pthread_mutex_unlock(&g_eventPool.proxyOpPoolLock);
+    WARN_INSPECTOR("NCCL Inspector: Double release detected for ProxyOp info!");
+    return;
+  }
+
+  entry->inUse = false;
+  entry->next = g_eventPool.proxyOpFreeList;
+  g_eventPool.proxyOpFreeList = entry;
+  g_eventPool.proxyOpAllocCount--;
+
+  pthread_mutex_unlock(&g_eventPool.proxyOpPoolLock);
+}
+
+/*
+ * Description:
+ *   Release a ProxyStep info object back to its fixed-capacity pool.
+ *
+ * Thread Safety:
+ *
+ *   Thread-safe.
+ *
+ * Parameters:
+ *
+ *   proxyStepInfo - ProxyStep info object to release.
+ *
+ * Return:
+ *
+ *   None.
+ */
+void inspectorEventPoolReleaseProxyStep(
+    struct inspectorProxyStepInfo* proxyStepInfo) {
+  if (proxyStepInfo == nullptr || g_eventPool.proxyStepChunkList == nullptr) {
+    return;
+  }
+
+  struct inspectorProxyStepInfoPoolEntry* entry
+    = (struct inspectorProxyStepInfoPoolEntry*)((char*)proxyStepInfo -
+        offsetof(struct inspectorProxyStepInfoPoolEntry, obj));
+
+  pthread_mutex_lock(&g_eventPool.proxyStepPoolLock);
+
+  if (!entry->inUse) {
+    pthread_mutex_unlock(&g_eventPool.proxyStepPoolLock);
+    WARN_INSPECTOR("NCCL Inspector: Double release detected for ProxyStep info!");
+    return;
+  }
+
+  entry->inUse = false;
+  entry->next = g_eventPool.proxyStepFreeList;
+  g_eventPool.proxyStepFreeList = entry;
+  g_eventPool.proxyStepAllocCount--;
+
+  pthread_mutex_unlock(&g_eventPool.proxyStepPoolLock);
 }
 
 /*

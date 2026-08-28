@@ -9,6 +9,7 @@ set(LIBSRCFILES
     channel.cc
     ce_coll.cc
     collectives.cc
+    crypt.cc
     debug.cc
     group.cc
     init.cc
@@ -236,6 +237,8 @@ target_link_libraries(nccl
     Threads::Threads
     ${CMAKE_DL_LIBS}
     CUDA::cudart
+    mbedtls
+    mbedcrypto
     ${EXTRA_LIBS}
 )
 
@@ -354,6 +357,8 @@ target_link_libraries(nccl_static
     Threads::Threads
     ${CMAKE_DL_LIBS}
     CUDA::cudart
+    mbedtls
+    mbedcrypto
     ${EXTRA_LIBS}
 )
 

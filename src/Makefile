@@ -19,7 +19,7 @@ TRANSPORT_CC := $(filter-out transport/net_socket_stub.cc transport/net_ib_stub.
 endif
 
 LIBSRCFILES := \
-	bootstrap.cc channel.cc collectives.cc debug.cc group.cc \
+	bootstrap.cc channel.cc collectives.cc crypt.cc debug.cc group.cc \
 	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc cft_dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
 	$(wildcard config/*.cc) \
 	$(wildcard graph/*.cc) \
@@ -96,7 +96,7 @@ LIBOBJ     := $(LIBSRCFILES:%.cc=$(OBJDIR)/%.o)
 BINOBJ     := $(BINSRCFILES:%.cc=$(OBJDIR)/%.o) $(OBJDIR)/ras/ras_param_client.o
 PARAMBINOBJ     := $(PARAMBINSRCFILES:%.cc=$(OBJDIR)/%.o)
 DEPFILES   := $(LIBOBJ:%.o=%.d) $(BINOBJ:%.o=%.d) $(PARAMBINOBJ:%.o=%.d)
-LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
+LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl -lmbedtls -lmbedcrypto
 INCPLUGIN  := include/plugin
 
 DEVMANIFEST := $(BUILDDIR)/obj/device/manifest

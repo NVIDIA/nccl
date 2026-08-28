@@ -3339,6 +3339,14 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
     return ncclInvalidArgument;
   }
 
+  {
+    struct ncclSocketStats sockStats;
+    ncclSocketGetStats(&sockStats);
+    INFO(NCCL_INIT, "rank %d socket totals: %.3f MiB sent, %.3f MiB received, %llu outgoing connections, %llu incoming connections",
+         rank, (unsigned long long)sockStats.bytesSent / (1024.0 * 1024.0), (unsigned long long)sockStats.bytesReceived / (1024.0 * 1024.0),
+         (unsigned long long)sockStats.connectionsOut, (unsigned long long)sockStats.connectionsIn);
+  }
+
   comm->destroyFlag = 1;
   /* init thread must be joined before we destroy the comm. */
   NCCLCHECK(ncclCommEnsureReady(comm));

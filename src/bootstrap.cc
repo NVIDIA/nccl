@@ -13,10 +13,12 @@
 #include "proxy.h"
 #include "param.h"
 #include "ras.h"
+#include "crypt.h"
 #include <mutex>
 #include "os.h"
 #include <thread>
 #include <chrono>
+#include <pthread.h>
 
 #define BOOTSTRAP_N_CHECK_ABORT 10000
 #define BOOTSTRAP_TAG_CONNECT (0x1 << 31)
@@ -524,6 +526,8 @@ struct bootstrapState {
   int nranks;
   uint64_t magic;
   volatile uint32_t* abortFlag;
+  struct bootstrapAsyncSend* asyncSendList; // in-flight encrypted sends, in call order
+  ncclResult_t asyncSendError;
 };
 #define STATE_RING(s, f) (s->ring.f)
 #define STATE_LISTEN(s, f) (s->listen.f)
@@ -608,13 +612,72 @@ static ncclResult_t netRingConnect(void* ctx, ncclNet_t* net, struct bootstrapLi
   } while (!*sendComm || !*recvComm);
   return ncclSuccess;
 }
+// With TLS on the bootstrap sockets, a connector cannot finish its handshake (and
+// therefore its send) until the acceptor's application accepts the connection and
+// runs the server half. The ring connect (connect to next, then accept from prev)
+// would deadlock once every rank sits in its connect, so the connect side runs on
+// a helper thread while this rank keeps serving its accept side. Plaintext mode
+// keeps the stock single-threaded order. One-shot sends get the same property from
+// the asynchronous bootstrapSend below.
+struct bootstrapThreadOp {
+  ncclResult_t (*fn)(void*);
+  void* args;
+  ncclResult_t result;
+};
+
+static void* bootstrapThreadRun(void* opaque) {
+  struct bootstrapThreadOp* op = (struct bootstrapThreadOp*)opaque;
+  op->result = op->fn(op->args);
+  return NULL;
+}
+
+static ncclResult_t bootstrapConcurrent(ncclResult_t (*sendFn)(void*), void* sendArgs,
+                                        ncclResult_t (*recvFn)(void*), void* recvArgs) {
+  int encrypted;
+  NCCLCHECK(ncclGetCryptConnectionMode(&encrypted));
+  if (!encrypted) {
+    NCCLCHECK(sendFn(sendArgs));
+    NCCLCHECK(recvFn(recvArgs));
+    return ncclSuccess;
+  }
+  // We want to be able to do the initial TLS handshake connecting to the next rank around the ring
+  // and accepting from the previous rank around the ring. To keep this simple, we spawn a thread to
+  // handle the outgoing side. Unencrypted doesn't need this because no data flows on initial
+  // connect.
+  struct bootstrapThreadOp op = { sendFn, sendArgs, ncclInternalError };
+  pthread_t thread;
+  int perr = pthread_create(&thread, NULL, bootstrapThreadRun, &op);
+  if (perr != 0) {
+    WARN("bootstrapConcurrent: pthread_create failed: %s", strerror(perr));
+    return ncclSystemError;
+  }
+  ncclResult_t recvRes = recvFn(recvArgs);
+  pthread_join(thread, NULL);
+  NCCLCHECK(op.result);
+  return recvRes;
+}
+
+static ncclResult_t socketConnectOp(void* opaque) {
+  return ncclSocketConnect((struct ncclSocket*)opaque);
+}
+
+struct socketAcceptArgs {
+  struct ncclSocket* sock;
+  struct ncclSocket* listenSock;
+};
+
+static ncclResult_t socketAcceptOp(void* opaque) {
+  struct socketAcceptArgs* op = (struct socketAcceptArgs*)opaque;
+  NCCLCHECK(ncclSocketInit(op->sock));
+  return ncclSocketAccept(op->sock, op->listenSock);
+}
+
 static ncclResult_t socketRingConnect(ncclSocketAddress* addr, struct ncclSocket* sendSocket,
                                       struct ncclSocket* listenSock, struct ncclSocket* recvSocket, uint64_t magic,
                                       volatile uint32_t* abortFlag) {
   NCCLCHECK(ncclSocketInit(sendSocket, addr, magic, ncclSocketTypeBootstrap, abortFlag));
-  NCCLCHECK(ncclSocketConnect(sendSocket));
-  NCCLCHECK(ncclSocketInit(recvSocket));
-  NCCLCHECK(ncclSocketAccept(recvSocket, listenSock));
+  struct socketAcceptArgs acceptArgs = { recvSocket, listenSock };
+  NCCLCHECK(bootstrapConcurrent(socketConnectOp, sendSocket, socketAcceptOp, &acceptArgs));
   return ncclSuccess;
 }
 static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* state,
@@ -995,7 +1058,7 @@ fail:
   (void)ncclSocketClose(sock);
   return ret;
 }
-ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int size) {
+static ncclResult_t bootstrapSendSync(void* commState, int peer, int tag, void* data, int size) {
   ncclResult_t ret = ncclSuccess;
   struct ncclSocket sock;
   TRACE(NCCL_BOOTSTRAP, "Sending to peer=%d tag=%d size=%d", peer, tag, size);
@@ -1008,6 +1071,122 @@ fail:
   (void)ncclSocketClose(&sock);
   return ret;
 }
+
+// With TLS, sockets that are send-only at the data level still need to receive for TLS handshaking
+// so we put them on their own threads with a copy of the payload and run them async.
+// bootstrapClose waits for them to drain, and a send failure is stashed on the state and returned
+// by the next bootstrapSend.
+//
+// The receiver matches connections by (peer, tag) in accept order, so two sends to the same (peer,
+// tag) must reach it in call order (NVLS setup broadcasts to the same peers with the same tag
+// several times during init). The in-flight list keeps caller order; a send's thread waits until it
+// is the oldest in-flight send for its (peer, tag) before connecting. Sends to distinct (peer, tag)
+// stay concurrent.
+static pthread_mutex_t bootstrapAsyncLock = PTHREAD_MUTEX_INITIALIZER; // owns every bootstrapState->asyncSendList/asyncSendError
+static pthread_cond_t bootstrapAsyncCond = PTHREAD_COND_INITIALIZER; // used to wake up drains and threads waiting on earlier sends
+
+struct bootstrapAsyncSend {
+  struct bootstrapState* state;
+  int peer;
+  int tag;
+  int size;
+  char* data;
+  struct bootstrapAsyncSend* next;
+};
+
+static void* bootstrapAsyncSendMain(void* opaque) {
+  struct bootstrapAsyncSend* op = (struct bootstrapAsyncSend*)opaque;
+  struct bootstrapState* state = op->state;
+  pthread_mutex_lock(&bootstrapAsyncLock);
+  for (;;) {
+    struct bootstrapAsyncSend* earlier = state->asyncSendList;
+    while (earlier != op && !(earlier->peer == op->peer && earlier->tag == op->tag)) earlier = earlier->next;
+    if (earlier == op) break;
+    // someone is queued ahead of us with the same (peer, tag), wait for it
+    pthread_cond_wait(&bootstrapAsyncCond, &bootstrapAsyncLock);
+  }
+  // Once any send on this state has failed, stop sending: a dropped message
+  // followed by a delivered one would be matched to the wrong bootstrapRecv on
+  // the receiver. The comm is coming down anyway; keep the first error.
+  int skip = (state->asyncSendError != ncclSuccess);
+  pthread_mutex_unlock(&bootstrapAsyncLock);
+  ncclResult_t res = skip ? ncclSuccess : bootstrapSendSync(state, op->peer, op->tag, op->data, op->size);
+  pthread_mutex_lock(&bootstrapAsyncLock);
+  if (res != ncclSuccess && state->asyncSendError == ncclSuccess) state->asyncSendError = res;
+  struct bootstrapAsyncSend** p = &state->asyncSendList;
+  while (*p != op) p = &(*p)->next;
+  *p = op->next;
+  // we're done, wake up anyone that might be waiting for us to finish
+  pthread_cond_broadcast(&bootstrapAsyncCond);
+  pthread_mutex_unlock(&bootstrapAsyncLock);
+  free(op->data);
+  free(op);
+  return NULL;
+}
+
+static void bootstrapAsyncSendDrain(struct bootstrapState* state) {
+  pthread_mutex_lock(&bootstrapAsyncLock);
+  while (state->asyncSendList != NULL) pthread_cond_wait(&bootstrapAsyncCond, &bootstrapAsyncLock);
+  pthread_mutex_unlock(&bootstrapAsyncLock);
+}
+
+ncclResult_t bootstrapSend(void* commState, int peer, int tag, void* data, int size) {
+  struct bootstrapState* state = (struct bootstrapState*)commState;
+  int encrypted;
+  NCCLCHECK(ncclGetCryptConnectionMode(&encrypted));
+  if (!encrypted) return bootstrapSendSync(commState, peer, tag, data, size);
+
+  char* copy = NULL;
+  struct bootstrapAsyncSend* op = NULL;
+  if (size > 0) {
+    NCCLCHECK(ncclCalloc(&copy, size));
+    memcpy(copy, data, size);
+  }
+  ncclResult_t allocRes = ncclCalloc(&op, 1);
+  if (allocRes != ncclSuccess) {
+    free(copy);
+    return allocRes;
+  }
+  op->state = state;
+  op->peer = peer;
+  op->tag = tag;
+  op->size = size;
+  op->data = copy;
+
+  pthread_mutex_lock(&bootstrapAsyncLock);
+  ncclResult_t pending = state->asyncSendError;
+  if (pending == ncclSuccess) {
+    // Append in caller order; bootstrapAsyncSendMain relies on it for the
+    // per-(peer, tag) ordering.
+    struct bootstrapAsyncSend** tail = &state->asyncSendList;
+    while (*tail != NULL) tail = &(*tail)->next;
+    *tail = op;
+  }
+  pthread_mutex_unlock(&bootstrapAsyncLock);
+  if (pending != ncclSuccess) {
+    WARN("bootstrapSend: an earlier asynchronous send to peer %d failed", peer);
+    free(copy);
+    free(op);
+    return pending;
+  }
+  pthread_t thread;
+  int perr = pthread_create(&thread, NULL, bootstrapAsyncSendMain, op);
+  if (perr != 0) {
+    WARN("bootstrapSend: pthread_create failed: %s", strerror(perr));
+    pthread_mutex_lock(&bootstrapAsyncLock);
+    struct bootstrapAsyncSend** p = &state->asyncSendList;
+    while (*p != op) p = &(*p)->next;
+    *p = op->next;
+    pthread_mutex_unlock(&bootstrapAsyncLock);
+    free(copy);
+    free(op);
+    return ncclSystemError;
+  }
+  pthread_detach(thread);
+  TRACE(NCCL_BOOTSTRAP, "Async send to peer=%d tag=%d size=%d", peer, tag, size);
+  return ncclSuccess;
+}
+
 // Bootstrap send/receive functions
 static ncclResult_t unexpectedEnqueue(struct bootstrapState* state, int peer, int tag, struct ncclSocket* sock) {
   // New unex
@@ -1058,6 +1237,7 @@ static void unexpectedFree(struct bootstrapState* state) {
   while (elem) {
     prev = elem;
     elem = elem->next;
+    (void)ncclSocketClose(&prev->sock);
     free(prev);
   }
   return;
@@ -1093,6 +1273,17 @@ fail:
 ncclResult_t bootstrapRecv(void* commState, int peer, int tag, void* data, int size) {
   ncclResult_t ret;
   struct ncclSocket sock;
+  struct bootstrapState* state = (struct bootstrapState*)commState;
+  // Asynchronous send failures are stashed rather than returned to their caller;
+  // surface them at the next bootstrap operation so init fails on this rank
+  // instead of only hanging the peer.
+  pthread_mutex_lock(&bootstrapAsyncLock);
+  ret = state->asyncSendError;
+  pthread_mutex_unlock(&bootstrapAsyncLock);
+  if (ret != ncclSuccess) {
+    WARN("bootstrapRecv: an earlier asynchronous bootstrap send failed");
+    return ret;
+  }
   NCCLCHECK(socketAccept(commState, peer, tag, &sock));
   TRACE(NCCL_BOOTSTRAP, "Receiving tag=%d peer=%d size=%d", tag, peer, size);
   NCCLCHECKGOTO(socketRecv(&sock, ((char*)data), size), ret, fail);
@@ -1252,6 +1443,23 @@ ncclResult_t bootstrapBarrier(void* commState, int rank, int nranks, int tag) {
   return ncclSuccess;
 }
 
+// Like the ring connect: connecting to next and accepting from prev must make
+// progress together once the connect includes a TLS handshake.
+struct bootstrapPeerSocketOp {
+  void* commState;
+  int peer;
+  int tag;
+  struct ncclSocket* sock;
+};
+static ncclResult_t bootstrapPeerConnectOp(void* opaque) {
+  struct bootstrapPeerSocketOp* op = (struct bootstrapPeerSocketOp*)opaque;
+  return socketConnect(op->commState, op->peer, op->tag, op->sock);
+}
+static ncclResult_t bootstrapPeerAcceptOp(void* opaque) {
+  struct bootstrapPeerSocketOp* op = (struct bootstrapPeerSocketOp*)opaque;
+  return socketAccept(op->commState, op->peer, op->tag, op->sock);
+}
+
 ncclResult_t bootstrapIntraNodeAllGather(void* commState, int* ranks, int rank, int nranks, void* allData, int size) {
   if (nranks == 1) return ncclSuccess;
   TRACE(NCCL_INIT, "rank %d nranks %d size %d - ENTER", rank, nranks, size);
@@ -1260,8 +1468,9 @@ ncclResult_t bootstrapIntraNodeAllGather(void* commState, int* ranks, int rank, 
   int nextRank = ranks[(rank + 1) % nranks];
   // intraNode bootstrap is done defacto using the socket-based implementation
   struct ncclSocket recvSocket, sendSocket;
-  NCCLCHECK(socketConnect(commState, nextRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER, &sendSocket));
-  NCCLCHECK(socketAccept(commState, prevRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER, &recvSocket));
+  struct bootstrapPeerSocketOp connectOp = { commState, nextRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER, &sendSocket };
+  struct bootstrapPeerSocketOp acceptOp = { commState, prevRank, BOOTSTRAP_TAG_INTRANODE_ALLGATHER, &recvSocket };
+  NCCLCHECK(bootstrapConcurrent(bootstrapPeerConnectOp, &connectOp, bootstrapPeerAcceptOp, &acceptOp));
 
   NCCLCHECK(socketRingAllGather(&sendSocket, &recvSocket, rank, nranks, (char*)allData, size));
 
@@ -1311,6 +1520,15 @@ ncclResult_t bootstrapBroadcast(void* commState, int rank, int nranks, int root,
 ncclResult_t bootstrapClose(void* commState) {
   if (commState == NULL) return ncclSuccess;
   struct bootstrapState* state = (struct bootstrapState*)commState;
+  // In-flight asynchronous sends reference this state; let them finish before
+  // tearing it down. On abort they exit quickly via the abort flag.
+  bootstrapAsyncSendDrain(state);
+  if (state->asyncSendError != ncclSuccess && __atomic_load_n(state->abortFlag, __ATOMIC_ACQUIRE) == 0) {
+    // Matches the unexpected-connections handling below: when not aborting, a
+    // failure nobody consumed must not turn into a clean close.
+    WARN("bootstrapClose: an asynchronous bootstrap send failed");
+    return state->asyncSendError;
+  }
   // close unexpected and return an error if we are not aborting and still operations in the pipe
   if (state->unexpectedConnections != NULL) {
     unexpectedFree(state);

@@ -88,7 +88,7 @@ static void rasTerminate();
 
 // enable to run passive RAS diagnostics
 NCCL_PARAM(RasDiagnostics, "RUN_RAS_DIAGNOSTICS", 0);
-NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
+NCCL_PARAM(RasEnable, "RAS_ENABLE", 0);
 
 //////////////////////////////////////////////////
 // Functions invoked from regular NCCL threads. //

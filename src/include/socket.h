@@ -55,6 +55,12 @@ union ncclSocketAddress {
 };
 #endif
 
+// The stock hello: socket magic + type, sent by the connector as the first
+// application data. In encrypted mode it travels inside the TLS channel.
+#define NCCL_SOCKET_PLAIN_HELLO_BYTES (8 + 4)
+
+struct ncclSocketCrypto;
+
 enum ncclSocketState {
   ncclSocketStateNone = 0,
   ncclSocketStateInitialized = 1,
@@ -94,7 +100,8 @@ struct ncclSocket {
   enum ncclSocketType type;
   int customRetry;
   int finalizeCounter; // Used to keep track of initial handshake for async sockets.
-  char finalizeBuffer[sizeof(uint64_t)]; // Used to keep track of initial handshake for async sockets.
+  char finalizeBuffer[NCCL_SOCKET_PLAIN_HELLO_BYTES]; // Used to keep track of initial handshake for async sockets.
+  struct ncclSocketCrypto* crypto;
 #ifdef NCCL_OS_WINDOWS
   int socketBlockingMode; // 0 - blocking mode; 1 - non-blocking mode
 #endif
@@ -106,6 +113,15 @@ struct ncclSocketOp {
   int size; // Size of data
   int offset; // Current progress offset
 };
+// Process-wide totals across all ncclSocket traffic (wire bytes, including handshake
+// and record overhead) and connection counts.
+struct ncclSocketStats {
+  uint64_t bytesSent;
+  uint64_t bytesReceived;
+  uint64_t connectionsOut;
+  uint64_t connectionsIn;
+};
+void ncclSocketGetStats(struct ncclSocketStats* stats);
 const char* ncclSocketToString(const union ncclSocketAddress* addr, char* buf, const int numericHostForm = 1);
 ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char* ip_port_pair);
 ncclResult_t ncclFindInterfaceMatchSubnet(char* ifName, union ncclSocketAddress* localAddr,

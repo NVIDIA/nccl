@@ -8,6 +8,7 @@
 #include "os.h"
 
 #include "checks.h"
+#include "crypt.h"
 #include "utils.h"
 
 #include <cstdint>
@@ -540,6 +541,10 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
        * connection close here. */
       (void)shutdown(sock->socketDescriptor, SHUT_RDWR);
       (void)close(sock->socketDescriptor);
+    }
+    if (sock->crypto) {
+      ncclCryptFree(sock->crypto);
+      sock->crypto = NULL;
     }
     sock->state = ncclSocketStateClosed;
     sock->socketDescriptor = NCCL_INVALID_SOCKET;

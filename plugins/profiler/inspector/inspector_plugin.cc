@@ -133,6 +133,9 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
   if (enableNcclInspectorP2p) {
     *eActivationMask |= ncclProfileP2p;
   }
+  if (enableNcclInspectorProxy) {
+    *eActivationMask |= ncclProfileProxyOp | ncclProfileProxyStep;
+  }
 
   INFO(NCCL_INIT, "PROFILER/Plugin: init commName: %s commHash: %lu nranks: %d rank: %d",
        commName ? commName : "", commHash, nranks, rank);

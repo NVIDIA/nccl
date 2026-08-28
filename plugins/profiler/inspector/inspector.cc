@@ -57,6 +57,7 @@ bool enableNcclInspectorPromStats = false;
 static uint32_t ncclInspectorDumpCollRingSize = 1024;
 // Per-communicator completed-P2P ring buffer capacity
 static uint32_t ncclInspectorDumpP2pRingSize = 1024;
+// Proxy ring storage is attached by the communicator ring integration.
 // Minimum message size (bytes) to be tracked by inspector
 size_t ncclInspectorDumpMinSizeBytes = 8192;
 // Global dump interval in microseconds (-1 = disabled, 0 = continuous, >0 = periodic)
@@ -66,6 +67,8 @@ static int64_t ncclInspectorDumpIntervalUsecs = -1;
 static bool ncclInspectorInit = false;
 // Global flag to control P2P tracking
 bool enableNcclInspectorP2p = true;
+// Global flag to control ProxyOp/ProxyStep tracking
+bool enableNcclInspectorProxy = false;
 // Global flag: require kernel-based timing; discard events without it
 bool requireKernelTiming = true;
 bool inspectorIsDumpVerboseEnabled() {
@@ -354,7 +357,6 @@ const char* inspectorTimingSourceToString(inspectorTimingSource_t timingSource) 
  *   inspectorResult_t - success or error code.
  *
  */
-
 
 /*
  * Description:
@@ -858,6 +860,7 @@ static void showInspectorEnvVars() {
   } envVars[] = {
     {"NCCL_INSPECTOR_ENABLE", getenv("NCCL_INSPECTOR_ENABLE"), "0", "Enable/disable inspector plugin"},
     {"NCCL_INSPECTOR_ENABLE_P2P", getenv("NCCL_INSPECTOR_ENABLE_P2P"), "1", "Enable/disable P2P tracking"},
+    {"NCCL_INSPECTOR_ENABLE_PROXY", getenv("NCCL_INSPECTOR_ENABLE_PROXY"), "0", "Enable/disable ProxyOp/ProxyStep tracking"},
     {"NCCL_INSPECTOR_DUMP_THREAD_ENABLE", getenv("NCCL_INSPECTOR_DUMP_THREAD_ENABLE"), "1", "Enable/disable dump thread"},
     {"NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS", getenv("NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS"), "-1", "Dump interval in microseconds (-1 = disabled/dump only at teardown, 0 = continuous, >0 = periodic)"},
     {"NCCL_INSPECTOR_DUMP_DIR", getenv("NCCL_INSPECTOR_DUMP_DIR"), "(auto-generated)", "Output directory for inspector logs"},
@@ -878,7 +881,9 @@ static void showInspectorEnvVars() {
     {"NCCL_INSPECTOR_COLL_POOL_SIZE", getenv("NCCL_INSPECTOR_COLL_POOL_SIZE"), "256", "Collective pool initial size/stride"},
     {"NCCL_INSPECTOR_P2P_POOL_SIZE", getenv("NCCL_INSPECTOR_P2P_POOL_SIZE"), "256", "P2P pool initial size/stride"},
     {"NCCL_INSPECTOR_COMM_POOL_SIZE", getenv("NCCL_INSPECTOR_COMM_POOL_SIZE"), "256", "Comm pool initial size/stride"},
-    {"NCCL_INSPECTOR_POOL_GROW", getenv("NCCL_INSPECTOR_POOL_GROW"), "1", "Enable/disable dynamic growth of event pools"},
+    {"NCCL_INSPECTOR_PROXY_OP_POOL_SIZE", getenv("NCCL_INSPECTOR_PROXY_OP_POOL_SIZE"), "1024", "Fixed capacity of the ProxyOp pool when Proxy tracking is enabled"},
+    {"NCCL_INSPECTOR_PROXY_STEP_POOL_SIZE", getenv("NCCL_INSPECTOR_PROXY_STEP_POOL_SIZE"), "4096", "Fixed capacity of the ProxyStep pool when Proxy tracking is enabled"},
+    {"NCCL_INSPECTOR_POOL_GROW", getenv("NCCL_INSPECTOR_POOL_GROW"), "1", "Enable/disable dynamic growth of collective, P2P, and Comm pools"},
     {"NCCL_INSPECTOR_REQUIRE_KERNEL_TIMING", getenv("NCCL_INSPECTOR_REQUIRE_KERNEL_TIMING"), "1", "Require GPU-based kernel timing; discard events with CPU-measured timing"},
   };
 
@@ -966,6 +971,20 @@ static void initP2pTrackingFromEnv() {
   enableNcclInspectorP2p = enable == 0 ? false : true;
 }
 
+static void initOutputBackendFromEnv() {
+  const char* str = getenv("NCCL_INSPECTOR_PROM_DUMP");
+  int enable = str ? atoi(str) : 0;
+  enableNcclInspectorPromDump = enable != 0;
+  warnedOtelPromDumpConflict = false;
+  inspectorOtelInitFromEnv();
+}
+
+static void initProxyTrackingFromEnv() {
+  const char* str = getenv("NCCL_INSPECTOR_ENABLE_PROXY");
+  int enable = str ? atoi(str) : 0;
+  enableNcclInspectorProxy = enable == 0 ? false : true;
+}
+
 /*
  * Description:
  *
@@ -994,17 +1013,32 @@ static void initKernelTimingFromEnv() {
  *   inspectorResult_t - Result from inspectorEventPoolInit.
  */
 static inspectorResult_t inspectorEventPoolInitFromEnv() {
-  uint32_t collPoolSize
+  struct inspectorEventPoolConfig config = {};
+
+  config.collPoolSize
     = getPoolSizeFromEnv("NCCL_INSPECTOR_COLL_POOL_SIZE",
                          "Collective pool size", 256, 10);
-  uint32_t p2pPoolSize
+  config.p2pPoolSize
     = getPoolSizeFromEnv("NCCL_INSPECTOR_P2P_POOL_SIZE",
                          "P2P pool size", 256, 10);
-  uint32_t commPoolSize
+  config.commPoolSize
     = getPoolSizeFromEnv("NCCL_INSPECTOR_COMM_POOL_SIZE",
                          "Comm pool size", 256, 10);
 
-  return inspectorEventPoolInit(collPoolSize, p2pPoolSize, commPoolSize);
+  const char* growStr = getenv("NCCL_INSPECTOR_POOL_GROW");
+  config.growEnabled = growStr ? atoi(growStr) != 0 : true;
+  config.enableProxy = enableNcclInspectorProxy;
+
+  if (config.enableProxy) {
+    config.proxyOpPoolSize
+      = getPoolSizeFromEnv("NCCL_INSPECTOR_PROXY_OP_POOL_SIZE",
+                           "ProxyOp pool size", 1024, 10);
+    config.proxyStepPoolSize
+      = getPoolSizeFromEnv("NCCL_INSPECTOR_PROXY_STEP_POOL_SIZE",
+                           "ProxyStep pool size", 4096, 10);
+  }
+
+  return inspectorEventPoolInit(config);
 }
 
 /*
@@ -1116,6 +1150,8 @@ inspectorResult_t inspectorGlobalInit(int rank) {
 
   INS_CHK(inspectorGlobalStateInit());
   initP2pTrackingFromEnv();
+  initOutputBackendFromEnv();
+  initProxyTrackingFromEnv();
   initKernelTimingFromEnv();
   INS_CHK(inspectorEventPoolInitFromEnv());
   INS_CHK(initDumpThreadFromEnv());

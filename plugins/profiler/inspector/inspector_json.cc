@@ -1,5 +1,6 @@
 #include "inspector_json.h"
 #include "inspector_ring.h"
+#include "profiler.h"
 
 #include <unistd.h>
 #include <vector>
@@ -58,7 +59,7 @@ static inspectorResult_t inspectorCommInfoHeader(jsonFileOutput* jfo,
 static inspectorResult_t inspectorCommInfoMetaHeader(jsonFileOutput* jfo) {
   JSON_CHK(jsonStartObject(jfo));
   {
-    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.2"));
+    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.3"));
     JSON_CHK(jsonKey(jfo, "git_rev")); JSON_CHK(jsonStr(jfo, get_git_version_info()));
     JSON_CHK(jsonKey(jfo, "rec_mechanism")); JSON_CHK(jsonStr(jfo, "nccl_profiler_interface"));
     JSON_CHK(jsonKey(jfo, "dump_timestamp_us")); JSON_CHK(jsonUint64(jfo, inspectorGetTime()));
@@ -261,6 +262,163 @@ static inline inspectorResult_t inspectorCompletedP2p(jsonFileOutput* jfo,
   return inspectorSuccess;
 }
 
+static const char* inspectorProxyParentTypeToString(uint64_t parentType) {
+  if (parentType == ncclProfileColl) return "coll";
+  if (parentType == ncclProfileP2p) return "p2p";
+  return "unknown";
+}
+
+static inline inspectorResult_t inspectorCompletedProxyOpTrace(
+    jsonFileOutput* jfo,
+    const struct inspectorCompletedProxyRecord* proxy) {
+  const struct inspectorEventTraceInfo* trace = proxy->proxyOp.evntTrace;
+
+  JSON_CHK(jsonKey(jfo, "event_trace_sn"));
+  JSON_CHK(jsonStartObject(jfo));
+  {
+    JSON_CHK(jsonKey(jfo, "proxy_op_start_sn"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_OP_START].sn));
+    JSON_CHK(jsonKey(jfo, "proxy_op_in_progress_sn"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_OP_IN_PROGRESS].sn));
+    JSON_CHK(jsonKey(jfo, "proxy_op_stop_sn"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_OP_STOP].sn));
+  }
+  JSON_CHK(jsonFinishObject(jfo));
+
+  JSON_CHK(jsonKey(jfo, "event_trace_ts"));
+  JSON_CHK(jsonStartObject(jfo));
+  {
+    JSON_CHK(jsonKey(jfo, "proxy_op_start_ts"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_OP_START].ts));
+    JSON_CHK(jsonKey(jfo, "proxy_op_in_progress_ts"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_OP_IN_PROGRESS].ts));
+    JSON_CHK(jsonKey(jfo, "proxy_op_stop_ts"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_OP_STOP].ts));
+  }
+  JSON_CHK(jsonFinishObject(jfo));
+  return inspectorSuccess;
+}
+
+static inline inspectorResult_t inspectorCompletedProxyStepTrace(
+    jsonFileOutput* jfo,
+    const struct inspectorCompletedProxyRecord* proxy) {
+  const struct inspectorEventTraceInfo* trace = proxy->proxyStep.evntTrace;
+
+  JSON_CHK(jsonKey(jfo, "event_trace_sn"));
+  JSON_CHK(jsonStartObject(jfo));
+  {
+    JSON_CHK(jsonKey(jfo, "proxy_step_start_sn"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_START].sn));
+    if (proxy->metadata.isSend) {
+      JSON_CHK(jsonKey(jfo, "send_gpu_wait_sn"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_GPU_WAIT].sn));
+      JSON_CHK(jsonKey(jfo, "send_peer_wait_sn"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_PEER_WAIT].sn));
+      JSON_CHK(jsonKey(jfo, "send_wait_sn"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_WAIT].sn));
+    } else {
+      JSON_CHK(jsonKey(jfo, "recv_wait_sn"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_WAIT].sn));
+      JSON_CHK(jsonKey(jfo, "recv_flush_wait_sn"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_FLUSH_WAIT].sn));
+      JSON_CHK(jsonKey(jfo, "recv_gpu_wait_sn"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_GPU_WAIT].sn));
+    }
+    JSON_CHK(jsonKey(jfo, "proxy_step_stop_sn"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_STOP].sn));
+  }
+  JSON_CHK(jsonFinishObject(jfo));
+
+  JSON_CHK(jsonKey(jfo, "event_trace_ts"));
+  JSON_CHK(jsonStartObject(jfo));
+  {
+    JSON_CHK(jsonKey(jfo, "proxy_step_start_ts"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_START].ts));
+    if (proxy->metadata.isSend) {
+      JSON_CHK(jsonKey(jfo, "send_gpu_wait_ts"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_GPU_WAIT].ts));
+      JSON_CHK(jsonKey(jfo, "send_peer_wait_ts"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_PEER_WAIT].ts));
+      JSON_CHK(jsonKey(jfo, "send_wait_ts"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_SEND_WAIT].ts));
+    } else {
+      JSON_CHK(jsonKey(jfo, "recv_wait_ts"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_WAIT].ts));
+      JSON_CHK(jsonKey(jfo, "recv_flush_wait_ts"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_FLUSH_WAIT].ts));
+      JSON_CHK(jsonKey(jfo, "recv_gpu_wait_ts"));
+      JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_RECV_GPU_WAIT].ts));
+    }
+    JSON_CHK(jsonKey(jfo, "proxy_step_stop_ts"));
+    JSON_CHK(jsonUint64(jfo, trace[NCCL_INSP_EVT_TRK_PROXY_STEP_STOP].ts));
+  }
+  JSON_CHK(jsonFinishObject(jfo));
+  return inspectorSuccess;
+}
+
+static inline inspectorResult_t inspectorCompletedProxy(
+    jsonFileOutput* jfo,
+    const struct inspectorCompletedProxyRecord* proxy,
+    uint64_t recordsDropped) {
+  if (proxy->recordType != NCCL_INSP_PROXY_RECORD_OP
+      && proxy->recordType != NCCL_INSP_PROXY_RECORD_STEP) {
+    return inspectorJsonError;
+  }
+
+  JSON_CHK(jsonStartObject(jfo));
+  {
+    JSON_CHK(jsonKey(jfo, "record_type"));
+    JSON_CHK(jsonStr(jfo, proxy->recordType == NCCL_INSP_PROXY_RECORD_OP
+                           ? "proxy_op" : "proxy_step"));
+    JSON_CHK(jsonKey(jfo, "record_sn"));
+    JSON_CHK(jsonUint64(jfo, proxy->recordSn));
+    JSON_CHK(jsonKey(jfo, "proxy_records_dropped"));
+    JSON_CHK(jsonUint64(jfo, recordsDropped));
+
+    JSON_CHK(jsonKey(jfo, "parent_type"));
+    JSON_CHK(jsonStr(jfo, inspectorProxyParentTypeToString(
+                           proxy->metadata.parentType)));
+    JSON_CHK(jsonKey(jfo, "parent_sn"));
+    JSON_CHK(jsonUint64(jfo, proxy->metadata.parentSn));
+    JSON_CHK(jsonKey(jfo, "proxy_op_sn"));
+    JSON_CHK(jsonUint64(jfo, proxy->metadata.proxyOpSn));
+    JSON_CHK(jsonKey(jfo, "origin_pid"));
+    JSON_CHK(jsonInt(jfo, proxy->metadata.originPid));
+    JSON_CHK(jsonKey(jfo, "rank"));
+    JSON_CHK(jsonInt(jfo, proxy->metadata.rank));
+    JSON_CHK(jsonKey(jfo, "channel_id"));
+    JSON_CHK(jsonInt(jfo, proxy->metadata.channelId));
+    JSON_CHK(jsonKey(jfo, "peer"));
+    JSON_CHK(jsonInt(jfo, proxy->metadata.peer));
+    JSON_CHK(jsonKey(jfo, "direction"));
+    JSON_CHK(jsonStr(jfo, proxy->metadata.isSend ? "send" : "recv"));
+
+    if (proxy->recordType == NCCL_INSP_PROXY_RECORD_OP) {
+      JSON_CHK(jsonKey(jfo, "n_steps"));
+      JSON_CHK(jsonInt(jfo, proxy->proxyOp.nSteps));
+      JSON_CHK(jsonKey(jfo, "chunk_size_bytes"));
+      JSON_CHK(jsonInt(jfo, proxy->proxyOp.chunkSize));
+      JSON_CHK(jsonKey(jfo, "n_steps_completed"));
+      JSON_CHK(jsonUint32(jfo, proxy->proxyOp.nStepsCompleted));
+      JSON_CHK(jsonKey(jfo, "n_steps_dropped"));
+      JSON_CHK(jsonUint32(jfo, proxy->proxyOp.nStepsDropped));
+      JSON_CHK(jsonKey(jfo, "trans_size_bytes"));
+      JSON_CHK(jsonSize_t(jfo, proxy->proxyOp.transSizeBytes));
+      INS_CHK(inspectorCompletedProxyOpTrace(jfo, proxy));
+    } else {
+      JSON_CHK(jsonKey(jfo, "proxy_step_sn"));
+      JSON_CHK(jsonUint64(jfo, proxy->proxyStep.proxyStepSn));
+      JSON_CHK(jsonKey(jfo, "step"));
+      JSON_CHK(jsonInt(jfo, proxy->proxyStep.step));
+      JSON_CHK(jsonKey(jfo, "trans_size_bytes"));
+      JSON_CHK(jsonSize_t(jfo, proxy->proxyStep.transSizeBytes));
+      INS_CHK(inspectorCompletedProxyStepTrace(jfo, proxy));
+    }
+  }
+  JSON_CHK(jsonFinishObject(jfo));
+  return inspectorSuccess;
+}
+
 
 /*
  * Description:
@@ -396,6 +554,54 @@ static inspectorResult_t inspectorCommInfoDumpStats(jsonFileOutput* jfo,
   return inspectorSuccess;
 }
 
+static inspectorResult_t inspectorCommInfoDumpProxy(jsonFileOutput* jfo,
+                                                    inspectorCommInfo* commInfo,
+                                                    bool* needs_writing) {
+  if (commInfo == nullptr) {
+    return inspectorSuccess;
+  }
+
+  thread_local std::vector<inspectorCompletedProxyRecord> drainedProxy;
+  drainedProxy.clear();
+  uint64_t recordsDropped = 0;
+
+  inspectorLockWr(&commInfo->guard);
+  if (commInfo->dump_proxy) {
+    if (commInfo->completedProxyRing.size > 0
+        && drainedProxy.capacity() < commInfo->completedProxyRing.size) {
+      drainedProxy.reserve(commInfo->completedProxyRing.size);
+    }
+    INS_CHK(inspectorRingDrain<inspectorCompletedProxyRecord>(
+      &commInfo->completedProxyRing, drainedProxy));
+    commInfo->dump_proxy = inspectorRingNonEmpty(&commInfo->completedProxyRing);
+    recordsDropped = commInfo->proxyRecordsDropped;
+  }
+  inspectorUnlockRWLock(&commInfo->guard);
+
+  if (!drainedProxy.empty()) {
+    *needs_writing = true;
+    JSON_CHK(jsonLockOutput(jfo));
+    for (size_t i = 0; i < drainedProxy.size(); i++) {
+      JSON_CHK(jsonStartObject(jfo));
+      {
+        JSON_CHK(jsonKey(jfo, "header"));
+        INS_CHK(inspectorCommInfoHeader(jfo, commInfo));
+
+        JSON_CHK(jsonKey(jfo, "metadata"));
+        INS_CHK(inspectorCommInfoMetaHeader(jfo));
+
+        JSON_CHK(jsonKey(jfo, "proxy_trace"));
+        INS_CHK(inspectorCompletedProxy(
+          jfo, &drainedProxy[i], recordsDropped));
+      }
+      JSON_CHK(jsonFinishObject(jfo));
+      JSON_CHK(jsonNewline(jfo));
+    }
+    JSON_CHK(jsonUnlockOutput(jfo));
+  }
+  return inspectorSuccess;
+}
+
 static inspectorResult_t inspectorCommInfoDump(jsonFileOutput* jfo,
                                                inspectorCommInfo* commInfo,
                                                bool* needs_writing) {
@@ -404,6 +610,7 @@ static inspectorResult_t inspectorCommInfoDump(jsonFileOutput* jfo,
     return inspectorSuccess;
   }
 
+  INS_CHK(inspectorCommInfoDumpProxy(jfo, commInfo, needs_writing));
   thread_local std::vector<inspectorCompletedOpInfo> drainedColl;
   thread_local std::vector<inspectorCompletedOpInfo> drainedP2p;
   drainedColl.clear();

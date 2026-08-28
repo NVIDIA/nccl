@@ -404,12 +404,67 @@ ncclResult_t ncclRmaIbProxyConnect(void* ctx, void* handles[], int nranks, int r
   return ncclSuccess;
 }
 
+#define NCCL_RMA_MAX_IB_WRS_PER_OP 2  // put+Signal (2 wrs)
+#define NCCL_RMA_IB_WR_BATCHSIZE 64
+NCCL_PARAM(RmaIbWrBatchsize, "RMA_IB_WR_BATCHSIZE", NCCL_RMA_IB_WR_BATCHSIZE);
+
+struct ncclRmaIbProxyWrBatch {
+  struct ibv_qp* qp;
+  int nWrs;
+  struct ibv_send_wr wrs[NCCL_RMA_IB_WR_BATCHSIZE];
+  struct ibv_sge sges[NCCL_RMA_IB_WR_BATCHSIZE];
+};
+
 struct ncclRmaIbProxyCtx {
   void** fullRecvComm;
   void** fullSendComm;
   int rank, nranks;
   int nContexts;
+  int wrBatchsize;
+  struct ncclRmaIbProxyWrBatch batch;
 };
+
+// Ring the doorbell for the pending chain, if any.
+static ncclResult_t ncclRmaIbProxyPostBatch(struct ncclRmaIbProxyCtx* ctx) {
+  struct ncclRmaIbProxyWrBatch* batch = &ctx->batch;
+  if (batch->nWrs == 0) return ncclSuccess;  // no wrs to post
+
+  struct ibv_send_wr* bad_wr;
+  NCCLCHECK(wrap_ibv_post_send(batch->qp, &batch->wrs[0], &bad_wr));
+
+  // reset the batch
+  batch->nWrs = 0;
+  batch->qp = NULL;
+  return ncclSuccess;
+}
+
+// allocate a slot (memset to 0)
+static ncclResult_t ncclRmaIbProxyReserveWrs(struct ncclRmaIbProxyCtx* ctx, struct ibv_qp* qp, int nWrs,
+                                             struct ibv_send_wr** wrs, struct ibv_sge** sges) {
+  struct ncclRmaIbProxyWrBatch* batch = &ctx->batch;
+  if (batch->nWrs && (batch->qp != qp || batch->nWrs + nWrs > ctx->wrBatchsize)) {
+    NCCLCHECK(ncclRmaIbProxyPostBatch(ctx));
+  }
+  batch->qp = qp;
+  *wrs = batch->wrs + batch->nWrs;
+  *sges = batch->sges + batch->nWrs;
+  memset(*wrs, 0, nWrs * sizeof(struct ibv_send_wr));
+  memset(*sges, 0, nWrs * sizeof(struct ibv_sge));
+  return ncclSuccess;
+}
+
+// fill the slot (link the wrs)
+static ncclResult_t ncclRmaIbProxyCommitWrs(struct ncclRmaIbProxyCtx* ctx, int nWrs, bool aggregate) {
+  struct ncclRmaIbProxyWrBatch* batch = &ctx->batch;
+  if (batch->nWrs) batch->wrs[batch->nWrs - 1].next = batch->wrs + batch->nWrs;
+  batch->nWrs += nWrs;
+
+  // in case we don't have enough space to fit the next put+signal
+  if (!aggregate || batch->nWrs + NCCL_RMA_MAX_IB_WRS_PER_OP > ctx->wrBatchsize) {
+    NCCLCHECK(ncclRmaIbProxyPostBatch(ctx));
+  }
+  return ncclSuccess;
+}
 
 ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config, void** rmaCtx) {
   ncclResult_t ret = ncclSuccess;
@@ -431,6 +486,18 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
   rmaProxyCtx[0].nContexts = config->nContexts;
   rmaProxyCtx[0].nranks = nranks = cComm->nranks;
 
+  int64_t wrBatchsize = ncclParamRmaIbWrBatchsize();
+  if (wrBatchsize < NCCL_RMA_MAX_IB_WRS_PER_OP) {
+    wrBatchsize = NCCL_RMA_MAX_IB_WRS_PER_OP;
+    INFO(NCCL_INIT, "RMA: NCCL_RMA_IB_WR_BATCHSIZE is less than (%d), setting to %ld", NCCL_RMA_MAX_IB_WRS_PER_OP,
+         wrBatchsize);
+  }
+  if (wrBatchsize > NCCL_RMA_IB_WR_BATCHSIZE) {
+    wrBatchsize = NCCL_RMA_IB_WR_BATCHSIZE;
+    INFO(NCCL_INIT, "RMA: NCCL_RMA_IB_WR_BATCHSIZE is greater than (%d), setting to %ld", NCCL_RMA_IB_WR_BATCHSIZE,
+         wrBatchsize);
+  }
+
   void* lComm = NULL;
   char *handle = NULL, *handles = NULL;
   NCCLCHECKGOTO(ncclIbMalloc((void**)&handles, NCCL_NET_HANDLE_MAXSIZE * cComm->nranks), ret, end);
@@ -444,6 +511,7 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
     NCCLCHECKGOTO(ncclIbMalloc((void**)&gc->fullSendComm, sizeof(void*) * nranks), ret, end);
     NCCLCHECKGOTO(ncclIbMalloc((void**)&gc->fullRecvComm, sizeof(void*) * nranks), ret, end);
     gc->rank = cComm->rank;
+    gc->wrBatchsize = (int)wrBatchsize;
 
     for (int i = 0; i < nranks; i += config->rankStride) {
       int connectPeer = (cComm->rank + i) % nranks;
@@ -476,6 +544,7 @@ ncclResult_t ncclRmaIbProxyDestroyContext(void* rmaCtx) {
   int nContexts = gc[0].nContexts;
   int nranks = gc[0].nranks;
   for (int c = 0; c < nContexts; c++) {
+    NCCLCHECK(ncclRmaIbProxyPostBatch(&gc[c]));
     if (gc[c].fullRecvComm) {
       for (int i = 0; i < nranks; i++) {
         NCCLCHECK(ncclNetIb.closeRecv(gc[c].fullRecvComm[i]));
@@ -568,7 +637,6 @@ static ncclResult_t ncclRmaIbProxyGetRecvComm(struct ncclRmaIbProxyCtx* rmaProxy
 
 ncclResult_t ncclRmaIbProxyIPut(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
                                 uint64_t dstOff, void* dstMhandle, uint32_t rank, uint32_t optFlags, void** request) {
-  (void)optFlags;
   struct ncclRmaIbProxyCtx* rmaProxyCtx = &((struct ncclRmaIbProxyCtx*)rmaCtx)[context];
 
   struct ncclRmaIbProxyMrHandle* srcMrHandle = (struct ncclRmaIbProxyMrHandle*)srcMhandle;
@@ -593,26 +661,25 @@ ncclResult_t ncclRmaIbProxyIPut(void* rmaCtx, int context, uint64_t srcOff, void
     req->devBases[i] = &comm->devs[i].base;
   }
 
-  struct ibv_send_wr wr;
-  memset(&wr, 0, sizeof(wr));
-  struct ibv_sge sge;
-  memset(&sge, 0, sizeof(sge));
+  struct ibv_send_wr* wr;
+  struct ibv_sge* sge;
 
-  wr.opcode = IBV_WR_RDMA_WRITE;
-  wr.send_flags = IBV_SEND_SIGNALED;
-  wr.wr_id = req - comm->base.reqs;
-  wr.next = NULL;
-  wr.wr.rdma.remote_addr = (uint64_t)dstPtr;
-  wr.wr.rdma.rkey = rkey;
-  wr.sg_list = &sge;
-  wr.num_sge = 1;
+  // reserve empty wr and sge
+  NCCLCHECK(ncclRmaIbProxyReserveWrs(rmaProxyCtx, qp->qp, 1, &wr, &sge));
 
-  sge.addr = (uintptr_t)srcPtr;  // Local buffer address
-  sge.length = size;  // Size of the transfer
-  sge.lkey = lkey;  // Local key
+  wr->opcode = IBV_WR_RDMA_WRITE;
+  wr->wr_id = req - comm->base.reqs;
+  wr->next = NULL;
+  wr->wr.rdma.remote_addr = (uint64_t)dstPtr;
+  wr->wr.rdma.rkey = rkey;
+  wr->sg_list = sge;
+  wr->num_sge = 1;
 
-  struct ibv_send_wr* bad_wr;
-  NCCLCHECK(wrap_ibv_post_send(qp->qp, &wr, &bad_wr));
+  sge->addr = (uintptr_t)srcPtr;  // Local buffer address
+  sge->length = size;  // Size of the transfer
+  sge->lkey = lkey;  // Local key
+
+  NCCLCHECK(ncclRmaIbProxyCommitWrs(rmaProxyCtx, 1, optFlags & ncclRmaOptFlagsAggregateRequests));
   ncclIbAddEvent(req, qp->devIndex);
 
   *request = req;
@@ -622,7 +689,6 @@ ncclResult_t ncclRmaIbProxyIPut(void* rmaCtx, int context, uint64_t srcOff, void
 ncclResult_t ncclRmaIbProxyIGet(void* rmaCtx, int context, uint64_t remoteOffset, void* remoteMhandle, size_t size,
                                 uint64_t localOffset, void* localMhandle, uint32_t rank, uint32_t optFlags,
                                 void** request) {
-  (void)optFlags;
   struct ncclRmaIbProxyCtx* rmaProxyCtx = &((struct ncclRmaIbProxyCtx*)rmaCtx)[context];
 
   struct ncclRmaIbProxyMrHandle* remoteMrHandle = (struct ncclRmaIbProxyMrHandle*)remoteMhandle;
@@ -647,27 +713,24 @@ ncclResult_t ncclRmaIbProxyIGet(void* rmaCtx, int context, uint64_t remoteOffset
   uint32_t rkey = remoteMrHandle->rkeys[rank];
   uint32_t lkey = localMrHandle->mrHandle->mrs[0]->lkey;
 
-  struct ibv_send_wr wr;
-  memset(&wr, 0, sizeof(wr));
-  struct ibv_sge sge;
-  memset(&sge, 0, sizeof(sge));
+  struct ibv_send_wr* wr;
+  struct ibv_sge* sge;
+  NCCLCHECK(ncclRmaIbProxyReserveWrs(rmaProxyCtx, qp->qp, 1, &wr, &sge));
 
-  wr.opcode = IBV_WR_RDMA_READ;
-  wr.send_flags = IBV_SEND_SIGNALED; // TODO: Potentially optimize this?
-  wr.wr_id = req - comm->base.reqs;
-  wr.next = NULL;
-  wr.wr.rdma.remote_addr = (uint64_t)remotePtr;
-  wr.wr.rdma.rkey = rkey;
-  wr.sg_list = &sge;
-  wr.num_sge = 1;
+  wr->opcode = IBV_WR_RDMA_READ;
+  wr->wr_id = req - comm->base.reqs;
+  wr->next = NULL;
+  wr->wr.rdma.remote_addr = (uint64_t)remotePtr;
+  wr->wr.rdma.rkey = rkey;
+  wr->sg_list = sge;
+  wr->num_sge = 1;
 
-  sge.addr = (uintptr_t)localPtr;
-  sge.length = size;
-  sge.lkey = lkey;
+  sge->addr = (uintptr_t)localPtr;
+  sge->length = size;
+  sge->lkey = lkey;
 
-  struct ibv_send_wr* bad_wr;
-  NCCLCHECK(wrap_ibv_post_send(qp->qp, &wr, &bad_wr));
   ncclIbAddEvent(req, qp->devIndex);
+  NCCLCHECK(ncclRmaIbProxyCommitWrs(rmaProxyCtx, 1, optFlags & ncclRmaOptFlagsAggregateRequests));
 
   *request = req;
   return ncclSuccess;
@@ -678,7 +741,6 @@ ncclResult_t ncclRmaIbProxyIPutSignal(void* rmaCtx, int context, uint64_t srcOff
                                       void* signalMhandle, uint64_t signalValue, uint32_t signalOp, bool isStrongSignal,
                                       uint32_t optFlags, void** request) {
   (void)isStrongSignal;
-  (void)optFlags;
   if (signalOp != NCCL_NET_SIGNAL_OP_INC && signalOp != NCCL_NET_SIGNAL_OP_ADD) {
     WARN("ncclRmaIbProxyIPutSignal: Unsupported signalOp %u", signalOp);
     return ncclInvalidArgument;
@@ -705,13 +767,17 @@ ncclResult_t ncclRmaIbProxyIPutSignal(void* rmaCtx, int context, uint64_t srcOff
     req->devBases[i] = &comm->devs[i].base;
   }
 
-  struct ibv_send_wr wr[2];
-  memset(&wr, 0, sizeof(wr));
-  struct ibv_sge sge[2];
-  memset(&sge, 0, sizeof(sge));
-
   // If size is 0, we only need to send the signal. srcMrHandle must be non-NULL
-  if (size > 0 && dstMrHandle) {
+  bool hasPut = size > 0 && dstMrHandle;
+  int nWrs = hasPut ? 2 : 1;
+  struct ibv_send_wr* wr;
+  struct ibv_sge* sge;
+  NCCLCHECK(ncclRmaIbProxyReserveWrs(rmaProxyCtx, qp->qp, nWrs, &wr, &sge));
+  // The signal is the last work request, whether or not a put precedes it.
+  struct ibv_send_wr* signalWr = wr + nWrs - 1;
+  struct ibv_sge* signalSge = sge + nWrs - 1;
+
+  if (hasPut) {
     void* srcPtr = (void*)(srcMrHandle->base_vas[rmaProxyCtx->rank] + srcOff);
     void* dstPtr = (void*)(dstMrHandle->base_vas[rank] + dstOff);
     uint32_t lkey = srcMrHandle->mrHandle->mrs[0]->lkey;
@@ -721,7 +787,7 @@ ncclResult_t ncclRmaIbProxyIPutSignal(void* rmaCtx, int context, uint64_t srcOff
     wr[0].opcode = IBV_WR_RDMA_WRITE;
     wr[0].send_flags = 0; // We only need the CQE from the signal
     wr[0].wr_id = req - comm->base.reqs;
-    wr[0].next = &wr[1];
+    wr[0].next = signalWr;
     wr[0].wr.rdma.remote_addr = (uint64_t)dstPtr;
     wr[0].wr.rdma.rkey = rkey;
     wr[0].sg_list = &sge[0];
@@ -736,24 +802,22 @@ ncclResult_t ncclRmaIbProxyIPutSignal(void* rmaCtx, int context, uint64_t srcOff
   uint32_t signalRkey = signalMrHandle->rkeys[rank];
 
   // SIGNAL
-  wr[1].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
-  wr[1].send_flags = IBV_SEND_SIGNALED;
-  wr[1].wr_id = req - comm->base.reqs;  // used for matching completions with request
-  wr[1].next = NULL;
-  wr[1].wr.atomic.remote_addr = (uint64_t)signalPtr;
-  wr[1].wr.atomic.compare_add = signalOp == NCCL_NET_SIGNAL_OP_INC ? 1 : signalValue;
-  wr[1].wr.atomic.rkey = signalRkey;
-  wr[1].sg_list = &sge[1];
-  wr[1].num_sge = 1;
+  signalWr->opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
+  signalWr->wr_id = req - comm->base.reqs;  // used for matching completions with request
+  signalWr->next = NULL;
+  signalWr->wr.atomic.remote_addr = (uint64_t)signalPtr;
+  signalWr->wr.atomic.compare_add = signalOp == NCCL_NET_SIGNAL_OP_INC ? 1 : signalValue;
+  signalWr->wr.atomic.rkey = signalRkey;
+  signalWr->sg_list = signalSge;
+  signalWr->num_sge = 1;
 
-  sge[1].addr = (uintptr_t)&comm->putSignalScratchpad;
-  sge[1].length = sizeof(comm->putSignalScratchpad);
-  sge[1].lkey = comm->devs[devIndex].putSignalScratchpadMr->lkey;
+  signalSge->addr = (uintptr_t)&comm->putSignalScratchpad;
+  signalSge->length = sizeof(comm->putSignalScratchpad);
+  signalSge->lkey = comm->devs[devIndex].putSignalScratchpadMr->lkey;
 
   // Send the put and the signal in one go
-  struct ibv_send_wr* bad_wr;
-  NCCLCHECK(wrap_ibv_post_send(qp->qp, size > 0 ? &wr[0] : &wr[1], &bad_wr));
   ncclIbAddEvent(req, qp->devIndex);
+  NCCLCHECK(ncclRmaIbProxyCommitWrs(rmaProxyCtx, nWrs, optFlags & ncclRmaOptFlagsAggregateRequests));
   *request = req;
   return ncclSuccess;
 }
@@ -763,6 +827,10 @@ ncclResult_t ncclRmaIbProxyTest(void* collComm, void* request, int* done) {
   struct ncclRmaIbProxyCtx* rmaProxyCtx = (struct ncclRmaIbProxyCtx*)req->rmaProxyCtx;
   int rank = req->iput.rank;
   *done = 0;
+
+  // The caller is already waiting on this op, so a deferred doorbell must not
+  // hold it back.
+  NCCLCHECK(ncclRmaIbProxyPostBatch(rmaProxyCtx));
 
   if (req->events[0] == 0) {
     *done = 1;
@@ -826,6 +894,9 @@ ncclResult_t ncclRmaIbProxyIFlush(void* rmaCtx, int context, void* mhandle, uint
     *request = NULL;
     return ncclSuccess;
   }
+
+  // drain batch before posting the flush
+  NCCLCHECK(ncclRmaIbProxyPostBatch(rmaProxyCtx));
   NCCLCHECK(ncclIbCreateFlushQp(comm));
   struct ncclIbQp* qp = &comm->devs[0].gpuFlush.qp;
 

@@ -979,18 +979,56 @@ static void initP2pTrackingFromEnv() {
   enableNcclInspectorP2p = enable == 0 ? false : true;
 }
 
+/*
+ * Description:
+ *
+ *   Initializes the selected output backend from environment variables.
+ *   OTLP takes precedence over Prometheus, and JSON is used when neither is
+ *   enabled.
+ *
+ * Return:
+ *   None.
+ */
 static void initOutputBackendFromEnv() {
   const char* str = getenv("NCCL_INSPECTOR_PROM_DUMP");
   int enable = str ? atoi(str) : 0;
-  enableNcclInspectorPromDump = enable != 0;
+  enableNcclInspectorPromDump = enable == 0 ? false : true;
   warnedOtelPromDumpConflict = false;
+
+  str = getenv("NCCL_INSPECTOR_PROM_DUMP_STATS");
+  enable = str ? atoi(str) : 0;
+  enableNcclInspectorPromStats = enable == 0 ? false : true;
+
   inspectorOtelInitFromEnv();
 }
 
+/*
+ * Description:
+ *
+ *   Initializes ProxyOp/ProxyStep tracking configuration from environment
+ *   variables. Proxy events currently have a JSON output path only, so do
+ *   not activate their callbacks or allocate their bounded storage when the
+ *   selected backend cannot consume them.
+ *
+ * Return:
+ *   None.
+ */
 static void initProxyTrackingFromEnv() {
   const char* str = getenv("NCCL_INSPECTOR_ENABLE_PROXY");
-  int enable = str ? atoi(str) : 0;
-  enableNcclInspectorProxy = enable == 0 ? false : true;
+  bool requested = str ? atoi(str) != 0 : false;
+  enableNcclInspectorProxy = requested;
+
+  if (requested
+      && (inspectorOtelIsEnabled() || enableNcclInspectorPromDump)) {
+    const char* backend
+      = inspectorOtelIsEnabled() ? "OTLP" : "Prometheus";
+    WARN_INSPECTOR(
+      "NCCL Inspector: ProxyOp/ProxyStep tracking currently supports JSON "
+      "output only; NCCL_INSPECTOR_ENABLE_PROXY is ignored while %s output "
+      "is enabled",
+      backend);
+    enableNcclInspectorProxy = false;
+  }
 }
 
 /*
@@ -1066,17 +1104,6 @@ static inspectorResult_t initDumpThreadFromEnv() {
   str = getenv("NCCL_INSPECTOR_DUMP_VERBOSE");
   enable = str ? atoi(str) : 0;
   enableNcclInspectorDumpVerbose = enable == 0 ? false : true;
-
-  str = getenv("NCCL_INSPECTOR_PROM_DUMP");
-  enable = str ? atoi(str) : 0;
-  enableNcclInspectorPromDump = enable == 0 ? false : true;
-  warnedOtelPromDumpConflict = false;
-
-  str = getenv("NCCL_INSPECTOR_PROM_DUMP_STATS");
-  enable = str ? atoi(str) : 0;
-  enableNcclInspectorPromStats = enable == 0 ? false : true;
-
-  inspectorOtelInitFromEnv();
 
   str = getenv("NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS");
   if (str) {

@@ -57,7 +57,8 @@ bool enableNcclInspectorPromStats = false;
 static uint32_t ncclInspectorDumpCollRingSize = 1024;
 // Per-communicator completed-P2P ring buffer capacity
 static uint32_t ncclInspectorDumpP2pRingSize = 1024;
-// Proxy ring storage is attached by the communicator ring integration.
+// Per-communicator completed-Proxy ring buffer capacity
+static uint32_t ncclInspectorDumpProxyRingSize = 4096;
 // Minimum message size (bytes) to be tracked by inspector
 size_t ncclInspectorDumpMinSizeBytes = 8192;
 // Global dump interval in microseconds (-1 = disabled, 0 = continuous, >0 = periodic)
@@ -357,6 +358,13 @@ const char* inspectorTimingSourceToString(inspectorTimingSource_t timingSource) 
  *   inspectorResult_t - success or error code.
  *
  */
+// Finalize every completed-event ring owned by a communicator.
+static void inspectorCommInfoRingsFinalize(struct inspectorCommInfo* commInfo) {
+  if (commInfo == nullptr) return;
+  inspectorRingFinalize(&commInfo->completedCollRing);
+  inspectorRingFinalize(&commInfo->completedP2pRing);
+  inspectorRingFinalize(&commInfo->completedProxyRing);
+}
 
 /*
  * Description:
@@ -382,8 +390,7 @@ inspectorResult_t inspectorCommInfoListFinalize(struct inspectorCommInfoList* co
     TRACE_INSPECTOR("NCCL Inspector: comm %lu still in tracker",
                     commList->comms->commHash);
     nextComm = commList->comms->next;
-    inspectorRingFinalize(&commList->comms->completedCollRing);
-    inspectorRingFinalize(&commList->comms->completedP2pRing);
+    inspectorCommInfoRingsFinalize(commList->comms);
     INS_CHK(inspectorLockDestroy(&commList->comms->guard));
     free(commList->comms);
     commList->comms = nextComm;
@@ -878,6 +885,7 @@ static void showInspectorEnvVars() {
     {"NCCL_INSPECTOR_DUMP_MIN_SIZE_BYTES", getenv("NCCL_INSPECTOR_DUMP_MIN_SIZE_BYTES"), "8192", "Minimum message size (bytes) to be tracked by inspector"},
     {"NCCL_INSPECTOR_DUMP_COLL_RING_SIZE", getenv("NCCL_INSPECTOR_DUMP_COLL_RING_SIZE"), "1024", "Per-communicator completed-collective ring buffer capacity"},
     {"NCCL_INSPECTOR_DUMP_P2P_RING_SIZE", getenv("NCCL_INSPECTOR_DUMP_P2P_RING_SIZE"), "1024", "Per-communicator completed-P2P ring buffer capacity"},
+    {"NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE", getenv("NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE"), "4096", "Per-communicator completed-Proxy ring buffer capacity"},
     {"NCCL_INSPECTOR_COLL_POOL_SIZE", getenv("NCCL_INSPECTOR_COLL_POOL_SIZE"), "256", "Collective pool initial size/stride"},
     {"NCCL_INSPECTOR_P2P_POOL_SIZE", getenv("NCCL_INSPECTOR_P2P_POOL_SIZE"), "256", "P2P pool initial size/stride"},
     {"NCCL_INSPECTOR_COMM_POOL_SIZE", getenv("NCCL_INSPECTOR_COMM_POOL_SIZE"), "256", "Comm pool initial size/stride"},
@@ -1091,6 +1099,9 @@ static inspectorResult_t initDumpThreadFromEnv() {
 
   ncclInspectorDumpP2pRingSize
     = getRingSizeFromEnv("NCCL_INSPECTOR_DUMP_P2P_RING_SIZE", 1024);
+
+  ncclInspectorDumpProxyRingSize
+    = getRingSizeFromEnv("NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE", 4096);
 
   if (enableNcclInspectorDumpThread) {
     INS_CHK(inspectorStartDumpThread(ncclInspectorDumpIntervalUsecs));
@@ -1307,11 +1318,19 @@ static inspectorResult_t inspectorFillCommInfo(struct inspectorCommInfo* commInf
   commInfo->nnodes = nnodes;
   commInfo->dump_coll = false;
   commInfo->dump_p2p = false;
+  commInfo->dump_proxy = false;
   commInfo->p2pSeqNum = 0;
+  commInfo->nextProxyOpSn = 0;
+  commInfo->nextProxyRecordSn = 0;
+  commInfo->proxyRecordsDropped = 0;
   INS_CHK(inspectorRingInit(&commInfo->completedCollRing, ncclInspectorDumpCollRingSize,
                             sizeof(struct inspectorCompletedOpInfo)));
   INS_CHK(inspectorRingInit(&commInfo->completedP2pRing, ncclInspectorDumpP2pRingSize,
                             sizeof(struct inspectorCompletedOpInfo)));
+  INS_CHK(inspectorRingInit(&commInfo->completedProxyRing,
+                            enableNcclInspectorProxy
+                              ? ncclInspectorDumpProxyRingSize : 0,
+                            sizeof(struct inspectorCompletedProxyRecord)));
 
   // Capture current CUDA device ID and convert to UUID string
   int cudaDeviceId = -1;
@@ -1433,6 +1452,7 @@ exit:
   return res;
 fail:
   if (commInfoPtr) {
+    inspectorCommInfoRingsFinalize(commInfoPtr);
     free(commInfoPtr);
     commInfoPtr = nullptr;
   }
@@ -1493,6 +1513,7 @@ inspectorResult_t inspectorDelComm(struct inspectorCommInfo *commInfo) {
   inspectorLockWr(&commInfoPtr->guard);
   commInfoPtr->dump_coll = false;
   commInfoPtr->dump_p2p = false;
+  commInfoPtr->dump_proxy = false;
   inspectorUnlockRWLock(&commInfoPtr->guard);
 
   INSPECTOR_LOCK_WR_FLAG(&deletedCommInfoList->guard, locked,

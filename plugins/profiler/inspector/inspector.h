@@ -239,9 +239,14 @@ struct inspectorCommInfo {
 
   bool dump_coll;
   bool dump_p2p;
+  bool dump_proxy;
   struct inspectorCompletedRing completedCollRing;
   struct inspectorCompletedRing completedP2pRing;
+  struct inspectorCompletedRing completedProxyRing;
   uint64_t p2pSeqNum;
+  uint64_t nextProxyOpSn;
+  uint64_t nextProxyRecordSn;
+  uint64_t proxyRecordsDropped;
   pthread_rwlock_t guard;
 };
 

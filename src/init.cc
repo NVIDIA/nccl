@@ -3734,8 +3734,9 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
     // consistent with ncclCommInitChildComm
     ++comm->childCount;
 
+    uniqueId = NULL;
     // Only boundary ranks (0 and N-1) receive grow handle from coordinator
-    if ((comm->nRanks > 1) && (comm->rank == 0 || comm->rank == comm->nRanks - 1)) {
+    if (comm->rank == 0 || comm->rank == comm->nRanks - 1) {
       NCCLCHECKGOTO(bcastGrowHandle(&recvHandle, comm, /*isRoot=*/false), res, exit);
       // verify the magic is the same as the one computed by the root
       if (recvHandle.magic != hashCombine(comm->magic, comm->childCount)) {

@@ -146,7 +146,7 @@ It must be called by both existing ranks (from the parent communicator) and new 
 
 - *comm* should be the parent communicator
 - *rank* must be set to *-1* (existing ranks retain their original rank in the new communicator)
-- *uniqueId* should be *NULL* (existing ranks receive coordination information internally)
+- *uniqueId* unused. (existing ranks receive coordination information internally)
 - The function creates *newcomm* with the same rank as in the parent communicator
 
 **For new ranks:**
@@ -165,7 +165,7 @@ After the grow operation completes, the parent communicator should be destroyed 
 
 1. Coordinator rank calls *ncclCommGetUniqueId* to generate the grow identifier
 2. Coordinator distributes the *uniqueId* to all new ranks (out-of-band)
-3. All existing ranks call *ncclCommGrow* with *comm*\=parent, *rank*\=-1, *uniqueId*\=NULL (except for Coordinator rank which passes the *uniqueId*)
+3. All existing ranks call *ncclCommGrow* with *comm*\=parent, *rank*\=-1, *uniqueId*\=NULL
 4. All new ranks call *ncclCommGrow* with *comm*\=NULL, *rank*\=new_rank, *uniqueId*\=received_id
 
 ncclCommRevoke

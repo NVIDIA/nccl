@@ -468,13 +468,13 @@ ncclResult_t bcastGrowHandle(struct ncclBootstrapHandle* handle, struct ncclComm
     return ncclInvalidArgument;
   }
 
-  // Single rank parent already has the handle, no need to broadcast
-  if (parent->nRanks == 1) return ncclSuccess;
   if (isRoot) {
     NCCLCHECK(bootstrapSend(parent->bootstrap, 0, BOOTSTRAP_TAG_GROW_BOUNDARY, handle,
                             sizeof(struct ncclBootstrapHandle)));
-    NCCLCHECK(bootstrapSend(parent->bootstrap, parent->nRanks - 1, BOOTSTRAP_TAG_GROW_BOUNDARY, handle,
-                            sizeof(struct ncclBootstrapHandle)));
+    if (parent->nRanks > 1) {
+      NCCLCHECK(bootstrapSend(parent->bootstrap, parent->nRanks - 1, BOOTSTRAP_TAG_GROW_BOUNDARY, handle,
+                              sizeof(struct ncclBootstrapHandle)));
+    }
   } else {
     NCCLCHECK(bootstrapRecv(parent->bootstrap, -1, BOOTSTRAP_TAG_GROW_BOUNDARY, handle,
                             sizeof(struct ncclBootstrapHandle)));

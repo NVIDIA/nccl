@@ -25,6 +25,9 @@ void rasDiagnosticsCommSnapshotInit(struct rasDiagnosticsCommSnapshot* snapshot,
 int rasDiagnosticsCommIdCompare(const struct rasCommId* id1, const struct rasCommId* id2);
 bool rasDiagnosticsCommMatchesContext(const struct rasDiagnosticsContext* ctx, const struct ncclComm* comm);
 size_t rasDiagnosticsLocalRecordStride(size_t checkDataSize);
+ncclResult_t rasDiagnosticsCollectCommSnapshots(const struct rasDiagnosticsContext* ctx, bool collectNetDevices,
+                                                struct rasDiagnosticsCommSnapshot** snapshots, int* nSnapshots);
+void rasDiagnosticsFreeCommSnapshots(struct rasDiagnosticsCommSnapshot* snapshots, int nSnapshots);
 ncclResult_t rasDiagnosticsCollectLocalRecords(const struct rasDiagnosticsContext* ctx, size_t checkDataSize,
                                                rasDiagnosticsFillLocalDataFn fillCheckData,
                                                struct rasDiagnosticsLocalData* data);

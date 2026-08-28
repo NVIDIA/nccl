@@ -125,7 +125,7 @@ static ncclResult_t ncclRmaSocketProxyConnectPeers(struct ncclRmaSocketProxyColl
       ret = ncclInternalError;
       goto fail;
     }
-    comm->peerReceiver[peer].sock = acceptedSock;
+    ncclSocketMove(&comm->peerReceiver[peer].sock, &acceptedSock);
     acceptedSockInitialized = false;
     accepted[peer] = 1;
   }

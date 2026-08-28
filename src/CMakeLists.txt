@@ -9,7 +9,6 @@ set(LIBSRCFILES
     channel.cc
     ce_coll.cc
     collectives.cc
-    crypt.cc
     debug.cc
     group.cc
     init.cc
@@ -124,6 +123,7 @@ set(NCCL_PRIVATE_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
     ${CMAKE_BINARY_DIR}/obj/include
 )
 if(NOT NCCL_OS_WINDOWS AND DOCA_HOME)
@@ -237,8 +237,6 @@ target_link_libraries(nccl
     Threads::Threads
     ${CMAKE_DL_LIBS}
     CUDA::cudart
-    mbedtls
-    mbedcrypto
     ${EXTRA_LIBS}
 )
 
@@ -336,6 +334,7 @@ target_include_directories(nccl_static
     transport/net_ib/gdaki/doca-gpunetio/include
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
     ${CMAKE_BINARY_DIR}/obj/include
 )
 
@@ -357,8 +356,6 @@ target_link_libraries(nccl_static
     Threads::Threads
     ${CMAKE_DL_LIBS}
     CUDA::cudart
-    mbedtls
-    mbedcrypto
     ${EXTRA_LIBS}
 )
 

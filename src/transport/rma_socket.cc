@@ -216,7 +216,7 @@ ncclResult_t ncclRmaSocketProxyEnqueueRespondGetData(struct ncclRmaSocketProxyPe
 static ncclResult_t ncclRmaSocketProxyProgressSendTask(struct ncclRmaSocketProxyCollComm* comm, int peer,
                                                        struct ncclRmaSocketProxySendTask* task) {
   struct ncclRmaSocketProxyPeerSender* sender = &comm->peerSender[peer];
-  int closed = 0;
+  bool closed = false;
 
   if (task->controlMsgOffset < (int)sizeof(task->controlMsg)) {
     NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &sender->sock, &task->controlMsg, sizeof(task->controlMsg),

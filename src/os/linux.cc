@@ -529,11 +529,11 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
     if (sock->state > ncclSocketStateNone && sock->state < ncclSocketStateNum && ncclOsSocketIsValid(sock)) {
       if (wait) {
         char data;
-        int closed = 0;
+        bool closed = false;
         do {
           int offset = 0;
           if (ncclSocketProgress(NCCL_SOCKET_RECV, sock, &data, sizeof(char), &offset, &closed) != ncclSuccess) break;
-        } while (closed == 0);
+        } while (!closed);
       }
       /* shutdown() is needed to send FIN packet to proxy thread; shutdown() is not affected
        * by refcount of fd, but close() is. close() won't close a fd and send FIN packet if
@@ -544,7 +544,7 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
     }
     if (sock->crypto) {
       ncclCryptFree(sock->crypto);
-      sock->crypto = NULL;
+      sock->crypto = nullptr;
     }
     sock->state = ncclSocketStateClosed;
     sock->socketDescriptor = NCCL_INVALID_SOCKET;

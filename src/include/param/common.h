@@ -25,9 +25,10 @@ typedef enum {
   NCCL_PARAM_FLAG_DEPRECATED = 1ULL << 1,
   NCCL_PARAM_FLAG_CACHED = 1ULL << 2, // value cached, subsequent change has no effect
   NCCL_PARAM_FLAG_UNUSED = 1ULL << 3, // parameter has no effect
-  NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT = 1ULL << 4 // special params that do not attempt to init
+  NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT = 1ULL << 4, // special params that do not attempt to init
                                                 // the EnvPlugin if it has not been initialized.
                                                 // It will fallback to std::get_env().
+  NCCL_PARAM_FLAG_SENSITIVE = 1ULL << 5 // parameter value is redacted from registry dumps
 } ncclParamFlag_t;
 
 // Type IDs for param info. non-integers, non-boolean and non-const-char* is mapped to RAW type.

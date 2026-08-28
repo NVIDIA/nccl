@@ -40,8 +40,6 @@ typedef struct ncclWindow_vidmem* ncclWindow_t;
 #define NCCL_UNIQUE_ID_BYTES 128
 typedef struct { char internal[NCCL_UNIQUE_ID_BYTES]; } ncclUniqueId;
 
-#define NCCL_PSK_MIN_BYTES 32
-
 /* Error type */
 typedef enum { ncclSuccess                 =  0,
                ncclUnhandledCudaError      =  1,
@@ -273,13 +271,6 @@ ncclResult_t pncclMemFree(void *ptr);
  */
 ncclResult_t  ncclGetVersion(int *version);
 ncclResult_t pncclGetVersion(int *version);
-
-/* Sets the pre-shared key used to encrypt and authenticate all NCCL host TCP
- * communication (bootstrap, proxy and network out-of-band connections). The
- * key must be at least NCCL_PSK_MIN_BYTES bytes long, must be identical on
- * every rank of the job, and must be set before any communicator is created. */
-ncclResult_t  ncclSetPSK(const void* key, size_t key_len);
-ncclResult_t pncclSetPSK(const void* key, size_t key_len);
 
 /* Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be
  * called once and the Id should be distributed to all ranks in the

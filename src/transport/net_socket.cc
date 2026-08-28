@@ -410,7 +410,7 @@ ncclResult_t ncclNetSocketAccept(void* listenComm, void** recvComm, ncclNetDevic
       free(sock);
       return ncclInternalError;
     }
-    *slot = *sock;
+    ncclSocketMove(slot, sock);
     free(sock);
   }
   NCCLCHECK(ncclCalloc(&rComm->inlineData, MAX_REQUESTS * (SOCKET_CTRL_SIZE + ncclParamSocketInlineSize())));

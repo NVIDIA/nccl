@@ -88,7 +88,7 @@ static void rasTerminate();
 
 // enable to run passive RAS diagnostics
 NCCL_PARAM(RasDiagnostics, "RUN_RAS_DIAGNOSTICS", 0);
-NCCL_PARAM(RasEnable, "RAS_ENABLE", 0);
+NCCL_PARAM(RasEnable, "RAS_ENABLE", 1);
 
 //////////////////////////////////////////////////
 // Functions invoked from regular NCCL threads. //
@@ -359,9 +359,9 @@ void rasConnEnqueueMsg(struct rasConnection* conn, struct rasMsg* msg, size_t ms
 }
 
 // Attempts to send the queued RAS messages to another RAS thread.
-ncclResult_t rasConnSendMsg(struct rasConnection* conn, int* closed, bool* allSent) {
+ncclResult_t rasConnSendMsg(struct rasConnection* conn, bool* closed, bool* allSent) {
   struct rasMsgMeta* meta;
-  *closed = 0;
+  *closed = false;
   while ((meta = ncclIntruQueueHead(&conn->sendQ)) != nullptr) {
     if (conn->sock->status == RAS_SOCK_HANDSHAKE && meta->msg.type != RAS_MSG_CONNINIT) {
       // We don't send anything beyond the handshake at this point.
@@ -390,8 +390,8 @@ ncclResult_t rasConnSendMsg(struct rasConnection* conn, int* closed, bool* allSe
 }
 
 // Attempts to receive a message through a RAS socket.
-ncclResult_t rasMsgRecv(struct rasSocket* sock, struct rasMsg** msg, int* closed) {
-  *closed = 0;
+ncclResult_t rasMsgRecv(struct rasSocket* sock, struct rasMsg** msg, bool* closed) {
+  *closed = false;
   if (sock->recvOffset < sizeof(sock->recvLength)) {
     // Receive the length of the message.
     NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &sock->sock, &sock->recvLength, sizeof(sock->recvLength),
@@ -607,7 +607,7 @@ void rasMsgHandleBCProfilerMask(struct rasCollRequest** pReq, size_t* pReqLen, b
 static ncclResult_t rasNetSendNack(struct rasSocket* sock) {
   struct rasMsg msg;
   int length = rasMsgLength(RAS_MSG_CONNINITACK);
-  int closed = 0;
+  bool closed = false;
   int offset;
 
   INFO(NCCL_RAS, "RAS sending NACK to %s", ncclSocketToString(&sock->sock.addr, rasLine));

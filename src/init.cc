@@ -384,7 +384,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
   ncclMemoryStackDestruct(&comm->memScoped);
   ncclMemoryStackDestruct(&comm->memPermanent);
 
-  abort = *comm->abortFlag;
+  abort = COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire);
   if (ncclAtomicRefCountDecrement(comm->abortFlagRefCount) == 0) {
     free(comm->abortFlag);
     NCCLCHECK(ncclCudaHostFree((void*)comm->abortFlagDev));
@@ -3116,8 +3116,8 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
 
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
 
-  TRACE(NCCL_DESTROY, "Destroying comm %p rank %d abortFlag %d asyncResult %d", comm, comm->rank, *comm->abortFlag,
-        comm->asyncResult);
+  TRACE(NCCL_DESTROY, "Destroying comm %p rank %d abortFlag %d asyncResult %d", comm, comm->rank,
+        (int)COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire), comm->asyncResult);
 
   if (comm->initState == ncclSuccess) {
     if ((ret = ncclStrongStreamSynchronize(&comm->sharedRes->hostStream)) != ncclSuccess) {
@@ -3142,7 +3142,7 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
              comm->commHash, comm->rank);
       }
     }
-    if (*comm->abortFlag == 0) {
+    if (COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire) == 0) {
       int* hostRanks;
       int hostRank = 0;
       int nHostRanks = 0;
@@ -3337,14 +3337,6 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   if (comm->rank == -1 || comm->nRanks == -1 || comm->cudaDev == -1 || comm->busId == -1) {
     WARN("comm %p has already been destroyed", comm);
     return ncclInvalidArgument;
-  }
-
-  {
-    struct ncclSocketStats sockStats;
-    ncclSocketGetStats(&sockStats);
-    INFO(NCCL_INIT, "rank %d socket totals: %.3f MiB sent, %.3f MiB received, %llu outgoing connections, %llu incoming connections",
-         rank, (unsigned long long)sockStats.bytesSent / (1024.0 * 1024.0), (unsigned long long)sockStats.bytesReceived / (1024.0 * 1024.0),
-         (unsigned long long)sockStats.connectionsOut, (unsigned long long)sockStats.connectionsIn);
   }
 
   comm->destroyFlag = 1;

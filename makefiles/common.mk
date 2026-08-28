@@ -7,6 +7,7 @@
 
 CUDA_HOME ?= /usr/local/cuda
 PREFIX ?= /usr/local
+TLS_BACKEND ?=
 VERBOSE ?= 0
 KEEP ?= 0
 DEBUG ?= 0
@@ -47,6 +48,12 @@ NVCC ?= $(CUDA_HOME)/bin/nvcc
 
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include
+ifeq ($(TLS_BACKEND),OPENSSL3)
+CXXFLAGS += -DNCCL_TLS_BACKEND_OPENSSL3=1
+else ifneq ($(strip $(TLS_BACKEND)),)
+$(error Unsupported TLS_BACKEND '$(TLS_BACKEND)'; expected OPENSSL3 or empty)
+endif
+NCCL_STATIC_DL_LIBS ?= -ldl
 CUDA_VERSION = $(strip $(shell which $(NVCC) >/dev/null && $(NVCC) --version | grep release | sed 's/.*release //' | sed 's/\,.*//'))
 #CUDA_VERSION ?= $(shell ls $(CUDA_LIB)/libcudart.so.* | head -1 | rev | cut -d "." -f -2 | rev)
 CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)

@@ -526,9 +526,7 @@ static void cleanupPartialPoolInit() {
  *
  * Parameters:
  *
- *   collPoolSize     - Initial size for collective info pool.
- *   p2pPoolSize      - Initial size for P2P info pool.
- *   commPoolSize     - Initial size for comm info pool.
+ *   config - Sizes and enablement settings for all event pools.
  * Return:
  *
  *   inspectorSuccess    - Success.
@@ -536,37 +534,50 @@ static void cleanupPartialPoolInit() {
  *   inspectorMemoryError - Failed to allocate initial chunk.
  *
  */
-inspectorResult_t inspectorEventPoolInit(uint32_t collPoolSize,
-                                         uint32_t p2pPoolSize,
-                                         uint32_t commPoolSize) {
+inspectorResult_t inspectorEventPoolInit(
+    const struct inspectorEventPoolConfig& config) {
   inspectorResult_t res;
 
   memset(&g_eventPool, 0, sizeof(struct inspectorEventPool));
 
-  const char* growStr = getenv("NCCL_INSPECTOR_POOL_GROW");
-  g_eventPool.growEnabled = growStr ? (atoi(growStr) != 0) : true;
+  g_eventPool.growEnabled = config.growEnabled;
 
-  res = initCollectivePool(collPoolSize);
+  res = initCollectivePool(config.collPoolSize);
   if (res != inspectorSuccess) {
     cleanupPartialPoolInit();
     return res;
   }
 
-  res = initP2pPool(p2pPoolSize);
+  res = initP2pPool(config.p2pPoolSize);
   if (res != inspectorSuccess) {
     cleanupPartialPoolInit();
     return res;
   }
 
-  res = initCommPool(commPoolSize);
+  res = initCommPool(config.commPoolSize);
   if (res != inspectorSuccess) {
     cleanupPartialPoolInit();
     return res;
+  }
+
+  if (config.enableProxy) {
+    res = initProxyOpPool(config.proxyOpPoolSize);
+    if (res != inspectorSuccess) {
+      cleanupPartialPoolInit();
+      return res;
+    }
+
+    res = initProxyStepPool(config.proxyStepPoolSize);
+    if (res != inspectorSuccess) {
+      cleanupPartialPoolInit();
+      return res;
+    }
   }
 
   INFO_INSPECTOR(
     "NCCL Inspector: Memory pools initialized (stride-based) - Coll: %u, P2P: %u, Comms: %u, pool grow: %s",
-    collPoolSize, p2pPoolSize, commPoolSize, g_eventPool.growEnabled ? "enabled" : "disabled");
+    config.collPoolSize, config.p2pPoolSize, config.commPoolSize,
+    g_eventPool.growEnabled ? "enabled" : "disabled");
 
   return inspectorSuccess;
 }

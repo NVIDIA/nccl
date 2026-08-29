@@ -296,12 +296,23 @@ ncclResult_t ncclSocketGetAddrFromString(union ncclSocketAddress* ua, const char
     memset(ip_str, '\0', sizeof(ip_str));
     memset(port_str, '\0', sizeof(port_str));
     memset(if_name, '\0', sizeof(if_name));
-    strncpy(ip_str, ip_port_pair + 1, global_scope ? i - 1 : j - 1);
-    strncpy(port_str, ip_port_pair + i + 2, len - i - 1);
+    // Clamp each copy to its destination buffer. These lengths derive from
+    // operator-controlled input (e.g. NCCL_COMM_ID / NCCL_RAS_ADDR), so an
+    // over-long IPv6 address, port, or interface name would otherwise overflow
+    // these fixed stack buffers. The (size_t) cast plus clamp also makes any
+    // unexpected negative length safe (it becomes large, then clamps down).
+    size_t ipLen   = (size_t)(global_scope ? i - 1 : j - 1);
+    size_t portLen = (size_t)(len - i - 1);
+    if (ipLen   > sizeof(ip_str)   - 1) ipLen   = sizeof(ip_str)   - 1;
+    if (portLen > sizeof(port_str) - 1) portLen = sizeof(port_str) - 1;
+    strncpy(ip_str, ip_port_pair + 1, ipLen);
+    strncpy(port_str, ip_port_pair + i + 2, portLen);
     int port = atoi(port_str);
     if (!global_scope) {
       // If not global scope, we need the intf name
-      strncpy(if_name, ip_port_pair + j + 1, i - j - 1);
+      size_t ifLen = (size_t)(i - j - 1);
+      if (ifLen > sizeof(if_name) - 1) ifLen = sizeof(if_name) - 1;
+      strncpy(if_name, ip_port_pair + j + 1, ifLen);
     }
 
     struct sockaddr_in6& sin6 = ua->sin6;

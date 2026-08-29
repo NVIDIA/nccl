@@ -2749,6 +2749,7 @@ fail:
     free(comm->abortFlag);
     if (comm->abortFlagDev) (void)ncclCudaHostFree((void*)comm->abortFlagDev);
     free(comm->abortFlagRefCount);
+    free((void*)comm->config.netName);
     free(comm);
   }
   if (newcomm) *newcomm = NULL;
@@ -3445,11 +3446,23 @@ exit:
   return res;
 fail:
   if (childComm) {
-    if (!comm->shareResources) {
+    if (comm->shareResources) {
+      // Abort flags are shared with (owned by) the parent; do not free them here.
+      // Undo the reference taken during setup so the parent can free them at destroy time.
+      if (childComm->abortFlagRefCount) ncclAtomicRefCountDecrement(comm->abortFlagRefCount);
+    } else {
+      // Child owns these abort flags. The parent's childAbortFlag/childAbortFlagDev back-pointers
+      // may alias this child's flags (set during init); clear them before freeing to avoid a later
+      // use-after-free when the parent is later destroyed/aborted/revoked/shrunk (setCommAbortFlags).
+      if (comm->childAbortFlag == childComm->abortFlag) {
+        comm->childAbortFlag = NULL;
+        comm->childAbortFlagDev = NULL;
+      }
       if (childComm->abortFlag) free(childComm->abortFlag);
       if (childComm->abortFlagDev) ncclCudaHostFree(childComm->abortFlagDev);
       if (childComm->abortFlagRefCount) free(childComm->abortFlagRefCount);
     }
+    free((void*)childComm->config.netName);
     free(childComm);
   }
   if (newcomm) *newcomm = NULL;
@@ -3624,7 +3637,7 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
   } else {
     // New rank: new comm, no parent
     int device;
-    CUDACHECK(cudaGetDevice(&device));
+    CUDACHECKGOTO(cudaGetDevice(&device), res, fail);
     job->parent = NULL;
     job->cudaDev = device;
     job->myrank = rank;
@@ -3668,12 +3681,11 @@ fail:
   }
   // Clean up newly allocated comm on failure
   if (newComm) {
-    // Only free abort resources if we allocated them (not shared)
-    if (!isExistingRank || !comm->shareResources) {
-      free(newComm->abortFlag);
-      if (newComm->abortFlagDev) (void)ncclCudaHostFree((void*)newComm->abortFlagDev);
-      free(newComm->abortFlagRefCount);
-    }
+    // Grow always allocates fresh abort resources (never shared), so always free them.
+    free(newComm->abortFlag);
+    if (newComm->abortFlagDev) (void)ncclCudaHostFree((void*)newComm->abortFlagDev);
+    free(newComm->abortFlagRefCount);
+    free((void*)newComm->config.netName);
     free(newComm);
     if (newcomm) *newcomm = NULL;
   }

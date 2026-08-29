@@ -298,8 +298,9 @@ ncclResult_t ncclTopoDumpXmlToFile(const char* xmlTopoFile, struct ncclXml* xml)
     INFO(NCCL_GRAPH | NCCL_ENV, "Unable to open %s, not dumping topology.", xmlTopoFile);
     return ncclSuccess;
   }
-  NCCLCHECK(ncclTopoDumpXmlRec(0, file, xml->nodes));
+  ncclResult_t res = ncclTopoDumpXmlRec(0, file, xml->nodes);
   fclose(file);
+  NCCLCHECK(res);
   return ncclSuccess;
 }
 
@@ -418,8 +419,9 @@ ncclResult_t ncclTopoGetXmlFromFile(const char* xmlTopoFile, struct ncclXml* xml
   INFO(NCCL_GRAPH, "Loading topology file %s", xmlTopoFile);
   struct xmlHandler handlers[] = {{"system", ncclTopoXmlLoadSystem}};
   xml->maxIndex = 0;
-  NCCLCHECK(xmlLoadSub(file, xml, NULL, handlers, 1));
+  ncclResult_t res = xmlLoadSub(file, xml, NULL, handlers, 1);
   fclose(file);
+  NCCLCHECK(res);
 #elif NCCL_OS_WINDOWS
   (void)xmlTopoFile;
   (void)xml;
@@ -1253,8 +1255,9 @@ ncclResult_t ncclTopoGetXmlGraphFromFile(const char* xmlGraphFile, struct ncclXm
   }
   struct xmlHandler handlers[] = {{"graphs", ncclTopoXmlGraphLoadGraphs}};
   xml->maxIndex = 0;
-  NCCLCHECK(xmlLoadSub(file, xml, NULL, handlers, 1));
+  ncclResult_t res = xmlLoadSub(file, xml, NULL, handlers, 1);
   fclose(file);
+  NCCLCHECK(res);
   return ncclSuccess;
 }
 

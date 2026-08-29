@@ -354,8 +354,10 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
 }
 
 struct sharedResources {
-  void* collNetListenComms[MAXCHANNELS];
-  void* collNetComms[MAXCHANNELS];
+  // These are all indexed by netDev (in [0, NCCL_MAX_NETDEVS)), like commRefCount
+  // below and the sibling proxyAppend / regular-net netComms arrays.
+  void* collNetListenComms[NCCL_MAX_NETDEVS];
+  void* collNetComms[NCCL_MAX_NETDEVS];
   int commRefCount[NCCL_MAX_NETDEVS];
 };
 

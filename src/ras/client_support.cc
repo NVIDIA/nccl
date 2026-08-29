@@ -1882,7 +1882,8 @@ static void rasClientBreakDownErrors(struct rasClient* client, struct rasCollCom
   for (;;) {
     int maxCount = 0;
     ncclResult_t maxCountIdx = ncclSuccess;
-    for (int i = ncclUnhandledCudaError; i < ncclInProgress; i++) {
+    for (int i = ncclUnhandledCudaError; i < ncclNumResults; i++) {
+      if (i == ncclInProgress) continue; // not an error; loop now reaches ncclTimeout (enum value after ncclInProgress)
       if (maxCount < ncclErrors[i]) {
         maxCount = ncclErrors[i];
         maxCountIdx = (ncclResult_t)i;
@@ -2269,6 +2270,8 @@ static const char* ncclErrorToString(ncclResult_t err) {
     return "Remote process error";
   case ncclInProgress:
     return "NCCL operation in progress";
+  case ncclTimeout:
+    return "Timeout";
   default:
     return "Unexpected error";
   }

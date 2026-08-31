@@ -58,7 +58,7 @@ static inspectorResult_t inspectorCommInfoHeader(jsonFileOutput* jfo,
 static inspectorResult_t inspectorCommInfoMetaHeader(jsonFileOutput* jfo) {
   JSON_CHK(jsonStartObject(jfo));
   {
-    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.1"));
+    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.2"));
     JSON_CHK(jsonKey(jfo, "git_rev")); JSON_CHK(jsonStr(jfo, get_git_version_info()));
     JSON_CHK(jsonKey(jfo, "rec_mechanism")); JSON_CHK(jsonStr(jfo, "nccl_profiler_interface"));
     JSON_CHK(jsonKey(jfo, "dump_timestamp_us")); JSON_CHK(jsonUint64(jfo, inspectorGetTime()));
@@ -206,6 +206,10 @@ static inline inspectorResult_t inspectorCompletedColl(jsonFileOutput* jfo,
   JSON_CHK(jsonStartObject(jfo));
   {
     JSON_CHK(jsonKey(jfo, "coll")); JSON_CHK(jsonStr(jfo, ncclFuncToString(op->func)));
+
+    JSON_CHK(jsonKey(jfo, "coll_algo")); JSON_CHK(jsonStr(jfo, op->algo ? op->algo : "unknown"));
+
+    JSON_CHK(jsonKey(jfo, "coll_proto")); JSON_CHK(jsonStr(jfo, op->proto ? op->proto : "unknown"));
 
     JSON_CHK(jsonKey(jfo, "coll_sn")); JSON_CHK(jsonUint64(jfo, op->sn));
 

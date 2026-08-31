@@ -379,6 +379,7 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
     devWork.isOneRPN = comm->isOneRPN;
     devWork.netRegUsed = devWork.regUsed = 0;
     devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
+    devWork.profilerPhaseEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelPhase);
     if (task->regBufType & NCCL_NET_REG_BUFFER) devWork.netRegUsed = 1;
     if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER)) devWork.regUsed = 1;
 
@@ -585,6 +586,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       devWork.oneNode = (comm->nNodes == 1);
       devWork.netRegUsed = devWork.regUsed = 0;
       devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
+      devWork.profilerPhaseEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelPhase);
       if (task->regBufType & NCCL_NET_REG_BUFFER) devWork.netRegUsed = 1;
       if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER)) devWork.regUsed = 1;
 
@@ -1109,6 +1111,10 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   work->recvBytes = recvBytes == -1 ? 0 : recvBytes;
   work->profilerEnabled =
     ncclProfilerPluginLoaded() && ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelCh);
+  work->profilerPhaseEnabled =
+    ncclProfilerPluginLoaded() &&
+    (((p2pTasks[0] ? p2pTasks[0]->eActivationMask : 0) | (p2pTasks[1] ? p2pTasks[1]->eActivationMask : 0)) &
+     ncclProfileKernelPhase);
 
   for (int dir = 0; dir < nProxyOps; dir++) {
     struct ncclProxyOp* op = &proxyOps[dir];

@@ -24,9 +24,8 @@ __device__ __forceinline__ void ncclSymkProfilerStart(struct ncclSymkDevWorkArgs
     uint64_t wc = args->getProfilerCounters()[ch];
     int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
     uint64_t ts = ncclSymkGlobaltimer();
-    // workStarted timestamp+counter share one 16B slot, so no fence; the BEGIN phase
-    // stamp is ordered by ncclSymkProfilerStop's fence.
-    args->kcomm.workPhases[ch].data[slot].timestamps[NCCL_KERNEL_PHASE_BEGIN] = ts;
+    if (args->profilerPhaseEnabled)
+      args->kcomm.workPhases[ch].data[slot].timestamps[NCCL_KERNEL_PHASE_BEGIN] = ts;
     args->kcomm.workStarted[ch].data[slot].timestamp = ts;
     args->kcomm.workStarted[ch].data[slot].counter = wc;
   }
@@ -39,16 +38,17 @@ __device__ __forceinline__ void ncclSymkProfilerStop(struct ncclSymkDevWorkArgs 
     int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
     uint64_t ts = ncclSymkGlobaltimer();
     args->kcomm.workCompleted[ch].data[slot].timestamp = ts;
-    args->kcomm.workPhases[ch].data[slot].timestamps[NCCL_KERNEL_PHASE_END] = ts;
-    // Fence so all timestamps are visible before either counter is published.
-    __threadfence_system();
-    args->kcomm.workPhases[ch].data[slot].counter = wc;
+    if (args->profilerPhaseEnabled) {
+      args->kcomm.workPhases[ch].data[slot].timestamps[NCCL_KERNEL_PHASE_END] = ts;
+      __threadfence_system();
+      args->kcomm.workPhases[ch].data[slot].counter = wc;
+    }
     args->kcomm.workCompleted[ch].data[slot].counter = wc;
   }
 }
 
 __device__ __forceinline__ void ncclSymkProfilerPhase(struct ncclSymkDevWorkArgs const* args, int phaseId) {
-  if (threadIdx.x == 0 && args->profilerEnabled) {
+  if (threadIdx.x == 0 && args->profilerEnabled && args->profilerPhaseEnabled) {
     int ch = blockIdx.x;
     uint64_t wc = args->getProfilerCounters()[ch];
     int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;

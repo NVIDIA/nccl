@@ -120,57 +120,64 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
     uint32_t workRecvMask = shared->workRecvMask;
 
     __syncthreads(); // release scratch space used by shared->*
-    if (nWorks <= workIx) return;
+    bool phaseOn = (nWorks > 0) && profilerPhaseEnabled(0);
+    if (phaseOn && threadIdx.x == 0) profilerPhase(NCCL_KERNEL_PHASE_AFTER_OPEN);
 
-    // Thread range for whole work (send & recv combined)
-    int subtid = tid - workIx * nWarpPerWork * WARP_SIZE;
-    int subtn = nWarpPerWork * WARP_SIZE;
+    if (nWorks > workIx) {
+      // Thread range for whole work (send & recv combined)
+      int subtid = tid - workIx * nWarpPerWork * WARP_SIZE;
+      int subtn = nWarpPerWork * WARP_SIZE;
 
-    // A send primtive of sufficient size requires 2 cuda barrier ids.
-    constexpr int nSendWarpsForExtraGroup = NCCL_SIMPLE_EXTRA_GROUP_IF_NTHREADS_GE / WARP_SIZE;
-    // Count up all group ids used below this workIx:
-    int group, extra;
-    // Each recv gets one group id:
-    group = __popc(workRecvMask & ((1 << workIx) - 1));
-    // Sends accompanying recvs get one and maybe an extra:
-    extra = (nSendWarpPerWork >= nSendWarpsForExtraGroup) ? 1 : 0;
-    group += __popc((workSendMask & workRecvMask) & ((1 << workIx) - 1)) * (1 + extra);
-    // Sends without recvs use more warps so compute extra accordingly:
-    extra = (nWarpPerWork >= nSendWarpsForExtraGroup) ? 1 : 0;
-    group += __popc((workSendMask & ~workRecvMask) & ((1 << workIx) - 1)) * (1 + extra);
+      // A send primtive of sufficient size requires 2 cuda barrier ids.
+      constexpr int nSendWarpsForExtraGroup = NCCL_SIMPLE_EXTRA_GROUP_IF_NTHREADS_GE / WARP_SIZE;
+      // Count up all group ids used below this workIx:
+      int group, extra;
+      // Each recv gets one group id:
+      group = __popc(workRecvMask & ((1 << workIx) - 1));
+      // Sends accompanying recvs get one and maybe an extra:
+      extra = (nSendWarpPerWork >= nSendWarpsForExtraGroup) ? 1 : 0;
+      group += __popc((workSendMask & workRecvMask) & ((1 << workIx) - 1)) * (1 + extra);
+      // Sends without recvs use more warps so compute extra accordingly:
+      extra = (nWarpPerWork >= nSendWarpsForExtraGroup) ? 1 : 0;
+      group += __popc((workSendMask & ~workRecvMask) & ((1 << workIx) - 1)) * (1 + extra);
 
-    struct ncclDevWorkP2p* work = &works[workIx];
-    bool hasSend = 1 & (workSendMask >> workIx);
-    bool hasRecv = 1 & (workRecvMask >> workIx);
-    bool isCopy = work->sendRank == ncclShmem.comm.rank;
-    bool isSend = !hasRecv || (hasSend && subtid < nSendWarpPerWork * WARP_SIZE);
+      struct ncclDevWorkP2p* work = &works[workIx];
+      bool hasSend = 1 & (workSendMask >> workIx);
+      bool hasRecv = 1 & (workRecvMask >> workIx);
+      bool isCopy = work->sendRank == ncclShmem.comm.rank;
+      bool isSend = !hasRecv || (hasSend && subtid < nSendWarpPerWork * WARP_SIZE);
 
-    if (!isCopy && hasSend && hasRecv) {
-      // Translate thread ids to reflect just this send or recv as opposed to whole work.
-      if (isSend) {
-        subtn = nSendWarpPerWork * WARP_SIZE;
+      if (!isCopy && hasSend && hasRecv) {
+        // Translate thread ids to reflect just this send or recv as opposed to whole work.
+        if (isSend) {
+          subtn = nSendWarpPerWork * WARP_SIZE;
+        } else {
+          subtid -= nSendWarpPerWork * WARP_SIZE;
+          subtn = nRecvWarpPerWork * WARP_SIZE;
+          group += 1 + (nSendWarpPerWork >= nSendWarpsForExtraGroup ? 1 : 0);
+        }
+      }
+
+      if (isCopy) {
+        reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/0>(
+          subtid, subtn, 0, false, 1, &work->sendAddr, 1, &work->recvAddr, (ssize_t)work->sendBytes);
+      } else if (isSend) {
+        if (work->sendProtoLL) {
+          runSend<ProtoLL>(subtid, subtn, group, work);
+        } else {
+          runSend<ProtoSimple<1, 1>>(subtid, subtn, group, work);
+        }
       } else {
-        subtid -= nSendWarpPerWork * WARP_SIZE;
-        subtn = nRecvWarpPerWork * WARP_SIZE;
-        group += 1 + (nSendWarpPerWork >= nSendWarpsForExtraGroup ? 1 : 0);
+        if (work->recvProtoLL) {
+          runRecv<ProtoLL>(subtid, subtn, group, work);
+        } else {
+          runRecv<ProtoSimple<1, 1>>(subtid, subtn, group, work);
+        }
       }
     }
-
-    if (isCopy) {
-      reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/0>(
-        subtid, subtn, 0, false, 1, &work->sendAddr, 1, &work->recvAddr, (ssize_t)work->sendBytes);
-    } else if (isSend) {
-      if (work->sendProtoLL) {
-        runSend<ProtoLL>(subtid, subtn, group, work);
-      } else {
-        runSend<ProtoSimple<1, 1>>(subtid, subtn, group, work);
-      }
-    } else {
-      if (work->recvProtoLL) {
-        runRecv<ProtoLL>(subtid, subtn, group, work);
-      } else {
-        runRecv<ProtoSimple<1, 1>>(subtid, subtn, group, work);
-      }
+    if (phaseOn) {
+      __syncthreads();
+      if (threadIdx.x == 0) profilerPhase(NCCL_KERNEL_PHASE_BEFORE_CLOSE);
     }
   }
 };

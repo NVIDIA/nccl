@@ -313,7 +313,7 @@ Each output file contains JSON objects with the following structure:
     "nnodes": 1
   },
   "metadata": {
-    "inspector_output_format_version": "v4.1",
+    "inspector_output_format_version": "v4.2",
     "git_rev": "",
     "rec_mechanism": "profiler_plugin",
     "dump_timestamp_us": 1748030377748202,
@@ -322,6 +322,8 @@ Each output file contains JSON objects with the following structure:
   },
   "coll_perf": {
     "coll": "AllReduce",
+    "coll_algo": "RING",
+    "coll_proto": "LL",
     "coll_sn": 1407,
     "coll_msg_size_bytes": 17179869184,
     "coll_exec_time_us": 61974,
@@ -346,7 +348,7 @@ Because this record has no `coll_perf`/`p2p_perf` body, consumers that iterate p
     "nnodes": 1
   },
   "metadata": {
-    "inspector_output_format_version": "v4.1",
+    "inspector_output_format_version": "v4.2",
     "git_rev": "",
     "rec_mechanism": "nccl_profiler_interface",
     "dump_timestamp_us": 1748030377748202,
@@ -383,7 +385,7 @@ This will include additional event trace information in the JSON output, showing
     "nnodes": 1
   },
   "metadata": {
-    "inspector_output_format_version": "v4.1",
+    "inspector_output_format_version": "v4.2",
     "git_rev": "9019a1912-dirty",
     "rec_mechanism": "nccl_profiler_interface",
     "dump_timestamp_us": 1752867229276385,
@@ -392,6 +394,8 @@ This will include additional event trace information in the JSON output, showing
   },
   "coll_perf": {
     "coll": "ReduceScatter",
+    "coll_algo": "RING",
+    "coll_proto": "SIMPLE",
     "coll_sn": 1231,
     "coll_msg_size_bytes": 2147483648,
     "coll_exec_time_us": 41057,

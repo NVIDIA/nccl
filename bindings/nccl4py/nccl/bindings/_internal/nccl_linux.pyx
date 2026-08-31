@@ -70,14 +70,6 @@ from libc.stdint cimport uintptr_t
 from .utils import FunctionNotFoundError, NotSupportedError
 from cuda.pathfinder import load_nvidia_dynamic_lib
 
-cdef extern from "<dlfcn.h>" nogil:
-    ctypedef struct Dl_info:
-        const char* dli_fname
-        void* dli_fbase
-        const char* dli_sname
-        void* dli_saddr
-    int dladdr(const void*, Dl_info*)
-
 
 ###############################################################################
 # Wrapper init
@@ -1146,34 +1138,6 @@ cpdef _inspect_function_pointer(str name):
 cdef void* load_library() except* with gil:
     cdef uintptr_t handle = load_nvidia_dynamic_lib("nccl")._handle_uint
     return <void*>handle
-
-
-cdef object __nccl_loaded_so_path = None
-
-
-cpdef object _inspect_loaded_library_path():
-    import os
-    # Path of the .so backing the loaded symbols, via dladdr() on a
-    # resolved entry point. None if it cannot be determined.
-    global __nccl_loaded_so_path
-    if __nccl_loaded_so_path is not None:
-        return __nccl_loaded_so_path
-
-    cdef dict ptrs = _inspect_function_pointers()
-    # Any resolved symbol maps to the same .so.
-    cdef intptr_t addr = 0
-    for value in ptrs.values():
-        if value:
-            addr = value
-            break
-
-    cdef Dl_info info
-    if addr == 0:
-        return None
-    if dladdr(<void*>addr, &info) == 0 or info.dli_fname == NULL:
-        return None
-    __nccl_loaded_so_path = os.fsdecode(<bytes>info.dli_fname)
-    return __nccl_loaded_so_path
 
 
 ###############################################################################

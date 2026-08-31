@@ -1681,11 +1681,13 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       }
     }
 
-    // Connect to local net proxy
-    NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_NET, 1, comm->rank, &proxyConn), ret, fail);
-    NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &proxyConn, ncclProxyMsgSharedInit, &comm->p2pnChannels, sizeof(int),
-                                        NULL, 0),
-                  ret, fail);
+    // A single-rank communicator cannot have a remote peer, so it does not need NET shared buffers.
+    if (comm->nRanks > 1) {
+      NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_NET, 1, comm->rank, &proxyConn), ret, fail);
+      NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &proxyConn, ncclProxyMsgSharedInit, &comm->p2pnChannels, sizeof(int),
+                                          NULL, 0),
+                    ret, fail);
+    }
 
     // Then to remote ones when using PXN
     if (ncclPxnDisable(comm) == 0) {

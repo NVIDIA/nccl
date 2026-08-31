@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.31.2. Do not modify it directly.
+# This code was automatically generated with version 2.32.1. Do not modify it directly.
 
 
 
@@ -141,6 +141,7 @@ cdef void* __ncclWaitSignal = NULL
 cdef void* __ncclGroupStart = NULL
 cdef void* __ncclGroupEnd = NULL
 cdef void* __ncclGroupSimulateEnd = NULL
+cdef void* __ncclSetEncryption = NULL
 cdef void* __ncclParamBind = NULL
 cdef void* __ncclParamGetI8 = NULL
 cdef void* __ncclParamGetI16 = NULL
@@ -159,8 +160,8 @@ cdef void* __ncclCommQueryProperties = NULL
 cdef void* __ncclDevCommCreate = NULL
 cdef void* __ncclDevCommDestroy = NULL
 cdef void* __ncclGetLsaMultimemDevicePointer = NULL
-cdef void* __ncclGetLsaDevicePointer = NULL
 cdef void* __ncclGetMultimemDevicePointer = NULL
+cdef void* __ncclGetLsaDevicePointer = NULL
 cdef void* __ncclGetPeerDevicePointer = NULL
 cdef void* __ncclGetMultimemDeviceLeInfo = NULL
 cdef void* __ncclGetCftDeviceLeInfo = NULL
@@ -169,13 +170,13 @@ cdef void* __ncclTeamWorld = NULL
 cdef void* __ncclTeamLsa = NULL
 cdef void* __ncclTeamCft = NULL
 cdef void* __ncclTeamCftMultimem = NULL
-cdef void* __ncclTeamRail = NULL
 cdef void* __ncclTeamRankToWorld = NULL
 cdef void* __ncclTeamRankToLsa = NULL
+cdef void* __ncclTeamRail = NULL
 cdef void* __ncclLsaBarrierCreateRequirement = NULL
 cdef void* __ncclGinBarrierCreateRequirement = NULL
-cdef void* __ncclLLA2ACreateRequirement = NULL
 cdef void* __ncclLLA2ACalcSlots = NULL
+cdef void* __ncclLLA2ACreateRequirement = NULL
 
 cdef int _init_nccl() except -1 nogil:
     global _cyb___py_nccl_init
@@ -582,6 +583,13 @@ cdef int _init_nccl() except -1 nogil:
                 handle = load_library()
             __ncclGroupSimulateEnd = _cyb_dlsym(handle, 'ncclGroupSimulateEnd')
 
+        global __ncclSetEncryption
+        __ncclSetEncryption = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclSetEncryption')
+        if __ncclSetEncryption == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclSetEncryption = _cyb_dlsym(handle, 'ncclSetEncryption')
+
         global __ncclParamBind
         __ncclParamBind = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclParamBind')
         if __ncclParamBind == NULL:
@@ -708,19 +716,19 @@ cdef int _init_nccl() except -1 nogil:
                 handle = load_library()
             __ncclGetLsaMultimemDevicePointer = _cyb_dlsym(handle, 'ncclGetLsaMultimemDevicePointer')
 
-        global __ncclGetLsaDevicePointer
-        __ncclGetLsaDevicePointer = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclGetLsaDevicePointer')
-        if __ncclGetLsaDevicePointer == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclGetLsaDevicePointer = _cyb_dlsym(handle, 'ncclGetLsaDevicePointer')
-
         global __ncclGetMultimemDevicePointer
         __ncclGetMultimemDevicePointer = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclGetMultimemDevicePointer')
         if __ncclGetMultimemDevicePointer == NULL:
             if handle == NULL:
                 handle = load_library()
             __ncclGetMultimemDevicePointer = _cyb_dlsym(handle, 'ncclGetMultimemDevicePointer')
+
+        global __ncclGetLsaDevicePointer
+        __ncclGetLsaDevicePointer = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclGetLsaDevicePointer')
+        if __ncclGetLsaDevicePointer == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclGetLsaDevicePointer = _cyb_dlsym(handle, 'ncclGetLsaDevicePointer')
 
         global __ncclGetPeerDevicePointer
         __ncclGetPeerDevicePointer = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclGetPeerDevicePointer')
@@ -778,13 +786,6 @@ cdef int _init_nccl() except -1 nogil:
                 handle = load_library()
             __ncclTeamCftMultimem = _cyb_dlsym(handle, 'ncclTeamCftMultimem')
 
-        global __ncclTeamRail
-        __ncclTeamRail = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclTeamRail')
-        if __ncclTeamRail == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclTeamRail = _cyb_dlsym(handle, 'ncclTeamRail')
-
         global __ncclTeamRankToWorld
         __ncclTeamRankToWorld = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclTeamRankToWorld')
         if __ncclTeamRankToWorld == NULL:
@@ -798,6 +799,13 @@ cdef int _init_nccl() except -1 nogil:
             if handle == NULL:
                 handle = load_library()
             __ncclTeamRankToLsa = _cyb_dlsym(handle, 'ncclTeamRankToLsa')
+
+        global __ncclTeamRail
+        __ncclTeamRail = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclTeamRail')
+        if __ncclTeamRail == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclTeamRail = _cyb_dlsym(handle, 'ncclTeamRail')
 
         global __ncclLsaBarrierCreateRequirement
         __ncclLsaBarrierCreateRequirement = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclLsaBarrierCreateRequirement')
@@ -813,19 +821,19 @@ cdef int _init_nccl() except -1 nogil:
                 handle = load_library()
             __ncclGinBarrierCreateRequirement = _cyb_dlsym(handle, 'ncclGinBarrierCreateRequirement')
 
-        global __ncclLLA2ACreateRequirement
-        __ncclLLA2ACreateRequirement = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclLLA2ACreateRequirement')
-        if __ncclLLA2ACreateRequirement == NULL:
-            if handle == NULL:
-                handle = load_library()
-            __ncclLLA2ACreateRequirement = _cyb_dlsym(handle, 'ncclLLA2ACreateRequirement')
-
         global __ncclLLA2ACalcSlots
         __ncclLLA2ACalcSlots = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclLLA2ACalcSlots')
         if __ncclLLA2ACalcSlots == NULL:
             if handle == NULL:
                 handle = load_library()
             __ncclLLA2ACalcSlots = _cyb_dlsym(handle, 'ncclLLA2ACalcSlots')
+
+        global __ncclLLA2ACreateRequirement
+        __ncclLLA2ACreateRequirement = _cyb_dlsym(_cyb_RTLD_DEFAULT, 'ncclLLA2ACreateRequirement')
+        if __ncclLLA2ACreateRequirement == NULL:
+            if handle == NULL:
+                handle = load_library()
+            __ncclLLA2ACreateRequirement = _cyb_dlsym(handle, 'ncclLLA2ACreateRequirement')
 
         _cyb_atomic_int_store(<int *>&_cyb___py_nccl_init, 1)
         return 0
@@ -1015,6 +1023,9 @@ cpdef dict _inspect_function_pointers():
     global __ncclGroupSimulateEnd
     data["__ncclGroupSimulateEnd"] = <intptr_t>__ncclGroupSimulateEnd
 
+    global __ncclSetEncryption
+    data["__ncclSetEncryption"] = <intptr_t>__ncclSetEncryption
+
     global __ncclParamBind
     data["__ncclParamBind"] = <intptr_t>__ncclParamBind
 
@@ -1069,11 +1080,11 @@ cpdef dict _inspect_function_pointers():
     global __ncclGetLsaMultimemDevicePointer
     data["__ncclGetLsaMultimemDevicePointer"] = <intptr_t>__ncclGetLsaMultimemDevicePointer
 
-    global __ncclGetLsaDevicePointer
-    data["__ncclGetLsaDevicePointer"] = <intptr_t>__ncclGetLsaDevicePointer
-
     global __ncclGetMultimemDevicePointer
     data["__ncclGetMultimemDevicePointer"] = <intptr_t>__ncclGetMultimemDevicePointer
+
+    global __ncclGetLsaDevicePointer
+    data["__ncclGetLsaDevicePointer"] = <intptr_t>__ncclGetLsaDevicePointer
 
     global __ncclGetPeerDevicePointer
     data["__ncclGetPeerDevicePointer"] = <intptr_t>__ncclGetPeerDevicePointer
@@ -1099,14 +1110,14 @@ cpdef dict _inspect_function_pointers():
     global __ncclTeamCftMultimem
     data["__ncclTeamCftMultimem"] = <intptr_t>__ncclTeamCftMultimem
 
-    global __ncclTeamRail
-    data["__ncclTeamRail"] = <intptr_t>__ncclTeamRail
-
     global __ncclTeamRankToWorld
     data["__ncclTeamRankToWorld"] = <intptr_t>__ncclTeamRankToWorld
 
     global __ncclTeamRankToLsa
     data["__ncclTeamRankToLsa"] = <intptr_t>__ncclTeamRankToLsa
+
+    global __ncclTeamRail
+    data["__ncclTeamRail"] = <intptr_t>__ncclTeamRail
 
     global __ncclLsaBarrierCreateRequirement
     data["__ncclLsaBarrierCreateRequirement"] = <intptr_t>__ncclLsaBarrierCreateRequirement
@@ -1114,11 +1125,11 @@ cpdef dict _inspect_function_pointers():
     global __ncclGinBarrierCreateRequirement
     data["__ncclGinBarrierCreateRequirement"] = <intptr_t>__ncclGinBarrierCreateRequirement
 
-    global __ncclLLA2ACreateRequirement
-    data["__ncclLLA2ACreateRequirement"] = <intptr_t>__ncclLLA2ACreateRequirement
-
     global __ncclLLA2ACalcSlots
     data["__ncclLLA2ACalcSlots"] = <intptr_t>__ncclLLA2ACalcSlots
+
+    global __ncclLLA2ACreateRequirement
+    data["__ncclLLA2ACreateRequirement"] = <intptr_t>__ncclLLA2ACreateRequirement
     _cyb_func_ptrs = data
     return data
 
@@ -1739,6 +1750,16 @@ cdef ncclResult_t _ncclGroupSimulateEnd(ncclSimInfo_t* simInfo) except?_NCCLRESU
         simInfo)
 
 
+cdef ncclResult_t _ncclSetEncryption(const ncclEncryptionConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclSetEncryption
+    _check_or_init_nccl()
+    if __ncclSetEncryption == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclSetEncryption is not found")
+    return (<ncclResult_t (*)(const ncclEncryptionConfig_t*) noexcept nogil>__ncclSetEncryption)(
+        config)
+
+
 cdef ncclResult_t _ncclParamBind(ncclParamHandle_t* out, const char* key) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclParamBind
     _check_or_init_nccl()
@@ -1920,16 +1941,6 @@ cdef ncclResult_t _ncclGetLsaMultimemDevicePointer(ncclWindow_t window, size_t o
         window, offset, outPtr)
 
 
-cdef ncclResult_t _ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsaRank, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    global __ncclGetLsaDevicePointer
-    _check_or_init_nccl()
-    if __ncclGetLsaDevicePointer == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclGetLsaDevicePointer is not found")
-    return (<ncclResult_t (*)(ncclWindow_t, size_t, int, void**) noexcept nogil>__ncclGetLsaDevicePointer)(
-        window, offset, lsaRank, outPtr)
-
-
 cdef ncclResult_t _ncclGetMultimemDevicePointer(ncclWindow_t window, size_t offset, ncclMultimemHandle_t multimem, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     global __ncclGetMultimemDevicePointer
     _check_or_init_nccl()
@@ -1938,6 +1949,16 @@ cdef ncclResult_t _ncclGetMultimemDevicePointer(ncclWindow_t window, size_t offs
             raise FunctionNotFoundError("function ncclGetMultimemDevicePointer is not found")
     return (<ncclResult_t (*)(ncclWindow_t, size_t, ncclMultimemHandle_t, void**) noexcept nogil>__ncclGetMultimemDevicePointer)(
         window, offset, multimem, outPtr)
+
+
+cdef ncclResult_t _ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsaRank, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclGetLsaDevicePointer
+    _check_or_init_nccl()
+    if __ncclGetLsaDevicePointer == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclGetLsaDevicePointer is not found")
+    return (<ncclResult_t (*)(ncclWindow_t, size_t, int, void**) noexcept nogil>__ncclGetLsaDevicePointer)(
+        window, offset, lsaRank, outPtr)
 
 
 cdef ncclResult_t _ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset, int peer, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
@@ -2020,16 +2041,6 @@ cdef ncclTeam_t _ncclTeamCftMultimem(ncclComm_t comm) except* nogil:
         comm)
 
 
-cdef ncclTeam_t _ncclTeamRail(ncclComm_t comm) except* nogil:
-    global __ncclTeamRail
-    _check_or_init_nccl()
-    if __ncclTeamRail == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclTeamRail is not found")
-    return (<ncclTeam_t (*)(ncclComm_t) noexcept nogil>__ncclTeamRail)(
-        comm)
-
-
 cdef int _ncclTeamRankToWorld(ncclComm_t comm, ncclTeam_t team, int rank) except?-42 nogil:
     global __ncclTeamRankToWorld
     _check_or_init_nccl()
@@ -2048,6 +2059,16 @@ cdef int _ncclTeamRankToLsa(ncclComm_t comm, ncclTeam_t team, int rank) except?-
             raise FunctionNotFoundError("function ncclTeamRankToLsa is not found")
     return (<int (*)(ncclComm_t, ncclTeam_t, int) noexcept nogil>__ncclTeamRankToLsa)(
         comm, team, rank)
+
+
+cdef ncclTeam_t _ncclTeamRail(ncclComm_t comm) except* nogil:
+    global __ncclTeamRail
+    _check_or_init_nccl()
+    if __ncclTeamRail == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclTeamRail is not found")
+    return (<ncclTeam_t (*)(ncclComm_t) noexcept nogil>__ncclTeamRail)(
+        comm)
 
 
 cdef ncclResult_t _ncclLsaBarrierCreateRequirement(ncclTeam_t team, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
@@ -2070,16 +2091,6 @@ cdef ncclResult_t _ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t t
         comm, team, nBarriers, outHandle, outReq)
 
 
-cdef ncclResult_t _ncclLLA2ACreateRequirement(int nBlocks, int nSlots, ncclLLA2AHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    global __ncclLLA2ACreateRequirement
-    _check_or_init_nccl()
-    if __ncclLLA2ACreateRequirement == NULL:
-        with gil:
-            raise FunctionNotFoundError("function ncclLLA2ACreateRequirement is not found")
-    return (<ncclResult_t (*)(int, int, ncclLLA2AHandle_t*, ncclDevResourceRequirements_t*) noexcept nogil>__ncclLLA2ACreateRequirement)(
-        nBlocks, nSlots, outHandle, outReq)
-
-
 cdef int _ncclLLA2ACalcSlots(int maxElts, int maxEltSize) except?-42 nogil:
     global __ncclLLA2ACalcSlots
     _check_or_init_nccl()
@@ -2088,3 +2099,13 @@ cdef int _ncclLLA2ACalcSlots(int maxElts, int maxEltSize) except?-42 nogil:
             raise FunctionNotFoundError("function ncclLLA2ACalcSlots is not found")
     return (<int (*)(int, int) noexcept nogil>__ncclLLA2ACalcSlots)(
         maxElts, maxEltSize)
+
+
+cdef ncclResult_t _ncclLLA2ACreateRequirement(int nBlocks, int nSlots, ncclLLA2AHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    global __ncclLLA2ACreateRequirement
+    _check_or_init_nccl()
+    if __ncclLLA2ACreateRequirement == NULL:
+        with gil:
+            raise FunctionNotFoundError("function ncclLLA2ACreateRequirement is not found")
+    return (<ncclResult_t (*)(int, int, ncclLLA2AHandle_t*, ncclDevResourceRequirements_t*) noexcept nogil>__ncclLLA2ACreateRequirement)(
+        nBlocks, nSlots, outHandle, outReq)

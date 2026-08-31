@@ -629,7 +629,7 @@ def _materialize_team_requirements(
             multimem_handles[team] = handle
 
         if previous is not None:
-            previous.next = node.ptr
+            previous.next = node
 
         team_nodes.append(node)
         previous = node
@@ -670,13 +670,13 @@ def _materialize_resource_requirements(
             handle = _nccl_bindings.LsaBarrierHandle()
             team_lowpp = resource.team._to_lowpp()
             _nccl_bindings.lsa_barrier_create_requirement(
-                team_lowpp.ptr, resource.n_barriers, handle.ptr, node.ptr
+                team_lowpp, resource.n_barriers, handle.ptr, node.ptr
             )
         elif isinstance(resource, GinBarrierRequirement):
             handle = _nccl_bindings.GinBarrierHandle()
             team_lowpp = resource.team._to_lowpp()
             _nccl_bindings.gin_barrier_create_requirement(
-                comm, team_lowpp.ptr, resource.n_barriers, handle.ptr, node.ptr
+                comm, team_lowpp, resource.n_barriers, handle.ptr, node.ptr
             )
         elif isinstance(resource, LLA2ARequirement):
             handle = _nccl_bindings.LLA2AHandle()
@@ -690,7 +690,7 @@ def _materialize_resource_requirements(
             raise TypeError(f"unknown resource requirement: {type(resource).__name__}")
 
         if previous is not None:
-            previous.next = node.ptr
+            previous.next = node
 
         resource_nodes.append(node)
         resource_handles.append(handle)
@@ -1544,7 +1544,7 @@ class Communicator:
         """
         self._check_valid("team_rank_to_world")
         team_lowpp = team._to_lowpp()
-        return _nccl_bindings.team_rank_to_world(self._comm, team_lowpp.ptr, team_rank)
+        return _nccl_bindings.team_rank_to_world(self._comm, team_lowpp, team_rank)
 
     def team_rank_to_lsa(self, team: NCCLTeam, team_rank: int) -> int:
         """Maps a rank within ``team`` to its rank in the LSA team.
@@ -1569,7 +1569,7 @@ class Communicator:
         """
         self._check_valid("team_rank_to_lsa")
         team_lowpp = team._to_lowpp()
-        return _nccl_bindings.team_rank_to_lsa(self._comm, team_lowpp.ptr, team_rank)
+        return _nccl_bindings.team_rank_to_lsa(self._comm, team_lowpp, team_rank)
 
     # --- Point-to-Point Communication ---
     def send(

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.31.2. Do not modify it directly.
+# This code was automatically generated with version 2.32.1. Do not modify it directly.
 
 
 ###############################################################################
@@ -23,6 +23,7 @@ from libc.stdint cimport (
     uint64_t,
     uint8_t,
 )
+from libcpp cimport bool as _cyb_bool
 
 
 # <<<< END OF PREAMBLE CONTENT >>>>
@@ -45,6 +46,13 @@ ctypedef enum ncclHostCftMode_t "ncclHostCftMode_t":
     ncclHostCftEnable "ncclHostCftEnable" = 1
     ncclHostCftDisable "ncclHostCftDisable" = 2
     ncclHostCftFallback "ncclHostCftFallback" = 3
+
+ctypedef enum ncclNvlsHostMode_t "ncclNvlsHostMode_t":
+    ncclNvlsHostModeDefault "ncclNvlsHostModeDefault" = -(2147483648)
+    ncclNvlsHostModeEnable "ncclNvlsHostModeEnable" = 0
+    ncclNvlsHostModeDisableTransport "ncclNvlsHostModeDisableTransport" = (1 << 0)
+    ncclNvlsHostModeDisableSymmetricMultimem "ncclNvlsHostModeDisableSymmetricMultimem" = (1 << 1)
+    ncclNvlsHostModeDisable "ncclNvlsHostModeDisable" = 2147483647
 
 ctypedef enum ncclCommMemStat_t "ncclCommMemStat_t":
     ncclStatGpuMemSuspend "ncclStatGpuMemSuspend" = 0
@@ -88,6 +96,16 @@ ctypedef enum ncclScalarResidence_t "ncclScalarResidence_t":
     ncclScalarDevice "ncclScalarDevice" = 0
     ncclScalarHostImmediate "ncclScalarHostImmediate" = 1
 
+ctypedef enum ncclEncryptionMode_t "ncclEncryptionMode_t":
+    NCCL_ENCRYPTION_MODE_NONE "NCCL_ENCRYPTION_MODE_NONE" = 0
+    NCCL_ENCRYPTION_MODE_PSK "NCCL_ENCRYPTION_MODE_PSK" = 1
+
+ctypedef enum ncclGinConnectionType_t "ncclGinConnectionType_t":
+    NCCL_GIN_CONNECTION_NONE "NCCL_GIN_CONNECTION_NONE"
+    NCCL_GIN_CONNECTION_FULL "NCCL_GIN_CONNECTION_FULL"
+    NCCL_GIN_CONNECTION_RAIL "NCCL_GIN_CONNECTION_RAIL"
+    NCCL_GIN_CONNECTION_CUSTOM_STRIDE "NCCL_GIN_CONNECTION_CUSTOM_STRIDE"
+
 ctypedef enum ncclGinType_t "ncclGinType_t":
     NCCL_GIN_TYPE_NONE "NCCL_GIN_TYPE_NONE" = 0
     NCCL_GIN_TYPE_PROXY "NCCL_GIN_TYPE_PROXY" = 2
@@ -96,16 +114,19 @@ ctypedef enum ncclGinType_t "ncclGinType_t":
     NCCL_GIN_TYPE_EFA_GDA "NCCL_GIN_TYPE_EFA_GDA" = 5
     NCCL_GIN_MAX_TYPES "NCCL_GIN_MAX_TYPES" = 6
 
-ctypedef enum ncclGinConnectionType_t "ncclGinConnectionType_t":
-    NCCL_GIN_CONNECTION_NONE "NCCL_GIN_CONNECTION_NONE" = 0
-    NCCL_GIN_CONNECTION_FULL "NCCL_GIN_CONNECTION_FULL" = 1
-    NCCL_GIN_CONNECTION_RAIL "NCCL_GIN_CONNECTION_RAIL" = 2
-    NCCL_GIN_CONNECTION_CUSTOM_STRIDE "NCCL_GIN_CONNECTION_CUSTOM_STRIDE" = 3
-
 ctypedef enum ncclCftTeamMode_t "ncclCftTeamMode_t":
-    NCCL_CFT_TEAM_FLAT "NCCL_CFT_TEAM_FLAT" = 0
-    NCCL_CFT_TEAM_HIER_MULTIMEM "NCCL_CFT_TEAM_HIER_MULTIMEM" = 1
-    NCCL_CFT_TEAM_HIER_LSA "NCCL_CFT_TEAM_HIER_LSA" = 2
+    NCCL_CFT_TEAM_FLAT "NCCL_CFT_TEAM_FLAT"
+    NCCL_CFT_TEAM_HIER_MULTIMEM "NCCL_CFT_TEAM_HIER_MULTIMEM"
+    NCCL_CFT_TEAM_HIER_LSA "NCCL_CFT_TEAM_HIER_LSA"
+
+ctypedef enum ncclCftCap_t "ncclCftCap_t":
+    NCCL_CFT_NONE "NCCL_CFT_NONE" = 0x0
+    NCCL_CFT "NCCL_CFT" = 0x1
+    NCCL_CFT_MULTIMEM "NCCL_CFT_MULTIMEM" = 0x2
+
+ctypedef enum ncclGinSignalOp_t "ncclGinSignalOp_t":
+    ncclGinSignalInc "ncclGinSignalInc" = 0
+    ncclGinSignalAdd "ncclGinSignalAdd"
 
 
 # types
@@ -116,9 +137,10 @@ cdef extern from *:
     #include <cuComplex.h>
     """
     ctypedef void* cudaStream_t 'cudaStream_t'
+    ctypedef void* cudaEvent_t 'cudaEvent_t'
 
 
-ctypedef uint32_t ncclDevResourceHandle_t 'ncclDevResourceHandle_t'
+ctypedef uint32_t ncclDevResourceHandle 'ncclDevResourceHandle'
 
 ctypedef uint32_t ncclGinSignal_t 'ncclGinSignal_t'
 
@@ -163,6 +185,7 @@ ctypedef struct ncclConfig_t 'ncclConfig_t':
     int numRmaSig
     int rmaEagerInit
     int hostCftMode
+    int nvlsHostMode
 
 ctypedef struct nccl_bindings_nccl__anon_pod0:
     int vendorId
@@ -185,6 +208,26 @@ ctypedef struct ncclWaitSignalDesc_t 'ncclWaitSignalDesc_t':
     int sigIdx
     int ctx
 
+ctypedef struct ncclEncryptionConfig_t 'ncclEncryptionConfig_t':
+    size_t size
+    unsigned int magic
+    unsigned int version
+    int mode
+    char* psk
+
+ctypedef struct ncclResourceWindow_vidmem_t 'ncclResourceWindow_vidmem_t':
+    char* lsaFlatBase
+    uint32_t stride4G
+    uint32_t mcOffset4K
+
+ctypedef struct ncclMultimemHandle_t 'ncclMultimemHandle_t':
+    void* mcBasePtr
+
+ctypedef struct ncclTeam_t 'ncclTeam_t':
+    int nRanks
+    int rank
+    int stride
+
 ctypedef struct ncclCommProperties_t 'ncclCommProperties_t':
     size_t size
     unsigned int magic
@@ -193,30 +236,41 @@ ctypedef struct ncclCommProperties_t 'ncclCommProperties_t':
     int nRanks
     int cudaDev
     int nvmlDev
-    uint8_t deviceApiSupport
-    uint8_t multimemSupport
+    _cyb_bool deviceApiSupport
+    _cyb_bool multimemSupport
     ncclGinType_t ginType
     int nLsaTeams
-    uint8_t hostRmaSupport
+    _cyb_bool hostRmaSupport
     ncclGinType_t railedGinType
     uint64_t commHash
     int ginMinStride
     ncclGinConnectionType_t ginConnectionType
-    uint8_t ginSupport[64]
+    _cyb_bool ginSupport[64]
     size_t devCommRuntimeVersionSize
+    _cyb_bool cftSupport
+    _cyb_bool cftMulticastSupport
+    _cyb_bool cftCountedSupport
 
-ctypedef struct ncclTeam_t 'ncclTeam_t':
-    int nRanks
-    int rank
-    int stride
+ctypedef ncclDevResourceHandle ncclDevResourceHandle_t 'ncclDevResourceHandle_t'
 
-ctypedef struct ncclMultimemHandle_t 'ncclMultimemHandle_t':
-    void* mcBasePtr
+ctypedef ncclCftLeId ncclCftLeId_t 'ncclCftLeId_t'
 
-ctypedef struct ncclResourceWindow_vidmem_t 'ncclResourceWindow_vidmem_t':
-    char* lsaFlatBase
-    uint32_t stride4G
-    uint32_t mcOffset4K
+cdef struct ncclConfigExt:
+    ncclConfigExt* next
+    nccl_bindings_nccl__anon_pod0 key
+    nccl_bindings_nccl__anon_pod1 val
+ctypedef ncclConfigExt ncclConfigExt_t
+
+cdef struct ncclTeamRequirements:
+    ncclTeamRequirements* next
+    ncclTeam_t team
+    _cyb_bool multimem
+    ncclMultimemHandle_t* outMultimemHandle
+ctypedef ncclTeamRequirements ncclTeamRequirements_t
+
+ctypedef struct ncclGinBarrierHandle_t 'ncclGinBarrierHandle_t':
+    ncclGinSignal_t signal0
+    ncclDevResourceHandle_t unused
 
 ctypedef struct ncclLsaBarrierHandle_t 'ncclLsaBarrierHandle_t':
     ncclDevResourceHandle_t bufHandle
@@ -230,12 +284,8 @@ ctypedef struct ncclLLA2AHandle_t 'ncclLLA2AHandle_t':
     ncclDevResourceHandle_t bufHandle
     uint32_t nSlots
 
-ctypedef struct ncclGinBarrierHandle_t 'ncclGinBarrierHandle_t':
-    ncclGinSignal_t signal0
-    ncclDevResourceHandle_t unused
-
-ctypedef struct ncclDevResourceRequirements_t 'ncclDevResourceRequirements_t':
-    void* next
+cdef struct ncclDevResourceRequirements:
+    ncclDevResourceRequirements* next
     size_t bufferSize
     size_t bufferAlign
     ncclDevResourceHandle_t* outBufferHandle
@@ -243,18 +293,22 @@ ctypedef struct ncclDevResourceRequirements_t 'ncclDevResourceRequirements_t':
     int ginCounterCount
     ncclGinSignal_t* outGinSignalStart
     ncclGinCounter_t* outGinCounterStart
+ctypedef ncclDevResourceRequirements ncclDevResourceRequirements_t
 
-cdef struct ncclConfigExt:
-    ncclConfigExt* next
-    nccl_bindings_nccl__anon_pod0 key
-    nccl_bindings_nccl__anon_pod1 val
-ctypedef ncclConfigExt ncclConfigExt_t
-
-ctypedef struct ncclTeamRequirements_t 'ncclTeamRequirements_t':
-    void* next
-    ncclTeam_t team
-    uint8_t multimem
-    ncclMultimemHandle_t* outMultimemHandle
+ctypedef struct ncclCollConfig_t 'ncclCollConfig_t':
+    size_t size
+    unsigned int magic
+    unsigned int version
+    ncclConfigExt_t* ext
+    int minCTAs
+    int maxCTAs
+    int nvlsCTAs
+    int cgaClusterSize
+    char* algSelection
+    int forceAlgSelection
+    int CTAPolicy
+    uint64_t userProfilerTag
+    cudaEvent_t launchCompletionEvent
 
 ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     unsigned int magic
@@ -282,7 +336,7 @@ ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     uint32_t ginContextCount
     int ginConnectionStride
     int ginContextStride
-    uint8_t ginStrongLegacySignals
+    _cyb_bool ginStrongLegacySignals
     uint32_t* abortFlag
     ncclLsaBarrierHandle_t hybridLsaBarrier
     ncclGinBarrierHandle_t hybridRailGinBarrier
@@ -298,46 +352,32 @@ ctypedef struct ncclDevComm_t 'ncclDevComm_t':
     ncclCftBarrierHandle_t cftBarrier
     ncclCftBarrierHandle_t cftMultimemBarrier
 
-ctypedef struct ncclCollConfig_t 'ncclCollConfig_t':
-    size_t size
-    unsigned int magic
-    unsigned int version
-    ncclConfigExt_t* ext
-    int minCTAs
-    int maxCTAs
-    int nvlsCTAs
-    int cgaClusterSize
-    char* algSelection
-    int forceAlgSelection
-    int CTAPolicy
-    uint64_t userProfilerTag
-
 ctypedef struct ncclDevCommRequirements_t 'ncclDevCommRequirements_t':
     size_t size
     unsigned int magic
     unsigned int version
     ncclDevResourceRequirements_t* resourceRequirementsList
     ncclTeamRequirements_t* teamRequirementsList
-    uint8_t lsaMultimem
+    _cyb_bool lsaMultimem
     int barrierCount
     int lsaBarrierCount
     int railGinBarrierCount
     int lsaLLA2ABlockCount
     int lsaLLA2ASlotCount
-    uint8_t ginForceEnable
+    _cyb_bool ginForceEnable
     int ginContextCount
     int ginSignalCount
     int ginCounterCount
     ncclGinConnectionType_t ginConnectionType
-    uint8_t ginExclusiveContexts
+    _cyb_bool ginExclusiveContexts
     int ginQueueDepth
     int ginTrafficClass
     int worldGinBarrierCount
-    uint8_t ginStrongSignalsRequired
-    uint8_t ginVaSignalsRequired
+    _cyb_bool ginStrongSignalsRequired
+    _cyb_bool ginVaSignalsRequired
     int ginCustomStride
     ncclGinType_t ginType
-    uint8_t useRuntimeVersion
+    _cyb_bool useRuntimeVersion
     int cftCaps
     int cftBarrierCount
 
@@ -403,6 +443,7 @@ cdef ncclResult_t ncclWaitSignal(int nDesc, ncclWaitSignalDesc_t* signalDescs, n
 cdef ncclResult_t ncclGroupStart() except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGroupEnd() except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* simInfo) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclSetEncryption(const ncclEncryptionConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclParamBind(ncclParamHandle_t* out, const char* key) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclParamGetI8(ncclParamHandle_t h, int8_t* out) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclParamGetI16(ncclParamHandle_t h, int16_t* out) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
@@ -421,8 +462,8 @@ cdef ncclResult_t ncclCommQueryProperties(ncclComm_t comm, ncclCommProperties_t*
 cdef ncclResult_t ncclDevCommCreate(ncclComm_t comm, const ncclDevCommRequirements_t* reqs, ncclDevComm_t* outDevComm) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclDevCommDestroy(ncclComm_t comm, const ncclDevComm_t* devComm) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGetLsaMultimemDevicePointer(ncclWindow_t window, size_t offset, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
-cdef ncclResult_t ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsaRank, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGetMultimemDevicePointer(ncclWindow_t window, size_t offset, ncclMultimemHandle_t multimem, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
+cdef ncclResult_t ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsaRank, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset, int peer, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGetMultimemDeviceLeInfo(ncclWindow_t window, size_t offset, ncclCftLeId* leId, size_t* leOffset) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGetCftDeviceLeInfo(ncclWindow_t window, size_t offset, int peerCft, ncclTeam_t cftTeam, ncclCftLeId* leId, size_t* leOffset) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
@@ -431,10 +472,10 @@ cdef ncclTeam_t ncclTeamWorld(ncclComm_t comm) except* nogil
 cdef ncclTeam_t ncclTeamLsa(ncclComm_t comm) except* nogil
 cdef ncclTeam_t ncclTeamCft(ncclComm_t comm, ncclCftTeamMode_t mode) except* nogil
 cdef ncclTeam_t ncclTeamCftMultimem(ncclComm_t comm) except* nogil
-cdef ncclTeam_t ncclTeamRail(ncclComm_t comm) except* nogil
 cdef int ncclTeamRankToWorld(ncclComm_t comm, ncclTeam_t team, int rank) except?-42 nogil
 cdef int ncclTeamRankToLsa(ncclComm_t comm, ncclTeam_t team, int rank) except?-42 nogil
+cdef ncclTeam_t ncclTeamRail(ncclComm_t comm) except* nogil
 cdef ncclResult_t ncclLsaBarrierCreateRequirement(ncclTeam_t team, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, int nBarriers, ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
-cdef ncclResult_t ncclLLA2ACreateRequirement(int nBlocks, int nSlots, ncclLLA2AHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil
 cdef int ncclLLA2ACalcSlots(int maxElts, int maxEltSize) except?-42 nogil
+cdef ncclResult_t ncclLLA2ACreateRequirement(int nBlocks, int nSlots, ncclLLA2AHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil

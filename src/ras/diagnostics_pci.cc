@@ -649,8 +649,16 @@ static ncclResult_t rasDiagnosticsRdmaTopoFillLocalData(const struct rasDiagnost
 
 ncclResult_t rasDiagnosticsRdmaTopoCollectLocal(const struct rasDiagnosticsContext* ctx,
                                                 struct rasDiagnosticsLocalData* data) {
-  return rasDiagnosticsCollectLocalRecords(ctx, sizeof(struct rasDiagnosticsRdmaTopoData),
-                                           rasDiagnosticsRdmaTopoFillLocalData, data);
+  NCCLCHECK(rasDiagnosticsCollectLocalRecords(ctx, sizeof(struct rasDiagnosticsRdmaTopoData),
+                                              rasDiagnosticsRdmaTopoFillLocalData, data));
+  if (data->nRecords == 0) return ncclSuccess;
+
+  const struct rasDiagnosticsRdmaTopoCache* rdmaTopo = rasDiagnosticsRdmaTopoResult();
+  if (rdmaTopo->state != RAS_DIAG_RDMA_TOPO_RAN) {
+    INFO(NCCL_RAS, "rdma_topo check not usable (%s): %s", rasDiagnosticsRdmaTopoStateName(rdmaTopo->state),
+         rdmaTopo->sample);
+  }
+  return ncclSuccess;
 }
 
 static const struct rasDiagnosticsRdmaTopoData* rasDiagnosticsRdmaTopoDataFromRecord(const char* record) {
@@ -780,21 +788,17 @@ static ncclResult_t rasDiagnosticsRdmaTopoReportFallbackReasons(const struct ras
                                                                 int end,
                                                                 const struct rasDiagnosticsRankHeader* startRank) {
   const struct rasDiagnosticsRdmaTopoData* first = nullptr;
-  int firstRank = -1;
   int nFallback = 0;
   bool mixedResults = false;
 
   for (int i = start; i < end; i++) {
     const char* record = records + (size_t)i * recordStride;
-    const struct rasDiagnosticsRankHeader* rank = rasDiagnosticsRankHeaderFromRecord(record);
     const struct rasDiagnosticsRdmaTopoData* topoData = rasDiagnosticsRdmaTopoDataFromRecord(record);
 
     if (topoData->source != RAS_DIAG_RDMA_TOPO_SOURCE_FALLBACK) continue;
     if (first == nullptr) {
       first = topoData;
-      firstRank = rank->commRank;
-    } else if (topoData->rdmaTopoState != first->rdmaTopoState ||
-               strcmp(topoData->rdmaTopo.sample, first->rdmaTopo.sample) != 0) {
+    } else if (topoData->rdmaTopoState != first->rdmaTopoState) {
       mixedResults = true;
     }
     nFallback++;
@@ -803,15 +807,13 @@ static ncclResult_t rasDiagnosticsRdmaTopoReportFallbackReasons(const struct ras
 
   if (mixedResults) {
     return rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                "rdma_topo check: not usable on %d/%d ranks in comm 0x%lx "
-                                "(mixed results); first rank %d: %s",
-                                nFallback, startRank->commNRanks, startRank->commId.commHash, firstRank,
-                                first->rdmaTopo.sample);
+                                "rdma_topo check: not usable on %d/%d ranks in comm 0x%lx (mixed results)", nFallback,
+                                startRank->commNRanks, startRank->commId.commHash);
   }
   return rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                              "rdma_topo check: not usable on %d/%d ranks in comm 0x%lx (%s): %s", nFallback,
+                              "rdma_topo check: not usable on %d/%d ranks in comm 0x%lx (%s)", nFallback,
                               startRank->commNRanks, startRank->commId.commHash,
-                              rasDiagnosticsRdmaTopoStateName(first->rdmaTopoState), first->rdmaTopo.sample);
+                              rasDiagnosticsRdmaTopoStateName(first->rdmaTopoState));
 }
 
 // Validate and group gathered records by communicator, then report each communicator's rdma_topo results.
@@ -1311,10 +1313,11 @@ ncclResult_t rasDiagnosticsIommuSummarize(const struct rasDiagnosticsContext* ct
       NCCLCHECKGOTO(rasDiagnosticsIommuReportMode(reporter, startRank, &summary), ret, exit);
       NCCLCHECKGOTO(rasDiagnosticsIommuReportGroups(reporter, startRank, &summary), ret, exit);
     } else if (summary.nUnavailable > 0) {
-      NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                         "IOMMU mode: unavailable on %d/%d ranks in comm 0x%lx", summary.nUnavailable,
-                                         startRank->commNRanks, startRank->commId.commHash),
-                    ret, exit);
+      NCCLCHECKGOTO(
+        rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                             "IOMMU mode: unable to identify relevant GPU/NIC pairs on %d/%d ranks in comm 0x%lx",
+                             summary.nUnavailable, startRank->commNRanks, startRank->commId.commHash),
+        ret, exit);
     }
     if (nTopologyNotReady > 0) {
       NCCLCHECKGOTO(rasDiagnosticsPciReportTopologyNotReady(reporter, "IOMMU mode", startRank, nTopologyNotReady), ret,
@@ -1518,8 +1521,10 @@ ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
     int nUnavailable = 0;
     int nTopologyNotReady = 0;
     int nAtsOn = 0;
+    int nAtsUnavailableRanks = 0;
     int previousCommRank = -1;
     int end = start;
+    bool reportedUnavailableSummary = false;
 
     if (ctx->hasCommFilter && (rasDiagnosticsCommIdCompare(&startRank->commId, &ctx->commFilter) != 0 ||
                                startRank->commNRanks != ctx->commNRanks)) {
@@ -1549,6 +1554,8 @@ ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
       }
 
       if (atsData->fallbackState == RAS_DIAG_PCI_FALLBACK_COLLECTED) {
+        bool rankHasUnavailableAts = false;
+
         nFallback++;
         for (int nicIdx = 0; nicIdx < atsData->nNics; nicIdx++) {
           const struct rasDiagnosticsAtsNicData* nic = atsData->nics + nicIdx;
@@ -1559,9 +1566,13 @@ ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
           } else if (nic->state == RAS_DIAG_ATS_NEEDS_ROOT) {
             rasDiagnosticsPciRecordNicIssue(&needsRoot, rank->commRank, nic->bdf);
           } else {
-            rasDiagnosticsPciRecordNicIssue(&unavailable, rank->commRank, nic->bdf);
+            rankHasUnavailableAts = true;
+            if (!atsData->lspciUnavailable) {
+              rasDiagnosticsPciRecordNicIssue(&unavailable, rank->commRank, nic->bdf);
+            }
           }
         }
+        if (rankHasUnavailableAts) nAtsUnavailableRanks++;
         if (atsData->netSelectionTruncated) rasDiagnosticsPciRankSetAdd(&truncated, rank->commRank);
         if (atsData->netSelectionIncomplete) rasDiagnosticsPciRankSetAdd(&incomplete, rank->commRank);
         if (atsData->lspciUnavailable) rasDiagnosticsPciRankSetAdd(&lspciUnavailableRanks, rank->commRank);
@@ -1578,9 +1589,10 @@ ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
       NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, "ATS state", startRank, end - start), ret, exit);
     } else if (nFallback == 0 && nUnavailable > 0) {
       NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                         "ATS state: network device selection incomplete on %d/%d ranks in comm 0x%lx",
+                                         "ATS state: unable to identify relevant NICs on %d/%d ranks in comm 0x%lx",
                                          nUnavailable, startRank->commNRanks, startRank->commId.commHash),
                     ret, exit);
+      reportedUnavailableSummary = true;
     } else if (nFallback == startRank->commNRanks && off.count == 0 && needsRoot.count == 0 && unavailable.count == 0 &&
                lspciUnavailableRanks.nTotal == 0 && lspciTruncatedRanks.nTotal == 0 && truncated.nTotal == 0 &&
                incomplete.nTotal == 0) {
@@ -1604,7 +1616,7 @@ ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
     } else if (unavailable.count > 0 || lspciUnavailableRanks.nTotal > 0) {
       NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
                                          "ATS state: unavailable across %d/%d ranks in comm 0x%lx",
-                                         unavailable.nAffectedRanks, startRank->commNRanks, startRank->commId.commHash),
+                                         nAtsUnavailableRanks, startRank->commNRanks, startRank->commId.commHash),
                     ret, exit);
     } else if (nFallback > 0) {
       NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
@@ -1665,9 +1677,9 @@ ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
                                          startRank->commId.commHash),
                     ret, exit);
     }
-    if (nUnavailable > 0) {
+    if (nUnavailable > 0 && !reportedUnavailableSummary) {
       NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                         "ATS state: network device selection incomplete on %d rank(s) in comm 0x%lx",
+                                         "ATS state: unable to identify relevant NICs on %d rank(s) in comm 0x%lx",
                                          nUnavailable, startRank->commId.commHash),
                     ret, exit);
     }

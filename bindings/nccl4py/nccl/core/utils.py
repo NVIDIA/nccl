@@ -18,6 +18,7 @@ from functools import cache
 from pathlib import Path
 
 import numpy as _np
+from cuda.pathfinder import load_nvidia_dynamic_lib
 from packaging.version import Version
 
 from nccl.bindings import nccl as _nccl_bindings
@@ -93,9 +94,11 @@ def _get_lib_version() -> Version:
 
 
 def _get_lib_path() -> Path | None:
-    """Path of the loaded ``libnccl.so``, or None if it cannot be determined."""
-    raw = _nccl_bindings.get_library_path()
-    return Path(raw) if raw else None
+    """Path of the loaded ``libnccl.so``, via the same cached loader the
+    bindings use. None if the loader cannot report a path.
+    """
+    abs_path = load_nvidia_dynamic_lib("nccl").abs_path
+    return Path(abs_path) if abs_path is not None else None
 
 
 @cache

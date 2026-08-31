@@ -5979,8 +5979,4 @@ cpdef list param_get_all_keys():
     return [table[i].decode() for i in range(table_len)]
 
 
-# Hand-written: not an NCCL entry point; reports the path of the loaded DSO.
-cpdef object get_library_path():
-    from ._internal.nccl import _inspect_loaded_library_path
-    return _inspect_loaded_library_path()
 del _cyb_IntEnum

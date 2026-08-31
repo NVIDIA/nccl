@@ -139,6 +139,3 @@ cpdef object team_cft_multimem(object comm)
 # Hand-written: Param API (SKIP_LOWPP in nccl.cybind.yaml).
 cpdef str param_get_parameter(str key)
 cpdef list param_get_all_keys()
-
-# Hand-written: not an NCCL entry point; reports the path of the loaded DSO.
-cpdef object get_library_path()

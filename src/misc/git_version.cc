@@ -12,3 +12,7 @@
 const char* ncclGetGitVersion(void) {
   return NCCL_GIT_VERSION_STRING;
 }
+
+const char* ncclGetGitCommitHash(void) {
+  return NCCL_GIT_COMMIT_HASH;
+}

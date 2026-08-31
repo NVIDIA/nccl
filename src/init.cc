@@ -859,6 +859,7 @@ fail:
   "NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX \
     "+cuda" STR(CUDA_MAJOR) "." STR(CUDA_MINOR)
 extern const char* ncclGetGitVersion(void);
+extern const char* ncclGetGitCommitHash(void);
 static void showVersion() {
   uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
   if ((levelMask & (1u << NCCL_LOG_INFO)) == 0) {
@@ -892,6 +893,8 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->cudaDev = comm->cudaDev;
   info->nvmlDev = comm->nvmlDev;
   info->version = NCCL_VERSION_CODE;
+  const char* gitCommitHash = ncclGetGitCommitHash();
+  info->gitVersionHash = (uint32_t)getHash(gitCommitHash, strlen(gitCommitHash));
   info->hostHash = getHostHash() + commHash;
   info->pidHash = getPidHash() + commHash;
   info->cuMemSupport = ncclCuMemEnable();
@@ -1299,6 +1302,15 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     globalRmaPluginSupport &= comm->peerInfo[i].rmaPluginAvailable;
     comm->cuMemGdrSupport &= comm->peerInfo[i].cuMemGdrSupport;
     comm->minDriverVersion = std::min(comm->peerInfo[i].cudaDriverVersion, comm->minDriverVersion);
+  }
+  if (rank == 0) {
+    for (int i = 1; i < nranks; i++) {
+      if (comm->peerInfo[0].gitVersionHash != comm->peerInfo[i].gitVersionHash) {
+        ATTN("Mismatched NCCL git versions detected: rank 0 fingerprint 0x%08x, rank %d fingerprint 0x%08x",
+             comm->peerInfo[0].gitVersionHash, i, comm->peerInfo[i].gitVersionHash);
+        break;
+      }
+    }
   }
   // AllGather1 - end
   timers[TIMER_INIT_ALLGATHER] = clockNano() - timers[TIMER_INIT_ALLGATHER];

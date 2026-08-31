@@ -825,13 +825,13 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
 
   if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterCft) && comm->gpuCftSupport > 0) {
     ncclTeam_t ucTeam = ncclTeamCft(comm), mcTeam = ncclTeamCftMultimem(comm);
-    if (comm->config.hostCftMode != ncclHostCftDisable || counted) {
+    if (comm->config.hostCftMode != ncclHostCftDisable) {
       // Add the UC and MC team to the teamHead list, and create the corresponding LEs.
       // In case of failure, "enable" will report the error, fallback will skip it.
       NOWARN(ret = symTeamObtain(comm, ucTeam, /*multimem=*/false, counted, /*uc=*/true, /*mc=*/false,
                                  /*outTeam=*/nullptr, /*needBarrier=*/nullptr),
              NCCL_INIT);
-      if (ret != ncclSuccess && (comm->config.hostCftMode == ncclHostCftEnable || counted)) {
+      if (ret != ncclSuccess && comm->config.hostCftMode == ncclHostCftEnable) {
         WARN("Failed to obtain the UC team");
         goto fail_mem_space_teams;
       }
@@ -1404,6 +1404,7 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   struct ncclTeam lsa = ncclTeamInnerFactor(world, devr->lsaSize);
   bool ginActivated = false;
   bool cftUcActivated = false;
+  bool hasCountedCftMemory = symHasCountedCftMemory(devr);
   struct ncclDevrTeam* tmLsa;
   ncclTeam_t ucTeam, mcTeam;
   size_t bufSizeTotal;
@@ -1529,8 +1530,13 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
     NCCLCHECKGOTO(symTeamObtain(comm, ucTeam, /*multimem=*/false, /*counted=*/false, /*uc=*/true, /*mc=*/false, &tmCft,
                                 /*needBarrier=*/nullptr),
                   ret, fail);
-    if (tmCft != nullptr) {
-      outDevComm->ucLeId = tmCft->ucLeId[0] != NCCL_LE_ID_INVALID ? tmCft->ucLeId[0] : tmCft->ucLeId[1] - ucTeam.nRanks;
+    if (tmCft != nullptr) outDevComm->ucLeId = tmCft->ucLeId[0];
+
+    if (hasCountedCftMemory) {
+      cftUcActivated |= devr->le[1].baseId == NCCL_LE_ID_INVALID;
+      NCCLCHECKGOTO(symTeamObtain(comm, ucTeam, /*multimem=*/false, /*counted=*/true, /*uc=*/true, /*mc=*/false, &tmCft,
+                                  /*needBarrier=*/nullptr),
+                    ret, fail);
     }
   }
 
@@ -1540,16 +1546,12 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
     NCCLCHECKGOTO(symTeamObtain(comm, mcTeam, /*multimem=*/false, /*counted=*/false, /*uc=*/false, /*mc=*/true, &tmCft,
                                 /*needBarrier=*/nullptr),
                   ret, fail);
-    // if outDevComm->mcLeId is unset set it to non-counted LE ID base
     if (tmCft != nullptr) outDevComm->mcLeId = tmCft->mcLeId[0];
 
-    if (symHasCountedCftMemory(devr)) {
-      tmCft = nullptr;
+    if (hasCountedCftMemory) {
       NCCLCHECKGOTO(symTeamObtain(comm, mcTeam, /*multimem=*/false, /*counted=*/true, /*uc=*/false, /*mc=*/true, &tmCft,
                                   /*needBarrier=*/nullptr),
                     ret, fail);
-      // if outDevComm->mcLeId is unset set it to non-counted LE ID base
-      if (tmCft != nullptr && outDevComm->mcLeId == NCCL_LE_ID_INVALID) outDevComm->mcLeId = tmCft->mcLeId[1] - 1;
     }
   }
 
@@ -1644,13 +1646,11 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   if (cftUcActivated) {
     for (int i = 0; i < devr->winSortedCount; i++) {
       struct ncclDevrWindow* win = devr->winSorted[i].win;
-      if (!ncclDevrWinRegEnabled(win->winFlags, ncclDevrRegisterCft) ||
-          (win->winFlags & NCCL_WIN_CFT_COUNTED)) {
-        continue;
-      }
+      if (!ncclDevrWinRegEnabled(win->winFlags, ncclDevrRegisterCft)) continue;
       struct ncclWindow_vidmem* winHost;
       NCCLCHECKGOTO(ncclShadowPoolToHost(&devr->shadows, win->vidmem, &winHost), ret, fail_stream);
-      winHost->ucLeIdBase = devr->le[0].baseId;
+      bool counted = win->winFlags & NCCL_WIN_CFT_COUNTED;
+      winHost->ucLeIdBase = devr->le[counted].baseId;
       CUDACHECKGOTO(cudaMemcpyAsync(win->vidmem, winHost, sizeof(struct ncclWindow_vidmem), cudaMemcpyHostToDevice,
                                     stream),
                     ret, fail_stream);

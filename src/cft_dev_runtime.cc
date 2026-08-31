@@ -132,13 +132,14 @@ ncclResult_t symTeamObtainUcLe(struct ncclComm* comm, struct ncclDevrTeam* t, st
     NCCLCHECKGOTO(ncclCalloc(&cftRankList, flatTeam.nRanks), ret, fail);
 
     // UC LD IDs are reserved in contiguous pairs, such that in devComm: counted ucLeId = devComm->ucLeId + nRanks
+    // Check if the other counted configuration was created.
     bool ucLeIdsCreated = cftUc[!counted].baseId != NCCL_LE_ID_INVALID;
     if (ucLeIdsCreated) {
       cftUc[counted].baseId = counted ? cftUc[0].baseId + flatTeam.nRanks : cftUc[1].baseId - flatTeam.nRanks;
     } else {
       ncclCftLeId ucLeIdBase;
       CUCHECKGOTO(cuLogicalEndpointIdReserve(&ucLeIdBase, flatTeam.nRanks * 2), ret, fail);
-      cftUc[counted].baseId = ucLeIdBase + ncclCftLeId(counted) * flatTeam.nRanks;
+      cftUc[counted].baseId = ucLeIdBase + (counted ? flatTeam.nRanks : 0);
       releaseCount = flatTeam.nRanks * 2;
     }
     CUCHECKGOTO(cuLogicalEndpointCreate(cftUc[counted].baseId + flatTeam.rank, &prop), ret, fail);

@@ -1403,6 +1403,7 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   struct ncclTeam world = ncclTeamWorld(comm);
   struct ncclTeam lsa = ncclTeamInnerFactor(world, devr->lsaSize);
   bool ginActivated = false;
+  bool cftUcActivated = false;
   struct ncclDevrTeam* tmLsa;
   ncclTeam_t ucTeam, mcTeam;
   size_t bufSizeTotal;
@@ -1522,6 +1523,7 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   outDevComm->cftMultimemSize_rcp32 = idivRcp32(devr->cftMcSize);
 
   if (comm->gpuCftSupport && (reqs->cftCaps & NCCL_CFT)) {
+    cftUcActivated = devr->le[0].baseId == NCCL_LE_ID_INVALID;
     // needBarrier = nullptr, the bootstrapBarrier below will barrier regardless
     struct ncclDevrTeam* tmCft = nullptr;
     NCCLCHECKGOTO(symTeamObtain(comm, ucTeam, /*multimem=*/false, /*counted=*/false, /*uc=*/true, /*mc=*/false, &tmCft,
@@ -1638,6 +1640,22 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   }
 
   CUDACHECKGOTO(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), ret, fail);
+
+  if (cftUcActivated) {
+    for (int i = 0; i < devr->winSortedCount; i++) {
+      struct ncclDevrWindow* win = devr->winSorted[i].win;
+      if (!ncclDevrWinRegEnabled(win->winFlags, ncclDevrRegisterCft) ||
+          (win->winFlags & NCCL_WIN_CFT_COUNTED)) {
+        continue;
+      }
+      struct ncclWindow_vidmem* winHost;
+      NCCLCHECKGOTO(ncclShadowPoolToHost(&devr->shadows, win->vidmem, &winHost), ret, fail_stream);
+      winHost->ucLeIdBase = devr->le[0].baseId;
+      CUDACHECKGOTO(cudaMemcpyAsync(win->vidmem, winHost, sizeof(struct ncclWindow_vidmem), cudaMemcpyHostToDevice,
+                                    stream),
+                    ret, fail_stream);
+    }
+  }
 
   if (ginActivated) {
     // Now update the GIN handles in all existing windows. Registration of memories happened above.

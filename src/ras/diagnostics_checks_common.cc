@@ -187,3 +187,11 @@ ncclResult_t rasDiagnosticsReportIncomplete(const struct rasDiagnosticsReporter*
                               gatheredRanks, rank->commNRanks, rank->commId.commHash, rank->commId.hostHash,
                               rank->commId.pidHash);
 }
+
+ncclResult_t rasDiagnosticsReportTopologyNotReady(const struct rasDiagnosticsReporter* reporter, const char* checkName,
+                                                  const struct rasDiagnosticsRankHeader* rank, int unavailableRanks) {
+  return rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                              "%s: incomplete for comm 0x%lx: topology-dependent data was unavailable for %d of %d "
+                              "ranks",
+                              checkName, rank->commId.commHash, unavailableRanks, rank->commNRanks);
+}

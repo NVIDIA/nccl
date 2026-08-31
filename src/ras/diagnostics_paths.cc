@@ -37,14 +37,20 @@
 // Number of distinct PATH_* types (PATH_LOC..PATH_DIS), for sizing per-path-type arrays.
 #define RAS_DIAG_PATH_TYPES (PATH_DIS + 1)
 
+enum rasDiagnosticsPathsState : uint8_t {
+  RAS_DIAG_PATHS_AVAILABLE = 0,
+  RAS_DIAG_PATHS_LOCAL_GPU_MISSING = 1,
+  RAS_DIAG_PATHS_TOPOLOGY_NOT_READY = 2,
+};
+
 struct rasDiagnosticsPathsData {
   uint32_t pathMask; // Bit (1u<<PATH_*) set for every path type this rank uses.
-  uint8_t localGpuMissing; // This rank's own GPU was absent from its topology, so pathMask is not meaningful.
+  rasDiagnosticsPathsState state;
 };
 
 // Computes this rank's path type usage from the (already-built) topology. `pathMask` has bit (1u<<PATH_*) set for every
 // type observed (PATH_LOC for self). Peers absent from the local topology are attributed to PATH_NET. If this rank's
-// own GPU is absent, no path type can be determined, so `localGpuMissing` is set and `pathMask` is left empty. Pure
+// own GPU is absent, no path type can be determined, so `state` records that and `pathMask` is left empty. Pure
 // in-memory read of `topo`; the caller must hold ncclCommsMutex so that `topo` stays alive for the call.
 static void rasDiagnosticsPathsUsage(struct ncclTopoSystem* topo, int rank, int nRanks,
                                      struct rasDiagnosticsPathsData* paths) {
@@ -55,7 +61,7 @@ static void rasDiagnosticsPathsUsage(struct ncclTopoSystem* topo, int rank, int 
   if (topo != nullptr) ncclTopoRankToIndex(topo, rank, &myGpuIdx, /*showWarn=*/false);
   if (myGpuIdx < 0) {
     // Without our own GPU we cannot classify any peer; report that rather than mislabelling every path as PATH_NET.
-    paths->localGpuMissing = 1;
+    paths->state = RAS_DIAG_PATHS_LOCAL_GPU_MISSING;
     return;
   }
 
@@ -81,6 +87,7 @@ ncclResult_t rasDiagnosticsPathsCollectLocal(const struct rasDiagnosticsContext*
   ncclUniquePtr<char> records;
   const size_t recordStride = rasDiagnosticsLocalRecordStride(sizeof(struct rasDiagnosticsPathsData));
   int nRecords = 0;
+  int recordIdx = 0;
 
   if (data == nullptr) {
     WARN("RAS diagnostics paths check local data output is null");
@@ -109,8 +116,6 @@ ncclResult_t rasDiagnosticsPathsCollectLocal(const struct rasDiagnosticsContext*
       struct ncclComm* comm = ncclComms[i];
       if (comm == nullptr) continue;
       if (!COMPILER_ATOMIC_LOAD(&comm->peerInfoValid, std::memory_order_acquire)) continue;
-      if (requireCommInitialized && COMPILER_ATOMIC_LOAD(&comm->initState, std::memory_order_acquire) != ncclSuccess)
-        continue;
       if (!rasDiagnosticsCommMatchesContext(ctx, comm)) continue;
       nRecords++;
     }
@@ -122,13 +127,14 @@ ncclResult_t rasDiagnosticsPathsCollectLocal(const struct rasDiagnosticsContext*
     }
 
     NCCLCHECK(ncclCalloc(records, (size_t)nRecords * recordStride));
-    for (int i = 0, recordIdx = 0; i < nNcclComms && recordIdx < nRecords; i++) {
+    for (int i = 0; i < nNcclComms && recordIdx < nRecords; i++) {
       struct ncclComm* comm = ncclComms[i];
       if (comm == nullptr) continue;
       if (!COMPILER_ATOMIC_LOAD(&comm->peerInfoValid, std::memory_order_acquire)) continue;
-      if (requireCommInitialized && COMPILER_ATOMIC_LOAD(&comm->initState, std::memory_order_acquire) != ncclSuccess)
-        continue;
       if (!rasDiagnosticsCommMatchesContext(ctx, comm)) continue;
+
+      ncclResult_t initState = COMPILER_ATOMIC_LOAD(&comm->initState, std::memory_order_acquire);
+      if (requireCommInitialized && initState != ncclSuccess && initState != ncclInProgress) continue;
 
       char* record = records.get() + (size_t)recordIdx * recordStride;
       struct rasDiagnosticsCommSnapshot snapshot;
@@ -138,9 +144,16 @@ ncclResult_t rasDiagnosticsPathsCollectLocal(const struct rasDiagnosticsContext*
       memcpy(record, &snapshot.rank, sizeof(snapshot.rank));
 
       paths = (struct rasDiagnosticsPathsData*)(record + sizeof(struct rasDiagnosticsRankHeader));
-      rasDiagnosticsPathsUsage(comm->topo, comm->rank, comm->nRanks, paths);
+      if (initState == ncclInProgress && (requireCommInitialized || comm->topo == nullptr)) {
+        memset(paths, 0, sizeof(*paths));
+        paths->state = RAS_DIAG_PATHS_TOPOLOGY_NOT_READY;
+      } else {
+        rasDiagnosticsPathsUsage(comm->topo, comm->rank, comm->nRanks, paths);
+      }
       recordIdx++;
     }
+    nRecords = recordIdx;
+    if (nRecords == 0) return ncclSuccess;
   }
 
   data->records = records.release();
@@ -204,6 +217,7 @@ ncclResult_t rasDiagnosticsPathsSummarize(const struct rasDiagnosticsContext* ct
     int ranksWithType[RAS_DIAG_PATH_TYPES] = {};
     int missingRanks[RAS_DIAG_RANK_SET_MAX];
     int nMissing = 0, nMissingStored = 0;
+    int nTopologyNotReady = 0;
     int end = start;
 
     while (end < nRecords) {
@@ -213,37 +227,48 @@ ncclResult_t rasDiagnosticsPathsSummarize(const struct rasDiagnosticsContext* ct
 
       if (end > start && rasDiagnosticsCommIdCompare(&startRank->commId, &rank->commId) != 0) break;
       paths = rasDiagnosticsPathsDataFromRecord(record);
-      if (paths->localGpuMissing) {
+      if (paths->state == RAS_DIAG_PATHS_LOCAL_GPU_MISSING) {
         if (nMissingStored < RAS_DIAG_RANK_SET_MAX) missingRanks[nMissingStored++] = rank->commRank;
         nMissing++;
-      } else {
+      } else if (paths->state == RAS_DIAG_PATHS_TOPOLOGY_NOT_READY) {
+        nTopologyNotReady++;
+      } else if (paths->state == RAS_DIAG_PATHS_AVAILABLE) {
         for (int t = 0; t < RAS_DIAG_PATH_TYPES; t++) {
           if (paths->pathMask & (1u << t)) ranksWithType[t]++;
         }
+      } else {
+        WARN("RAS diagnostics paths check received invalid path state %d", (int)paths->state);
+        ret = ncclInternalError;
+        goto exit;
       }
       end++;
     }
 
-    if (end - start != commNRanks) {
+    bool incomplete = end - start != commNRanks;
+    if (incomplete) {
       NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, "Paths", startRank, end - start), ret, exit);
-    } else {
+    } else if (nMissing > 0) {
+      char rankSet[256];
+
+      rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), missingRanks, nMissingStored, nMissing);
+      NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                                         "Paths: could not locate the rank's own GPU in the topology, so its paths "
+                                         "are unknown -- %s in comm 0x%lx",
+                                         rankSet, startRank->commId.commHash),
+                    ret, exit);
+    }
+
+    if (nTopologyNotReady > 0) {
+      NCCLCHECKGOTO(rasDiagnosticsReportTopologyNotReady(reporter, "Paths", startRank, nTopologyNotReady), ret, exit);
+    }
+
+    if (!incomplete && nTopologyNotReady == 0) {
       char buf[512];
       int pos = 0;
       bool first = true;
       // Partial coverage and disconnected paths are informational, not failures: uneven topologies (e.g. mixed
       // interop clusters) are legal, and a rank whose own GPU is missing simply could not be classified.
       bool info = (nMissing > 0) || (ranksWithType[PATH_DIS] > 0);
-
-      if (nMissing > 0) {
-        char rankSet[256];
-
-        rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), missingRanks, nMissingStored, nMissing);
-        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                           "Paths: could not locate the rank's own GPU in the topology, so its paths "
-                                           "are unknown -- %s in comm 0x%lx",
-                                           rankSet, startRank->commId.commHash),
-                      ret, exit);
-      }
 
       buf[0] = '\0';
       for (int t = 0; t < RAS_DIAG_PATH_TYPES; t++) {

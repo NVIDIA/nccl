@@ -1214,7 +1214,9 @@ static void profilerEnqueueOp(struct ncclProfilerThread* pt, struct ncclComm* co
       // Sym collectives poll a dedicated buffer set (see ncclProfilerCommState).
       op->workStarted = sym ? comm->profiler.symWorkStarted : comm->profiler.workStarted;
       op->workCompleted = sym ? comm->profiler.symWorkCompleted : comm->profiler.workCompleted;
-      op->workPhases = sym ? comm->profiler.symWorkPhases : comm->profiler.workPhases;
+      // Null for regular/p2p: they never publish a phases counter, so the completion
+      // check would otherwise wait on it forever.
+      op->workPhases = sym ? comm->profiler.symWorkPhases : nullptr;
       op->kernelEventHandle = nullptr;
       op->started = false;
       op->completed = false;

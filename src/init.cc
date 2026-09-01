@@ -786,13 +786,10 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   // Alloc profiler counters for the kernel
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.workStarted, MAXCHANNELS), ret, fail);
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.workCompleted, MAXCHANNELS), ret, fail);
-  NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.workPhases, MAXCHANNELS), ret, fail);
   tmpCommAndChans.comm.workStarted = comm->profiler.workStarted;
   tmpCommAndChans.comm.workCompleted = comm->profiler.workCompleted;
-  tmpCommAndChans.comm.workPhases = comm->profiler.workPhases;
   ncclCommPushCudaHostFree(comm, comm->profiler.workStarted);
   ncclCommPushCudaHostFree(comm, comm->profiler.workCompleted);
-  ncclCommPushCudaHostFree(comm, comm->profiler.workPhases);
   // Dedicated sym profiler buffers (ncclProfilerCommState); reach the device via the
   // sym kcomm (ncclSymkInit), not tmpCommAndChans.
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.symWorkStarted, MAXCHANNELS), ret, fail);

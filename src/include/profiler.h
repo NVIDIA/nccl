@@ -44,7 +44,6 @@ struct ncclProfilerThread;
 struct ncclProfilerCommState {
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
-  struct ncclDevProfilerPhases* workPhases /*[MAXCHANNELS]*/;
   uint64_t workCounter[MAXCHANNELS];
   // Dedicated counter/buffers for symmetric collectives: sym kernels read a fixed
   // counter from the args buffer and never advance the device channels[].workCounter,

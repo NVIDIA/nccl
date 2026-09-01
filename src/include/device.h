@@ -495,7 +495,6 @@ struct ncclKernelComm {
   // Profiler counters
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
-  struct ncclDevProfilerPhases* workPhases /*[MAXCHANNELS]*/;
 
   // GPU-resident progress-counter block; null when GPU progress counters are disabled.
   struct ncclProgressCountersBlock* progressCounters;

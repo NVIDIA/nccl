@@ -136,6 +136,7 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
 // Profiler utility functions
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
 bool ncclProfilerPluginLoaded(void);
+uint8_t ncclProfilerDeviceMode(int eActivationMask);
 
 // Dedicated profiler thread API
 ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent);

@@ -289,10 +289,13 @@ struct RunWorkBatch<ncclFuncAllGatherV, T, RedOp, NCCL_ALGO_RING, Proto>;
 // These kernels record only KernelCh start/stop. KernelPhase instrumentation is
 // symmetric-only: the open/close barriers it measures exist in the symmetric
 // kernels, so stamping them here would report boundaries that carry no meaning.
+// Items are strided by workSize, not sizeof(ncclDevWorkColl), which is smaller for
+// registered collectives. Bcast work carries no profiling bit.
 __device__ __forceinline__ bool profilerEnabled(int workItemIdx) {
-  return (ncclShmem.workType == ncclDevWorkTypeP2p) ?
-           ((struct ncclDevWorkP2p*)ncclShmem.workStorage)[workItemIdx].profilerEnabled :
-           ((struct ncclDevWorkColl*)ncclShmem.workStorage)[workItemIdx].profilerEnabled;
+  char* work = ncclShmem.workStorage + workItemIdx * ncclShmem.workSize;
+  if (ncclShmem.workType == ncclDevWorkTypeP2p) return ((struct ncclDevWorkP2p*)work)->profilerEnabled;
+  if (ncclShmem.workType == ncclDevWorkTypeBcast) return false;
+  return ((struct ncclDevWorkColl*)work)->profilerEnabled;
 }
 
 // Specialized here for non-P2p (Coll and CollReg)

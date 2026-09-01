@@ -577,9 +577,9 @@ ncclResult_t ncclRmaProxyPutLaunch(struct ncclComm* comm, struct ncclKernelPlan*
   struct ncclRmaProxyDesc** descs = nullptr;
   struct ncclRmaProxyCtx** descCtxs = nullptr;  // per-desc context: tasks may span contexts
   CUstreamBatchMemOpParams* batchParams = nullptr;
-  NCCLCHECK(ncclCalloc(&descs, nRmaTasksProxy));
-  NCCLCHECK(ncclCalloc(&descCtxs, nRmaTasksProxy));
-  NCCLCHECK(ncclCalloc(&batchParams, opsPerTask * nRmaTasksProxy));
+  NCCLCHECKGOTO(ncclCalloc(&descs, nRmaTasksProxy), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&descCtxs, nRmaTasksProxy), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&batchParams, opsPerTask * nRmaTasksProxy), ret, fail);
 
   // Phase 1: build all descriptors and fill all stream-batch memop params up front.
   // Tasks in this plan may belong to different contexts; each desc is built on its

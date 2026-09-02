@@ -347,17 +347,19 @@ ncclResult_t ncclRegisterCollBuffers(
       void** srecvNetHandles = NULL;
       bool hasRecvNetPeer = false;
       bool hasSendNetPeer = false;
+      bool sendRdmaCapable = false, recvRdmaCapable = false;
 
       NCCLCHECK(ncclRegFind(comm, info->recvbuff, recvbuffSize, &recvRegRecord));
       if (recvRegRecord == NULL && !(comm->planner.persistent && ncclParamGraphRegister())) goto exit;
       NCCLCHECK(ncclRegFind(comm, info->sendbuff, sendbuffSize, &sendRegRecord));
       if (comm->nNodes > 1 && sendRegRecord == NULL && !(comm->planner.persistent && ncclParamGraphRegister()))
         goto exit;
-      NCCLCHECK(ncclCalloc(&sendNetConns, comm->nChannels));
-      NCCLCHECK(ncclCalloc(&sendNetHandles, comm->nChannels));
-      NCCLCHECK(ncclCalloc(&recvNetConns, comm->nChannels));
-      NCCLCHECK(ncclCalloc(&recvNetHandles, comm->nChannels));
-      NCCLCHECK(ncclCalloc(&srecvNetHandles, comm->nChannels));
+      // From here on, failures must go through ringFree to release the arrays below.
+      NCCLCHECKGOTO(ncclCalloc(&sendNetConns, comm->nChannels), result, ringFree);
+      NCCLCHECKGOTO(ncclCalloc(&sendNetHandles, comm->nChannels), result, ringFree);
+      NCCLCHECKGOTO(ncclCalloc(&recvNetConns, comm->nChannels), result, ringFree);
+      NCCLCHECKGOTO(ncclCalloc(&recvNetHandles, comm->nChannels), result, ringFree);
+      NCCLCHECKGOTO(ncclCalloc(&srecvNetHandles, comm->nChannels), result, ringFree);
 
       for (int c = 0; c < comm->nChannels; ++c) {
         struct ncclChannel* channel = comm->channels + c;
@@ -409,9 +411,8 @@ ncclResult_t ncclRegisterCollBuffers(
       // start net registration
       regBufFlag = 0;
 
-      bool sendRdmaCapable = false, recvRdmaCapable = false;
-      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->sendbuff, &sendRdmaCapable));
-      NCCLCHECK(isMloPartBufRdmaCapable(comm, info->recvbuff, &recvRdmaCapable));
+      NCCLCHECKGOTO(isMloPartBufRdmaCapable(comm, info->sendbuff, &sendRdmaCapable), result, ringFree);
+      NCCLCHECKGOTO(isMloPartBufRdmaCapable(comm, info->recvbuff, &recvRdmaCapable), result, ringFree);
       if (!comm->useNetPXN && comm->useGdr && comm->netDeviceType != NCCL_NET_DEVICE_UNPACK &&
           !(info->func == ncclFuncAllReduce &&
             (info->opDev.op == ncclDevPreMulSum || info->opDev.op == ncclDevSumPostDiv)) &&
@@ -447,17 +448,20 @@ ncclResult_t ncclRegisterCollBuffers(
         info->sendNetHandles = sendNetHandles;
         info->recvNetHandles = recvNetHandles;
         info->srecvNetHandles = srecvNetHandles;
+        // ownership of the handle arrays moved to info; do not free them below
+        sendNetHandles = recvNetHandles = srecvNetHandles = NULL;
         if (comm->isOneRPN && (info->func == ncclFuncAllGather || info->func == ncclFuncBroadcast)) {
           info->nMaxChannels = std::max(comm->config.minCTAs, std::min(comm->config.maxCTAs, comm->minNetCount));
         }
-      } else {
-        free(sendNetHandles);
-        free(recvNetHandles);
-        free(srecvNetHandles);
       }
 
+    ringFree:
+      free(sendNetHandles);
+      free(recvNetHandles);
+      free(srecvNetHandles);
       free(sendNetConns);
       free(recvNetConns);
+      if (result != ncclSuccess) goto exit;
     } else if (info->algorithm == NCCL_ALGO_TREE || info->algorithm == NCCL_ALGO_COLLNET_CHAIN) {
       struct ncclReg* recvRegRecord;
       int netSendRegFlag = 0, netRecvRegFlag = 0;

@@ -1145,8 +1145,8 @@ static void bootstrapAsyncSendMain(void* opaque) {
   bootstrapAsyncSendSetError(state, res);
   ncclIntruQueueDelete(&state->asyncSendQueue, op, bootstrapAsyncSendMatches);
   // we're done, wake up anyone that might be waiting for us to finish
-  lock.unlock();
   state->asyncSendCond.notify_all();
+  lock.unlock();
   free(op->data);
   free(op);
 }

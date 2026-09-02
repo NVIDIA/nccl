@@ -371,7 +371,7 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
       //  Check the user env vars only for functions that have a forced configuration and not already disabled.
       if (comm->tuningContext.forced[f] == 0 || comm->tuningContext.enabled[i][f] == 0) continue;
       comm->tuningContext.enabled[i][f] = 0;
-      TRACE(NCCL_TUNING, "a/p/s %s/%s/%s enabled %d/%d/%d", ncclAlgoStr[algo], ncclProtoStr[proto],
+      TRACE(NCCL_TUNING, "a/p/s %s/%s/%s enabled %d/%d/%d", ncclAlgoToString(algo), ncclProtoToString(proto),
             ncclSymkKernelIdToString(symKernelId),
             algo != NCCL_ALGO_UNDEF ? algoEnable[f * NCCL_NUM_ALGORITHMS + algo] : -1,
             proto != NCCL_PROTO_UNDEF ? protoEnable[f * NCCL_NUM_PROTOCOLS + proto] : -1,

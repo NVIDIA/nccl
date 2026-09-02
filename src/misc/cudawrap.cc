@@ -10,6 +10,8 @@
 #include "debug.h"
 #include "param.h"
 #include "cudawrap.h"
+#include "nvmlwrap.h"
+#include <cstdio>
 #include <mutex>
 
 // This env var (NCCL_CUMEM_ENABLE) toggles cuMem API usage
@@ -70,15 +72,21 @@ int ncclCuMemHostEnable() {
   return ncclCumemHostEnable;
 #else
   ncclResult_t ret = ncclSuccess;
-  int cudaDriverVersion;
+  int cudaApiVersion;
   int paramValue = -1;
-  CUDACHECKGOTO(cudaDriverGetVersion(&cudaDriverVersion), ret, error);
-  if (cudaDriverVersion < 12020) {
+  NCCLCHECKGOTO(ncclCudaDriverVersion(&cudaApiVersion), ret, error);
+  if (cudaApiVersion < 12020) {
     ncclCumemHostEnable = 0;
   } else {
     paramValue = ncclParamCuMemHostEnable();
     if (paramValue != -1) ncclCumemHostEnable = paramValue;
-    else ncclCumemHostEnable = (cudaDriverVersion >= 12060) ? 1 : 0;
+    else {
+      char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+      int major, minor, patch = 0;
+      ncclCumemHostEnable = ncclNvmlSystemGetDriverVersion(version, sizeof(version)) == ncclSuccess &&
+                            sscanf(version, "%d.%d.%d", &major, &minor, &patch) >= 2 &&
+                            (major > 560 || (major == 560 && (minor > 28 || (minor == 28 && patch >= 3))));
+    }
     if (ncclCumemHostEnable) {
       // Verify that host allocations actually work.  Docker in particular is known to disable "get_mempolicy",
       // causing such allocations to fail (this can be fixed by invoking Docker with "--cap-add SYS_NICE").

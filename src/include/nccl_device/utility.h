@@ -386,7 +386,13 @@ NCCL_DEVICE_INLINE unsigned int lanemask_lt() {
 #endif
 
 #ifdef __CUDACC__
+#if !defined(__CUDACC_VER_MAJOR__) || !defined(__CUDACC_VER_MINOR__)
+#define NCCL_DEVICE_LOADCONST_USE_LDG 1
+#elif (__CUDACC_VER_MAJOR__ > 13) || ((__CUDACC_VER_MAJOR__ == 13) && (__CUDACC_VER_MINOR__ >= 4))
+#define NCCL_DEVICE_LOADCONST_USE_LDG 1
+#else
 #define NCCL_DEVICE_LOADCONST_USE_LDG 0
+#endif
 
 template <typename T>
 NCCL_DEVICE_INLINE T loadConstLdg(T const* p) {
@@ -429,9 +435,7 @@ NCCL_DEVICE_INLINE T loadConstLdg(T const* p) {
   }
 }
 
-// loadConst defaults to ordinary dereference loads to avoid the __ldg/acquire-fence regression.
-// The loadConst selection macro is intentionally 0 for now; future CUDA-version gating belongs at
-// the define site above.
+// Use ordinary dereference loads with CUDA versions affected by the __ldg/acquire-fence regression.
 template <typename T>
 NCCL_DEVICE_INLINE T loadConst(T const* p) {
 #if NCCL_DEVICE_LOADCONST_USE_LDG

@@ -12,7 +12,7 @@
 #include <cfloat>
 
 NCCL_PARAM(PatEnable, "PAT_ENABLE", 2);
-static int ncclPatEnable(struct ncclComm* comm) {
+int ncclPatEnable(struct ncclComm* comm) {
   int patEnable = ncclParamPatEnable();
   if (comm->minCompCap < 60) return 0; // Need SM60 or higher for CUDA atomics
   if (patEnable != 2) return patEnable;

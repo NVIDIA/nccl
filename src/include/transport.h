@@ -39,6 +39,7 @@ struct ncclComm;
 
 int64_t ncclParamMultiSegmentRegister();
 extern int64_t ncclParamNvlsEnable();
+int ncclPatEnable(struct ncclComm* comm);
 
 struct ncclPeerInfo {
   int rank;

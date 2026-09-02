@@ -29,6 +29,7 @@
 uint64_t ncclOsGetPid();
 uint64_t ncclOsGetTid();
 size_t ncclOsGetPageSize();
+size_t ncclOsGetCommMempoolMaxSize();
 ncclResult_t ncclOsInitialize();
 
 ncclResult_t ncclOsSetFilesLimit();

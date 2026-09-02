@@ -642,6 +642,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
       props.handleTypes = cudaMemHandleTypeNone;
       props.location.type = cudaMemLocationTypeDevice;
       props.location.id = comm->cudaDev;
+      props.maxSize = ncclOsGetCommMempoolMaxSize();
       CUDACHECK(cudaMemPoolCreate(&comm->memPool, &props));
       uint64_t releaseThreshold = ~uint64_t(0);
       CUDACHECK(cudaMemPoolSetAttribute(comm->memPool, cudaMemPoolAttrReleaseThreshold, &releaseThreshold));

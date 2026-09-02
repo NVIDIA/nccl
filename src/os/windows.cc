@@ -120,6 +120,10 @@ size_t ncclOsGetPageSize() {
   return (size_t)si.dwPageSize;
 }
 
+size_t ncclOsGetCommMempoolMaxSize() {
+  return (size_t)1 << 30;
+}
+
 void* ncclOsAlignedAlloc(size_t alignment, size_t size) {
   return _aligned_malloc(size, alignment);
 }

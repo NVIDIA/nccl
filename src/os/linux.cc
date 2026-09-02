@@ -96,6 +96,10 @@ size_t ncclOsGetPageSize() {
   return (size_t)sysconf(_SC_PAGESIZE);
 }
 
+size_t ncclOsGetCommMempoolMaxSize() {
+  return 0;
+}
+
 void* ncclOsAlignedAlloc(size_t alignment, size_t size) {
   return aligned_alloc(alignment, size);
 }

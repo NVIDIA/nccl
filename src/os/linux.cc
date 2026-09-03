@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <dlfcn.h>
+#include <elf.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -48,7 +49,75 @@ static void saveDlError() {
   }
 }
 
+// dlopen() of a shared object truncated inside one of its PT_LOAD segments kills the process with SIGBUS (glibc
+// maps the missing part and faults while zero-filling it), so refuse such files before loading them.
+// Returns 1 if the file is truncated, 0 if it looks loadable, -1 if dlopen() would skip it and search on.
+static int dlFileCheck(const char* path) {
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return -1;
+  int res = 0;
+  struct stat st;
+  Elf64_Ehdr ehdr;
+  if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && pread(fd, &ehdr, sizeof(ehdr), 0) == (ssize_t)sizeof(ehdr) &&
+      memcmp(ehdr.e_ident, ELFMAG, SELFMAG) == 0) {
+    if (ehdr.e_ident[EI_CLASS] != ELFCLASS64) {
+      res = -1;
+    } else if (ehdr.e_phentsize == sizeof(Elf64_Phdr)) {
+      for (int i = 0; i < ehdr.e_phnum && res == 0; i++) {
+        Elf64_Phdr phdr;
+        off_t off = (off_t)ehdr.e_phoff + (off_t)i * (off_t)sizeof(phdr);
+        // Headers past the end of the file are rejected by dlopen() itself.
+        if (pread(fd, &phdr, sizeof(phdr), off) != (ssize_t)sizeof(phdr)) break;
+        if (phdr.p_type == PT_LOAD &&
+            (phdr.p_offset > (uint64_t)st.st_size || phdr.p_filesz > (uint64_t)st.st_size - phdr.p_offset)) {
+          res = 1;
+        }
+      }
+    }
+  }
+  close(fd);
+  return res;
+}
+
+// Best effort: only names we can resolve ourselves are checked, i.e. paths and bare names found in LD_LIBRARY_PATH.
+// dlopen() also consults RPATH/RUNPATH, hwcaps subdirectories and ld.so.cache, which are not emulated here.
+static bool dlCheckFile(const char* filename) {
+  if (filename == NULL) return true;
+  // Already loaded: dlopen() will not touch the file.
+  void* loaded = dlopen(filename, RTLD_NOLOAD | RTLD_LAZY);
+  if (loaded) {
+    dlclose(loaded);
+    return true;
+  }
+  char path[PATH_MAX];
+  const char* found = NULL;
+  int res = 0;
+  if (strchr(filename, '/')) {
+    found = filename;
+    res = dlFileCheck(found);
+  } else {
+    const char* dirs = getenv("LD_LIBRARY_PATH");
+    while (dirs && found == NULL) {
+      const char* end = strpbrk(dirs, ":;");
+      int len = end ? (int)(end - dirs) : (int)strlen(dirs);
+      // An empty entry stands for the current directory.
+      if (snprintf(path, sizeof(path), "%.*s/%s", len ? len : 1, len ? dirs : ".", filename) < (int)sizeof(path)) {
+        res = dlFileCheck(path);
+        if (res >= 0) found = path;
+      }
+      dirs = end ? end + 1 : NULL;
+    }
+  }
+  if (res == 1) {
+    snprintf(ncclDlErrorBuf, sizeof(ncclDlErrorBuf),
+             "%.180s: file is truncated (a segment ends beyond the end of the file)", found);
+    return false;
+  }
+  return true;
+}
+
 ncclOsLibraryHandle ncclOsDlopen(const char* filename) {
+  if (!dlCheckFile(filename)) return NULL;
   ncclOsLibraryHandle handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
   if (handle == NULL) {
     saveDlError();
@@ -69,6 +138,7 @@ const char* ncclOsDlerror() {
 }
 
 ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode) {
+  if (!dlCheckFile(path)) return NULL;
   ncclOsLibraryHandle handle = dlopen(path, (mode == NCCL_OS_DL_NOW) ? RTLD_NOW : RTLD_LAZY);
   if (handle == NULL) saveDlError();
   return handle;

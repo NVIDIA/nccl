@@ -283,7 +283,12 @@ ncclResult_t ncclRmaProxyPutGroupStartParams(struct ncclRmaProxyDesc* desc, CUst
 int ncclRmaProxyPutGroupDoneNumOps(bool persistent);
 ncclResult_t ncclRmaProxyPutGroupDoneParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params);
 
-// Stream-batch memop param builder for a wait descriptor.
+// Stream-batch memop param builders for a wait descriptor.
+int ncclRmaProxyWaitStartNumOps(const struct ncclRmaProxyDesc* desc);
+ncclResult_t ncclRmaProxyWaitStartParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params);
+int ncclRmaProxyWaitDoneNumOps(const struct ncclRmaProxyDesc* desc);
+ncclResult_t ncclRmaProxyWaitDoneParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc* desc,
+                                        CUstreamBatchMemOpParams* params);
 int ncclRmaProxyWaitNumStreamOps(const struct ncclRmaProxyDesc* desc);
 ncclResult_t ncclRmaProxyWaitParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc* desc,
                                     CUstreamBatchMemOpParams* params);

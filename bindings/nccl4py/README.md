@@ -1,103 +1,114 @@
 # nccl4py: Python Bindings for NCCL
 
-Python bindings for NVIDIA Collective Communications Library (NCCL), providing high-performance multi-GPU and multi-node communication primitives.
+nccl4py provides low-level Cython bindings and a high-level Python API for the
+[NVIDIA Collective Communications Library (NCCL)](https://developer.nvidia.com/nccl).
+It supports multi-GPU and multi-node communication from Python.
 
-This package provides both low-level Cython bindings and a high-level Pythonic API for NCCL collective operations.
+## Installation
 
-### Experimental Cython Support
+nccl4py supports Linux and Python 3.10 or later. Running NCCL operations
+requires a supported NVIDIA GPU and compatible NVIDIA driver. Choose the extra
+matching the CUDA major version of the other CUDA packages in your environment:
+
+```bash
+python -m pip install "nccl4py[cu12]"
+# or
+python -m pip install "nccl4py[cu13]"
+```
+
+The extras install the corresponding NCCL runtime and CUDA Python dependencies.
+Installing a published wheel does not require `CUDA_HOME` or a local CUDA
+Toolkit. Compiling nccl4py from source does.
+
+Verify the installation and inspect the loaded component versions:
 
 ```python
+import nccl.core as nccl
+
+nccl.show_versions()
+```
+
+`nccl.core` ships inline type information for
+[PEP 561](https://peps.python.org/pep-0561/)-compatible type checkers.
+
+See [`examples/01_basic`](examples/01_basic) for MPI-based collective and
+point-to-point examples.
+
+## Experimental Cython Support
+
+The wheel includes `nccl/bindings/cynccl.pxd` as an experimental Cython API:
+
+```cython
 from nccl.bindings cimport cynccl
 ```
 
-This allows Cython code to call NCCL functions with minimal overhead. The `cynccl.pxd` file is included in the package distribution for direct Cython integration.
-
-## Requirements
-
-- **CUDA Toolkit**: CUDA 12.x or 13.x
-- **NCCL Library**: Matching CUDA version (nvidia-nccl-cu12 or nvidia-nccl-cu13)
-- **Python**: 3.10 or later
+This allows Cython extensions to call NCCL functions with minimal Python
+overhead.
 
 ## Namespace Package
 
-`nccl` is a PEP 420 implicit namespace package: nccl4py owns `nccl.bindings` and
-`nccl.core`, and NCCL extension distributions add their own `nccl.<ext>` subpackage.
-Two consequences:
+`nccl` is a [PEP 420](https://peps.python.org/pep-0420/) implicit namespace
+package. nccl4py provides `nccl.bindings` and `nccl.core`; other NCCL extension
+distributions can provide additional `nccl.*` subpackages.
 
-- Install into a real environment, not `pip install --target DIR`. pip cannot merge
-  two distributions into one target directory, so the second one's package payload is
-  silently dropped.
-- `pip uninstall nccl4py` leaves an empty `nccl/` in site-packages, which keeps
-  `import nccl` succeeding as an empty namespace. Remove it by hand if that matters.
-  `uv pip uninstall` is unaffected.
+## Building from source
 
-## Development Setup
+The commands below use `bindings/nccl4py` as the working directory:
 
-### Prerequisites
-
-**Set CUDA_HOME environment variable:**
 ```bash
-export CUDA_HOME=/usr/local/cuda  # Or your CUDA installation path
+git clone https://github.com/NVIDIA/nccl.git
+cd nccl/bindings/nccl4py
 ```
 
-### Building from Source (using Makefile)
+Building the extension modules requires:
 
-The easiest way to build is using the Makefile, which requires [uv](https://docs.astral.sh/uv/):
+- Linux
+- Python 3.10 or later
+- a C++ compiler
+- CUDA Toolkit 12.x or 13.x, including its headers
+- `CUDA_HOME` pointing to that CUDA Toolkit
+
+Set `CUDA_HOME` to the CUDA Toolkit used for the build. For example:
 
 ```bash
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
+export CUDA_HOME=/usr/local/cuda
+```
 
-cd nccl4py
+### Development with the Makefile
 
-# Create development environment
+The Makefile uses [uv](https://docs.astral.sh/uv/) to manage the development
+environment. `make dev` detects the CUDA version from `CUDA_HOME`, creates
+`.venv`, and installs nccl4py in editable mode with the matching `cu12` or
+`cu13` extra, test dependencies, PyTorch, and CuPy. `make build` compiles the
+Cython extensions.
+
+```bash
+# Create the development environment and install nccl4py in editable mode.
 make dev
 
-# Build package (sdist and wheel)
+# Build the source distribution and wheel.
 make build
 
-# Clean build artifacts
+# Remove local build artifacts.
 make clean
 ```
 
-The Makefile automatically:
-- Detects CUDA version from `$CUDA_HOME`
-- Installs appropriate CUDA-specific dependencies (cu12/cu13)
-- Builds Cython extensions
+### Build with standard Python tools
 
-### Manual Build (without uv)
-
-If you prefer not to use `uv`, you can build manually with standard Python tools:
+Create a virtual environment and install nccl4py with standard Python tools:
 
 ```bash
-# Set CUDA_HOME
-export CUDA_HOME=/usr/local/cuda
-
-cd nccl4py
-
-# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate
 
-# Install in editable mode with CUDA dependencies
-pip install -e .[cu12]  # For CUDA 12.x
-# OR
-pip install -e .[cu13]  # For CUDA 13.x
-
-# Build distribution packages
-pip install build
-python -m build
+# Select exactly one CUDA extra.
+python -m pip install -e ".[cu12]"
+# python -m pip install -e ".[cu13]"
 ```
 
-## Building Distribution Packages
-
-### Build for current Python version:
-```bash
-make build
-# Output: build/dist/nccl4py-*.tar.gz and nccl4py-*.whl
-```
 
 ## References
 
-- [NCCL Documentation](https://docs.nvidia.com/deeplearning/nccl/)
-- [NCCL Repository](https://github.com/NVIDIA/nccl)
+- [NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/)
+- [NCCL repository](https://github.com/NVIDIA/nccl)
+- [nccl4py package documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/nccl4py.html)

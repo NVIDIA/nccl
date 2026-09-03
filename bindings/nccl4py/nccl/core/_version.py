@@ -3,4 +3,12 @@
 #
 # See LICENSE.txt for more license information
 
-__version__ = "0.5.0"
+"""NCCL4Py version from installed distribution metadata."""
+
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _distribution_version
+
+try:
+    __version__ = _distribution_version("nccl4py") or "0+unknown"
+except PackageNotFoundError:
+    __version__ = "0+unknown"

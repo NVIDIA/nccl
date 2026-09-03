@@ -1,15 +1,19 @@
-# Include nccl package with all source files
-recursive-include nccl *.pyx *.pxd
+# Include all Cython extension sources and dependencies
+recursive-include nccl/bindings *.pyx *.pxd
+
+# Include examples in the source distribution
+graft examples
 
 # Exclude directories not needed in sdist
-prune examples
-prune *.egg-info
+prune ci
 
-# Exclude development files from root and subdirectoriese x
+# Exclude development files from the project root
+exclude .gitlab-ci.yml
+exclude .git_archival.txt
+exclude CMakeLists.txt
 exclude Makefile
 exclude uv.lock
-global-exclude .gitignore .gitattributes
+global-exclude .gitignore .gitattributes *.py[cod]
 
-# Exclude generated Cython build outputs in nccl/bindings/
-recursive-exclude nccl/bindings *.so
-global-exclude *.cpp *.c
+# Exclude generated Cython build outputs
+recursive-exclude nccl/bindings *.so *.cpp *.c

@@ -6,28 +6,42 @@
 import os
 from pathlib import Path
 
-from Cython.Build import cythonize
 from setuptools import Extension, setup
-
-# Check CUDA_HOME is set and is a valid directory
-CUDA_HOME = os.environ.get("CUDA_HOME")
-if not CUDA_HOME:
-    raise SystemExit("Error: CUDA_HOME is not set")
-
-cuda_path = Path(CUDA_HOME)
-if not cuda_path.exists() or not cuda_path.is_dir():
-    raise SystemExit(f"Error: CUDA_HOME does not exist or is not a directory: {CUDA_HOME}")
-CUDA_INC = str(cuda_path / "include")
+from setuptools.command.build_ext import build_ext
+from setuptools.errors import PlatformError
+from Cython.Build import cythonize
 
 PACKAGE = "nccl.bindings"
 LIBNAMES = ["nccl"]
+
+
+def _cuda_include_dir() -> str:
+    cuda_home = os.environ.get("CUDA_HOME")
+    if not cuda_home:
+        raise PlatformError("CUDA_HOME is not set")
+
+    cuda_include = Path(cuda_home) / "include"
+    if not cuda_include.is_dir():
+        raise PlatformError(f"CUDA include directory does not exist: {cuda_include}")
+
+    return str(cuda_include)
+
+
+class BuildExt(build_ext):
+    """Add CUDA headers only when extension compilation starts."""
+
+    def build_extensions(self) -> None:
+        cuda_include = _cuda_include_dir()
+        for extension in self.extensions:
+            extension.include_dirs.append(cuda_include)
+
+        super().build_extensions()
 
 
 def _ext(module: str, source: str) -> Extension:
     return Extension(
         module,
         sources=[source],
-        include_dirs=[CUDA_INC],
         language="c++",
         extra_compile_args=["-std=c++14"],
         libraries=["dl"],
@@ -67,6 +81,7 @@ compiler_directives = {
 
 
 setup(
+    cmdclass={"build_ext": BuildExt},
     ext_modules=cythonize(
         ext_modules,
         verbose=True,
@@ -74,5 +89,4 @@ setup(
         compiler_directives=compiler_directives,
     ),
     zip_safe=False,
-    options={"build_ext": {"inplace": False}},
 )

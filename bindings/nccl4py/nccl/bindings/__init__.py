@@ -2,3 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # See LICENSE.txt for more license information
+
+"""Low-level Python bindings for NCCL."""

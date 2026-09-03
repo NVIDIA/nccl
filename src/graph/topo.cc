@@ -2153,15 +2153,11 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem,
                                             xmlMemSize(NCCL_TOPO_XML_MAX_NODES)),
                 ret, fail);
-  if (comm->MNNVL) {
-    // Ensure that we have enough room when fusing topos from multiple nodes.
-    free(xml);
-    xml = NULL;
-    NCCLCHECKGOTO(xmlAlloc(&xml, nLocalRanks * NCCL_TOPO_XML_MAX_NODES), ret, fail);
-  } else {
-    // In the intra-node case there's no need to enlarge the topo xml.
-    xml->maxIndex = 0;
-  }
+  // Ensure that we have enough room when fusing the topos: subtrees with per-rank attributes (e.g. the gpu
+  // nodes) do not dedup, so the fused topo can exceed NCCL_TOPO_XML_MAX_NODES even in the intra-node case.
+  free(xml);
+  xml = NULL;
+  NCCLCHECKGOTO(xmlAlloc(&xml, nLocalRanks * NCCL_TOPO_XML_MAX_NODES), ret, fail);
   for (int i = 0; i < nLocalRanks; i++) {
     struct ncclXml* peerXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * i);
     NCCLCHECKGOTO(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0), ret, fail);

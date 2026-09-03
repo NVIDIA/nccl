@@ -546,9 +546,13 @@ static ncclResult_t ncclTopoPrefNetsChannelFirst(struct ncclTopoSystem* system, 
 // 1. First gather the preferred NETs for each of the GPU(s), based on the NETDEVS_POLICY and the connection.
 // 2. If the NETDEV_policy allows it, add all the other NETs satisfying typeInter but not already in
 //    the list of preferred NETs.
+//
+// The result is cached for the duration of a search (see ncclTopoSelectNets), so it must depend only on the
+// precomputed paths and static node attributes, never on state the search mutates (link and NET bandwidth,
+// used flags).
 NCCL_PARAM(ScatterEnable, "MNNVL_SCATTER_NETS_ENABLE", 1);
-ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpu, int nets[NCCL_TOPO_MAX_NODES],
-                                int* netCountRet) {
+static ncclResult_t ncclTopoSelectNetsCompute(struct ncclTopoSystem* system, int typeInter, int gpu, int* nets,
+                                              int* netCountRet) {
   ncclResult_t ret = ncclSuccess;
   int netCount = 0;
 
@@ -599,6 +603,55 @@ exit:
   return ret;
 }
 
+// The search queries the same (typeInter, gpu) selection at every step of every channel of every pass, so
+// ncclTopoCompute installs a cache in the system and each selection is computed once.
+struct ncclTopoSelectNetsCache {
+  int count; // -1: not computed yet
+  int* nets;
+};
+// One entry per (typeInter + 1, gpu + 1), covering the typeInter == -1 and gpu == -1 queries.
+#define NCCL_TOPO_SELECT_NETS_CACHE_SIZE(ngpus) ((PATH_DIS + 2) * ((ngpus) + 1))
+
+static ncclResult_t ncclTopoSelectNetsCacheCreate(struct ncclTopoSystem* system) {
+  if (system->selectNetsCache != NULL) {
+    WARN("Graph search NET selection cache is already installed");
+    return ncclInternalError;
+  }
+  int nEntries = NCCL_TOPO_SELECT_NETS_CACHE_SIZE(system->nodes[GPU].count);
+  NCCLCHECK(ncclCalloc(&system->selectNetsCache, nEntries));
+  for (int i = 0; i < nEntries; i++) system->selectNetsCache[i].count = -1;
+  return ncclSuccess;
+}
+
+static void ncclTopoSelectNetsCacheDestroy(struct ncclTopoSystem* system) {
+  struct ncclTopoSelectNetsCache* cache = system->selectNetsCache;
+  if (cache == NULL) return;
+  int nEntries = NCCL_TOPO_SELECT_NETS_CACHE_SIZE(system->nodes[GPU].count);
+  for (int i = 0; i < nEntries; i++) free(cache[i].nets);
+  free(cache);
+  system->selectNetsCache = NULL;
+}
+
+// Return the NETs to try for (typeInter, gpu), see ncclTopoSelectNetsCompute. The list belongs to the cache and
+// stays valid until ncclTopoCompute returns.
+static ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, int gpu, const int** nets,
+                                       int* netCount) {
+  struct ncclTopoSelectNetsCache* entry = system->selectNetsCache;
+  if (entry == NULL) {
+    WARN("Graph search NET selection used outside of ncclTopoCompute");
+    return ncclInternalError;
+  }
+  entry += (typeInter + 1) * (system->nodes[GPU].count + 1) + (gpu + 1);
+  if (entry->count < 0) {
+    // ncclTopoSelectNetsCompute writes at most one entry per NET.
+    NCCLCHECK(ncclCalloc(&entry->nets, std::max(system->nodes[NET].count, 1)));
+    NCCLCHECK(ncclTopoSelectNetsCompute(system, typeInter, gpu, entry->nets, &entry->count));
+  }
+  *nets = entry->nets;
+  *netCount = entry->count;
+  return ncclSuccess;
+}
+
 NCCL_PARAM(MnnvlRailPerHost, "MNNVL_RAIL_PER_HOST", -1);
 
 static bool ncclTopoMnnvlRailPerHost(struct ncclTopoSystem* system) {
@@ -643,7 +696,7 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
   (*time)--;
 
   ncclResult_t ret = ncclSuccess;
-  int* nets = NULL;
+  const int* nets = NULL;
   int* next = NULL;
   int ngpus = system->nodes[GPU].count;
   int g;
@@ -672,8 +725,7 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
       NCCLCHECKGOTO(getNetIndex(system, graph->inter[graph->nChannels * 2], &startNetIndex), ret, exit);
       struct ncclTopoNode* startNet = system->nodes[NET].nodes + startNetIndex;
       int netCount;
-      NCCLCHECKGOTO(ncclCalloc(&nets, NCCL_TOPO_MAX_NODES), ret, exit);
-      NCCLCHECKGOTO(ncclTopoSelectNets(system, graph->typeInter, g, nets, &netCount), ret, exit);
+      NCCLCHECKGOTO(ncclTopoSelectNets(system, graph->typeInter, g, &nets, &netCount), ret, exit);
       for (int i = 0; i < netCount; i++) {
         int n = nets[i];
         if (!ncclTopoSearchCheckNet(system, graph, startNet, n, step)) continue;
@@ -750,7 +802,6 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
   }
 
 exit:
-  free(nets);
   free(next);
   return ret;
 }
@@ -758,15 +809,14 @@ exit:
 ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph,
                                   struct ncclTopoGraph* saveGraph, int backToNet, int backToFirstRank, int* time) {
   ncclResult_t ret = ncclSuccess;
-  int* nets = NULL;
+  const int* nets = NULL;
   int* localGpus = NULL;
   const int bw = graph->bwInter;
   int netCount;
   int graphFound = 0;
-  NCCLCHECKGOTO(ncclCalloc(&nets, NCCL_TOPO_MAX_NODES), ret, exit);
   NCCLCHECKGOTO(ncclCalloc(&localGpus, NCCL_TOPO_MAX_NODES), ret, exit);
 
-  NCCLCHECKGOTO(ncclTopoSelectNets(system, graph->typeInter, -1, nets, &netCount), ret, exit);
+  NCCLCHECKGOTO(ncclTopoSelectNets(system, graph->typeInter, -1, &nets, &netCount), ret, exit);
   for (int i = 0; i < netCount; i++) {
     if ((graph->pattern == NCCL_TOPO_PATTERN_NVLS || graph->pattern == NCCL_TOPO_PATTERN_COLLNET_DIRECT) &&
         graphFound) {
@@ -858,7 +908,6 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
   }
 
 exit:
-  free(nets);
   free(localGpus);
   return ret;
 }
@@ -1236,6 +1285,7 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
 
   NCCLCHECKGOTO(ncclCalloc(&tmpGraph, 1), ret, exit);
   memcpy(tmpGraph, graph, sizeof(struct ncclTopoGraph));
+  NCCLCHECKGOTO(ncclTopoSelectNetsCacheCreate(system), ret, exit);
 
   ncclTopoGetSpeedArray(system->inter, ccMin, &nspeeds, &speedArray);
 
@@ -1365,7 +1415,7 @@ done:
   }
 
   if (graph->nChannels == 0 && graph->collNet == 0 && graph->pattern != NCCL_TOPO_PATTERN_NVLS) {
-    int nets[NCCL_TOPO_MAX_NODES];
+    const int* nets;
     int netCount;
 
     INFO(NCCL_GRAPH, "Could not find a path for pattern %d, falling back to simple order", graph->pattern);
@@ -1373,9 +1423,9 @@ done:
     graph->bwIntra = 0.1;
     graph->typeIntra = PATH_SYS;
 
-    NCCLCHECKGOTO(ncclTopoSelectNets(system, /*typeInter =*/-1, /*gpu =*/0, nets, &netCount), ret, exit);
+    NCCLCHECKGOTO(ncclTopoSelectNets(system, /*typeInter =*/-1, /*gpu =*/0, &nets, &netCount), ret, exit);
     graph->inter[0] = (netCount > 0 ? system->nodes[NET].nodes[nets[0]].id : -1);
-    NCCLCHECKGOTO(ncclTopoSelectNets(system, /*typeInter =*/-1, /*gpu =*/ngpus - 1, nets, &netCount), ret, exit);
+    NCCLCHECKGOTO(ncclTopoSelectNets(system, /*typeInter =*/-1, /*gpu =*/ngpus - 1, &nets, &netCount), ret, exit);
     graph->inter[1] = (netCount > 0 ? system->nodes[NET].nodes[nets[0]].id : -1);
     if (graph->inter[0] != -1 && graph->inter[1] != -1) {
       graph->bwInter = 0.1;
@@ -1389,6 +1439,7 @@ done:
   }
   ret = ncclSuccess;
 exit:
+  ncclTopoSelectNetsCacheDestroy(system);
   free(tmpGraph);
   return ret;
 }

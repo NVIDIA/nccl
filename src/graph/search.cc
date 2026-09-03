@@ -773,7 +773,7 @@ ncclResult_t ncclTopoSearchRecGpu(struct ncclTopoSystem* system, struct ncclTopo
       count = 1;
     } else {
       // Normal search
-      NCCLCHECKGOTO(ncclCalloc(&next, NCCL_TOPO_MAX_NODES), ret, exit);
+      NCCLCHECKGOTO(ncclCallocQuiet(&next, ngpus), ret, exit);
       NCCLCHECKGOTO(ncclTopoSearchNextGpuSort(system, graph, gpu, next, &count,
                                               backToNet == -1       ? 0 :
                                               backToNet == step + 1 ? 1 :
@@ -816,7 +816,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
   const int bw = graph->bwInter;
   int netCount;
   int graphFound = 0;
-  NCCLCHECKGOTO(ncclCalloc(&localGpus, NCCL_TOPO_MAX_NODES), ret, exit);
+  NCCLCHECKGOTO(ncclCallocQuiet(&localGpus, system->nodes[GPU].count), ret, exit);
 
   NCCLCHECKGOTO(ncclTopoSelectNets(system, graph->typeInter, -1, &nets, &netCount), ret, exit);
   for (int i = 0; i < netCount; i++) {

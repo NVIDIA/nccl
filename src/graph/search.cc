@@ -251,20 +251,55 @@ static ncclResult_t getNetPaths(struct ncclTopoSystem* system, struct ncclTopoGr
   return ncclSuccess;
 }
 
+// NVSwitches prefer when we talk to a limited set of peers: only the previous and next GPUs are candidates,
+// in an order fixed by the pattern. Scoring and sorting all GPUs would only be discarded.
+static ncclResult_t ncclTopoSearchNextGpuSortNvl(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, int index,
+                                                 int ngpus, struct ncclTopoLinkList* paths, uint64_t flag, int* next,
+                                                 int* countPtr) {
+  int prevGpu = (index - 1 + ngpus) % ngpus;
+  int nextGpu = (index + 1) % ngpus;
+  int candidates[2];
+  int nCandidates = 0;
+  if (graph->pattern == NCCL_TOPO_PATTERN_RING) {
+    candidates[nCandidates++] = prevGpu;
+    candidates[nCandidates++] = nextGpu;
+  } else if (graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE || graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) {
+    candidates[nCandidates++] = nextGpu;
+    candidates[nCandidates++] = prevGpu;
+  } else {
+    candidates[nCandidates++] = nextGpu;
+  }
+  if (nCandidates == 2 && prevGpu == nextGpu) nCandidates = 1;
+  int count = 0;
+  for (int i = 0; i < nCandidates; i++) {
+    int g = candidates[i];
+    if (paths[g].count == 0) continue; // There is no path to that GPU
+    if (system->nodes[GPU].nodes[g].used & flag) continue;
+    next[count++] = g;
+  }
+  *countPtr = count;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoSearchNextGpuSort(struct ncclTopoSystem* system, struct ncclTopoGraph* graph,
                                        struct ncclTopoNode* gpu, int* next, int* countPtr, int sortNet) {
   const uint64_t flag = 1ULL << (graph->nChannels);
   int ngpus = system->nodes[GPU].count;
   struct ncclTopoLinkList* paths = gpu->paths[GPU];
+  int index = gpu - system->nodes[GPU].nodes;
+
+  if (system->nodes[NVS].count) {
+    return ncclTopoSearchNextGpuSortNvl(system, graph, index, ngpus, paths, flag, next, countPtr);
+  }
+
   struct ncclTopoLinkList* netPaths = NULL;
   if (sortNet) NCCLCHECK(getNetPaths(system, graph, &netPaths));
 
   struct ncclGpuScore scores[NCCL_TOPO_MAX_NODES];
   memset(scores, 0, ngpus * sizeof(struct ncclGpuScore));
-  int start = gpu - system->nodes[GPU].nodes;
   int count = 0;
   for (int i = 1; i < ngpus; i++) {
-    int g = (start + i) % ngpus;
+    int g = (index + i) % ngpus;
     if (paths[g].count == 0) continue; // There is no path to that GPU
     if (system->nodes[GPU].nodes[g].used & flag) continue;
     scores[count].g = g;
@@ -290,39 +325,6 @@ ncclResult_t ncclTopoSearchNextGpuSort(struct ncclTopoSystem* system, struct ncc
   }
 
   *countPtr = count;
-
-  if (system->nodes[NVS].count) {
-    // NVSwitches prefer when we talk to a limited set of peers. Try to use neighbors first.
-    int index = gpu - system->nodes[GPU].nodes;
-    int i;
-    int prevGpu = (index - 1 + ngpus) % ngpus;
-    int nextGpu = (index + 1) % ngpus;
-    int firstGpus[2];
-    int firstGpuCount = 0;
-    if (graph->pattern == NCCL_TOPO_PATTERN_RING) {
-      firstGpus[0] = nextGpu;
-      firstGpus[1] = prevGpu;
-      firstGpuCount = 2;
-    } else if (graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE || graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE) {
-      firstGpus[0] = prevGpu;
-      firstGpus[1] = nextGpu;
-      firstGpuCount = 2;
-    } else {
-      firstGpus[0] = nextGpu;
-      firstGpuCount = 1;
-    }
-    if (nextGpu == prevGpu && firstGpuCount == 2) firstGpuCount = 1;
-    int firstGpuRealCount = 0;
-    for (int g = 0; g < firstGpuCount; g++) {
-      for (i = 0; i < count && next[i] != firstGpus[g]; i++);
-      if (i < count) {
-        for (; i > 0; i--) next[i] = next[i - 1];
-        next[0] = firstGpus[g];
-        firstGpuRealCount++;
-      }
-    }
-    *countPtr = firstGpuRealCount;
-  }
   return ncclSuccess;
 }
 

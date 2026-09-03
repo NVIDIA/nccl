@@ -9,6 +9,7 @@
 #include "cudawrap.h"
 #include "graph.h"
 #include "topo.h"
+#include <cstring>
 #include "comm.h"
 #include "nccl.h"
 #include "nvmlwrap.h"
@@ -435,8 +436,8 @@ static ncclResult_t ncclTopoGetNetRailKeyIndex(struct ncclTopoNetRailKeyList* li
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, struct ncclXmlNode* xmlNet, int port,
-                                         int* rail, int* plane) {
+static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, struct ncclXmlNode* xmlNet, int* rail,
+                                         int* plane) {
   if (*rail == NCCL_TOPO_UNDEF) {
     uint64_t railKey;
     int keyIndex;
@@ -445,7 +446,17 @@ static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, st
     *rail = NCCL_TOPO_UNDEF_BIT | keyIndex;
   }
   if (*plane == NCCL_TOPO_UNDEF) {
-    *plane = NCCL_TOPO_UNDEF_BIT | port;
+    // Planes are obrtained as the index of this device within its PCI device.
+    // We discard devices with planes provided by the plugin and devices of different type.
+    int count = 0;
+    struct ncclXmlNode* nic = xmlNet->parent;
+    for (int s = 0; nic && s < nic->nSubs; s++) {
+      if (xmlNet == nic->subs[s]) break;
+      int subPlane = NCCL_TOPO_UNDEF;
+      NCCLCHECK(xmlGetAttrIntDefault(nic->subs[s], "plane", &subPlane, NCCL_TOPO_UNDEF));
+      if (strcmp(xmlNet->name, nic->subs[s]->name) == 0 && subPlane == NCCL_TOPO_UNDEF) count++;
+    }
+    *plane = NCCL_TOPO_UNDEF_BIT | count;
   }
   return ncclSuccess;
 }
@@ -1754,7 +1765,7 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     // Reserve bit 16 for NCCL-generated rail and plane IDs.
     int rail = (props.railId == NCCL_NET_ID_UNDEF) ? NCCL_TOPO_UNDEF : (props.railId & 0xFFFF);
     int plane = (props.planeId == NCCL_NET_ID_UNDEF) ? NCCL_TOPO_UNDEF : (props.planeId & 0xFFFF);
-    NCCLCHECK(ncclTopoGetRailPlane(netInfo->railKeyList, netNode, props.port, &rail, &plane));
+    NCCLCHECK(ncclTopoGetRailPlane(netInfo->railKeyList, netNode, &rail, &plane));
 
     int oldRail, oldPlane;
     NCCLCHECK(xmlGetAttrIntDefault(netNode, "rail", &oldRail, rail));

@@ -504,17 +504,44 @@ ncclResult_t ncclRmaProxyPutGroupDoneParams(struct ncclRmaProxyDesc* desc, CUstr
   return ncclSuccess;
 }
 
-// Returns the number of stream-batch memops waitSignal will emit for the descriptor
-int ncclRmaProxyWaitNumStreamOps(const struct ncclRmaProxyDesc* desc) {
+// Returns the number of stream-batch memops the wait's start phase emits.
+// A persistent wait is serviced by the proxy, which has to be told to start
+// polling; a non-persistent wait is a plain GPU-side poll with nothing to start.
+int ncclRmaProxyWaitStartNumOps(const struct ncclRmaProxyDesc* desc) {
   bool persistent = (desc->persistPlan != nullptr) || desc->captured;
-  return persistent ? 3 : desc->waitSignal.npeers;
+  return persistent ? 1 : 0;
 }
 
-// Fill stream-batch memop params for a wait-signal descriptor.
-ncclResult_t ncclRmaProxyWaitParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc* desc,
-                                    CUstreamBatchMemOpParams* params) {
+// Fill the stream-batch memop param that tells the proxy to start polling.
+ncclResult_t ncclRmaProxyWaitStartParams(struct ncclRmaProxyDesc* desc, CUstreamBatchMemOpParams* params) {
   if (desc->rmaDescType != ncclRmaDescTypeWaitSignal) {
-    WARN("ncclRmaProxyWaitParams: descriptor is not a wait-signal type (%d)", desc->rmaDescType);
+    WARN("ncclRmaProxyWaitStartParams: descriptor is not a wait-signal type (%d)", desc->rmaDescType);
+    return ncclInternalError;
+  }
+
+  bool persistent = (desc->persistPlan != nullptr) || desc->captured;
+  if (!persistent) return ncclSuccess;
+
+  params[0].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
+  params[0].writeValue.address = (CUdeviceptr)desc->readySeqDev;
+  params[0].writeValue.value = desc->opSeq;
+  params[0].writeValue.flags = CU_STREAM_WRITE_VALUE_DEFAULT;
+  return ncclSuccess;
+}
+
+// Returns the number of stream-batch memops the wait's done phase emits.
+int ncclRmaProxyWaitDoneNumOps(const struct ncclRmaProxyDesc* desc) {
+  bool persistent = (desc->persistPlan != nullptr) || desc->captured;
+  return persistent ? 2 : desc->waitSignal.npeers;
+}
+
+// Fill stream-batch memop params that block the stream until the wait completes.
+// For non-persistent descriptors this consumes the context's expected-signal
+// counters, so calls must follow the order the batches are emitted in.
+ncclResult_t ncclRmaProxyWaitDoneParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc* desc,
+                                        CUstreamBatchMemOpParams* params) {
+  if (desc->rmaDescType != ncclRmaDescTypeWaitSignal) {
+    WARN("ncclRmaProxyWaitDoneParams: descriptor is not a wait-signal type (%d)", desc->rmaDescType);
     return ncclInternalError;
   }
 
@@ -535,22 +562,30 @@ ncclResult_t ncclRmaProxyWaitParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct 
       params[i].waitValue.flags = CU_STREAM_WAIT_VALUE_GEQ;
     }
   } else {
-    params[0].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
-    params[0].writeValue.address = (CUdeviceptr)desc->readySeqDev;
-    params[0].writeValue.value = desc->opSeq;
-    params[0].writeValue.flags = CU_STREAM_WRITE_VALUE_DEFAULT;
+    params[0].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
+    params[0].waitValue.address = (CUdeviceptr)desc->doneSeqDev;
+    params[0].waitValue.value = desc->opSeq;
+    params[0].waitValue.flags = CU_STREAM_WAIT_VALUE_GEQ;
 
-    params[1].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
-    params[1].waitValue.address = (CUdeviceptr)desc->doneSeqDev;
-    params[1].waitValue.value = desc->opSeq;
-    params[1].waitValue.flags = CU_STREAM_WAIT_VALUE_GEQ;
-
-    params[2].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
-    params[2].writeValue.address = (CUdeviceptr)desc->doneSeqDev;
-    params[2].writeValue.value = 0;
-    params[2].writeValue.flags = CU_STREAM_WRITE_VALUE_DEFAULT;
+    params[1].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
+    params[1].writeValue.address = (CUdeviceptr)desc->doneSeqDev;
+    params[1].writeValue.value = 0;
+    params[1].writeValue.flags = CU_STREAM_WRITE_VALUE_DEFAULT;
   }
+  return ncclSuccess;
+}
 
+// Returns the number of stream-batch memops waitSignal will emit for the descriptor
+int ncclRmaProxyWaitNumStreamOps(const struct ncclRmaProxyDesc* desc) {
+  return ncclRmaProxyWaitStartNumOps(desc) + ncclRmaProxyWaitDoneNumOps(desc);
+}
+
+// Fill stream-batch memop params for a whole wait-signal descriptor.
+ncclResult_t ncclRmaProxyWaitParams(struct ncclRmaProxyCtx* rmaProxyCtx, struct ncclRmaProxyDesc* desc,
+                                    CUstreamBatchMemOpParams* params) {
+  int nStart = ncclRmaProxyWaitStartNumOps(desc);
+  NCCLCHECK(ncclRmaProxyWaitStartParams(desc, params));
+  NCCLCHECK(ncclRmaProxyWaitDoneParams(rmaProxyCtx, desc, params + nStart));
   return ncclSuccess;
 }
 

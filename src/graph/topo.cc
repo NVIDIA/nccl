@@ -780,9 +780,10 @@ ncclResult_t ncclTopoAddPci(struct ncclXmlNode* xmlPci, struct ncclTopoSystem* s
   return ncclSuccess;
 }
 
-struct kvDict kvDictCpuArch[] = {
-  {"x86_64", NCCL_TOPO_CPU_ARCH_X86}, {"arm64", NCCL_TOPO_CPU_ARCH_ARM}, {"ppc64", NCCL_TOPO_CPU_ARCH_POWER}, {NULL, 0}
-};
+struct kvDict kvDictCpuArch[] = {{"x86_64", NCCL_TOPO_CPU_ARCH_X86},
+                                 {"arm64", NCCL_TOPO_CPU_ARCH_ARM},
+                                 {"ppc64", NCCL_TOPO_CPU_ARCH_POWER},
+                                 {NULL, NCCL_TOPO_CPU_ARCH_UNDEF}};
 struct kvDict kvDictCpuVendor[] = {{"GenuineIntel", NCCL_TOPO_CPU_VENDOR_INTEL},
                                    {"AuthenticAMD", NCCL_TOPO_CPU_VENDOR_AMD},
                                    {"CentaurHauls", NCCL_TOPO_CPU_VENDOR_ZHAOXIN},
@@ -1860,11 +1861,15 @@ ncclResult_t ncclTopoProcessNet(ncclXml* xml, const char* dumpXmlFile, struct nc
 }
 
 ncclResult_t ncclTopoGetXmlCpuArch(ncclXml* xml, int* cpuArch) {
+  // loop over the CPUs until we find the arch
+  const char* str = NULL;
   struct ncclXmlNode* cpu = NULL;
   NCCLCHECK(xmlFindTag(xml, "cpu", &cpu));
-  if (cpu == NULL) return ncclInternalError;
-  const char* str = NULL;
-  NCCLCHECK(xmlGetAttrStr(cpu, "arch", &str));
+  while (str == NULL && cpu != NULL) {
+    NCCLCHECK(xmlGetAttr(cpu, "arch", &str));
+    NCCLCHECK(xmlFindNextTag(xml, "cpu", cpu, &cpu));
+  }
+  // str == NULL will return NCCL_TOPO_CPU_ARCH_UNDEF
   NCCLCHECK(kvConvertToInt(str, cpuArch, kvDictCpuArch));
   return ncclSuccess;
 }

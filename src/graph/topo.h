@@ -180,6 +180,8 @@ struct ncclTopoSystem {
   // mirrors the comm's values
   bool cuMemGdrSupport;  // global cuMem GDR support
   int minDriverVersion;  // min CUDA driver version across ranks
+  // NET selection cache of the graph search. Obtained by ncclTopoCompute for its duration, NULL otherwise.
+  struct ncclTopoSelectNetsCache* selectNetsCache;
 };
 
 ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id);

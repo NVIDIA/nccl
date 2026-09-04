@@ -80,11 +80,11 @@ The NCCL Device API enables GPU kernels to perform inter-GPU communication direc
 
 ```c
 ncclDevComm devComm;
-ncclDevCommRequirements requirements = {0};
-requirements.lsaBarrierCount = numBlocks;  // One barrier per thread block
+ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+reqs.lsaBarrierCount = numBlocks;  // One barrier per thread block
 
 // Create device communicator
-ncclDevCommCreate(&devComm, comm, &requirements);
+ncclDevCommCreate(comm, &reqs, &devComm);
 ```
 
 ### Symmetric Memory Windows (Host-side)
@@ -114,7 +114,7 @@ GPUs.
 // synchronize independently with their counterparts on other GPUs.
 ncclLsaBarrierSession<ncclCoopCta> bar {
     ncclCoopCta(),           // Barrier scope: entire CTA (thread block)
-    devComm, ncclTeamLsa(devComm), devComm.lsaBarrier,
+    devComm, ncclTeamTagLsa(),
     blockIdx.x               // Barrier index: matches our CTA index (0 to lsaBarrierCount-1)
 };
 

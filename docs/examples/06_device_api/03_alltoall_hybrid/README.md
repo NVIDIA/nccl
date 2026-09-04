@@ -39,9 +39,8 @@ The C variant can be built with either pthreads or MPI. It can run on a single n
 ## Key concepts
 
 ### Hybrid device communicator
-The device communicator is configured with both LSA and GIN resources:
-`lsaBarrierCount` for local peer synchronization, `railGinBarrierCount` for
-network synchronization, `ginSignalCount` for async completion, and
+The device communicator is configured with hybrid LSA+GIN resources:
+`barrierCount` for world-team synchronization, `ginSignalCount` for async completion, and
 `ginConnectionType` for cross-node connectivity. This dual setup enables optimal
 communication for each peer type.
 

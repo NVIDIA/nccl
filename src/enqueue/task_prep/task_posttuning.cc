@@ -61,9 +61,9 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
   task->opDev = raw->opDev;
   postTuningSetChunkSteps(task);
   task->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&raw->collConfig);
-  task->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
-  task->groupApiEventHandle = nullptr;
-  task->collApiEventHandle = nullptr;
+  task->eActivationMask = ncclProfilerCurrentEventMask();
+  task->groupApiEventHandle = {};
+  task->collApiEventHandle = {};
 
   const ncclCollConfig_t* cfg = &raw->collConfig;
   bool ctaPolicyEnvOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
@@ -163,9 +163,9 @@ static ncclResult_t fillP2pTaskFromRaw(struct ncclComm* comm, struct ncclTaskTun
   } else {
     task->allowUB = true;
   }
-  task->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
-  task->groupApiEventHandle = nullptr;
-  task->p2pApiEventHandle = nullptr;
+  task->eActivationMask = ncclProfilerCurrentEventMask();
+  task->groupApiEventHandle = {};
+  task->p2pApiEventHandle = {};
   return ncclSuccess;
 }
 
@@ -418,7 +418,7 @@ static ncclResult_t postTuneRmaTaskAppend(struct ncclComm* comm, const struct nc
         k++;
       }
 
-      t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+      t->eActivationMask = ncclProfilerCurrentEventMask();
       planner->nTasksRma++;
       ncclIntruQueueEnqueue(&planner->rmaTaskQueues[t->ctx], t);
     }
@@ -471,7 +471,7 @@ static ncclResult_t postTuneRmaTaskAppend(struct ncclComm* comm, const struct nc
       t->signalIdxs = NULL;
       t->npeers = 0;
 
-      t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+      t->eActivationMask = ncclProfilerCurrentEventMask();
 
       planner->nTasksRma++;
       // Enqueue the task into the appropriate context queue
@@ -743,7 +743,7 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   task->datatype = ncclInt8;
   task->trafficBytes = task->count * ncclFuncTrafficPerByte(task->func, comm->nRanks);
   postTuningSetChunkSteps(task);
-  task->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+  task->eActivationMask = ncclProfilerCurrentEventMask();
   task->opHost = ncclSum;
 
   NCCLCHECK(ncclGetCollNetSupport(comm, task, &collNetSupport));
@@ -811,10 +811,10 @@ static ncclResult_t postTuneAllGatherVEnqueueBcastTasks(struct ncclComm* comm, s
     t->count = agv->counts[root];
     t->datatype = ncclInt8;
     t->root = root;
-    t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
-    t->groupApiEventHandle = nullptr;
-    t->collApiEventHandle = nullptr;
-    t->eventHandle = nullptr;
+    t->eActivationMask = ncclProfilerCurrentEventMask();
+    t->groupApiEventHandle = {};
+    t->collApiEventHandle = {};
+    t->eventHandle = {};
 
     planner->bcast_info.minBcastPeer = std::min(planner->bcast_info.minBcastPeer, root);
     planner->bcast_info.maxBcastPeer = std::max(planner->bcast_info.maxBcastPeer, root);
@@ -910,9 +910,9 @@ static ncclResult_t postTuneCeCollTaskAppend(struct ncclComm* comm, const struct
   t->opDev = raw->opDev; // C++ struct assignment
   t->chunkSteps = 1;
   t->sliceSteps = 1;
-  t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
-  t->groupApiEventHandle = nullptr;
-  t->collApiEventHandle = nullptr;
+  t->eActivationMask = ncclProfilerCurrentEventMask();
+  t->groupApiEventHandle = {};
+  t->collApiEventHandle = {};
   t->sendWin = sendWin;
   t->recvWin = recvWin;
 

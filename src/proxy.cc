@@ -834,10 +834,10 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
   struct ncclProxyProgressState* state = &proxyState->progressState;
   if (state->opsPool == NULL) return ncclInternalError;
   struct ncclProxyOpsPool* pool = state->opsPool;
+  struct ncclProfilerEventRef eHandle = {};
 
   if (state->nextOps != -1) goto process_nextops;
 
-  void* eHandle;
   // If we have ops to progress, no need to block waiting for something to arrive or even wait for the lock
   // to be available. Exit, continue progress, and come back later.
   {
@@ -848,12 +848,12 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
       lock.lock();
       if (pool->nextOps == -1 && state->stop.load(std::memory_order_acquire) == 0) {
         ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
-        ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlSleep);
+        ncclProfilerRecordProxyCtrlEventState(&eHandle, 0, ncclProfilerProxyCtrlSleep);
         // Predicate avoids lost wakeups and guarantees we observe stop after ncclProxyProgressDestroy.
         pool->cond.wait(lock,
                         [&]() { return pool->nextOps != -1 || state->stop.load(std::memory_order_acquire) != 0; });
-        ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlWakeup);
-        ncclProfilerStopProxyCtrlEvent(eHandle);
+        ncclProfilerRecordProxyCtrlEventState(&eHandle, 0, ncclProfilerProxyCtrlWakeup);
+        ncclProfilerStopProxyCtrlEvent(&eHandle);
       }
     }
     state->nextOps = pool->nextOps;
@@ -862,7 +862,7 @@ static ncclResult_t ncclProxyGetPostedOps(struct ncclProxyState* proxyState, int
 
 process_nextops:
   ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
-  ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlAppend);
+  ncclProfilerRecordProxyCtrlEventState(&eHandle, 0, ncclProfilerProxyCtrlAppend);
   TIME_START(2);
   int freeOp[NCCL_MAX_PROXY_CONNECTIONS];
   int freeOpEnd[NCCL_MAX_PROXY_CONNECTIONS];
@@ -909,8 +909,8 @@ process_nextops:
                                                /*success=*/std::memory_order_release,
                                                /*failure=*/std::memory_order_acquire));
   }
-  ncclProfilerRecordProxyCtrlEventState(eHandle, *added, ncclProfilerProxyCtrlAppendEnd);
-  ncclProfilerStopProxyCtrlEvent(eHandle);
+  ncclProfilerRecordProxyCtrlEventState(&eHandle, *added, ncclProfilerProxyCtrlAppendEnd);
+  ncclProfilerStopProxyCtrlEvent(&eHandle);
   TIME_STOP(2);
   return ncclSuccess;
 }
@@ -985,11 +985,11 @@ void* ncclProxyProgress(void* proxyState_) {
       break;
     }
     if ((lastIdle == 0 && idle == 1) || (lastIdle == 1 && idle == 0)) {
-      void* eHandle;
+      struct ncclProfilerEventRef eHandle = {};
       ncclProfilerStartProxyCtrlEvent(proxyState->profilerContext, &eHandle);
-      if (lastIdle == 0 && idle == 1) ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlIdle);
-      if (lastIdle == 1 && idle == 0) ncclProfilerRecordProxyCtrlEventState(eHandle, 0, ncclProfilerProxyCtrlActive);
-      ncclProfilerStopProxyCtrlEvent(eHandle);
+      if (lastIdle == 0 && idle == 1) ncclProfilerRecordProxyCtrlEventState(&eHandle, 0, ncclProfilerProxyCtrlIdle);
+      if (lastIdle == 1 && idle == 0) ncclProfilerRecordProxyCtrlEventState(&eHandle, 0, ncclProfilerProxyCtrlActive);
+      ncclProfilerStopProxyCtrlEvent(&eHandle);
     }
     if (idle || !state->active || (++proxyOpAppendCounter == ncclParamProgressAppendOpFreq())) {
       int added = 0;

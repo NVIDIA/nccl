@@ -9,9 +9,9 @@
 #include "nccl_profiler.h"
 #include "checks.h"
 #include "os.h"
+#include "profiler_shim.h"
 
-static ncclProfiler_v5_t* ncclProfiler_v5;
-static ncclProfiler_t ncclProfiler;
+NCCL_PROFILER_SHIM_BEGIN(5)
 
 static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
   ncclProfilerEventDescr_v5_t eDescr_v5;
@@ -118,7 +118,7 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
     return ncclSuccess;
   }
 
-  return ncclProfiler_v5->startEvent(ctx, eHandle, &eDescr_v5);
+  NCCL_PROFILER_SHIM_CALL(startEvent, ctx, eHandle, &eDescr_v5);
 }
 
 static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEventState_t eState,
@@ -169,39 +169,32 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
     return ncclSuccess;
   }
 
-  return ncclProfiler_v5->recordEventState(eHandle, (ncclProfilerEventState_v5_t)eState, &eStateArgs_v5);
+  NCCL_PROFILER_SHIM_CALL(recordEventState, eHandle, (ncclProfilerEventState_v5_t)eState, &eStateArgs_v5);
+}
+
+static ncclResult_t ncclProfiler_finalize(void* context) {
+  NCCL_PROFILER_SHIM_CALL(finalize, context);
 }
 
 static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
-  // v5 stopEvent takes no stop timestamps; drop the v7 stop descriptor.
+  // v5 stopEvent takes no stop timestamps; drop the v8 stop descriptor.
   (void)eStopDescr;
-  return ncclProfiler_v5->stopEvent(eHandle);
+  NCCL_PROFILER_SHIM_CALL(stopEvent, eHandle);
 }
 
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
                                       int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn,
                                       ncclProfilerConfig_t* config __attribute__((unused))) {
-  NCCLCHECK(ncclProfiler_v5->init(ctx, commId, eActivationMask, commName, nNodes, nRanks, rank, logfn));
+  ncclProfilerShim_t* p = getActiveProfiler();
+  if (p == nullptr) return ncclInternalError;
+  NCCLCHECK(p->init(ctx, commId, eActivationMask, commName, nNodes, nRanks, rank, logfn));
 
   // Clear v6/v7 event bits from the activation mask since v5 doesn't support them
   if (eActivationMask) {
     *eActivationMask &= ~(ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch | ncclProfileKernelPhase);
   }
 
-  ncclProfiler.startEvent = ncclProfiler_startEvent;
-  ncclProfiler.recordEventState = ncclProfiler_recordEventState;
-  ncclProfiler.stopEvent = ncclProfiler_stopEvent;
-  ncclProfiler.finalize = ncclProfiler_v5->finalize;
   return ncclSuccess;
 }
 
-ncclProfiler_t* getNcclProfiler_v5(void* lib) {
-  ncclProfiler_v5 = (ncclProfiler_v5_t*)ncclOsDlsym(lib, "ncclProfiler_v5");
-  if (ncclProfiler_v5) {
-    ncclProfiler.name = ncclProfiler_v5->name;
-    ncclProfiler.init = ncclProfiler_init;
-    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v5)", ncclProfiler_v5->name);
-    return &ncclProfiler;
-  }
-  return NULL;
-}
+NCCL_PROFILER_SHIM_END(5)

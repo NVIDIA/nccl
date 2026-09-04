@@ -10,6 +10,7 @@
 #include "plugin/profiler/profiler_v6.h"
 #include "checks.h"
 #include "os.h"
+#include "profiler_shim.h"
 
 // Adapter: the internal interface is v8, which can stamp NCCL timestamps on
 // every event. v6 plugins predate both that and the v7 additions, so this
@@ -19,8 +20,7 @@
 // to write, the plugin leaves cpuClock at its default of None and keeps
 // computing its own timestamps internally, exactly as before.
 
-static ncclProfiler_v6_t* ncclProfiler_v6;
-static ncclProfiler_t ncclProfiler;
+NCCL_PROFILER_SHIM_BEGIN(6)
 
 static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
   // v6 plugins don't understand kernel phase events; silently drop.
@@ -156,7 +156,7 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
   default:
     break;
   }
-  return ncclProfiler_v6->startEvent(ctx, eHandle, &eDescr_v6);
+  NCCL_PROFILER_SHIM_CALL(startEvent, ctx, eHandle, &eDescr_v6);
 }
 
 static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEventState_t eState,
@@ -193,38 +193,31 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
       break;
     }
   }
-  return ncclProfiler_v6->recordEventState(eHandle, (ncclProfilerEventState_v6_t)eState, &eStateArgs_v6);
+  NCCL_PROFILER_SHIM_CALL(recordEventState, eHandle, (ncclProfilerEventState_v6_t)eState, &eStateArgs_v6);
+}
+
+static ncclResult_t ncclProfiler_finalize(void* context) {
+  NCCL_PROFILER_SHIM_CALL(finalize, context);
 }
 
 static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
   // v6 plugins don't take stop timestamps; drop the stop descriptor.
   (void)eStopDescr;
-  return ncclProfiler_v6->stopEvent(eHandle);
+  NCCL_PROFILER_SHIM_CALL(stopEvent, eHandle);
 }
 
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
                                       int nNodes, int nranks, int rank, ncclDebugLogger_t logfn,
                                       ncclProfilerConfig_t* config __attribute__((unused))) {
-  ncclResult_t ret = ncclProfiler_v6->init(ctx, commId, eActivationMask, commName, nNodes, nranks, rank, logfn);
+  ncclProfilerShim_t* p = getActiveProfiler();
+  if (p == nullptr) return ncclInternalError;
+  ncclResult_t ret = p->init(ctx, commId, eActivationMask, commName, nNodes, nranks, rank, logfn);
   // v6 plugins don't know about kernel phases; strip the bit so the core never
   // generates phase work for them.
   if (eActivationMask) {
     *eActivationMask &= ~ncclProfileKernelPhase;
   }
-  ncclProfiler.startEvent = ncclProfiler_startEvent;
-  ncclProfiler.recordEventState = ncclProfiler_recordEventState;
-  ncclProfiler.stopEvent = ncclProfiler_stopEvent;
-  ncclProfiler.finalize = ncclProfiler_v6->finalize;
   return ret;
 }
 
-ncclProfiler_t* getNcclProfiler_v6(void* lib) {
-  ncclProfiler_v6 = (ncclProfiler_v6_t*)ncclOsDlsym(lib, "ncclProfiler_v6");
-  if (ncclProfiler_v6) {
-    ncclProfiler.name = ncclProfiler_v6->name;
-    ncclProfiler.init = ncclProfiler_init;
-    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v6)", ncclProfiler_v6->name);
-    return &ncclProfiler;
-  }
-  return NULL;
-}
+NCCL_PROFILER_SHIM_END(6)

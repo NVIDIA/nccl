@@ -22,6 +22,7 @@
 #include "gin/gin_host.h"
 #endif
 #include "os.h"
+#include "profiler_event.h"
 
 #include <atomic>
 #include <mutex>
@@ -109,7 +110,7 @@ struct ncclProxyOp {
     struct ncclTaskP2p* p2p;
   } task;
   int eActivationMask;
-  void* taskEventHandle;
+  struct ncclProfilerEventRef taskEventHandle;
   int rank;
   int peer;
   ncclPid_t pid;
@@ -122,7 +123,7 @@ struct ncclProxyOp {
 struct ncclProxySubArgs;
 
 struct ncclProxyEventHandle {
-  void* stepEventHandle;
+  struct ncclProfilerEventRef stepEventHandle;
   struct ncclProxySubArgs* subArgPtr;
 };
 
@@ -160,9 +161,9 @@ struct ncclProxySubArgs {
   int rank;
   ncclPid_t pid;
   void* profilerContext;
-  void* taskEventHandle;
-  void* opEventHandle;
-  void* kernelEventHandle;
+  struct ncclProfilerEventRef taskEventHandle;
+  struct ncclProfilerEventRef opEventHandle;
+  struct ncclProfilerEventRef kernelEventHandle;
   struct ncclProxyEventHandle pHandles[NCCL_STEPS];
   size_t transSize;
   uint64_t workCounter;
@@ -224,6 +225,13 @@ struct ncclProxyOpsPool {
   std::mutex mutex;
   std::condition_variable cond;
 };
+
+// Profiler handles sit inside both this pool and the ncclProxyArgs pool, which
+// together replicate them hundreds of thousands of times per rank. See
+// profiler_event.h for the per-slot cost before relaxing this.
+static_assert(sizeof(struct ncclProfilerEventRef) <= 2 * sizeof(void*),
+              "NCCL_PROFILER_MAX_PLUGINS is replicated across the proxy op and proxy args pools; "
+              "each additional slot costs megabytes of host memory per rank");
 
 struct ncclProxyOps {
   ncclProxyOpsPool* pool;

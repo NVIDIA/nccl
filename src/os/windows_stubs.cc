@@ -224,10 +224,13 @@ int64_t ncclParamDiagnostics() {
 /* --------------------------------------------------------------------------
  * Profiler plugin stubs and globals
  * -------------------------------------------------------------------------- */
-thread_local ncclProfilerApiState_t ncclProfilerApiState = {0,       0,       ncclProfilerGroupApiStartStateReset,
-                                                            nullptr, nullptr, nullptr};
+thread_local ncclProfilerApiState_t ncclProfilerApiState = {};
 
 int ncclProfilerEventMask = 0;
+
+int ncclProfilerCurrentEventMask(void) {
+  return 0;
+}
 
 bool ncclProfilerPluginLoaded(void) {
   return false;
@@ -352,13 +355,13 @@ ncclResult_t ncclProfilerStopProxyStepEvent(int sub, struct ncclProxyArgs* args,
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHandle) {
+ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, struct ncclProfilerEventRef* eHandle) {
   (void)profilerContext;
-  if (eHandle) *eHandle = nullptr;
+  if (eHandle) memset(eHandle, 0, sizeof(*eHandle));
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
+ncclResult_t ncclProfilerStopProxyCtrlEvent(struct ncclProfilerEventRef* eHandle) {
   (void)eHandle;
   return ncclSuccess;
 }
@@ -391,7 +394,8 @@ ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, ncclProfilerEventState_t eState) {
+ncclResult_t ncclProfilerRecordProxyCtrlEventState(struct ncclProfilerEventRef* eHandle, int appended,
+                                                   ncclProfilerEventState_t eState) {
   (void)eHandle;
   (void)appended;
   (void)eState;
@@ -436,15 +440,16 @@ ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCol
 }
 
 ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream,
-                                          void** ceSyncHandle) {
+                                          struct ncclProfilerEventRef* ceSyncHandle) {
   (void)comm;
   (void)args;
   (void)stream;
-  if (ceSyncHandle) *ceSyncHandle = nullptr;
+  if (ceSyncHandle) memset(ceSyncHandle, 0, sizeof(*ceSyncHandle));
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHandle, cudaStream_t stream) {
+ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, struct ncclProfilerEventRef* ceSyncHandle,
+                                         cudaStream_t stream) {
   (void)comm;
   (void)ceSyncHandle;
   (void)stream;
@@ -453,16 +458,17 @@ ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHand
 
 ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
                                            struct ncclCeBatchOpsParams* params, cudaStream_t stream,
-                                           void** ceBatchHandle) {
+                                           struct ncclProfilerEventRef* ceBatchHandle) {
   (void)comm;
   (void)args;
   (void)params;
   (void)stream;
-  if (ceBatchHandle) *ceBatchHandle = nullptr;
+  if (ceBatchHandle) memset(ceBatchHandle, 0, sizeof(*ceBatchHandle));
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream) {
+ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, struct ncclProfilerEventRef* ceBatchHandle,
+                                          cudaStream_t stream) {
   (void)comm;
   (void)ceBatchHandle;
   (void)stream;

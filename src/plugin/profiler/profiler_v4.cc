@@ -9,9 +9,9 @@
 #include "nccl_profiler.h"
 #include "checks.h"
 #include "os.h"
+#include "profiler_shim.h"
 
-static ncclProfiler_v4_t* ncclProfiler_v4;
-static ncclProfiler_t ncclProfiler;
+NCCL_PROFILER_SHIM_BEGIN(4)
 
 static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
   ncclProfilerEventDescr_v4_t eDescr_v4;
@@ -79,7 +79,7 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
   default:
     return ncclSuccess;
   }
-  return ncclProfiler_v4->startEvent(ctx, eHandle, &eDescr_v4);
+  NCCL_PROFILER_SHIM_CALL(startEvent, ctx, eHandle, &eDescr_v4);
 }
 
 static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEventState_t eState,
@@ -113,33 +113,26 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
   default:
     return ncclSuccess;
   }
-  return ncclProfiler_v4->recordEventState(eHandle, (ncclProfilerEventState_v4_t)eState, &eStateArgs_v4);
+  NCCL_PROFILER_SHIM_CALL(recordEventState, eHandle, (ncclProfilerEventState_v4_t)eState, &eStateArgs_v4);
+}
+
+static ncclResult_t ncclProfiler_finalize(void* context) {
+  NCCL_PROFILER_SHIM_CALL(finalize, context);
 }
 
 static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
-  // v4 stopEvent takes no stop timestamps; drop the v7 stop descriptor.
+  // v4 stopEvent takes no stop timestamps; drop the v8 stop descriptor.
   (void)eStopDescr;
-  return ncclProfiler_v4->stopEvent(eHandle);
+  NCCL_PROFILER_SHIM_CALL(stopEvent, eHandle);
 }
 
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
                                       int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn,
                                       ncclProfilerConfig_t* config __attribute__((unused))) {
-  NCCLCHECK(ncclProfiler_v4->init(ctx, eActivationMask, commName, commId, nNodes, nRanks, rank, logfn));
-  ncclProfiler.startEvent = ncclProfiler_startEvent;
-  ncclProfiler.recordEventState = ncclProfiler_recordEventState;
-  ncclProfiler.stopEvent = ncclProfiler_stopEvent;
-  ncclProfiler.finalize = ncclProfiler_v4->finalize;
+  ncclProfilerShim_t* p = getActiveProfiler();
+  if (p == nullptr) return ncclInternalError;
+  NCCLCHECK(p->init(ctx, eActivationMask, commName, commId, nNodes, nRanks, rank, logfn));
   return ncclSuccess;
 }
 
-ncclProfiler_t* getNcclProfiler_v4(void* lib) {
-  ncclProfiler_v4 = (ncclProfiler_v4_t*)ncclOsDlsym(lib, "ncclProfiler_v4");
-  if (ncclProfiler_v4) {
-    ncclProfiler.name = ncclProfiler_v4->name;
-    ncclProfiler.init = ncclProfiler_init;
-    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v4)", ncclProfiler_v4->name);
-    return &ncclProfiler;
-  }
-  return NULL;
-}
+NCCL_PROFILER_SHIM_END(4)

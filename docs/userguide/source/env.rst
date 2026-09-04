@@ -635,19 +635,27 @@ Plugin suffix, plugin file name, or "none".
 NCCL_PROFILER_PLUGIN
 --------------------
 
-Set it to either a suffix string or to a library name to choose among multiple NCCL profiler plugins. This setting will cause NCCL to look for the profiler plugin library using the following strategy:
- - If NCCL_PROFILER_PLUGIN is set, attempt loading the library with name specified by NCCL_PROFILER_PLUGIN;
- - If NCCL_PROFILER_PLUGIN is set and previous failed, attempt loading libnccl-profiler-<NCCL_PROFILER_PLUGIN>.so;
- - If NCCL_PROFILER_PLUGIN is not set, attempt loading libnccl-profiler.so;
+Set it to a comma-separated list of up to two suffix strings or library names. NCCL loads the
+entries in list order and sends each event to the plugins that enabled that event type. Empty,
+missing, unsupported, and duplicate entries are skipped without preventing later entries from
+loading. Whitespace around commas is ignored. This setting causes NCCL to look for each profiler
+plugin library using the following strategy:
+
+ - For each entry, attempt loading the library with the specified name;
+ - If that fails, attempt loading libnccl-profiler-<entry>.so;
+ - If NCCL_PROFILER_PLUGIN is unset or empty, attempt loading libnccl-profiler.so;
  - If no plugin was found (neither user defined nor default), do not enable profiling.
  - If NCCL_PROFILER_PLUGIN is set to ``STATIC_PLUGIN``, the plugin symbols are searched in the program binary.
+ - If every explicit entry fails, NCCL tries the profiler symbol exported by the network plugin as a final entry.
 
-For example, setting ``NCCL_PROFILER_PLUGIN=foo`` will cause NCCL to try to load ``foo`` and, if ``foo`` cannot be found, ``libnccl-profiler-foo.so`` (provided that it exists on the system).
+For example, ``NCCL_PROFILER_PLUGIN=telemetry,libnccl-profiler-trace.so`` loads the telemetry
+suffix plugin followed by the explicitly named trace plugin.
 
 Values accepted
 ^^^^^^^^^^^^^^^
 
-Plugin suffix, plugin file name, or "none".
+Comma-separated plugin suffixes or plugin file names, or ``none``.
+Unset or empty loads ``libnccl-profiler.so``.
 
 NCCL_ENV_PLUGIN
 ---------------

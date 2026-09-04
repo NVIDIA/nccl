@@ -11,13 +11,12 @@
 #include "checks.h"
 #include "os.h"
 
-static ncclProfiler_v8_t* ncclProfiler_v8;
-
-ncclProfiler_t* getNcclProfiler_v8(void* lib) {
-  ncclProfiler_v8 = (ncclProfiler_v8_t*)ncclOsDlsym(lib, "ncclProfiler_v8");
-  if (ncclProfiler_v8) {
-    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v8)", ncclProfiler_v8->name);
-    return ncclProfiler_v8;
+ncclProfiler_t* getNcclProfiler_v8(void* lib, void** target) {
+  ncclProfiler_v8_t* profiler = (ncclProfiler_v8_t*)ncclOsDlsym(lib, "ncclProfiler_v8");
+  *target = profiler;
+  if (profiler) {
+    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v8)", profiler->name);
+    return profiler;
   }
   return NULL;
 }

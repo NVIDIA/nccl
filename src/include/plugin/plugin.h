@@ -28,6 +28,8 @@ void* ncclOpenEnvPluginLib(const char* name);
 void* ncclGetNetPluginLib(enum ncclPluginType type);
 void* ncclGetGinPluginLib(enum ncclPluginType type);
 ncclResult_t ncclClosePluginLib(void* handle, enum ncclPluginType type);
+ncclResult_t ncclClosePluginLibHandle(void* handle, enum ncclPluginType type);
+void ncclDetachPluginLibHandle(void* handle, enum ncclPluginType type);
 
 extern char* ncclPluginLibPaths[];
 const char* ncclGetPluginLibName(enum ncclPluginType type);

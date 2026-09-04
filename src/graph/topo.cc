@@ -568,18 +568,18 @@ ncclResult_t ncclTopoAddNic(struct ncclXmlNode* xmlNic, struct ncclTopoSystem* s
 
   for (int s = 0; s < xmlNic->nSubs; s++) {
     struct ncclXmlNode* xmlNet = xmlNic->subs[s];
-    if (strcmp(xmlNet->name, "net") != 0) continue;
+    int net = strcmp(xmlNet->name, "net") == 0;
+    int gin = strcmp(xmlNet->name, "gin") == 0;
+    int rma = strcmp(xmlNet->name, "rma") == 0;
+    if (!net && !gin && !rma) continue;
+
+    // Physical NICs fused into a vNIC are marked net="0"; absent "net" remains enabled for older XML.
+    if (net) NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "net", &net, 1));
+
     int index;
     NCCLCHECK(xmlGetAttrIndex(xmlNet, "dev", &index));
-    // This means that the "dev" attribute wasn't set on this net xml node. That means it should not be added to
-    // the system topology graph
+    // XML net nodes without "dev" attribute will be ignore
     if (index == -1) continue;
-
-    // Backward compatibility: net withouh "net" attr is a net dev, net without a "gin" is not a gin dev
-    int net = 0, gin = 0, rma = 0;
-    NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "net", &net, 1));
-    NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "gin", &gin, 0));
-    NCCLCHECK(xmlGetAttrIntDefault(xmlNet, "rma", &rma, 0));
     if (net) NCCLCHECK(ncclTopoAddNet(xmlNet, parent, system, nic, systemId));
     if (gin) NCCLCHECK(ncclTopoAddGin(xmlNet, parent, system, nic, systemId));
     if (rma) NCCLCHECK(ncclTopoAddRma(xmlNet, parent, system, nic, systemId));
@@ -1629,14 +1629,15 @@ ncclResult_t ncclTopoFindLinkWidth(ncclXmlNode* parent, ncclXmlNode** physNetNod
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, ncclResult_t (*getProperties)(int, ncclNetProperties_t*),
+ncclResult_t ncclTopoGetVNicParent(struct ncclXml* xml, const char* tagName,
+                                   ncclResult_t (*getProperties)(int, ncclNetProperties_t*),
                                    ncclNetVDeviceProps_t* vProps, ncclXmlNode** parent) {
   ncclNetProperties_t props[NCCL_NET_MAX_DEVS_PER_NIC];
   ncclXmlNode* physNetNodes[NCCL_NET_MAX_DEVS_PER_NIC];
   for (int i = 0; i < vProps->ndevs; i++) {
     NCCLCHECK(getProperties(vProps->devs[i], props + i));
     struct ncclXmlNode* physNetNode;
-    NCCLCHECK(xmlFindTagKv(xml, "net", &physNetNode, "name", props[i].name));
+    NCCLCHECK(xmlFindTagKv(xml, tagName, &physNetNode, "name", props[i].name));
     physNetNodes[i] = physNetNode;
     TRACE(NCCL_GRAPH, "Re-found physical ncclNet node %d %s", i, props[i].name);
   }
@@ -1716,6 +1717,7 @@ out:
 
 static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIndex, struct ncclTopoNetInfo* netInfo,
                                          int virtualNics) {
+  const char* tagName = netInfo->gin ? "gin" : (netInfo->rma ? "rma" : "net");
   for (int n = startIndex; n < endIndex; n++) {
     ncclNetProperties_t props;
     NCCLCHECK(netInfo->getProperties(n, &props));
@@ -1723,14 +1725,32 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     struct ncclXmlNode* parent = NULL;
     if (virtualNics) {
       struct ncclXmlNode* net = NULL;
-      NCCLCHECK(xmlFindTagKv(xml, "net", &net, "name", props.name));
+      NCCLCHECK(xmlFindTagKv(xml, tagName, &net, "name", props.name));
       // In the event of multithreaded use case, we need to re-discover the shared parent of the given devices for
       // this vNIC
       // Only run this if the net doesn't exist locally - this may alter the XML state
-      if (net == NULL) NCCLCHECK(ncclTopoGetVNicParent(xml, netInfo->getProperties, &props.vProps, &parent));
+      if (net == NULL) NCCLCHECK(ncclTopoGetVNicParent(xml, tagName, netInfo->getProperties, &props.vProps, &parent));
     }
 
-    NCCLCHECK(ncclTopoFillNet(xml, "net", props.pciPath, props.name, &netNode, parent));
+    NCCLCHECK(ncclTopoFillNet(xml, tagName, props.pciPath, props.name, &netNode, parent));
+    // Move <net .... gin/rma=1> XML nodes to <gin/rma ...> nodes.
+    // This would lead to duplication of the device in ncclTopoAddNic.
+    if (netInfo->gin || netInfo->rma) {
+      struct ncclXmlNode* legacyNetNode = NULL;
+      NCCLCHECK(xmlFindTagKv(xml, "net", &legacyNetNode, "name", props.name));
+      if (legacyNetNode) {
+        int legacyAttr = 0;
+        NCCLCHECK(xmlGetAttrIntDefault(legacyNetNode, tagName, &legacyAttr, 0));
+        if (legacyAttr) {
+          int count = 0;
+          while (count < legacyNetNode->nAttrs) {
+            NCCLCHECK(xmlSetAttrIfUnset(netNode, legacyNetNode->attrs[count].key, legacyNetNode->attrs[count].value));
+            count++;
+          }
+          NCCLCHECK(xmlUnsetAttr(legacyNetNode, tagName));
+        }
+      }
+    }
 
     const char* colAttr;
     NCCLCHECK(xmlGetAttr(netNode, "coll", &colAttr));

@@ -367,8 +367,10 @@ ncclResult_t ncclTopoXmlLoadNet(FILE* file, struct ncclXml* xml, struct ncclXmlN
 }
 
 ncclResult_t ncclTopoXmlLoadNic(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
-  struct xmlHandler handlers[] = {{"net", ncclTopoXmlLoadNet}};
-  NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 1));
+  struct xmlHandler handlers[] = {
+    {"net", ncclTopoXmlLoadNet}, {"gin", ncclTopoXmlLoadNet}, {"rma", ncclTopoXmlLoadNet}
+  };
+  NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 3));
   return ncclSuccess;
 }
 
@@ -1218,7 +1220,7 @@ ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
     // Remove node if it has no children and no keep attribute
     if (*keep == 0 && // Trim PCI switches, CPUs with no used GPU/NIC under them, or pruned NICs
         (strcmp(node->name, "pci") == 0 || strcmp(node->name, "cpu") == 0 || strcmp(node->name, "nic") == 0 ||
-         strcmp(node->name, "net") == 0)) {
+         strcmp(node->name, "net") == 0 || strcmp(node->name, "gin") == 0 || strcmp(node->name, "rma") == 0)) {
 #ifdef ENABLE_TRACE
       const char* name;
       const char* busid;

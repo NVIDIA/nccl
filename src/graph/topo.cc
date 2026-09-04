@@ -454,7 +454,9 @@ static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, st
       if (xmlNet == nic->subs[s]) break;
       int subPlane = NCCL_TOPO_UNDEF;
       NCCLCHECK(xmlGetAttrIntDefault(nic->subs[s], "plane", &subPlane, NCCL_TOPO_UNDEF));
-      if (strcmp(xmlNet->name, nic->subs[s]->name) == 0 && subPlane == NCCL_TOPO_UNDEF) count++;
+      if (strcmp(xmlNet->name, nic->subs[s]->name) == 0 &&
+          (subPlane == NCCL_TOPO_UNDEF || (subPlane & NCCL_TOPO_UNDEF_BIT)))
+        count++;
     }
     *plane = NCCL_TOPO_UNDEF_BIT | count;
   }

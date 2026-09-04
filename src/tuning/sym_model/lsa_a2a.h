@@ -11,6 +11,10 @@
 #include "sym_kernels.h"
 #include "tuning.h"
 
+struct ncclSymkLsaA2ACtaScalingCurve {
+  double ctaScale[2];
+};
+
 struct ncclSymkLsaA2AParameters {
   bool valid;
   double baseLatUs;
@@ -18,8 +22,12 @@ struct ncclSymkLsaA2AParameters {
   double computeCtaBw; // GB/s; rank-independent LL CTA compute work; zero for other kernels.
   double ctaBw; // GB/s.
   double peakBw; // GB/s.
+  struct ncclSymkLsaA2ACtaScalingCurve ctaScalingCurve;
   double fullOverlapCtas; // LLMC active CTA threshold for full overlap; zero otherwise.
   bool peakRankEfficiency;
+  double ctaTroughLatUs; // Additional latency for the measured TmaST 4k+2 CTA series.
+  double ctaTroughPeakBw; // GB/s; measured TmaST 4k+2 CTA ceiling.
+  double rankLimitedPeakBw; // GB/s; TmaST ceiling when active CTAs are fewer than ranks.
 };
 
 enum {

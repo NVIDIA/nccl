@@ -30,16 +30,20 @@ static int maxBlocksLsa(struct ncclComm* comm, enum ncclSymkKernelId kernelId) {
 static bool evaluateLsaEstimate(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
                                 int nBlocks, struct ncclSymkLsaEstimate* estimate) {
   int activeCtas;
+  float selectionCostPercent = 0.0250f;
   if (ncclSymkLsaA2AModel(input, kernelId, nBlocks, &estimate->timeUs, &activeCtas)) {
-    estimate->selectionTimeUs = estimate->timeUs;
-    return true;
+    estimate->ctaSelectionTimeUs = estimate->timeUs;
+    selectionCostPercent = 0.0200f;
+  } else if (!ncclSymkLsaBaseModel(input, kernelId, nBytes, nBlocks, estimate)) {
+    return false;
   }
-  return ncclSymkLsaBaseModel(input, kernelId, nBytes, nBlocks, estimate);
+  estimate->selectionTimeUs = estimate->timeUs * (1.0f + selectionCostPercent * nBlocks);
+  return true;
 }
 
 // Select the CTA count with the shared policy using either the A2A or base model.
-void ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                      int* nBlocks) {
+ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
+                              float* timeUs, float* selectionTimeUs, int* nBlocks) {
   struct ncclComm* comm = input->comm;
   int nMaxBlocks = std::min<int>(maxBlocksLsa(comm, kernelId), input->maxCTAs);
   int nMinBlocks = std::min(input->minCTAs, nMaxBlocks);
@@ -67,7 +71,7 @@ void ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId ker
              "NCCL_SYM_KERNEL set to %s. At largest grouped work size %zu Bytes, kernel will not exercise TMA paths.",
              symKernelIdEnv, maxWorkBytes);
       } else {
-        return;
+        return ncclSuccess;
       }
     } else {
       while (nMaxBlocks > nMinBlocks && !ncclSymkTmaDeepEligible(comm, kernelId, maxWorkBytes, nMaxBlocks)) {
@@ -77,17 +81,19 @@ void ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId ker
   }
 
   struct ncclSymkLsaEstimate selectedEstimate;
-  if (!evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, &selectedEstimate)) return;
+  if (!evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, &selectedEstimate)) return ncclSuccess;
   *nBlocks = nMaxBlocks;
-  float maxSelectionTimeUs = static_cast<float>(selectedEstimate.selectionTimeUs);
+  float maxCtaSelectionTimeUs = static_cast<float>(selectedEstimate.ctaSelectionTimeUs);
   for (int candidate = nMinBlocks; candidate < nMaxBlocks; candidate += candidate == 1 ? 1 : 2) {
     struct ncclSymkLsaEstimate candidateEstimate;
     if (evaluateLsaEstimate(input, kernelId, nBytes, candidate, &candidateEstimate) &&
-        candidateEstimate.selectionTimeUs <= 1.025 * maxSelectionTimeUs) {
+        candidateEstimate.ctaSelectionTimeUs <= 1.025 * maxCtaSelectionTimeUs) {
       selectedEstimate = candidateEstimate;
       *nBlocks = candidate;
       break;
     }
   }
   *timeUs = selectedEstimate.timeUs;
+  *selectionTimeUs = selectedEstimate.selectionTimeUs;
+  return ncclSuccess;
 }

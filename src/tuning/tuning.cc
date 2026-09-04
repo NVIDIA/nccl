@@ -155,13 +155,17 @@ fail:
 static ncclResult_t ncclTuningSelectBestTuning(struct ncclTuningResultList_t* tunings,
                                                struct ncclTuningResult_t* const bestTuning) {
   bestTuning->timeUs = FLT_MAX;
+  float bestSelectionTimeUs = FLT_MAX;
   struct ncclTuningResultListNode* node = tunings->head;
   while (node != nullptr) {
     const struct ncclTuningResult_t& tuning = node->result;
-    TRACE(NCCL_TUNING, "A/P/S %s/%s/%s, time: %f", ncclAlgoToString(tuning.algo), ncclProtoToString(tuning.proto),
-          ncclSymkKernelIdToString(tuning.symKernelId), tuning.timeUs);
-    if (tuning.timeUs < bestTuning->timeUs) {
+    float selectionTimeUs = tuning.selectionTimeUs > 0.0f ? tuning.selectionTimeUs : tuning.timeUs;
+    TRACE(NCCL_TUNING, "A/P/S %s/%s/%s, time: %f, selection time: %f", ncclAlgoToString(tuning.algo),
+          ncclProtoToString(tuning.proto), ncclSymkKernelIdToString(tuning.symKernelId), tuning.timeUs,
+          selectionTimeUs);
+    if (selectionTimeUs < bestSelectionTimeUs) {
       *bestTuning = tuning;
+      bestSelectionTimeUs = selectionTimeUs;
     }
     node = node->next;
   }

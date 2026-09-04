@@ -48,6 +48,10 @@ struct ncclProfilerProxy {
   // Unresolved out-of-order sequences [MAXCHANNELS][MAX_KERNEL_STEP_EVENTS_PER_CHANNEL], flat.
   uint64_t* kernelStepPending;
   int kernelStepPendingCount[MAXCHANNELS];
+  // Plugin handles for start-visible KernelSteps.  A slot is opened when the
+  // GPU start ring becomes visible and closed when its completion arrives.
+  void** kernelStepHandles;
+  uint64_t* kernelStepHandleSeq;
   // KernelStep parent metadata [MAXCHANNELS][send/recv][MAX_KERNEL_STEP_PARENT_EVENTS], flat.
   // P2P send/recv tasks share a GPU work counter, so direction is required to route
   // sparse ring entries to the correct top-level task event.

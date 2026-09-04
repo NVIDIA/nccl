@@ -655,6 +655,12 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepPending, MAXCHANNELS * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL), ret,
                 fail);
   ncclCommPushFree(comm, comm->profiler.kernelStepPending);
+  NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepHandles,
+                          MAXCHANNELS * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL), ret, fail);
+  ncclCommPushFree(comm, comm->profiler.kernelStepHandles);
+  NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepHandleSeq,
+                          MAXCHANNELS * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL), ret, fail);
+  ncclCommPushFree(comm, comm->profiler.kernelStepHandleSeq);
   NCCLCHECKGOTO(ncclCalloc(&comm->profiler.kernelStepParents,
                           MAXCHANNELS * 2 * MAX_KERNEL_STEP_PARENT_EVENTS), ret, fail);
   ncclCommPushFree(comm, comm->profiler.kernelStepParents);

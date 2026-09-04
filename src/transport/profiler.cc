@@ -27,22 +27,26 @@ static bool ncclKernelStepSameHost(struct ncclComm* comm, int peer) {
   return comm->peerInfo[rank].hostHash == comm->peerInfo[peer].hostHash;
 }
 
-// Deliver one completed start/end pair via work_tag parent routing.
-// Returns true if the sequence should be consumed (delivered or dropped).
-static bool profilerDeliverKernelStep(struct ncclProxySubArgs* sub, struct ncclComm* comm, int ch,
-                                      uint64_t seq) {
+// Publish a KernelStep start as soon as the GPU start ring is visible.  The
+// previous implementation waited for the completion ring and invoked start
+// and stop back-to-back, which made in-flight localization impossible.
+static void profilerStartKernelStep(struct ncclProxySubArgs* sub, struct ncclComm* comm, int ch,
+                                    uint64_t seq) {
   int slot = (int)(seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
   struct ncclDevKernelStepEvent* st = &sub->stepStarted[ch].data[slot];
-  struct ncclDevKernelStepEvent* co = &sub->stepCompleted[ch].data[slot];
+  size_t handleIndex = (size_t)ch * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL + slot;
+  if (comm->profiler.kernelStepHandleSeq[handleIndex] == seq) return;
+  comm->profiler.kernelStepHandleSeq[handleIndex] = seq;
+  comm->profiler.kernelStepHandles[handleIndex] = nullptr;
 
-  if (!ncclKernelStepSameHost(comm, (int)st->peer)) return true;
+  if (!ncclKernelStepSameHost(comm, (int)st->peer)) return;
 
   int dir = (st->flags & NCCL_KERNEL_STEP_FLAG_SEND) ? 1 : 0;
   int parentSlot = (int)(st->work_tag % MAX_KERNEL_STEP_PARENT_EVENTS);
   size_t parentIndex = ((size_t)ch * 2 + dir) * MAX_KERNEL_STEP_PARENT_EVENTS + parentSlot;
   struct ncclKernelStepParent* parent = comm->profiler.kernelStepParents + parentIndex;
   // Unroutable (parent slot reused / never saved): drop so the drain cursor can advance.
-  if ((uint16_t)parent->workCounter != st->work_tag) return true;
+  if ((uint16_t)parent->workCounter != st->work_tag) return;
 
   struct ncclProxyArgs routedArgs = {};
   routedArgs.subs[0].eActivationMask = parent->eActivationMask;
@@ -52,10 +56,21 @@ static bool profilerDeliverKernelStep(struct ncclProxySubArgs* sub, struct ncclC
   routedArgs.subs[0].channelId = ch;
   void* handle = nullptr;
   (void)ncclProfilerStartKernelStepEvent(&routedArgs, 0, st, &handle);
-  // Plugin rejected start: drop. Retrying cannot recover and must not stall NET.
-  if (!handle) return true;
-  (void)ncclProfilerStopKernelStepEvent(handle, co);
-  return true;
+  comm->profiler.kernelStepHandles[handleIndex] = handle;
+}
+
+static void profilerStopKernelStep(struct ncclProxySubArgs* sub, struct ncclComm* comm, int ch,
+                                   uint64_t seq) {
+  int slot = (int)(seq % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
+  size_t handleIndex = (size_t)ch * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL + slot;
+  profilerStartKernelStep(sub, comm, ch, seq);
+  void* handle = comm->profiler.kernelStepHandles[handleIndex];
+  if (handle != nullptr) {
+    struct ncclDevKernelStepEvent* co = &sub->stepCompleted[ch].data[slot];
+    (void)ncclProfilerStopKernelStepEvent(handle, co);
+  }
+  comm->profiler.kernelStepHandles[handleIndex] = nullptr;
+  comm->profiler.kernelStepHandleSeq[handleIndex] = 0;
 }
 
 // Sequential KernelStep drain (pre-sample-rate style) with work_tag parent routing.
@@ -101,26 +116,22 @@ static void profilerDrainKernelSteps(struct ncclProxyArgs* args, int s, struct n
       }
       break;
     }
+    // Start is observable independently of completion.  Keep the sequential
+    // cursor on this sequence until its stop arrives; checking one slot per
+    // proxy tick is O(1) and does not pollute the NET progress loop.
+    profilerStartKernelStep(sub, comm, ch, next);
     if (co->counter != next) {
-      // Start without stop. With sample-rate > 1 an orphan start can appear; do not
-      // stall the shared proxy thread forever (that previously starved ProxySteps).
       if (produced - next >= MAX_KERNEL_STEP_EVENTS_PER_CHANNEL) {
+        size_t handleIndex = (size_t)ch * MAX_KERNEL_STEP_EVENTS_PER_CHANNEL + slot;
+        comm->profiler.kernelStepHandles[handleIndex] = nullptr;
+        comm->profiler.kernelStepHandleSeq[handleIndex] = 0;
         drained = next;
         continue;
-      }
-      if (next < produced) {
-        int slotN = (int)((next + 1) % MAX_KERNEL_STEP_EVENTS_PER_CHANNEL);
-        uint64_t c1 = sub->stepStarted[ch].data[slotN].counter;
-        uint64_t c2 = sub->stepCompleted[ch].data[slotN].counter;
-        if (c1 == next + 1 || c2 == next + 1) {
-          drained = next; // drop orphan start; keep draining later pairs
-          continue;
-        }
       }
       break;
     }
 
-    (void)profilerDeliverKernelStep(sub, comm, ch, next);
+    profilerStopKernelStep(sub, comm, ch, next);
     drained = next;
     produced = comm->profiler.stepSeq[ch];
   }

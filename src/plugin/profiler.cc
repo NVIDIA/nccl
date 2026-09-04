@@ -259,7 +259,10 @@ static void dumpCommMembership(struct ncclComm* comm) {
   std::vector<int> cudaDevs(n);
   std::vector<int64_t> busIds(n);
   for (int i = 0; i < n; i++) {
-    hostHashes[i] = comm->peerInfo[i].hostHash;
+    // fillInfo() salts hostHash with commHash. Remove that salt before
+    // exporting membership so one host keeps the same identity across
+    // world/TP/DP/PP subcommunicators. NCCL RAS uses the same recovery.
+    hostHashes[i] = comm->peerInfo[i].hostHash - comm->commHash;
     cudaDevs[i] = comm->peerInfo[i].cudaDev;
     busIds[i] = comm->peerInfo[i].busId;
   }

@@ -110,10 +110,6 @@ static constexpr const char* ncclCryptSslLibrary = "libssl.so.3";
 #endif
 
 static constexpr size_t ncclPskMinBytes = 32;
-DEFINE_NCCL_PARAM(ncclParamPsk, const char*, NCCL_PSK, nullptr, NCCL_PARAM_FLAG_PUBLISHED | NCCL_PARAM_FLAG_SENSITIVE,
-                  NCCL_PARAM_DEFAULT,
-                  "Pre-shared key used to request TLS encryption for NCCL Socket traffic; must be empty or at least "
-                  "32 bytes");
 extern int64_t ncclParamPollTimeOut();
 
 struct ncclSocketCrypto {
@@ -131,6 +127,11 @@ static std::mutex ncclCryptLock; // owns all static-scoped variables for this tr
 static bool ncclCryptHaveKey = false;
 static unsigned char* ncclCryptConfigKey;
 static size_t ncclCryptConfigKeyLen;
+
+// PSK set through ncclSetEncryption().
+static int ncclCryptApiMode = NCCL_ENCRYPTION_MODE_NONE;
+static unsigned char* ncclCryptApiPsk;
+static size_t ncclCryptApiPskLen;
 
 static void cryptEraseAndFree(unsigned char* key, size_t keyLen) {
   volatile unsigned char* p = key;
@@ -425,14 +426,24 @@ static void cryptClearMasterKey() {
 }
 
 ncclResult_t ncclGetCryptConnectionMode(bool* encrypted) {
-  const char* key = ncclParamPsk();
   *encrypted = false;
-  size_t keyLen = key == nullptr ? 0 : strlen(key);
-  if (keyLen != 0 && keyLen < ncclPskMinBytes) {
-    WARN("Invalid NCCL_PSK; must be empty or at least %zu bytes", ncclPskMinBytes);
+
+  std::lock_guard<std::mutex> lock(ncclCryptLock);
+  const unsigned char* key = nullptr;
+  size_t keyLen = 0;
+
+  switch (ncclCryptApiMode) {
+  case NCCL_ENCRYPTION_MODE_PSK:
+    key = ncclCryptApiPsk;
+    keyLen = ncclCryptApiPskLen;
+    break;
+  case NCCL_ENCRYPTION_MODE_NONE:
+    break;
+  default:
+    WARN("ncclGetCryptConnectionMode: unsupported encryption mode %d", ncclCryptApiMode);
     return ncclInvalidArgument;
   }
-  std::lock_guard<std::mutex> lock(ncclCryptLock);
+
   if (keyLen == 0) {
     if (ncclCryptHaveKey || ncclCryptConfigKey != nullptr) cryptClearMasterKey();
   } else {
@@ -441,6 +452,60 @@ ncclResult_t ncclGetCryptConnectionMode(bool* encrypted) {
     }
     *encrypted = true;
   }
+  return ncclSuccess;
+}
+
+NCCL_API(ncclResult_t, ncclSetEncryption, const ncclEncryptionConfig_t* config);
+ncclResult_t ncclSetEncryption(const ncclEncryptionConfig_t* config) {
+  ncclEncryptionConfig_t internal = NCCL_ENCRYPTION_CONFIG_INITIALIZER;
+  internal.magic = 0;      // like ncclConfig_t we use magic to enforce the init pattern
+  if (config != nullptr) {
+    if (config->magic != NCCL_API_MAGIC) {
+      WARN("ncclSetEncryption: config not initialized via NCCL_ENCRYPTION_CONFIG_INITIALIZER");
+      return ncclInvalidArgument;
+    }
+    size_t realSize = config->size > sizeof(internal) ? sizeof(internal) : config->size;
+    memcpy(&internal, config, realSize);
+  }
+  // checks for config mode
+  size_t pskLen = 0;
+  switch (internal.mode) {
+  case NCCL_ENCRYPTION_MODE_NONE:
+    break;
+  case NCCL_ENCRYPTION_MODE_PSK:
+    if (internal.psk == NCCL_CONFIG_UNDEF_PTR) {
+      WARN("ncclSetEncryption: NCCL_ENCRYPTION_MODE_PSK requires config->psk");
+      return ncclInvalidArgument;
+    }
+    pskLen = strlen(internal.psk);
+    if (pskLen < ncclPskMinBytes) {
+      WARN("ncclSetEncryption: config->psk must be at least %zu bytes", ncclPskMinBytes);
+      return ncclInvalidArgument;
+    }
+    break;
+  default:
+    WARN("ncclSetEncryption: config->mode=%d is not a supported encryption mode", internal.mode);
+    return ncclInvalidArgument;
+  }
+
+  std::lock_guard<std::mutex> lock(ncclCryptLock);
+
+  // Case 1: store the API PSK; ncclGetCryptConnectionMode() installs the derived key later
+  if (internal.mode == NCCL_ENCRYPTION_MODE_PSK) {
+    unsigned char* keyCopy = nullptr;
+    NCCLCHECK(ncclCalloc(&keyCopy, pskLen));
+    memcpy(keyCopy, internal.psk, pskLen);
+    cryptEraseAndFree(ncclCryptApiPsk, ncclCryptApiPskLen);
+    ncclCryptApiPsk = keyCopy;
+    ncclCryptApiPskLen = pskLen;
+  } else {
+    // Case 2: default or non-PSK/plaintext mode, clear installed master key
+    cryptEraseAndFree(ncclCryptApiPsk, ncclCryptApiPskLen);
+    ncclCryptApiPsk = nullptr;
+    ncclCryptApiPskLen = 0;
+    if (ncclCryptHaveKey || ncclCryptConfigKey != nullptr) cryptClearMasterKey();
+  }
+  ncclCryptApiMode = internal.mode;
   return ncclSuccess;
 }
 

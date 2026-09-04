@@ -7,7 +7,7 @@
 
 #define NCCL_CRYPT_KEY_BYTES 32
 
-// *encrypted is true if a nonempty NCCL_PSK is set and sockets must encrypt.
+// *encrypted is true if ncclSetEncryption() configured a PSK; default is plaintext.
 ncclResult_t ncclGetCryptConnectionMode(bool* encrypted);
 
 // Rebind the opaque TLS state after its owning ncclSocket moves.

@@ -118,31 +118,6 @@ If 0, it will not poll, but keep trying to progress the socket
 operation without pause. If non-zero, it will poll for up that amount
 of time before trying to progress the operation again.
 
-.. _NCCL_PSK:
-
-NCCL_PSK
---------
-The ``NCCL_PSK`` environment variable supplies a process-global pre-shared key that 
-requests TLS encryption for NCCL's host TCP traffic. If unset or empty, NCCL keeps 
-its existing plaintext behavior.
-
-Every participating process must use the same value, and it must be set before
-:c:func:`ncclGetUniqueId` or other NCCL networking begins for encryption to occur.
-
-Note that since ``NCCL_PSK`` is read as a NUL-terminated string from the environment, one may need to
-encode a raw binary key (e.g. using base64) before setting the variable. The minimum length check of 32 bytes 
-only counts characters in the encoded string.
-
-Values accepted
-^^^^^^^^^^^^^^^
-Empty or unset disables encryption. Nonempty values shorter than 32 characters
-are rejected.
-
-NCCL must be built with OpenSSL 3 TLS support (``TLS_BACKEND=OPENSSL3``), and a
-compatible OpenSSL 3 runtime must be available when a nonempty key is configured.
-If encryption is requested but cannot be provided, NCCL reports an error rather
-than falling back to plaintext.
-
 NCCL_SOCKET_NTHREADS
 --------------------
 (since 2.4.8)

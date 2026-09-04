@@ -10,6 +10,7 @@
 #include "plugin/profiler/profiler_v7.h"
 #include "checks.h"
 #include "os.h"
+#include "profiler_shim.h"
 
 // Adapter: the internal interface is v8, which can stamp NCCL timestamps on
 // every event. v7 plugins predate that, so this adapter forwards the v8 calls
@@ -21,10 +22,11 @@
 // kernel phase sub-event -- is carried through unchanged, since the descriptor
 // union is identical in the two versions.
 
-static ncclProfiler_v7_t* ncclProfiler_v7;
-static ncclProfiler_t ncclProfiler;
+NCCL_PROFILER_SHIM_BEGIN(7)
 
 static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
+  ncclProfilerShim_t* p = getActiveProfiler();
+  if (p == nullptr) return ncclInternalError;
   ncclProfilerEventDescr_v7_t eDescr_v7 = {};
   eDescr_v7.type = eDescr->type;
   eDescr_v7.parentObj = eDescr->parentObj;
@@ -141,13 +143,13 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
     return ncclSuccess;
   }
 
-  return ncclProfiler_v7->startEvent(ctx, eHandle, &eDescr_v7);
+  return p->startEvent(ctx, eHandle, &eDescr_v7);
 }
 
 static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
   // v7 plugins don't take stop timestamps; drop the stop descriptor.
   (void)eStopDescr;
-  return ncclProfiler_v7->stopEvent(eHandle);
+  NCCL_PROFILER_SHIM_CALL(stopEvent, eHandle);
 }
 
 static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEventState_t eState,
@@ -185,27 +187,19 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
       break;
     }
   }
-  return ncclProfiler_v7->recordEventState(eHandle, (ncclProfilerEventState_v7_t)eState, &eStateArgs_v7);
+  NCCL_PROFILER_SHIM_CALL(recordEventState, eHandle, (ncclProfilerEventState_v7_t)eState, &eStateArgs_v7);
 }
 
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
                                       int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn,
                                       ncclProfilerConfig_t* config __attribute__((unused))) {
-  NCCLCHECK(ncclProfiler_v7->init(ctx, commId, eActivationMask, commName, nNodes, nRanks, rank, logfn));
-  ncclProfiler.startEvent = ncclProfiler_startEvent;
-  ncclProfiler.stopEvent = ncclProfiler_stopEvent;
-  ncclProfiler.recordEventState = ncclProfiler_recordEventState;
-  ncclProfiler.finalize = ncclProfiler_v7->finalize;
-  return ncclSuccess;
+  ncclProfilerShim_t* p = getActiveProfiler();
+  if (p == nullptr) return ncclInternalError;
+  return p->init(ctx, commId, eActivationMask, commName, nNodes, nRanks, rank, logfn);
 }
 
-ncclProfiler_t* getNcclProfiler_v7(void* lib) {
-  ncclProfiler_v7 = (ncclProfiler_v7_t*)ncclOsDlsym(lib, "ncclProfiler_v7");
-  if (ncclProfiler_v7) {
-    ncclProfiler.name = ncclProfiler_v7->name;
-    ncclProfiler.init = ncclProfiler_init;
-    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v7)", ncclProfiler_v7->name);
-    return &ncclProfiler;
-  }
-  return NULL;
+static ncclResult_t ncclProfiler_finalize(void* context) {
+  NCCL_PROFILER_SHIM_CALL(finalize, context);
 }
+
+NCCL_PROFILER_SHIM_END(7)

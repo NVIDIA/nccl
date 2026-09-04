@@ -10,6 +10,7 @@
 
 #include <cuda_runtime.h>
 #include "nccl_profiler.h"
+#include "profiler_event.h"
 
 struct ncclProxyArgs;
 struct ncclKernelPlan;
@@ -25,9 +26,9 @@ struct ncclProfilerWorkOp {
   int channelId;
   uint64_t workCounter;
   int eActivationMask;
-  void* taskEventHandle;
+  struct ncclProfilerEventRef taskEventHandle;
   void* profilerContext;
-  void* kernelEventHandle;
+  struct ncclProfilerEventRef kernelEventHandle;
   // Captured per-op so a profiler thread shared across comm-split children
   // polls the correct (originating comm) buffers.
   struct ncclDevProfiler* workStarted;
@@ -56,6 +57,11 @@ struct ncclProfilerCommState {
   struct ncclProfilerThread* profilerThread;
   // What the plugin asked for during init on this communicator.
   ncclProfilerConfig_t config;
+  // Whether this comm's profiler init() succeeded, and so whether its plugin
+  // reference must be released. Not inferrable from profilerContext itself: a
+  // stateless plugin may return NULL and succeed, and a plugin can stay loaded
+  // for other comms after failing this one.
+  bool contextValid;
 };
 
 enum groupApiState {
@@ -69,15 +75,20 @@ typedef struct ncclProfilerApiState {
   int profilerGroupDepth;
   int eActivationMask;
   groupApiState state;
-  void* groupApiEventHandle;
+  struct ncclProfilerEventRef groupApiEventHandle;
   // Tracks the latest API event handles for p2p/collectives
-  void* p2pApiEventHandle;
-  void* collApiEventHandle;
+  struct ncclProfilerEventRef p2pApiEventHandle;
+  struct ncclProfilerEventRef collApiEventHandle;
 } ncclProfilerApiState_t;
 
 extern thread_local ncclProfilerApiState_t ncclProfilerApiState;
 
 extern int ncclProfilerEventMask;
+
+// Rebuilds the union of per-plugin masks and returns it. Plugins may write the
+// pointer init() gave them (exampleProfilerStart); this copies that into the
+// process-wide mask enqueue snapshots onto tasks.
+int ncclProfilerCurrentEventMask(void);
 
 // Out-of-band (RAS) override of the event mask; see profiler.cc.
 void ncclProfilerSetRasOverride(int mask);
@@ -121,8 +132,8 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int sub, struct ncclProxyArgs* 
 ncclResult_t ncclProfilerStopProxyStepEvent(int sub, struct ncclProxyArgs* args, int stepId);
 
 // Proxy Control Start/Stop Events Wrappers
-ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHandle);
-ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle);
+ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, struct ncclProfilerEventRef* eHandle);
+ncclResult_t ncclProfilerStopProxyCtrlEvent(struct ncclProfilerEventRef* eHandle);
 
 // Kernel Channel Start/Stop Event Wrappers
 ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t start);
@@ -132,7 +143,8 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64
 ncclResult_t ncclProfilerRecordProxyOpEventState(int sub, struct ncclProxyArgs* args, ncclProfilerEventState_t eState);
 ncclResult_t ncclProfilerRecordProxyStepEventState(int sub, struct ncclProxyArgs* args, int stepId,
                                                    ncclProfilerEventState_t eState);
-ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, ncclProfilerEventState_t eState);
+ncclResult_t ncclProfilerRecordProxyCtrlEventState(struct ncclProfilerEventRef* eHandle, int appended,
+                                                   ncclProfilerEventState_t eState);
 
 // Profiler utility functions
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
@@ -172,11 +184,13 @@ struct ncclCeBatchOpsParams;
 ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream);
 ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream);
 ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream,
-                                          void** ceSyncHandle);
-ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHandle, cudaStream_t stream);
+                                          struct ncclProfilerEventRef* ceSyncHandle);
+ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, struct ncclProfilerEventRef* ceSyncHandle,
+                                         cudaStream_t stream);
 ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
                                            struct ncclCeBatchOpsParams* params, cudaStream_t stream,
-                                           void** ceBatchHandle);
-ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream);
+                                           struct ncclProfilerEventRef* ceBatchHandle);
+ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, struct ncclProfilerEventRef* ceBatchHandle,
+                                          cudaStream_t stream);
 
 #endif

@@ -1505,12 +1505,12 @@ static int geteActivationMask(struct ncclProxyOp* op) {
   return op->task.coll->eActivationMask;
 }
 
-static void* gettaskEventHandle(struct ncclProxyOp* op) {
+static struct ncclProfilerEventRef gettaskEventHandle(struct ncclProxyOp* op) {
   if (ncclFuncSendRecv <= op->coll && op->coll <= ncclFuncRecv) {
     return op->task.p2p->eventHandle;
   }
   if (op->coll == ncclFuncAllGatherV) {
-    return nullptr;
+    return {};
   }
   return op->task.coll->eventHandle;
 }
@@ -2941,7 +2941,7 @@ static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* inf
   t->sliceSteps = info->sliceSteps;
   t->profilerTag = info->collConfig.userProfilerTag;
   t->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
-  t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+  t->eActivationMask = ncclProfilerCurrentEventMask();
   t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
   t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
   t->sendWin = sendWin;
@@ -3130,7 +3130,7 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
         k++;
       }
 
-      t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+      t->eActivationMask = ncclProfilerCurrentEventMask();
       planner->nTasksRma++;
       ncclIntruQueueEnqueue(&planner->rmaTaskQueues[t->ctx], t);
     }
@@ -3183,7 +3183,7 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
       t->signalIdxs = NULL;
       t->npeers = 0;
 
-      t->eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+      t->eActivationMask = ncclProfilerCurrentEventMask();
 
       planner->nTasksRma++;
       // Enqueue the task into the appropriate context queue

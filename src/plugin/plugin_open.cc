@@ -185,6 +185,25 @@ ncclResult_t ncclClosePluginLib(void* handle, enum ncclPluginType type) {
   return ncclSuccess;
 }
 
+// Close a plugin library by handle. Unlike ncclClosePluginLib() the handle does not have to
+// be the most recently opened one for `type`, which is what lets the profiler keep several
+// libraries open at the same time (openPluginLib only tracks the last one per type).
+ncclResult_t ncclClosePluginLibHandle(void* handle, enum ncclPluginType type) {
+  if (handle == nullptr) return ncclSuccess;
+  if (libHandles[type] == handle) return ncclClosePluginLib(handle, type);
+  ncclOsDlclose(handle);
+  return ncclSuccess;
+}
+
+void ncclDetachPluginLibHandle(void* handle, enum ncclPluginType type) {
+  if (libHandles[type] != handle) return;
+  libHandles[type] = nullptr;
+  free(ncclPluginLibPaths[type]);
+  ncclPluginLibPaths[type] = nullptr;
+  free(libNames[type]);
+  libNames[type] = nullptr;
+}
+
 const char* ncclGetPluginLibName(enum ncclPluginType type) {
   return libNames[type];
 }

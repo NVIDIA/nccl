@@ -313,7 +313,7 @@ fail:
 // Intra-LSA-rank synchronization through memory operations.
 ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream, struct ncclCeCollArgs* profilerArgs) {
   ncclResult_t ret = ncclSuccess;
-  void* ceSyncHandle = NULL;
+  struct ncclProfilerEventRef ceSyncHandle = {};
   int lsaSize = comm->devrState.lsaSize;
 
   // Get pointers to the ready and complete synchronization arrays
@@ -360,7 +360,7 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream, struct nc
 
 exit:
   // Stop CE sync profiling - always attempt if started, even on error
-  ncclProfilerStopCeSyncEvent(comm, ceSyncHandle, stream);
+  ncclProfilerStopCeSyncEvent(comm, &ceSyncHandle, stream);
   free(batchParams);
   return ret;
 fail:
@@ -492,7 +492,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
   int driverVersion;
   int64_t chunkSizeParam = ncclParamCeChunkSize();
   size_t ceChunkSize = chunkSizeParam > 0 ? (size_t)chunkSizeParam : 0;
-  void* ceBatchHandle = NULL;
+  struct ncclProfilerEventRef ceBatchHandle = {};
   bool capturing = ncclCudaGraphValid(comm->planner.capturingGraph);
   bool isLegacyStream = false;
 
@@ -634,7 +634,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
 
 exit:
   // Stop CE batch profiling - always attempt if started, even on error
-  ncclProfilerStopCeBatchEvent(comm, ceBatchHandle, stream);
+  ncclProfilerStopCeBatchEvent(comm, &ceBatchHandle, stream);
   return ret;
 fail:
   goto exit;

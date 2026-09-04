@@ -249,9 +249,9 @@ struct ncclTaskColl {
 
   // Profiler plugin
   int eActivationMask;
-  void* groupApiEventHandle;
-  void* collApiEventHandle;
-  void* eventHandle;
+  struct ncclProfilerEventRef groupApiEventHandle;
+  struct ncclProfilerEventRef collApiEventHandle;
+  struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
   // Inclusive channel range this task ran on; mirrors devWork->channelLo/Hi.
   uint8_t channelLo;
@@ -288,9 +288,9 @@ struct ncclTaskBcast {
 
   // Profiler plugin
   int eActivationMask;
-  void* groupApiEventHandle;
-  void* collApiEventHandle;
-  void* eventHandle;
+  struct ncclProfilerEventRef groupApiEventHandle;
+  struct ncclProfilerEventRef collApiEventHandle;
+  struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
   uint64_t profilerTag; // Per-call profiler annotation (0 == untagged)
 };
@@ -309,9 +309,9 @@ struct ncclTaskP2p {
 
   // Profiler plugin
   int eActivationMask;
-  void* groupApiEventHandle;
-  void* p2pApiEventHandle;
-  void* eventHandle;
+  struct ncclProfilerEventRef groupApiEventHandle;
+  struct ncclProfilerEventRef p2pApiEventHandle;
+  struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
   uint64_t profilerTag; // Per-call profiler annotation (0 == untagged)
   // Per-direction channels used by this task; read by the profiler to emit and
@@ -349,9 +349,9 @@ struct ncclTaskRma {
 
   // Profiler plugin
   int eActivationMask;
-  void* groupApiEventHandle;
-  void* rmaApiEventHandle;
-  void* eventHandle;
+  struct ncclProfilerEventRef groupApiEventHandle;
+  struct ncclProfilerEventRef rmaApiEventHandle;
+  struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
 };
 
@@ -405,9 +405,9 @@ struct ncclKernelPlan {
   struct ncclIntruQueue<struct ncclProxyOp, &ncclProxyOp::enqNext> proxyOpQueue;
 
   // Profiler plugin
-  void* groupApiEventHandle;
-  void* kernelLaunchEventHandle;
-  void* groupEventHandle;
+  struct ncclProfilerEventRef groupApiEventHandle;
+  struct ncclProfilerEventRef kernelLaunchEventHandle;
+  struct ncclProfilerEventRef groupEventHandle;
 };
 
 ////////////////////////////////////////////////////////////////////////////////

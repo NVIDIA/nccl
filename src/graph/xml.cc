@@ -1179,6 +1179,18 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* tagName, const cha
   return ncclSuccess;
 }
 
+ncclResult_t xmlUnsetAttr(struct ncclXmlNode* node, const char* attrName) {
+  int index;
+  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  if (index == -1) return ncclSuccess;
+  for (int i = index + 1; i < node->nAttrs; i++) {
+    strcpy(node->attrs[i - 1].key, node->attrs[i].key);
+    strcpy(node->attrs[i - 1].value, node->attrs[i].value);
+  }
+  node->nAttrs--;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
   const char* str;
   NCCLCHECK(xmlGetAttr(node, "keep", &str));

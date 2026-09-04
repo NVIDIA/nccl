@@ -102,8 +102,9 @@ static ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
     for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) shmSize += comm->buffSizes[p];
   }
   req.size = shmSize;
-  if (myInfo->hostHash == peerInfo->hostHash && myInfo->pidHash == peerInfo->pidHash) req.legacy = true;
-  else req.legacy = false;
+  // The peer can only import a cuMem host buffer if cuMem host allocations work on its side too.
+  req.legacy = (myInfo->hostHash == peerInfo->hostHash && myInfo->pidHash == peerInfo->pidHash) ||
+               !myInfo->cuMemHostSupport || !peerInfo->cuMemHostSupport;
 
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_SHM, 1, myInfo->rank, &send->proxyConn));
   NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, (void*)&req, sizeof(struct shmRequest),
@@ -135,8 +136,9 @@ static ncclResult_t shmRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
     for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) shmSize += comm->buffSizes[p];
   }
   req.size = shmSize;
-  if (myInfo->hostHash == peerInfo->hostHash && myInfo->pidHash == peerInfo->pidHash) req.legacy = true;
-  else req.legacy = false;
+  // The peer can only import a cuMem host buffer if cuMem host allocations work on its side too.
+  req.legacy = (myInfo->hostHash == peerInfo->hostHash && myInfo->pidHash == peerInfo->pidHash) ||
+               !myInfo->cuMemHostSupport || !peerInfo->cuMemHostSupport;
 
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_SHM, 0, myInfo->rank, &recv->proxyConn));
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, (void*)&req, sizeof(struct shmRequest),
@@ -309,7 +311,7 @@ ncclResult_t ncclShmAllocateShareableBuffer(size_t size, bool legacy, ncclShmIpc
     return ncclInvalidArgument;
   }
 #if CUDART_VERSION >= 12020
-  if (ncclCuMemEnable() && ncclCuMemHostEnable() && !legacy) {
+  if (!legacy) {
     // cuMem API support
     CUmemAllocationHandleType type = SHM_HANDLE_TYPE;
     CUmemGenericAllocationHandle handle;
@@ -362,7 +364,7 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm* comm, int proxyRank, 
     return ncclInvalidArgument;
   }
 #if CUDART_VERSION >= 12020
-  if (ncclCuMemEnable() && ncclCuMemHostEnable() && !desc->legacy) {
+  if (!desc->legacy) {
     // cuMem API support
     CUdeviceptr hostptr = 0;
     CUmemAllocationHandleType type = SHM_HANDLE_TYPE;
@@ -451,7 +453,7 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm* comm, int proxyRank, 
 ncclResult_t ncclShmIpcClose(ncclShmIpcDesc_t* desc) {
   if (desc) {
 #if CUDART_VERSION >= 12020
-    if (ncclCuMemEnable() && ncclCuMemHostEnable() && !desc->legacy) {
+    if (!desc->legacy) {
       NCCLCHECK(ncclCuMemHostFree(desc->shmci.ptr));
     } else {
       NCCLCHECK(ncclShmClose(desc->shmli.handle));

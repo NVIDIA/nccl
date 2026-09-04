@@ -33,6 +33,7 @@ struct ncclP2pRequest {
   size_t size;
   int refcount;
   int peerRank;
+  int shmLegacy;  // CE path: use a /dev/shm segment for the host buffer
 };
 
 struct p2pConnectInfo {
@@ -446,6 +447,8 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   req.size = sendSize;
   req.refcount = 0;
   req.peerRank = peerInfo->rank;  // Track which peer will import this buffer
+  // CE path: the host buffer is created by the proxy of info->rank and imported by the peer.
+  req.shmLegacy = !comm->peerInfo[info->rank].cuMemHostSupport || !peerInfo->cuMemHostSupport;
   if (P2P_SAME_PID((comm->peerInfo + info->rank), peerInfo) &&
       (comm->peerInfo[info->rank].cudaDev != peerInfo->cudaDev)) {
     req.refcount++;
@@ -455,8 +458,8 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   }
   NCCLCHECK(ncclProxyConnect(comm, TRANSPORT_P2P, 1, info->rank, &send->proxyConn));
   if (useMemcpy) {
-    NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, NULL, 0, &resources->proxyInfo,
-                                    sizeof(struct p2pShmProxyInfo)));
+    NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &req, sizeof(struct ncclP2pRequest),
+                                    &resources->proxyInfo, sizeof(struct p2pShmProxyInfo)));
     memcpy(&info->desc, &resources->proxyInfo.desc, sizeof(ncclShmIpcDesc_t));
   } else {
     NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &req, sizeof(struct ncclP2pRequest),
@@ -685,9 +688,11 @@ static ncclResult_t p2pSendProxySetup(struct ncclProxyConnection* connection, st
                                       void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   if (useMemcpy) {
     // CE memcpy support
+    struct ncclP2pRequest* req = (struct ncclP2pRequest*)reqBuff;
     struct p2pShmProxyInfo* proxyInfo;
     size_t shmSize;
 
+    if (reqSize != sizeof(struct ncclP2pRequest)) return ncclInternalError;
     if (respSize != sizeof(struct p2pShmProxyInfo)) return ncclInternalError;
     NCCLCHECK(ncclCalloc(&proxyInfo, 1));
     connection->transportResources = proxyInfo;
@@ -696,7 +701,7 @@ static ncclResult_t p2pSendProxySetup(struct ncclProxyConnection* connection, st
 
     // Create a SHM segment for the peer to attach to
     shmSize = sizeof(struct ncclSendMem) + sizeof(struct ncclRecvMem);
-    NCCLCHECK(ncclShmAllocateShareableBuffer(shmSize, false, &proxyInfo->desc, (void**)&proxyInfo->shm,
+    NCCLCHECK(ncclShmAllocateShareableBuffer(shmSize, req->shmLegacy, &proxyInfo->desc, (void**)&proxyInfo->shm,
                                              (void**)&proxyInfo->devShm));
 
     NCCLCHECK(ncclCudaHostCalloc(&proxyInfo->ceRecvMem, 1));

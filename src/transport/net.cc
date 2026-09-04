@@ -1566,8 +1566,11 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             if (resources->shared) {
               if (sub->reg) {
                 // Wait until CUDA kernel has started before we access the user buffer directly.
-                if (!sub->regBufferReady && connFifo[sub->base % NCCL_STEPS].size == -1) continue;
-                sub->regBufferReady = 1;
+                if (!sub->regBufferReady) {
+                  if (connFifo[sub->base % NCCL_STEPS].size == -1) continue;
+                  sub->regBufferReady = 1;
+                  connFifo[sub->base % NCCL_STEPS].size = -1;
+                }
                 ptrs[subCount] = sub->recvbuff + sub->posted * NCCL_MAX_NET_SIZE;
                 sizes[subCount] =
                   std::min((ssize_t)NCCL_MAX_NET_SIZE, (ssize_t)(sub->nbytes - sub->posted * NCCL_MAX_NET_SIZE));
@@ -1581,8 +1584,11 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
               }
             } else {
               if (sub->reg) {
-                if (!sub->regBufferReady && connFifo[sub->base % NCCL_STEPS].size == -1) continue;
-                sub->regBufferReady = 1;
+                if (!sub->regBufferReady) {
+                  if (connFifo[sub->base % NCCL_STEPS].size == -1) continue;
+                  sub->regBufferReady = 1;
+                  connFifo[sub->base % NCCL_STEPS].size = -1;
+                }
                 sub->ringAlgo->getNextRecvAddr(sub->posted, (uint8_t**)&ptrs[subCount], &sizes[subCount],
                                                &sub->recvMhandle);
               } else {
@@ -1648,10 +1654,6 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
           for (int i = 0; i < subGroup->groupSize; i++) {
             struct ncclProxySubArgs* sub = subGroup + i;
             int receivedStepId = sub->received;
-            int buffSlot = (sub->base + sub->received) % NCCL_STEPS;
-            struct recvNetResources* resources = (struct recvNetResources*)(sub->connection->transportResources);
-            volatile struct ncclConnFifo* connFifo = (volatile struct ncclConnFifo*)resources->recvMem->connFifo;
-            connFifo[buffSlot].size = -1;
             sub->transSize = sizes[i];
             sub->received += args->sliceSteps;
             ncclProfilerRecordProxyStepEventState(s + i, args, receivedStepId, ncclProfilerProxyStepRecvFlushWait);

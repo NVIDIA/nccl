@@ -1955,7 +1955,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
         relayUserLaunchCompletionEvent = true;
         userKernelEventArmed = true;
       }
-    } else if (userKernelEvent) {
+    } else if (userKernelEvent && driverVersion >= 12030) {
       launchAttrs[attrs].id = CU_LAUNCH_ATTRIBUTE_LAUNCH_COMPLETION_EVENT;
       launchAttrs[attrs].value.launchCompletionEvent.event = plan->launchCompletionEvent;
       launchAttrs[attrs].value.launchCompletionEvent.flags = 0;

@@ -87,6 +87,7 @@ struct connectMap {
 
 struct sendNetResources {
   struct connectMap map;
+  int shmLegacy;
   void* netSendComm;
   struct ncclSendMem* sendMem;
   struct ncclRecvMem* recvMem;
@@ -181,6 +182,7 @@ struct setupReq {
   int channelId;
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
+  int shmLegacy;   // use a /dev/shm segment for the host buffer
 };
 
 NCCL_PARAM(NetOptionalRecvCompletion, "NET_OPTIONAL_RECV_COMPLETION", 1);
@@ -317,6 +319,8 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   req.tpRank = comm->topParentRanks[myInfo->rank];
   req.tpRemoteRank = comm->topParentRanks[peerInfo->rank];
   req.sameDevice = (comm->peerInfo[proxyRank].cudaDev == comm->cudaDev);
+  // The host buffer is created by the proxy rank and imported here, so both must support cuMem host memory.
+  req.shmLegacy = !myInfo->cuMemHostSupport || !comm->peerInfo[proxyRank].cuMemHostSupport;
   NCCLCHECK(ncclProxyCallBlocking(comm, &send->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), NULL, 0));
 
   if (proxyRank == myInfo->rank) {
@@ -405,8 +409,8 @@ static ncclResult_t netMapShm(struct ncclComm* comm, struct ncclProxyConnector* 
   return ncclSuccess;
 }
 
-static ncclResult_t netCreateShm(struct ncclProxyState* proxyState, struct connectMapMem* mem) {
-  NCCLCHECK(ncclShmAllocateShareableBuffer(mem->size, false, &mem->createDesc, (void**)&mem->cpuPtr,
+static ncclResult_t netCreateShm(struct ncclProxyState* proxyState, struct connectMapMem* mem, bool legacy) {
+  NCCLCHECK(ncclShmAllocateShareableBuffer(mem->size, legacy, &mem->createDesc, (void**)&mem->cpuPtr,
                                            (void**)&mem->gpuPtr));
   return ncclSuccess;
 }
@@ -763,6 +767,7 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
   resources->tpRemoteRank = req->tpRemoteRank;
   resources->netDev = req->netDev;
   resources->shared = connection->shared = req->shared;
+  resources->shmLegacy = req->shmLegacy;
   resources->useGdr = req->useGdr;
   resources->channelId = req->channelId;
   resources->connIndex = req->connIndex;
@@ -976,7 +981,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     NCCLCHECK(ncclCudaHostCalloc(&map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, map->mems[NCCL_NET_MAP_HOSTMEM].size));
     map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
   } else {
-    NCCLCHECK(netCreateShm(proxyState, map->mems + NCCL_NET_MAP_HOSTMEM));
+    NCCLCHECK(netCreateShm(proxyState, map->mems + NCCL_NET_MAP_HOSTMEM, resources->shmLegacy));
     void* sendMem = (void*)NCCL_NET_MAP_GET_POINTER(map, cpu, sendMem);
     void* recvMem = (void*)NCCL_NET_MAP_GET_POINTER(map, cpu, recvMem);
     memset(sendMem, 0, sizeof(struct ncclSendMem));

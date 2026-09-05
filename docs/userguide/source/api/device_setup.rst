@@ -141,7 +141,7 @@ ncclDevCommRequirements
       Set to false if kernels using this communicator will not use strong signal operations
       (such as :cpp:struct:`ncclGin_StrongSignalInc` and :cpp:struct:`ncclGin_StrongVASignalAdd`).
       Default is true. Available since NCCL 2.30.5.
- 
+
 
    .. c:member:: bool ginVaSignalsRequired
 

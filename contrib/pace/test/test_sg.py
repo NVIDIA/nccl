@@ -354,7 +354,7 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
                     answer_list = [all_to_all_baseline(t, scatter_dim, gather_dim, group=group) for t in qkv_list]
                     all_inputs.append(qkv_list)
                     all_answers.append(answer_list)
-                
+
                 default_stream = torch.cuda.current_stream()
                 # Test 2: sync - each block launches QKV list on its own stream, wait immediately
                 all_results = []

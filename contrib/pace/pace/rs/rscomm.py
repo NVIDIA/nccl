@@ -42,7 +42,7 @@ class RSComm(BaseComm):
                 return CommConfig(24, 2, 2, 32)
             else:
                 return CommConfig(slot_unroll=128, nvl_ring_size=4, rdma_ring_size=0, num_sms=32)
-    
+
     def out_numel_alignment(self) -> int:
         return self.runtime.out_numel_alignment()
 

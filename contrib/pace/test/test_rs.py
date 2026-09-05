@@ -172,7 +172,7 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
 
         dist.barrier()
 
-    
+
     dtype = torch.float32 if args.dtype_size == 4 else torch.bfloat16
     # Iterate over all sequence lengths
     dim0 = num_ranks if args.dim0 is None else args.dim0

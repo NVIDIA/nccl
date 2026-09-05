@@ -111,18 +111,18 @@ and the plugins. NCCL decides how user contexts map to plugin connections and co
 
 ### Operations
 
-**Put/PutValue**  
+**Put/PutValue**
 Put moves data from a local source buffer to a (likely remote) target buffer. PutValue places
 a value in a target buffer. Puts are not required to be completed in the order they are requested.
 
 A single call to `Put` or `PutValue` may include a signal or counter operation. See below for
 more details.
 
-**Get**  
+**Get**
 Get moves data from a (likely remote) source buffer to a local target buffer. Gets are
 not required to be completed in the order they are requested.
 
-**Signal**  
+**Signal**
 Signal increments a target memory address by a fixed value. There's 2 types of visibility guarantees:
 strong and weak. The visibility of a *strong* signal guarantees the completion/visibility of all previous
 puts and signals, including the bundled put in the case of put+signal. The visibility of a *weak*
@@ -135,12 +135,12 @@ current signal value, while `waitSignal` blocks until the signal meets or exceed
 value. `resetSignal` reinitializes a signal before reuse and must not race with concurrent
 signal updates.
 
-**Flush**  
+**Flush**
 Flush ensures all previous operations are locally complete. In the case of gets, flush indicates
 the data is visible and ready to use. In the case of puts, flush indicates source buffers are
 ready for reuse.
 
-**Counter**  
+**Counter**
 Counter increments a local memory address by a fixed value. The completion/visibility of a counter
 guarantees the local completion of a bundled put. It does not guarantee completion at the target,
 nor local completion of any previous puts.
@@ -254,7 +254,7 @@ A `ncclGinCtx` contains metadata associated with a GIN context. The most importa
 
 This is the pointer returned as `ginHandle` in `regMrSym`.
 
-**Coop**  
+**Coop**
 
 In many places, the backend API supplies a `coop` argument. `coop` specifies the threads
 calling/participating in the operation. `coop` can be used for both correctness and performance:
@@ -276,14 +276,14 @@ Some backends choose to "reset" indexed signals by caching an offset (the value 
 Accordingly, `GetSignalPtr` returns an offset. Backends can return an offset of 0 if `ResetSignal`
 actually sets the memory location of the indexed signal to 0.
 
-**Abort flag**  
+**Abort flag**
 
 Many blocking functions supply an `abortFlag` argument. When true, the function should return
 immediately. The function (and corresponding state) can have undefined behavior if it returns
 early due to an abort flag. `abortFlag` may be null, in which case the function should return
 only when the requested operation is complete.
 
-**Counter**  
+**Counter**
 
 A counter is a 64-bit *local* memory location allocated by the custom implementation. All
 writes are done via the backend API (e.g. either `ResetCounter` or `Put` (with counter)).
@@ -291,14 +291,14 @@ All reads are done via `GetCounterPtr`, which should return a device-side addres
 be read using CUDA atomic operations (e.g. `cuda::atomic_ref`). Similar to signals,
 `GetCounterPtr` returns an offset in case backends wish to "reset" counters by caching an offset.
 
-**DescriptorSmem**  
+**DescriptorSmem**
 
 `DescriptorSmem` is a 64-byte, user-allocated, shared-memory scratch pad. As an optional
 performance improvement, implementations may use this scratch pad instead of reallocating
 internal structs on each API call. Users can reuse one `DescriptorSmem` across many
 non-overlapping GIN calls, but they do not have to.
 
-**Optimization flags**  
+**Optimization flags**
 
 GIN exposes several optimization flags in the form of `ncclGinOptFlags`.
 The flags include:

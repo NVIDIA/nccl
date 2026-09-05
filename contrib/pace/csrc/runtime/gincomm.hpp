@@ -168,7 +168,7 @@ public:
     // variants (num_sms <= 1) from normal multi-SM kernels. All variants read
     // strided-S input directly.
     int num_sms() const { return comm.launch.num_sms; };
-    
+
     std::tuple<std::vector<torch::Tensor>, std::optional<EventHandle>> ScatterGather(const std::vector<torch::Tensor>& src, const int scatter_dim, const int gather_dim, std::optional<EventHandle>& previous_event, const bool async, const std::optional<std::vector<torch::Tensor>>& out);
 
 };

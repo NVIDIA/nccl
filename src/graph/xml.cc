@@ -277,6 +277,10 @@ ncclResult_t ncclTopoDumpXmlRec(int indent, FILE* file, struct ncclXmlNode* node
   fprintf(file, "<%s", node->name);
 
   for (int a = 0; a < node->nAttrs; a++) {
+    // Skip NCCL-generated rail/plane IDs
+    if (strcmp(node->attrs[a].key, "rail") == 0 || strcmp(node->attrs[a].key, "plane") == 0) {
+      if (strtol(node->attrs[a].value, NULL, 0) & NCCL_TOPO_UNDEF_BIT) continue;
+    }
     fprintf(file, " %s=\"%s\"", node->attrs[a].key, node->attrs[a].value);
   }
   if (node->nSubs == 0) {

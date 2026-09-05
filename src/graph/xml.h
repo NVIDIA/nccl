@@ -24,6 +24,9 @@
 #define MAX_ATTR_COUNT 16
 #define MAX_SUBS 640
 
+#define NCCL_TOPO_UNDEF (-1)
+#define NCCL_TOPO_UNDEF_BIT (0x1 << 16)
+
 #define NODE_TYPE_NONE 0
 #define NODE_TYPE_OPEN 1
 #define NODE_TYPE_CLOSE 2
@@ -321,6 +324,18 @@ static ncclResult_t xmlSetAttrLong(struct ncclXmlNode* node, const char* attrNam
     node->attrs[index].key[MAX_STR_LEN] = '\0';
   }
   snprintf(node->attrs[index].value, MAX_STR_LEN, "%#" PRIx64, (uint64_t)value);
+  return ncclSuccess;
+}
+
+static ncclResult_t xmlSetAttrUint64(struct ncclXmlNode* node, const char* attrName, const uint64_t value) {
+  int index;
+  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  if (index == -1) {
+    NCCLCHECK(xmlGetNextAttrIndex(node, &index));
+    strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
+    node->attrs[index].key[MAX_STR_LEN] = '\0';
+  }
+  snprintf(node->attrs[index].value, MAX_STR_LEN, "%#" PRIx64, value);
   return ncclSuccess;
 }
 

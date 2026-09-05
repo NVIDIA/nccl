@@ -1788,7 +1788,8 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
-    NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
+    // Overwrite stale GUID from topo injection if it exists
+    NCCLCHECK(xmlSetAttrUint64(netNode, "guid", props.guid));
     // Reserve bit 16 for NCCL-generated rail and plane IDs.
     int rail = (props.railId == NCCL_NET_ID_UNDEF) ? NCCL_TOPO_UNDEF : (props.railId & 0xFFFF);
     int plane = (props.planeId == NCCL_NET_ID_UNDEF) ? NCCL_TOPO_UNDEF : (props.planeId & 0xFFFF);

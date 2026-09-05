@@ -72,7 +72,7 @@ struct kernelPhase {
 };
 
 struct kernelCh {
-  uint8_t type;
+  uint64_t type;                    // must be first and 64-bit: handle dispatch reads *(uint64_t*)
   uint8_t channelId;
   struct taskEventBase* parent;
   double startTs;

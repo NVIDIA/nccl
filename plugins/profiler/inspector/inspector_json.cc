@@ -268,9 +268,8 @@ static const char* inspectorProxyParentTypeToString(uint64_t parentType) {
   return "unknown";
 }
 
-static inline inspectorResult_t inspectorCompletedProxyOpTrace(
-    jsonFileOutput* jfo,
-    const struct inspectorCompletedProxyRecord* proxy) {
+static inline inspectorResult_t inspectorCompletedProxyOpTrace(jsonFileOutput* jfo,
+                                                               const struct inspectorCompletedProxyRecord* proxy) {
   const struct inspectorEventTraceInfo* trace = proxy->proxyOp.evntTrace;
 
   JSON_CHK(jsonKey(jfo, "event_trace_sn"));
@@ -299,9 +298,8 @@ static inline inspectorResult_t inspectorCompletedProxyOpTrace(
   return inspectorSuccess;
 }
 
-static inline inspectorResult_t inspectorCompletedProxyStepTrace(
-    jsonFileOutput* jfo,
-    const struct inspectorCompletedProxyRecord* proxy) {
+static inline inspectorResult_t inspectorCompletedProxyStepTrace(jsonFileOutput* jfo,
+                                                                 const struct inspectorCompletedProxyRecord* proxy) {
   const struct inspectorEventTraceInfo* trace = proxy->proxyStep.evntTrace;
 
   JSON_CHK(jsonKey(jfo, "event_trace_sn"));
@@ -356,10 +354,8 @@ static inline inspectorResult_t inspectorCompletedProxyStepTrace(
   return inspectorSuccess;
 }
 
-static inline inspectorResult_t inspectorCompletedProxy(
-    jsonFileOutput* jfo,
-    const struct inspectorCompletedProxyRecord* proxy,
-    uint64_t recordsDropped) {
+static inline inspectorResult_t inspectorCompletedProxy(jsonFileOutput* jfo,
+                                                         const struct inspectorCompletedProxyRecord* proxy) {
   if (proxy->recordType != NCCL_INSP_PROXY_RECORD_OP
       && proxy->recordType != NCCL_INSP_PROXY_RECORD_STEP) {
     return inspectorJsonError;
@@ -372,8 +368,6 @@ static inline inspectorResult_t inspectorCompletedProxy(
                            ? "proxy_op" : "proxy_step"));
     JSON_CHK(jsonKey(jfo, "record_sn"));
     JSON_CHK(jsonUint64(jfo, proxy->recordSn));
-    JSON_CHK(jsonKey(jfo, "proxy_records_dropped"));
-    JSON_CHK(jsonUint64(jfo, recordsDropped));
 
     JSON_CHK(jsonKey(jfo, "parent_type"));
     JSON_CHK(jsonStr(jfo, inspectorProxyParentTypeToString(
@@ -382,8 +376,6 @@ static inline inspectorResult_t inspectorCompletedProxy(
     JSON_CHK(jsonUint64(jfo, proxy->metadata.parentSn));
     JSON_CHK(jsonKey(jfo, "proxy_op_sn"));
     JSON_CHK(jsonUint64(jfo, proxy->metadata.proxyOpSn));
-    JSON_CHK(jsonKey(jfo, "origin_pid"));
-    JSON_CHK(jsonInt(jfo, proxy->metadata.originPid));
     JSON_CHK(jsonKey(jfo, "rank"));
     JSON_CHK(jsonInt(jfo, proxy->metadata.rank));
     JSON_CHK(jsonKey(jfo, "channel_id"));
@@ -398,6 +390,8 @@ static inline inspectorResult_t inspectorCompletedProxy(
       JSON_CHK(jsonInt(jfo, proxy->proxyOp.nSteps));
       JSON_CHK(jsonKey(jfo, "chunk_size_bytes"));
       JSON_CHK(jsonInt(jfo, proxy->proxyOp.chunkSize));
+      JSON_CHK(jsonKey(jfo, "n_steps_started"));
+      JSON_CHK(jsonUint32(jfo, proxy->proxyOp.nStepsStarted));
       JSON_CHK(jsonKey(jfo, "n_steps_completed"));
       JSON_CHK(jsonUint32(jfo, proxy->proxyOp.nStepsCompleted));
       JSON_CHK(jsonKey(jfo, "n_steps_dropped"));
@@ -449,6 +443,13 @@ struct inspectorCommDumpStats {
   uint64_t p2pRecords = 0;
   uint64_t p2pDroppedTotal = 0;
   uint64_t p2pDroppedSinceLastDump = 0;
+  uint64_t proxyRecords = 0;
+  uint64_t proxyDroppedTotal = 0;
+  uint64_t proxyDroppedSinceLastDump = 0;
+  uint64_t proxyOpsDroppedTotal = 0;
+  uint64_t proxyOpsDroppedSinceLastDump = 0;
+  uint64_t proxyPxnSkippedProcessTotal = 0;
+  bool proxyPxnSkippedChanged = false;
 };
 
 /*
@@ -530,10 +531,10 @@ static inspectorResult_t inspectorCommInfoDumpStats(jsonFileOutput* jfo,
   JSON_CHK(jsonStartObject(jfo));
   {
     JSON_CHK(jsonKey(jfo, "header"));
-    inspectorCommInfoHeader(jfo, commInfo);
+    INS_CHK(inspectorCommInfoHeader(jfo, commInfo));
 
     JSON_CHK(jsonKey(jfo, "metadata"));
-    inspectorCommInfoMetaHeader(jfo);
+    INS_CHK(inspectorCommInfoMetaHeader(jfo));
 
     JSON_CHK(jsonKey(jfo, "dump_stats"));
     JSON_CHK(jsonStartObject(jfo));
@@ -546,6 +547,20 @@ static inspectorResult_t inspectorCommInfoDumpStats(jsonFileOutput* jfo,
       JSON_CHK(jsonKey(jfo, "p2p_dropped_total")); JSON_CHK(jsonUint64(jfo, stats->p2pDroppedTotal));
       JSON_CHK(jsonKey(jfo, "p2p_dropped_since_last_dump"));
       JSON_CHK(jsonUint64(jfo, stats->p2pDroppedSinceLastDump));
+      if (enableNcclInspectorProxy) {
+        JSON_CHK(jsonKey(jfo, "proxy_records")); JSON_CHK(jsonUint64(jfo, stats->proxyRecords));
+        JSON_CHK(jsonKey(jfo, "proxy_dropped_total")); JSON_CHK(jsonUint64(jfo, stats->proxyDroppedTotal));
+        JSON_CHK(jsonKey(jfo, "proxy_dropped_since_last_dump"));
+        JSON_CHK(jsonUint64(jfo, stats->proxyDroppedSinceLastDump));
+        JSON_CHK(jsonKey(jfo, "proxy_ops_dropped_total"));
+        JSON_CHK(jsonUint64(jfo, stats->proxyOpsDroppedTotal));
+        JSON_CHK(jsonKey(jfo, "proxy_ops_dropped_since_last_dump"));
+        JSON_CHK(jsonUint64(jfo, stats->proxyOpsDroppedSinceLastDump));
+        JSON_CHK(jsonKey(jfo, "proxy_pxn_skipped_process_total"));
+        JSON_CHK(jsonUint64(jfo, stats->proxyPxnSkippedProcessTotal));
+        JSON_CHK(jsonKey(jfo, "proxy_steps_enabled"));
+        JSON_CHK(jsonInt(jfo, enableNcclInspectorProxyStepDump ? 1 : 0));
+      }
     }
     JSON_CHK(jsonFinishObject(jfo));
   }
@@ -554,52 +569,34 @@ static inspectorResult_t inspectorCommInfoDumpStats(jsonFileOutput* jfo,
   return inspectorSuccess;
 }
 
-static inspectorResult_t inspectorCommInfoDumpProxy(jsonFileOutput* jfo,
-                                                    inspectorCommInfo* commInfo,
-                                                    bool* needs_writing) {
-  if (commInfo == nullptr) {
-    return inspectorSuccess;
-  }
-
-  thread_local std::vector<inspectorCompletedProxyRecord> drainedProxy;
-  drainedProxy.clear();
-  uint64_t recordsDropped = 0;
-
-  inspectorLockWr(&commInfo->guard);
+static inspectorResult_t inspectorCommInfoDrainProxy(inspectorCommInfo* commInfo,
+                                                     std::vector<inspectorCompletedProxyRecord>& drained,
+                                                     inspectorCommDumpStats* stats) {
+  INS_CHK(inspectorLockWr(&commInfo->guard));
+  inspectorResult_t res = inspectorSuccess;
   if (commInfo->dump_proxy) {
     if (commInfo->completedProxyRing.size > 0
-        && drainedProxy.capacity() < commInfo->completedProxyRing.size) {
-      drainedProxy.reserve(commInfo->completedProxyRing.size);
+        && drained.capacity() < commInfo->completedProxyRing.size) {
+      drained.reserve(commInfo->completedProxyRing.size);
     }
-    INS_CHK(inspectorRingDrain<inspectorCompletedProxyRecord>(
-      &commInfo->completedProxyRing, drainedProxy));
+    INS_CHK_GOTO(inspectorRingDrain<inspectorCompletedProxyRecord>(&commInfo->completedProxyRing, drained), res, exit);
     commInfo->dump_proxy = inspectorRingNonEmpty(&commInfo->completedProxyRing);
-    recordsDropped = commInfo->proxyRecordsDropped;
   }
+  // Snapshot even an empty ring: pool failures and PXN skips may be the only
+  // activity in this window. Their counters have different scopes from drops.
+  inspectorCommInfoUpdateDropStats(&commInfo->completedProxyRing,
+                                   &stats->proxyDroppedTotal,
+                                   &stats->proxyDroppedSinceLastDump);
+  stats->proxyRecords = drained.size();
+  stats->proxyOpsDroppedTotal = commInfo->proxyOpsDropped;
+  stats->proxyOpsDroppedSinceLastDump = commInfo->proxyOpsDropped - commInfo->proxyOpsDroppedReported;
+  commInfo->proxyOpsDroppedReported = commInfo->proxyOpsDropped;
+  stats->proxyPxnSkippedProcessTotal = __atomic_load_n(&ncclInspectorProxyPxnSkipped, __ATOMIC_RELAXED);
+  stats->proxyPxnSkippedChanged = stats->proxyPxnSkippedProcessTotal != commInfo->proxyPxnSkippedReported;
+  commInfo->proxyPxnSkippedReported = stats->proxyPxnSkippedProcessTotal;
+exit:
   inspectorUnlockRWLock(&commInfo->guard);
-
-  if (!drainedProxy.empty()) {
-    *needs_writing = true;
-    JSON_CHK(jsonLockOutput(jfo));
-    for (size_t i = 0; i < drainedProxy.size(); i++) {
-      JSON_CHK(jsonStartObject(jfo));
-      {
-        JSON_CHK(jsonKey(jfo, "header"));
-        INS_CHK(inspectorCommInfoHeader(jfo, commInfo));
-
-        JSON_CHK(jsonKey(jfo, "metadata"));
-        INS_CHK(inspectorCommInfoMetaHeader(jfo));
-
-        JSON_CHK(jsonKey(jfo, "proxy_trace"));
-        INS_CHK(inspectorCompletedProxy(
-          jfo, &drainedProxy[i], recordsDropped));
-      }
-      JSON_CHK(jsonFinishObject(jfo));
-      JSON_CHK(jsonNewline(jfo));
-    }
-    JSON_CHK(jsonUnlockOutput(jfo));
-  }
-  return inspectorSuccess;
+  return res;
 }
 
 static inspectorResult_t inspectorCommInfoDump(jsonFileOutput* jfo,
@@ -610,59 +607,60 @@ static inspectorResult_t inspectorCommInfoDump(jsonFileOutput* jfo,
     return inspectorSuccess;
   }
 
-  INS_CHK(inspectorCommInfoDumpProxy(jfo, commInfo, needs_writing));
   thread_local std::vector<inspectorCompletedOpInfo> drainedColl;
   thread_local std::vector<inspectorCompletedOpInfo> drainedP2p;
+  thread_local std::vector<inspectorCompletedProxyRecord> drainedProxy;
   drainedColl.clear();
   drainedP2p.clear();
+  drainedProxy.clear();
 
   inspectorCommDumpStats stats;
   // One guard hold per ring, matching the original per-ring locking.
   INS_CHK(inspectorCommInfoDrainColl(commInfo, drainedColl, &stats));
   INS_CHK(inspectorCommInfoDrainP2p(commInfo, drainedP2p, &stats));
+  if (enableNcclInspectorProxy) {
+    INS_CHK(inspectorCommInfoDrainProxy(commInfo, drainedProxy, &stats));
+  }
 
   // Emit only when this comm produced records or has newly dropped entries to
   // report, so idle communicators don't generate empty stats records.
-  bool haveDrops = stats.collDroppedSinceLastDump != 0 || stats.p2pDroppedSinceLastDump != 0;
-  if (drainedColl.empty() && drainedP2p.empty() && !haveDrops) {
+  bool haveDrops = stats.collDroppedSinceLastDump != 0 || stats.p2pDroppedSinceLastDump != 0
+                   || stats.proxyDroppedSinceLastDump != 0 || stats.proxyOpsDroppedSinceLastDump != 0
+                   || stats.proxyPxnSkippedChanged;
+  if (drainedColl.empty() && drainedP2p.empty() && drainedProxy.empty() && !haveDrops) {
     return inspectorSuccess;
   }
 
   *needs_writing = true;
+  inspectorResult_t res = inspectorSuccess;
+  // Hold the output lock for the whole batch. All following records inherit
+  // the header/metadata of this dump_stats marker until the next marker.
   JSON_CHK(jsonLockOutput(jfo));
-  INS_CHK(inspectorCommInfoDumpStats(jfo, commInfo, &stats));
+  INS_CHK_GOTO(inspectorCommInfoDumpStats(jfo, commInfo, &stats), res, exit);
   for (size_t i = 0; i < drainedColl.size(); i++) {
-    JSON_CHK(jsonStartObject(jfo));
-    {
-      JSON_CHK(jsonKey(jfo, "header"));
-      inspectorCommInfoHeader(jfo, commInfo);
-
-      JSON_CHK(jsonKey(jfo, "metadata"));
-      inspectorCommInfoMetaHeader(jfo);
-
-      JSON_CHK(jsonKey(jfo, "coll_perf"));
-      INS_CHK(inspectorCompletedColl(jfo, &drainedColl[i]));
-    }
-    JSON_CHK(jsonFinishObject(jfo));
-    JSON_CHK(jsonNewline(jfo));
+    JSON_CHK_GOTO(jsonStartObject(jfo), res, exit);
+    JSON_CHK_GOTO(jsonKey(jfo, "coll_perf"), res, exit);
+    INS_CHK_GOTO(inspectorCompletedColl(jfo, &drainedColl[i]), res, exit);
+    JSON_CHK_GOTO(jsonFinishObject(jfo), res, exit);
+    JSON_CHK_GOTO(jsonNewline(jfo), res, exit);
   }
   for (size_t i = 0; i < drainedP2p.size(); i++) {
-    JSON_CHK(jsonStartObject(jfo));
-    {
-      JSON_CHK(jsonKey(jfo, "header"));
-      inspectorCommInfoHeader(jfo, commInfo);
-
-      JSON_CHK(jsonKey(jfo, "metadata"));
-      inspectorCommInfoMetaHeader(jfo);
-
-      JSON_CHK(jsonKey(jfo, "p2p_perf"));
-      INS_CHK(inspectorCompletedP2p(jfo, &drainedP2p[i]));
-    }
-    JSON_CHK(jsonFinishObject(jfo));
-    JSON_CHK(jsonNewline(jfo));
+    JSON_CHK_GOTO(jsonStartObject(jfo), res, exit);
+    JSON_CHK_GOTO(jsonKey(jfo, "p2p_perf"), res, exit);
+    INS_CHK_GOTO(inspectorCompletedP2p(jfo, &drainedP2p[i]), res, exit);
+    JSON_CHK_GOTO(jsonFinishObject(jfo), res, exit);
+    JSON_CHK_GOTO(jsonNewline(jfo), res, exit);
   }
+  for (size_t i = 0; i < drainedProxy.size(); i++) {
+    JSON_CHK_GOTO(jsonStartObject(jfo), res, exit);
+    JSON_CHK_GOTO(jsonKey(jfo, "proxy_trace"), res, exit);
+    INS_CHK_GOTO(inspectorCompletedProxy(jfo, &drainedProxy[i]), res, exit);
+    JSON_CHK_GOTO(jsonFinishObject(jfo), res, exit);
+    JSON_CHK_GOTO(jsonNewline(jfo), res, exit);
+  }
+exit:
   JSON_CHK(jsonUnlockOutput(jfo));
-  return inspectorSuccess;
+  return res;
 }
 
 

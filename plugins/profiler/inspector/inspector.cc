@@ -58,7 +58,7 @@ static uint32_t ncclInspectorDumpCollRingSize = 1024;
 // Per-communicator completed-P2P ring buffer capacity
 static uint32_t ncclInspectorDumpP2pRingSize = 1024;
 // Per-communicator completed-Proxy ring buffer capacity
-static uint32_t ncclInspectorDumpProxyRingSize = 4096;
+static uint32_t ncclInspectorDumpProxyRingSize = 1024;
 // Minimum message size (bytes) to be tracked by inspector
 size_t ncclInspectorDumpMinSizeBytes = 8192;
 // Global dump interval in microseconds (-1 = disabled, 0 = continuous, >0 = periodic)
@@ -70,6 +70,11 @@ static bool ncclInspectorInit = false;
 bool enableNcclInspectorP2p = true;
 // Global flag to control ProxyOp/ProxyStep tracking
 bool enableNcclInspectorProxy = false;
+bool enableNcclInspectorProxyStepDump = true;
+pid_t ncclInspectorPid = 0;
+uint64_t ncclInspectorProxyPxnSkipped = 0;
+static bool outputBackendInitialized = false;
+static bool proxyTrackingInitialized = false;
 // Global flag: require kernel-based timing; discard events without it
 bool requireKernelTiming = true;
 bool inspectorIsDumpVerboseEnabled() {
@@ -868,6 +873,7 @@ static void showInspectorEnvVars() {
     {"NCCL_INSPECTOR_ENABLE", getenv("NCCL_INSPECTOR_ENABLE"), "0", "Enable/disable inspector plugin"},
     {"NCCL_INSPECTOR_ENABLE_P2P", getenv("NCCL_INSPECTOR_ENABLE_P2P"), "1", "Enable/disable P2P tracking"},
     {"NCCL_INSPECTOR_ENABLE_PROXY", getenv("NCCL_INSPECTOR_ENABLE_PROXY"), "0", "Enable/disable ProxyOp/ProxyStep tracking"},
+    {"NCCL_INSPECTOR_DUMP_PROXY_STEPS", getenv("NCCL_INSPECTOR_DUMP_PROXY_STEPS"), "1", "Emit completed ProxyStep records; callbacks always maintain ProxyOp statistics"},
     {"NCCL_INSPECTOR_DUMP_THREAD_ENABLE", getenv("NCCL_INSPECTOR_DUMP_THREAD_ENABLE"), "1", "Enable/disable dump thread"},
     {"NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS", getenv("NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS"), "-1", "Dump interval in microseconds (-1 = disabled/dump only at teardown, 0 = continuous, >0 = periodic)"},
     {"NCCL_INSPECTOR_DUMP_DIR", getenv("NCCL_INSPECTOR_DUMP_DIR"), "(auto-generated)", "Output directory for inspector logs"},
@@ -885,7 +891,7 @@ static void showInspectorEnvVars() {
     {"NCCL_INSPECTOR_DUMP_MIN_SIZE_BYTES", getenv("NCCL_INSPECTOR_DUMP_MIN_SIZE_BYTES"), "8192", "Minimum message size (bytes) to be tracked by inspector"},
     {"NCCL_INSPECTOR_DUMP_COLL_RING_SIZE", getenv("NCCL_INSPECTOR_DUMP_COLL_RING_SIZE"), "1024", "Per-communicator completed-collective ring buffer capacity"},
     {"NCCL_INSPECTOR_DUMP_P2P_RING_SIZE", getenv("NCCL_INSPECTOR_DUMP_P2P_RING_SIZE"), "1024", "Per-communicator completed-P2P ring buffer capacity"},
-    {"NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE", getenv("NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE"), "4096", "Per-communicator completed-Proxy ring buffer capacity"},
+    {"NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE", getenv("NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE"), "1024", "Per-communicator completed-Proxy ring buffer capacity"},
     {"NCCL_INSPECTOR_COLL_POOL_SIZE", getenv("NCCL_INSPECTOR_COLL_POOL_SIZE"), "256", "Collective pool initial size/stride"},
     {"NCCL_INSPECTOR_P2P_POOL_SIZE", getenv("NCCL_INSPECTOR_P2P_POOL_SIZE"), "256", "P2P pool initial size/stride"},
     {"NCCL_INSPECTOR_COMM_POOL_SIZE", getenv("NCCL_INSPECTOR_COMM_POOL_SIZE"), "256", "Comm pool initial size/stride"},
@@ -1000,6 +1006,7 @@ static void initOutputBackendFromEnv() {
   enableNcclInspectorPromStats = enable == 0 ? false : true;
 
   inspectorOtelInitFromEnv();
+  outputBackendInitialized = true;
 }
 
 /*
@@ -1014,9 +1021,12 @@ static void initOutputBackendFromEnv() {
  *   None.
  */
 static void initProxyTrackingFromEnv() {
+  assert(outputBackendInitialized);
   const char* str = getenv("NCCL_INSPECTOR_ENABLE_PROXY");
   bool requested = str ? atoi(str) != 0 : false;
   enableNcclInspectorProxy = requested;
+  str = getenv("NCCL_INSPECTOR_DUMP_PROXY_STEPS");
+  enableNcclInspectorProxyStepDump = str ? atoi(str) != 0 : true;
 
   if (requested
       && (inspectorOtelIsEnabled() || enableNcclInspectorPromDump)) {
@@ -1029,6 +1039,7 @@ static void initProxyTrackingFromEnv() {
       backend);
     enableNcclInspectorProxy = false;
   }
+  proxyTrackingInitialized = true;
 }
 
 /*
@@ -1059,6 +1070,10 @@ static void initKernelTimingFromEnv() {
  *   inspectorResult_t - Result from inspectorEventPoolInit.
  */
 static inspectorResult_t inspectorEventPoolInitFromEnv() {
+  if (!outputBackendInitialized || !proxyTrackingInitialized) {
+    WARN_INSPECTOR("NCCL Inspector: initialize output backend and Proxy configuration before event pools");
+    return inspectorUninitializedError;
+  }
   struct inspectorEventPoolConfig config = {};
 
   config.collPoolSize
@@ -1128,7 +1143,7 @@ static inspectorResult_t initDumpThreadFromEnv() {
     = getRingSizeFromEnv("NCCL_INSPECTOR_DUMP_P2P_RING_SIZE", 1024);
 
   ncclInspectorDumpProxyRingSize
-    = getRingSizeFromEnv("NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE", 4096);
+    = getRingSizeFromEnv("NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE", 1024);
 
   if (enableNcclInspectorDumpThread) {
     INS_CHK(inspectorStartDumpThread(ncclInspectorDumpIntervalUsecs));
@@ -1187,7 +1202,11 @@ inspectorResult_t inspectorGlobalInit(int rank) {
   }
 
   INS_CHK(inspectorGlobalStateInit());
+  ncclInspectorPid = getpid();
+  __atomic_store_n(&ncclInspectorProxyPxnSkipped, 0, __ATOMIC_RELAXED);
   initP2pTrackingFromEnv();
+  // Select the backend before applying the JSON-only Proxy gate.
+  // Finalize Proxy enablement before deciding which event pools to allocate.
   initOutputBackendFromEnv();
   initProxyTrackingFromEnv();
   initKernelTimingFromEnv();
@@ -1349,7 +1368,9 @@ static inspectorResult_t inspectorFillCommInfo(struct inspectorCommInfo* commInf
   commInfo->p2pSeqNum = 0;
   commInfo->nextProxyOpSn = 0;
   commInfo->nextProxyRecordSn = 0;
-  commInfo->proxyRecordsDropped = 0;
+  commInfo->proxyOpsDropped = 0;
+  commInfo->proxyOpsDroppedReported = 0;
+  commInfo->proxyPxnSkippedReported = 0;
   INS_CHK(inspectorRingInit(&commInfo->completedCollRing, ncclInspectorDumpCollRingSize,
                             sizeof(struct inspectorCompletedOpInfo)));
   INS_CHK(inspectorRingInit(&commInfo->completedP2pRing, ncclInspectorDumpP2pRingSize,
@@ -1859,5 +1880,7 @@ inspectorResult_t inspectorGlobalFinalize() {
   }
   // Finalize event pools
   inspectorEventPoolFinalize();
+  outputBackendInitialized = false;
+  proxyTrackingInitialized = false;
   return inspectorSuccess;
 }

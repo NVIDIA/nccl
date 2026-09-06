@@ -119,8 +119,10 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=500
   (`dropped_total` / `dropped_since_last_dump` in the JSON `dump_stats` record;
   `nccl_collectives_dropped_total` / `nccl_p2p_dropped_total` in Prometheus/OTLP
   stats). Increasing the ring size retains more entries under bursts.
-- `NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE=<entries>` (default: `4096`)
-  Per-communicator completed-Proxy record ring buffer capacity. When full, the oldest record is overwritten and `proxy_records_dropped` is incremented.
+- `NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE=<entries>` (default: `1024`)
+  Per-communicator completed-Proxy record ring buffer capacity, matching the collective and P2P defaults. Full rings overwrite the oldest record; `dump_stats` reports the loss. Increase this for bursty workloads or long dump intervals. A smaller ring bounds retained storage, not total event-processing overhead or output volume.
+- `NCCL_INSPECTOR_DUMP_PROXY_STEPS=<0|1>` (default: `1`)
+  Set to `0` to emit only completed ProxyOp summaries. ProxyStep callbacks, pools, byte/count aggregation, and parent references remain active; only completed Step record construction, ring insertion, and JSON output are suppressed. This option requires `NCCL_INSPECTOR_ENABLE_PROXY=1` and does not change the JSON-only gate.
 - `NCCL_INSPECTOR_COLL_POOL_SIZE=<entries>` (default: `256`)
   Collective pool initial size/stride.
 - `NCCL_INSPECTOR_P2P_POOL_SIZE=<entries>` (default: `256`)
@@ -312,7 +314,45 @@ nccl_p2p_exec_time_microseconds{version="v5.1",slurm_job_id="unknown",node="nvl7
 
 ## Output Example
 
-Each output file contains JSON objects with the following structure:
+JSON v4.3 is a stream of newline-separated objects. Each communicator dump starts
+with a `dump_stats` marker carrying `header` and `metadata` once. The following
+`coll_records + p2p_records + proxy_records` objects belong to that marker (an
+absent `proxy_records` means zero). The writer holds its output lock across the
+whole batch, so communicator batches cannot interleave. Consumers must preserve
+the marker context when filtering, splitting, or merging these files; individual
+operation lines are no longer self-contained. This applies even with Proxy
+tracking disabled. A zero-record marker can still report new losses or PXN skips.
+The bundled analysis scripts use `inspector_json_reader.py` to restore this
+context while accepting older per-record formats. Keep that helper alongside
+the Inspector directory when copying the tools elsewhere.
+
+For example, a collective record following its marker looks like:
+
+```json
+{
+  "coll_perf": {
+    "coll": "AllReduce",
+    "coll_algo": "RING",
+    "coll_proto": "LL",
+    "coll_sn": 1407,
+    "coll_msg_size_bytes": 17179869184,
+    "coll_exec_time_us": 61974,
+    "coll_algobw_gbs": 277.210914,
+    "coll_busbw_gbs": 485.119099
+  }
+}
+```
+
+### Per-Dump Stats Record
+
+Each non-idle communicator emits one `dump_stats` marker at the start of its dump.
+It reports records written and records overwritten in each completed ring.
+`*_dropped_total` is cumulative for the communicator; `*_dropped_since_last_dump`
+covers only the interval since its previous dump. Stats are sampled even if the
+rings are empty. With Proxy tracking enabled, it also reports Ops lost before
+record construction, the Step-output setting (`proxy_steps_enabled`, integer 0/1), and process-wide PXN skips.
+
+Because this record has no `coll_perf`/`p2p_perf` body, consumers that iterate per-collective should filter on the presence of `coll_perf`/`p2p_perf` and read `dump_stats` separately rather than assuming every record is an operation.
 
 ```json
 {
@@ -330,48 +370,20 @@ Each output file contains JSON objects with the following structure:
     "hostname": "example-hostname",
     "pid": 1639453
   },
-  "coll_perf": {
-    "coll": "AllReduce",
-    "coll_algo": "RING",
-    "coll_proto": "LL",
-    "coll_sn": 1407,
-    "coll_msg_size_bytes": 17179869184,
-    "coll_exec_time_us": 61974,
-    "coll_algobw_gbs": 277.210914,
-    "coll_busbw_gbs": 485.119099
-  }
-}
-```
-
-### Per-Dump Stats Record
-
-Once per dump cycle, each communicator also emits a single stats record (identified by the `dump_stats` key) as a marker at the start of its dump. It reports how many records were written and how many were dropped — overwritten in the ring buffer before they could be dumped (see `NCCL_INSPECTOR_DUMP_COLL_RING_SIZE`). `dropped_total` is cumulative for the communicator; `dropped_since_last_dump` covers only the current dump. Non-zero drops mean the output is an incomplete sample and the ring should be enlarged.
-
-Because this record has no `coll_perf`/`p2p_perf` body, consumers that iterate per-collective should filter on the presence of `coll_perf`/`p2p_perf` and read `dump_stats` separately rather than assuming every record is an operation.
-
-```json
-{
-  "header": {
-    "id": "0x7f8c496ae9f661",
-    "rank": 2,
-    "n_ranks": 8,
-    "nnodes": 1
-  },
-  "metadata": {
-    "inspector_output_format_version": "v4.2",
-    "git_rev": "",
-    "rec_mechanism": "nccl_profiler_interface",
-    "dump_timestamp_us": 1748030377748202,
-    "hostname": "example-hostname",
-    "pid": 1639453
-  },
   "dump_stats": {
     "coll_records": 1024,
     "coll_dropped_total": 4096,
     "coll_dropped_since_last_dump": 512,
     "p2p_records": 0,
     "p2p_dropped_total": 0,
-    "p2p_dropped_since_last_dump": 0
+    "p2p_dropped_since_last_dump": 0,
+    "proxy_records": 2,
+    "proxy_dropped_total": 0,
+    "proxy_dropped_since_last_dump": 0,
+    "proxy_ops_dropped_total": 3,
+    "proxy_ops_dropped_since_last_dump": 1,
+    "proxy_pxn_skipped_process_total": 5,
+    "proxy_steps_enabled": 1
   }
 }
 ```
@@ -388,20 +400,6 @@ This will include additional event trace information in the JSON output, showing
 
 ```json
 {
-  "header": {
-    "id": "0xe62dedaa97644a",
-    "rank": 4,
-    "n_ranks": 8,
-    "nnodes": 1
-  },
-  "metadata": {
-    "inspector_output_format_version": "v4.3",
-    "git_rev": "9019a1912-dirty",
-    "rec_mechanism": "nccl_profiler_interface",
-    "dump_timestamp_us": 1752867229276385,
-    "hostname": "example-hostname",
-    "pid": 438776
-  },
   "coll_perf": {
     "coll": "ReduceScatter",
     "coll_algo": "RING",
@@ -458,7 +456,7 @@ Each completed ProxyStep and ProxyOp is written as a separate newline-delimited 
 - `proxy_op_sn` identifies a ProxyOp within the communicator.
 - `proxy_step_sn` identifies a step within its ProxyOp.
 - `record_sn` orders completed Proxy records within the communicator. Gaps can indicate overwritten records.
-- `origin_pid`, `rank`, `channel_id`, `peer`, and `direction` describe where the operation originated and the connection it uses.
+- `rank`, `channel_id`, `peer`, and `direction` describe the connection. The local process PID is in the dump marker's `metadata.pid`; Proxy records do not duplicate it as `origin_pid`.
 
 A completed send step can produce a `proxy_trace` object like this:
 
@@ -466,11 +464,9 @@ A completed send step can produce a `proxy_trace` object like this:
 {
   "record_type": "proxy_step",
   "record_sn": 41,
-  "proxy_records_dropped": 0,
   "parent_type": "coll",
   "parent_sn": 1407,
   "proxy_op_sn": 12,
-  "origin_pid": 1639453,
   "rank": 2,
   "channel_id": 0,
   "peer": 3,
@@ -501,17 +497,16 @@ The corresponding completed ProxyOp summary can produce:
 {
   "record_type": "proxy_op",
   "record_sn": 42,
-  "proxy_records_dropped": 0,
   "parent_type": "coll",
   "parent_sn": 1407,
   "proxy_op_sn": 12,
-  "origin_pid": 1639453,
   "rank": 2,
   "channel_id": 0,
   "peer": 3,
   "direction": "send",
   "n_steps": 1,
   "chunk_size_bytes": 1048576,
+  "n_steps_started": 1,
   "n_steps_completed": 1,
   "n_steps_dropped": 0,
   "trans_size_bytes": 1048576,
@@ -528,23 +523,46 @@ The corresponding completed ProxyOp summary can produce:
 }
 ```
 
-In a ProxyOp record, `n_steps` is the number of network-transfer steps described by NCCL, `n_steps_completed` is the number Inspector observed through step stop, and `n_steps_dropped` is the number it could not track because the active ProxyStep pool was full. `trans_size_bytes` is the sum of the transfer sizes recorded for its tracked steps; the per-step value is captured at `send_wait` for sends and `recv_flush_wait` for receives.
+In a ProxyOp record, `n_steps` is the number of network-transfer steps described by
+NCCL. `n_steps_started` counts successfully tracked Step starts, and
+`n_steps_completed` counts their stops; the two agree when an Op is finalized.
+`n_steps_dropped` counts starts rejected by the active Step pool. These counters
+still operate when `NCCL_INSPECTOR_DUMP_PROXY_STEPS=0`; suppressing output is not a
+dropped event.
 
-For receive steps, the direction-specific trace fields are `recv_wait`, `recv_flush_wait`, and `recv_gpu_wait` instead of the send fields shown above. All `event_trace_ts` values are timestamps in microseconds.
+`trans_size_bytes` is bytes **observed**, not necessarily all bytes transferred.
+It sums the first transfer-size callback for each tracked Step (`send_wait` for
+sends, `recv_flush_wait` for receives). Treat it as a complete byte total only
+when `n_steps_dropped == 0` and the transfer-size callbacks were received. A Step
+without a transfer-size callback still counts as completed, but contributes no
+bytes. Do not reconstruct missing bytes from `n_steps * chunk_size_bytes`:
+`chunk_size_bytes` is a maximum slice size, not the realized transfer size.
+
+For receive steps, the direction-specific trace fields are `recv_wait`, `recv_flush_wait`, and `recv_gpu_wait` instead of the send fields shown above. All `event_trace_ts` values are CPU Proxy callback timestamps in microseconds, not GPU execution timing. Any durations or bandwidth derived from them must not be compared directly with GPU-derived collective timing.
 
 ### Bounded Proxy Storage and Dropped Events
 
 Proxy tracking uses fixed-capacity active-event pools and a fixed-capacity completed-record ring so that a high-frequency ProxyStep stream cannot grow Inspector memory without limit:
 
-- If the ProxyOp pool is full, the new ProxyOp and its child steps are not recorded.
+- If the ProxyOp pool is full, the new ProxyOp and its child steps are not recorded. `proxy_ops_dropped_total` / `proxy_ops_dropped_since_last_dump` in `dump_stats` count these lost Ops, including lock-initialization failures. The reserved `proxy_op_sn` also leaves a gap. These counters count Ops, not the unknown number of child Steps lost with them.
 - If the ProxyStep pool is full, the new step is not recorded and its parent ProxyOp increments `n_steps_dropped`.
-- If the completed Proxy ring is full, the oldest completed record is overwritten. `proxy_records_dropped` is a cumulative per-communicator counter, copied into each subsequently emitted Proxy record.
-- `n_steps_dropped` reports active ProxyStep allocation failures. It does not include completed records later overwritten in the ring; those are reported by `proxy_records_dropped`.
+- If the completed Proxy ring is full, the oldest completed record is overwritten. The ring's counters are emitted once per dump as `proxy_dropped_total` / `proxy_dropped_since_last_dump`, alongside `proxy_records` (the number written in this batch).
+- `n_steps_dropped` reports active ProxyStep allocation failures. It does not include completed records later overwritten in the ring. Ring loss does not change the byte/count aggregation already performed for an Op.
+- Pool exhaustion and Proxy ring overflow each produce a one-shot message per process, not a log line per lost event. Loss counters continue to advance after messages are suppressed.
 - `NCCL_INSPECTOR_POOL_GROW` does not apply to either Proxy pool. Increase `NCCL_INSPECTOR_PROXY_OP_POOL_SIZE`, `NCCL_INSPECTOR_PROXY_STEP_POOL_SIZE`, or `NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE` when a workload needs a larger capture window.
 
 ### PXN Limitation
 
 Detached PXN ProxyOps can carry a parent pointer from another process's address space. Inspector checks the origin PID before dereferencing that pointer. ProxyOps whose origin PID differs from the current process are currently skipped and do not produce Proxy JSON records; support for correlating detached PXN work is not included yet.
+
+`proxy_pxn_skipped_process_total` in `dump_stats` makes these skips observable.
+It is cumulative for the **local Inspector process**, not for the communicator:
+the descriptor's profiler context may also be foreign, so neither it nor the
+parent pointer is dereferenced to attribute a skip. The same process total can
+appear in several communicator markers; group by `metadata.hostname` and
+`metadata.pid` and take the latest/max value, **do not sum it across markers**.
+A changed total triggers a stats-only dump for each local communicator even
+without local operation records. Skips also trigger one informational message.
 
 ## Output Directory
 
@@ -561,7 +579,7 @@ The size of output files depends on the output format and usage patterns:
 **JSON Mode** (`NCCL_INSPECTOR_PROM_DUMP=0`, default):
 - File size **grows continuously** throughout the application lifetime
 - Each collective operation adds a new JSON entry to the log file
-- With `NCCL_INSPECTOR_ENABLE_PROXY=1`, each completed ProxyOp and recorded ProxyStep adds another JSON entry. Proxy traces can therefore grow much faster than collective-only output.
+- With `NCCL_INSPECTOR_ENABLE_PROXY=1`, each completed ProxyOp and recorded ProxyStep adds another JSON entry. Set `NCCL_INSPECTOR_DUMP_PROXY_STEPS=0` for Op-only output while retaining Step-based Op statistics. Common header/metadata are emitted once per communicator dump, rather than on each operation line.
 - File size is proportional to:
   - Total number of collective operations executed
   - Number of parallel/overlapping communicators the process (PID) participates in

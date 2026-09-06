@@ -187,7 +187,6 @@ struct inspectorProxyOpMetadata {
   uint64_t parentType;
   uint64_t parentSn;
   uint64_t proxyOpSn;
-  pid_t originPid;
   int rank;
   int peer;
   uint8_t channelId;
@@ -204,6 +203,7 @@ struct inspectorCompletedProxyRecord {
     struct {
       int nSteps;
       int chunkSize;
+      uint32_t nStepsStarted;
       uint32_t nStepsCompleted;
       uint32_t nStepsDropped;
       size_t transSizeBytes;
@@ -247,7 +247,10 @@ struct inspectorCommInfo {
   uint64_t p2pSeqNum;
   uint64_t nextProxyOpSn;
   uint64_t nextProxyRecordSn;
-  uint64_t proxyRecordsDropped;
+  uint64_t proxyOpsDropped;
+  uint64_t proxyOpsDroppedReported;
+  // Last observed process-wide PXN skip count; not a per-comm loss counter.
+  uint64_t proxyPxnSkippedReported;
   pthread_rwlock_t guard;
 };
 
@@ -425,6 +428,12 @@ inline int ncclTypeSize(ncclDataType_t type) {
 extern bool enableNcclInspectorP2p;
 // Global flag to control ProxyOp/ProxyStep tracking
 extern bool enableNcclInspectorProxy;
+// Controls completed Step records only; callbacks still feed Op statistics.
+extern bool enableNcclInspectorProxyStepDump;
+extern pid_t ncclInspectorPid;
+// Foreign-PID descriptors may also carry a foreign profiler context, so these
+// skips cannot be safely attributed to a communicator. Access atomically.
+extern uint64_t ncclInspectorProxyPxnSkipped;
 extern bool requireKernelTiming;
 // Opt-in flag for extra per-device Prometheus stats metrics (totals + drops)
 extern bool enableNcclInspectorPromStats;

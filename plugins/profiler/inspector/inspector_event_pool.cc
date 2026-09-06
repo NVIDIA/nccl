@@ -716,10 +716,15 @@ struct inspectorProxyOpInfo* inspectorEventPoolAllocProxyOp() {
   pthread_mutex_lock(&g_eventPool.proxyOpPoolLock);
 
   if (g_eventPool.proxyOpFreeList == nullptr) {
+    uint32_t allocated = g_eventPool.proxyOpAllocCount;
+    uint32_t capacity = g_eventPool.proxyOpCapacity;
     pthread_mutex_unlock(&g_eventPool.proxyOpPoolLock);
-    WARN_INSPECTOR(
-      "NCCL Inspector: ProxyOp pool exhausted (capacity: %u) - allocation failed!",
-      g_eventPool.proxyOpCapacity);
+    static bool warned = false;
+    if (!__atomic_exchange_n(&warned, true, __ATOMIC_RELAXED)) {
+      WARN_INSPECTOR("NCCL Inspector: ProxyOp pool exhausted (%u/%u allocated); "
+                     "failed Ops are counted in dump_stats. Further exhaustion messages are suppressed.",
+                     allocated, capacity);
+    }
     return nullptr;
   }
 
@@ -757,10 +762,15 @@ struct inspectorProxyStepInfo* inspectorEventPoolAllocProxyStep() {
   pthread_mutex_lock(&g_eventPool.proxyStepPoolLock);
 
   if (g_eventPool.proxyStepFreeList == nullptr) {
+    uint32_t allocated = g_eventPool.proxyStepAllocCount;
+    uint32_t capacity = g_eventPool.proxyStepCapacity;
     pthread_mutex_unlock(&g_eventPool.proxyStepPoolLock);
-    WARN_INSPECTOR(
-      "NCCL Inspector: ProxyStep pool exhausted (capacity: %u) - allocation failed!",
-      g_eventPool.proxyStepCapacity);
+    static bool warned = false;
+    if (!__atomic_exchange_n(&warned, true, __ATOMIC_RELAXED)) {
+      WARN_INSPECTOR("NCCL Inspector: ProxyStep pool exhausted (%u/%u allocated); "
+                     "failed Steps are counted in their Op. Further exhaustion messages are suppressed.",
+                     allocated, capacity);
+    }
     return nullptr;
   }
 

@@ -51,7 +51,7 @@ class SGComm(BaseComm):
         if is_blackwell:
             return CommConfig(16, 4, 2, num_sms)
         return CommConfig(4, 4, 2, num_sms)
-    
+
     def scatter_gather(self, tensor: Union[torch.Tensor, List[torch.Tensor]], scatter_dim = 0, gather_dim = 1, out: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None, previous_event: Optional[EventOverlap] = None, async_finish: bool = False):
         """
         Perform scatter-gather on different dimensions
@@ -153,7 +153,7 @@ class SGComm(BaseComm):
             prefix_sizes.append(psize)
         outs = [output[prefix_sizes[i]:prefix_sizes[i] + tensors[i].numel()] for i in range(len(tensors))]
         return outs
-    
+
     def get_comm_slots(self, tensors : Union[torch.Tensor, List[torch.Tensor]]):
         if isinstance(tensors, torch.Tensor):
             tensors = [tensors]
@@ -163,6 +163,6 @@ class SGComm(BaseComm):
         total_size = sum(aligned_sizes)
         slot_bytes = align * 1024 * self.config.slot_unroll
         return (total_size + slot_bytes - 1) // slot_bytes
-    
+
     def is_ring_mode(self):
         return self.runtime.is_ring_mode()

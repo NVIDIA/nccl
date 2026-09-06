@@ -28,6 +28,12 @@ The three GIN factories also accept :data:`GIN_ALL_CONTEXTS` in place of a
 
         sess = barrier.world_gin(coop, barrier.GIN_ALL_CONTEXTS, dev_comm,
                                  index=0)
+
+Call ``destroy()`` exactly once after the session's final operation. All
+threads in the session's cooperative group must call it from uniform control
+flow. For LSA and hybrid sessions, this makes the same handle and index safe to
+reuse. Omitting it can cause a later barrier to stop synchronizing without
+hanging.
 """
 
 import cutlass
@@ -126,6 +132,14 @@ class LsaBarrierSession:
         """
         _bindings.nccl_lsa_barrier_session_sync(self.ptr, _to_coop_value(coop), cutlass.Int32(int(order)))
 
+    def destroy(self) -> None:
+        """Finalize the session so its handle and index can be safely reused.
+
+        All threads in the session's cooperative group must call this exactly
+        once.
+        """
+        _bindings.nccl_lsa_barrier_session_destroy(self.ptr)
+
 
 def lsa_session(
     coop: ncclCoopAny,
@@ -179,6 +193,14 @@ class GinBarrierSession:
         """
         _bindings.nccl_gin_barrier_session_sync(
             self.ptr, _to_coop_value(coop), cutlass.Int32(int(order)), cutlass.Int32(int(fence)))
+
+    def destroy(self) -> None:
+        """Finalize the session.
+
+        All threads in the session's cooperative group must call this exactly
+        once.
+        """
+        _bindings.nccl_gin_barrier_session_destroy(self.ptr)
 
 
 class _GinAllContexts:
@@ -252,6 +274,14 @@ class BarrierSession:
         """
         _bindings.nccl_barrier_session_sync(
             self.ptr, _to_coop_value(coop), cutlass.Int32(int(order)), cutlass.Int32(int(fence)))
+
+    def destroy(self) -> None:
+        """Finalize the session so its handles and index can be safely reused.
+
+        All threads in the session's cooperative group must call this exactly
+        once.
+        """
+        _bindings.nccl_barrier_session_destroy(self.ptr)
 
 
 def hybrid_session(

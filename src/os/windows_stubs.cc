@@ -225,6 +225,11 @@ bool ncclProfilerPluginLoaded(void) {
   return false;
 }
 
+uint8_t ncclProfilerDeviceMode(int eActivationMask) {
+  (void)eActivationMask;
+  return ncclDevProfilerModeNone;
+}
+
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;

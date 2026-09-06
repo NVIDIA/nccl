@@ -632,7 +632,7 @@ void rasSockEventLoop(struct rasSocket* sock, int pollIdx) {
     // The extra test for TERMINATING is there to take care of a race when the handling of one socket
     // results in another socket being terminated, but one that already has revents waiting from poll.
     if (sock->status != RAS_SOCK_TERMINATING && (rasPfds[pollIdx].revents & POLLOUT)) {
-      int closed = 0;
+      bool closed = false;
       bool allSent = false;
       if (sock->conn == nullptr) {
         // Should never happen.
@@ -666,7 +666,7 @@ void rasSockEventLoop(struct rasSocket* sock, int pollIdx) {
     if (rasPfds[pollIdx].revents & POLLIN) {
       struct rasMsg* msg;
       do {
-        int closed = 0;
+        bool closed = false;
         msg = nullptr;
         if (rasMsgRecv(sock, &msg, &closed) != ncclSuccess) {
           INFO(NCCL_RAS, "RAS unexpected error from rasMsgRecv; terminating the socket connection with %s",

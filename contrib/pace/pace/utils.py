@@ -102,7 +102,7 @@ class EventOverlap:
         assert self.event is not None
         self.event.host_wait()
         self.extra_tensors = None
-    
+
     def host_query(self) -> bool:
         assert self.event is not None
         sync = self.event.host_query()

@@ -26,17 +26,20 @@ int ncclSymkModelCtasEnvOverride() {
   return static_cast<int>(nUserCTAs);
 }
 
-static void queryModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                       int* nBlocks) {
+static ncclResult_t queryModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
+                               float* timeUs, float* selectionTimeUs, int* nBlocks) {
   if (ncclSymkGinKernelMask() >> kernelId & 1) {
-    ncclSymkGinModel(input, kernelId, nBytes, timeUs, nBlocks);
+    NCCLCHECK(ncclSymkGinModel(input, kernelId, nBytes, timeUs, nBlocks));
+    *selectionTimeUs = *timeUs;
   } else {
-    ncclSymkLsaModel(input, kernelId, nBytes, timeUs, nBlocks);
+    NCCLCHECK(ncclSymkLsaModel(input, kernelId, nBytes, timeUs, selectionTimeUs, nBlocks));
   }
+  return ncclSuccess;
 }
 
 ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning) {
   ncclResult_t ret = ncclSuccess;
+  tuning->selectionTimeUs = NCCL_TUNING_IGNORE;
 
   if (tuning->symKernelId == ncclSymkKernelId_Count) {
     tuning->valid = 0;
@@ -75,8 +78,10 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
   }
 
   float kTime = FLT_MAX;
+  float kSelectionTime = FLT_MAX;
   int kBlocks = 0;
-  queryModel(inputs, (enum ncclSymkKernelId)tuning->symKernelId, inputs->nBytes, &kTime, &kBlocks);
+  NCCLCHECK(queryModel(inputs, (enum ncclSymkKernelId)tuning->symKernelId, inputs->nBytes, &kTime, &kSelectionTime,
+                       &kBlocks));
   if (kBlocks <= 0 || !std::isfinite(kTime) || kTime >= disableTime) {
     tuning->valid = 0;
     tuning->timeUs = -1.0f;
@@ -85,6 +90,7 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
   }
 
   tuning->timeUs = kTime;
+  tuning->selectionTimeUs = kSelectionTime;
   tuning->nChannels = kBlocks;
   tuning->nWarps = 16;
   return ret;

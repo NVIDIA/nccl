@@ -9,7 +9,11 @@
 #include "checks.h"
 #include "debug.h"
 #include "os.h"
+#include "param.h"
 
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <initializer_list>
 #include <memory>
 #include <mutex>
@@ -73,6 +77,45 @@ union nvmlCCInfoInternal {
   nvmlConfComputeSystemState_t settingV12020;
   nvmlSystemConfComputeSettings_t settingV12040;
 };
+
+void ncclNvmlParseCudaVisibleDevices(const char* env, int deviceCount, bool* visible) {
+  for (int a = 0; a < deviceCount; a++) visible[a] = (env == nullptr);
+  if (env == nullptr || env[0] == '\0') return;
+
+  const char* p = env;
+  while (*p != '\0') {
+    while (*p == ' ' || *p == '\t') p++;
+
+    char* end = nullptr;
+    errno = 0;
+    long value = strtol(p, &end, 10);
+    if (p == end) {
+      // CUDA accepts UUID and MIG identifiers, which cannot be mapped to NVML
+      // ordinals here. Avoid treating a potentially visible device as invisible.
+      for (int a = 0; a < deviceCount; a++) visible[a] = true;
+      return;
+    }
+    if (errno != 0 || value > INT_MAX) return;
+    if (value < 0) return;
+
+    while (*end == ' ' || *end == '\t') end++;
+    if (*end != '\0' && *end != ',') return;
+
+    // CUDA stops processing the sequence at the first invalid index.
+    if (value >= deviceCount) return;
+    visible[value] = true;
+    if (*end == '\0') break;
+    p = end + 1;
+  }
+}
+
+void ncclNvmlCacheCudaVisibleDevices() {
+  bool visible[ncclNvmlMaxDevices];
+  ncclNvmlParseCudaVisibleDevices(ncclGetEnv("CUDA_VISIBLE_DEVICES"), ncclNvmlDeviceCount, visible);
+  for (int a = 0; a < ncclNvmlDeviceCount; a++) {
+    ncclNvmlDevices[a].cudaVisible = visible[a];
+  }
+}
 } // namespace
 
 ncclResult_t ncclNvmlEnsureInitialized() {
@@ -171,9 +214,15 @@ ncclResult_t ncclNvmlEnsureInitialized() {
     return initResult;
   }
 
+  ncclNvmlCacheCudaVisibleDevices();
+
   for (int a = 0; a < ncclNvmlDeviceCount; a++) {
     res1 = pfn_nvmlDeviceGetHandleByIndex(a, &ncclNvmlDevices[a].handle);
     if (res1 != NVML_SUCCESS) {
+      if (!ncclNvmlDevices[a].cudaVisible) {
+        ncclNvmlDevices[a].handle = nullptr;
+        continue;
+      }
       WARN("nvmlDeviceGetHandleByIndex(%d) failed: %s", int(a), pfn_nvmlErrorString(res1));
       initResult = ncclSystemError;
       return initResult;
@@ -182,6 +231,7 @@ ncclResult_t ncclNvmlEnsureInitialized() {
     res1 = pfn_nvmlDeviceGetCudaComputeCapability(ncclNvmlDevices[a].handle, &ncclNvmlDevices[a].computeCapabilityMajor,
                                                   &ncclNvmlDevices[a].computeCapabilityMinor);
     if (res1 != NVML_SUCCESS) {
+      if (!ncclNvmlDevices[a].cudaVisible) continue;
       WARN("nvmlDeviceGetCudaComputeCapability(%d) failed: %s", int(a), pfn_nvmlErrorString(res1));
       initResult = ncclSystemError;
       return initResult;
@@ -190,19 +240,32 @@ ncclResult_t ncclNvmlEnsureInitialized() {
 
   for (int a = 0; a < ncclNvmlDeviceCount; a++) {
     for (int b = 0; b < ncclNvmlDeviceCount; b++) {
+      if (ncclNvmlDevices[a].handle == nullptr || ncclNvmlDevices[b].handle == nullptr) {
+        ncclNvmlDevicePairs[a][b].p2pStatusRead = NVML_P2P_STATUS_UNKNOWN;
+        ncclNvmlDevicePairs[a][b].p2pStatusWrite = NVML_P2P_STATUS_UNKNOWN;
+        continue;
+      }
       nvmlDevice_t da = ncclNvmlDevices[a].handle;
       nvmlDevice_t db = ncclNvmlDevices[b].handle;
 
       res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_READ, &ncclNvmlDevicePairs[a][b].p2pStatusRead);
       if (res1 != NVML_SUCCESS) {
-        WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
-        initResult = ncclSystemError;
-        return initResult;
+        if (!ncclNvmlDevices[a].cudaVisible || !ncclNvmlDevices[b].cudaVisible) {
+          ncclNvmlDevicePairs[a][b].p2pStatusRead = NVML_P2P_STATUS_UNKNOWN;
+        } else {
+          WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
+          initResult = ncclSystemError;
+          return initResult;
+        }
       }
 
       res1 = pfn_nvmlDeviceGetP2PStatus(da, db, NVML_P2P_CAPS_INDEX_WRITE, &ncclNvmlDevicePairs[a][b].p2pStatusWrite);
       if (res1 != NVML_SUCCESS) {
-        WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_READ) failed: %s", a, b, pfn_nvmlErrorString(res1));
+        if (!ncclNvmlDevices[a].cudaVisible || !ncclNvmlDevices[b].cudaVisible) {
+          ncclNvmlDevicePairs[a][b].p2pStatusWrite = NVML_P2P_STATUS_UNKNOWN;
+          continue;
+        }
+        WARN("nvmlDeviceGetP2PStatus(%d,%d,NVML_P2P_CAPS_INDEX_WRITE) failed: %s", a, b, pfn_nvmlErrorString(res1));
         initResult = ncclSystemError;
         return initResult;
       }

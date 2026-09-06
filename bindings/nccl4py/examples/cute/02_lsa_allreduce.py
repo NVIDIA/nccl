@@ -109,6 +109,7 @@ def lsa_allreduce_kernel(
 
     # arrive + wait in one call; release makes the reduction visible first.
     bar.sync(coop, nccl_cute.MemoryOrder.RELEASE)
+    bar.destroy()
 
 
 @cute.jit

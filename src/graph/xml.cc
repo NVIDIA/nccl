@@ -367,8 +367,10 @@ ncclResult_t ncclTopoXmlLoadNet(FILE* file, struct ncclXml* xml, struct ncclXmlN
 }
 
 ncclResult_t ncclTopoXmlLoadNic(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head) {
-  struct xmlHandler handlers[] = {{"net", ncclTopoXmlLoadNet}};
-  NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 1));
+  struct xmlHandler handlers[] = {
+    {"net", ncclTopoXmlLoadNet}, {"gin", ncclTopoXmlLoadNet}, {"rma", ncclTopoXmlLoadNet}
+  };
+  NCCLCHECK(xmlLoadSub(file, xml, head, handlers, 3));
   return ncclSuccess;
 }
 
@@ -481,8 +483,10 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     // Set affinity using OS-specific implementation
     unsigned int nodeNumber = (unsigned int)strtoul(numaId, NULL, 0);
     char affinityStr[MAX_STR_LEN];
-    NCCLCHECK(ncclOsGetNumaNodeAffinity(nodeNumber, affinityStr, sizeof(affinityStr)));
+    int cpuOffset;
+    NCCLCHECK(ncclOsGetNumaNodeAffinity(nodeNumber, affinityStr, sizeof(affinityStr), &cpuOffset));
     NCCLCHECK(xmlSetAttr(cpuNode, "affinity", affinityStr));
+    if (cpuOffset > 0) NCCLCHECK(xmlSetAttrInt(cpuNode, "affinity_offset", cpuOffset));
   }
 
   NCCLCHECK(xmlGetAttrIndex(cpuNode, "arch", &index));
@@ -614,9 +618,11 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   }
 
 #elif NCCL_OS_WINDOWS
+  char* path = NULL;
   char* parentBusId = NULL;
   char deviceClass[MAX_STR_LEN];
   deviceClass[0] = '\0';
+  NOWARN(ncclOsGetPciPath(busId, &path), NCCL_GRAPH);
   bool isGpuDevice = false;
   if (ncclOsGetPciDeviceClassByBusId(busId, deviceClass, sizeof(deviceClass)) == ncclSuccess &&
       deviceClass[0] != '\0') {
@@ -799,7 +805,12 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
     INFO(NCCL_INIT, "ncclTopoGetXmlFromSys: Windows - creating parent node");
     if (nvmlDeviceFound) {
       char numaIdStr[MAX_STR_LEN] = "0";
-      INFO(NCCL_INIT, "ncclTopoGetXmlFromSys: Using NUMA node %s (Windows default)", numaIdStr);
+      if (path != NULL) {
+        ncclResult_t numaRet;
+        NOWARN(numaRet = ncclOsTopoGetStrFromSys(path, "numa_node", numaIdStr, sizeof(numaIdStr)), NCCL_GRAPH);
+        if (numaRet != ncclSuccess) snprintf(numaIdStr, sizeof(numaIdStr), "0");
+      }
+      INFO(NCCL_GRAPH, "ncclTopoGetXmlFromSys: Using NUMA node %s", numaIdStr);
 
       // Get PCI device parent using Windows Setup API
       ncclResult_t result = ncclOsGetPciDeviceParent(device, &parentBusId);
@@ -888,6 +899,7 @@ exit:
 #if NCCL_OS_LINUX
   free(path);
 #elif NCCL_OS_WINDOWS
+  free(path);
   free(parentBusId);
 #endif
   return ret;
@@ -1169,6 +1181,18 @@ ncclResult_t ncclTopoFillNet(struct ncclXml* xml, const char* tagName, const cha
   return ncclSuccess;
 }
 
+ncclResult_t xmlUnsetAttr(struct ncclXmlNode* node, const char* attrName) {
+  int index;
+  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
+  if (index == -1) return ncclSuccess;
+  for (int i = index + 1; i < node->nAttrs; i++) {
+    strcpy(node->attrs[i - 1].key, node->attrs[i].key);
+    strcpy(node->attrs[i - 1].value, node->attrs[i].value);
+  }
+  node->nAttrs--;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
   const char* str;
   NCCLCHECK(xmlGetAttr(node, "keep", &str));
@@ -1196,7 +1220,7 @@ ncclResult_t ncclTopoTrimXmlRec(struct ncclXmlNode* node, int* keep) {
     // Remove node if it has no children and no keep attribute
     if (*keep == 0 && // Trim PCI switches, CPUs with no used GPU/NIC under them, or pruned NICs
         (strcmp(node->name, "pci") == 0 || strcmp(node->name, "cpu") == 0 || strcmp(node->name, "nic") == 0 ||
-         strcmp(node->name, "net") == 0)) {
+         strcmp(node->name, "net") == 0 || strcmp(node->name, "gin") == 0 || strcmp(node->name, "rma") == 0)) {
 #ifdef ENABLE_TRACE
       const char* name;
       const char* busid;

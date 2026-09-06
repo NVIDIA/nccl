@@ -1122,8 +1122,16 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   work->recvRank = recvRank;
   work->recvAddr = recvAddr;
   work->recvBytes = recvBytes == -1 ? 0 : recvBytes;
-  work->profilerEnabled =
-    ncclProfilerPluginLoaded() && ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelCh);
+  // One bit covers both directions, so it has to hold if either task asked for KernelCh.
+  work->profilerEnabled = 0;
+  if (ncclProfilerPluginLoaded()) {
+    for (int dir = 0; dir < 2; dir++) {
+      if (p2pTasks[dir] && (p2pTasks[dir]->eActivationMask & ncclProfileKernelCh)) {
+        work->profilerEnabled = 1;
+        break;
+      }
+    }
+  }
 
   for (int dir = 0; dir < nProxyOps; dir++) {
     struct ncclProxyOp* op = &proxyOps[dir];
@@ -1947,7 +1955,7 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
         relayUserLaunchCompletionEvent = true;
         userKernelEventArmed = true;
       }
-    } else if (userKernelEvent) {
+    } else if (userKernelEvent && driverVersion >= 12030) {
       launchAttrs[attrs].id = CU_LAUNCH_ATTRIBUTE_LAUNCH_COMPLETION_EVENT;
       launchAttrs[attrs].value.launchCompletionEvent.event = plan->launchCompletionEvent;
       launchAttrs[attrs].value.launchCompletionEvent.flags = 0;

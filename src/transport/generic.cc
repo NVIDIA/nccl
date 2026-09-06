@@ -103,6 +103,7 @@ exit:
 
 ncclResult_t ncclTransportPatConnect(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
+  if (ncclPatEnable(comm) == 0) goto exit;
   if (comm && comm->nRanks > 1) {
     int denseLocalRank = 0;
     // Connect corresponding NVLS-dense rails across nodes.

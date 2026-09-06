@@ -29,6 +29,7 @@
   {/*.id =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
    /*.valid =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
    /*.timeUs =*/NCCL_TUNING_IGNORE, \
+   /*.selectionTimeUs =*/NCCL_TUNING_IGNORE, \
    /*.algo =*/NCCL_ALGO_UNDEF, \
    /*.proto =*/NCCL_PROTO_UNDEF, \
    /*.symKernelId =*/ncclSymkKernelId_Count, \
@@ -42,6 +43,7 @@ struct ncclTuningResult_t {
   int id;
   int valid;
   float timeUs;
+  float selectionTimeUs;
   int algo;
   int proto;
   int symKernelId;

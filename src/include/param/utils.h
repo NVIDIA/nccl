@@ -66,10 +66,9 @@ inline std::string flagsStr(uint64_t flags) {
     uint64_t flag;
     const char* name;
   } entries[] = {
-    {NCCL_PARAM_FLAG_DEPRECATED, "Deprecated"},
-    {NCCL_PARAM_FLAG_CACHED, "Cached"},
-    {NCCL_PARAM_FLAG_UNUSED, "Unused"},
-    {NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT, "NoEnvPluginInit"},
+    {NCCL_PARAM_FLAG_DEPRECATED, "Deprecated"}, {NCCL_PARAM_FLAG_CACHED, "Cached"},
+    {NCCL_PARAM_FLAG_UNUSED, "Unused"},         {NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT, "NoEnvPluginInit"},
+    {NCCL_PARAM_FLAG_SENSITIVE, "Sensitive"},
   };
   std::string result = (flags & NCCL_PARAM_FLAG_PUBLISHED) ? "" : "Private";
   for (const auto& e : entries) {

@@ -30,3 +30,4 @@ docs/examples/**/rmsnorm_lsa
 docs/examples/**/rmsnorm_multimem
 docs/examples/**/rmsnorm_gin
 docs/examples/**/rmsnorm_hybrid
+docs/examples/**/ring_exchange

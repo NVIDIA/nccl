@@ -141,7 +141,7 @@ ncclDevCommRequirements
       Set to false if kernels using this communicator will not use strong signal operations
       (such as :cpp:struct:`ncclGin_StrongSignalInc` and :cpp:struct:`ncclGin_StrongVASignalAdd`).
       Default is true. Available since NCCL 2.30.5.
- 
+
 
    .. c:member:: bool ginVaSignalsRequired
 
@@ -253,14 +253,15 @@ ncclGinType_t
    .. c:enumerator:: NCCL_GIN_TYPE_GPI
 
       GPU-Push Interface (GPI) GIN type. Requires SpectrumX - see
-      SpectrumX documentation for details. Added as an experimental
-      feature in NCCL 2.30.6.
+      `SpectrumX documentation <https://networking-docs.nvidia.com/hpcxum/2.51/spectrum-x-nccl-plugin#GPU-Initiated-Networking-(GIN)>`_
+      for details. Added as an experimental feature in NCCL 2.30.6.
 
    .. c:enumerator:: NCCL_GIN_TYPE_EFA_GDA
 
       AWS EFA GPUDirect Async (GDA) GIN type. Requires the AWS OFI plugin for NCCL -
-      see AWS EFA `documentation <https://github.com/aws/aws-ofi-nccl>`_ for details.
-      Available since NCCL 2.31.
+      see AWS EFA `documentation <https://github.com/aws/aws-ofi-nccl>`_ and
+      `getting started guide <https://github.com/aws/aws-ofi-nccl/blob/master/doc/gin-getting-started.md>`_
+      for details. Available since NCCL 2.31.
 
 ncclGinConnectionType_t
 -----------------------

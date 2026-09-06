@@ -315,7 +315,7 @@ static bool ncclIbIsCx9(const struct ncclIbDev* dev) {
 static const int NCCL_IB_VR_SOCKET_COUNT = 2;
 static const int NCCL_IB_VR_RAILS_PER_SOCKET = 2;
 
-static ncclResult_t ncclIbGetRailPolicy(enum ncclIbRailPolicy* policy) {
+static void ncclIbGetRailPolicy(enum ncclIbRailPolicy* policy) {
   static std::once_flag onceFlag;
   static enum ncclIbRailPolicy railPolicy = NCCL_IB_RAIL_POLICY_CX9_FLIP;
   std::call_once(onceFlag, [&]() {
@@ -336,7 +336,6 @@ static ncclResult_t ncclIbGetRailPolicy(enum ncclIbRailPolicy* policy) {
     INFO(NCCL_ENV, "NET/IB: NCCL_IB_RAIL_POLICY set by environment to %s", envStr);
   });
   *policy = railPolicy;
-  return ncclSuccess;
 }
 
 // Returns the index of dev in the array of pci paths
@@ -352,11 +351,11 @@ static int ncclIbGetPciIndex(int nPaths, const char** pciPaths, struct ncclIbDev
 // returns the policy and the total number of devices subject to the policy.
 static ncclResult_t ncclIbAutoPolicy(enum ncclIbRailPolicy* policy, int* nDevs) {
   static int count = 0;
-  static ncclIbRailPolicy cache = NCCL_IB_RAIL_POLICY_NONE;
-  NCCLCHECK(ncclIbGetRailPolicy(&cache));
-
   static std::once_flag onceFlag;
+  static ncclIbRailPolicy cache = NCCL_IB_RAIL_POLICY_NONE;
+
   std::call_once(onceFlag, [&]() {
+    ncclIbGetRailPolicy(&cache);
     if (ncclIbCpuArchAarch64 && (cache == NCCL_IB_RAIL_POLICY_CX9_BLOCK || cache == NCCL_IB_RAIL_POLICY_CX9_ALT ||
                                  cache == NCCL_IB_RAIL_POLICY_CX9_FLIP)) {
       count = 0;

@@ -114,13 +114,21 @@ struct alignas(16) ncclSymkDevWork {
   uint64_t sChannelId:16, nChannels:16, padding:32;
 };
 
+// Device-side profiling requested for a launch; KernelPhase implies KernelCh. Only the
+// symmetric kernels stamp phases, and they read these bits at runtime.
+enum ncclDevProfilerMode : uint8_t {
+  ncclDevProfilerModeNone = 0,
+  ncclDevProfilerModeKernelCh = 1 << 0,
+  ncclDevProfilerModeKernelPhase = 1 << 1,
+};
+
 struct alignas(16) ncclSymkDevWorkArgs {
   struct ncclSymkDevComm kcomm;
   int nMaxChannels;
   int maxDynamicSmem;
-  int profilerEnabled; // when set, profilerWorkCounters[nMaxChannels] follows before channelWorkRange
+  uint8_t profilerMode; // ncclDevProfilerMode bits; nonzero means profilerWorkCounters[nMaxChannels] follows
   // Variable-length trailing data layout:
-  //   if profilerEnabled: uint64_t profilerWorkCounters[nMaxChannels] (aligned to 16)
+  //   if profilerMode: uint64_t profilerWorkCounters[nMaxChannels] (aligned to 16)
   //   ncclSymkChannelWorkRange[nChannels] (aligned to 16)
   //   ncclSymkDevWork[nWorks]
   // aux functions
@@ -134,7 +142,7 @@ struct alignas(16) ncclSymkDevWorkArgs {
   }
   __host__ __device__ struct ncclSymkChannelWorkRange* getWorkRange() const {
     size_t off = alignUp(sizeof(struct ncclSymkDevWorkArgs), 16);
-    if (profilerEnabled) off += alignUp(nMaxChannels * sizeof(uint64_t), 16);
+    if (profilerMode) off += alignUp(nMaxChannels * sizeof(uint64_t), 16);
     return (struct ncclSymkChannelWorkRange*)((uint8_t*)this + off);
   }
   __host__ __device__ struct ncclSymkDevWork* getWorks(int nChannels) const {

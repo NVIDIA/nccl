@@ -35,7 +35,7 @@ namespace pace {
 
 /**
  * sg.cu - Scatter-Gather (All-to-All) communication implementation
- * 
+ *
  * Design follows ag.cu single-stream pattern:
  *   copy_stream: all CE ops — c1 (input→send buf), c2 (peer NVL send→output),
  *                c3 (RDMA recv→output) — issued in order per slot, with c3
@@ -194,13 +194,13 @@ class sg_device_mem_layout {
     uint8_t *base_ptr;  // Local GPU's buffer base pointer
     const size_t slot_bytes;
     const int nvl_ring, num_local_ranks, local_rank, node_id, num_nodes;
-    
+
 public:
-    __device__ sg_device_mem_layout(void *gin_win_ptr, int nvl_ring_, int rdma_ring_, size_t slot_bytes_, 
+    __device__ sg_device_mem_layout(void *gin_win_ptr, int nvl_ring_, int rdma_ring_, size_t slot_bytes_,
                                      int rank, int num_local_ranks_, int num_ranks)
-        : base_ptr(reinterpret_cast<uint8_t*>(gin_win_ptr)), 
+        : base_ptr(reinterpret_cast<uint8_t*>(gin_win_ptr)),
           slot_bytes(slot_bytes_),
-          nvl_ring(nvl_ring_), 
+          nvl_ring(nvl_ring_),
           num_local_ranks(num_local_ranks_),
           local_rank(rank % num_local_ranks_),
           node_id(rank / num_local_ranks_),
@@ -213,25 +213,25 @@ public:
         const int dst_node = dst_rank / num_local_ranks;
         const int dest_local = dst_rank % num_local_ranks;
         return reinterpret_cast<float4*>(base_ptr + blockIdx.x * block_send_area +
-               dst_node * nvl_ring * batch_slot_bytes + 
+               dst_node * nvl_ring * batch_slot_bytes +
                batch_slot_bytes * (slot % nvl_ring) + slot_bytes * dest_local);
     }
-    
+
     // c2: Read from NVL peer's send buffer (per-block region)
     __device__ __forceinline__ float4* peer_send_ptr(void **p2p_ptrs, const int& src_local, const size_t& slot) {
         const size_t batch_slot_bytes = slot_bytes * num_local_ranks;
         const size_t block_send_area = batch_slot_bytes * nvl_ring * num_nodes;
-        return reinterpret_cast<float4*>(reinterpret_cast<uint8_t*>(p2p_ptrs[src_local]) + 
+        return reinterpret_cast<float4*>(reinterpret_cast<uint8_t*>(p2p_ptrs[src_local]) +
                blockIdx.x * block_send_area +
                node_id * nvl_ring * batch_slot_bytes + batch_slot_bytes * (slot % nvl_ring) + slot_bytes * local_rank);
     }
-    
+
     // c3: Read from RDMA recv buffer (per-block region) - only used in multi-node
     __device__ __forceinline__ float4* rdma_recv_ptr(void **p2p_ptrs, const int& src_node, const int& nvl_peer, const size_t& slot, const int rdma_ring) {
         const size_t batch_slot_bytes = slot_bytes * num_local_ranks;
         const size_t block_send_area = batch_slot_bytes * nvl_ring * num_nodes;
         const size_t block_recv_area = batch_slot_bytes * rdma_ring * num_nodes;
-        return reinterpret_cast<float4*>(reinterpret_cast<uint8_t*>(p2p_ptrs[nvl_peer]) + 
+        return reinterpret_cast<float4*>(reinterpret_cast<uint8_t*>(p2p_ptrs[nvl_peer]) +
                block_send_area * gridDim.x + blockIdx.x * block_recv_area +
                batch_slot_bytes * (rdma_ring * src_node + (slot % rdma_ring)) + slot_bytes * local_rank);
     }
@@ -243,7 +243,7 @@ public:
         return blockIdx.x * block_send_area +
                dst_node * nvl_ring * batch_slot_bytes + batch_slot_bytes * (slot % nvl_ring);
     }
-    
+
     __device__ __forceinline__ uint64_t rdma_recv_offset(const int& src_node, const size_t& slot, const int rdma_ring) {
         const size_t batch_slot_bytes = slot_bytes * num_local_ranks;
         const size_t block_send_area = batch_slot_bytes * nvl_ring * num_nodes;
@@ -309,18 +309,18 @@ scattergather_kernel(
     __shared__ int prefix_f4[SG_MAX_TENSORS];   // Cumulative f4 count for input
     __shared__ int tensor_f4[SG_MAX_TENSORS];   // Per-tensor f4 count for input
     __shared__ uint64_t cached_args[SG_MAX_TENSORS * 8];  // Cached args from global memory
-    
+
     DEVICE_ASSERT(nargs <= SG_MAX_TENSORS);
-    
+
     // Load args into shared memory (8 uint64_t per tensor)
     // Each thread loads multiple elements to cover nargs * 8 elements
     for (int i = threadIdx.x; i < nargs * 8; i += blockDim.x) {
         cached_args[i] = args[i];
     }
-    
+
     // Sync after loading cached_args
     __syncthreads();
-    
+
     // Initialize tensor metadata from cached args (now in shared memory)
     // Format: [in_ptr, in_X, in_Y, in_Z, out_ptr, out_X, out_Y, out_Z] per tensor
     // Z is already in bytes, so f4_count = X * Z / 16 (where 16 = sizeof(float4))
@@ -335,18 +335,18 @@ scattergather_kernel(
         prefix_f4[threadIdx.x] = f4_count;  // No extra alignment needed
     }
     __syncthreads();
-    
+
     // Compute prefix sums
     if ((threadIdx.x >> 5) == 0) {
         hillis_steele_sum<EAGER_SCOPE_WARP>(prefix_f4, nargs, threadIdx.x);
     }
     __syncthreads();
-    
+
     // Calculate work distribution
     const int total_f4 = prefix_f4[nargs - 1];
     const size_t slot_bytes = rdma_unroll * blockDim.x * sizeof(float4);
     const int slot_f4 = static_cast<int>(rdma_unroll * blockDim.x);
-    
+
     int smf4start, smf4end;
     // Divide work in float8 (2×float4) units so smf4start is always even (32-byte aligned),
     // enabling the float8 vectorized path without misaligned address errors.
@@ -359,10 +359,10 @@ scattergather_kernel(
     } else {
         get_work_range(total_f4, num_sms, sm_id, smf4start, smf4end);
     }
-    
+
     const int unrolled_times = (smf4end - smf4start) / slot_f4;
     const int tailf4 = (smf4end - smf4start) - unrolled_times * slot_f4;
-    
+
     // Total segments per dst_local: each dst_local processes seg_batch slots
     const int seg_batch = unrolled_times + (tailf4 > 0);
 
@@ -388,7 +388,7 @@ scattergather_kernel(
     const uint64_t gstart_id = __ldg(reinterpret_cast<const uint64_t*>(c1_gstart_ptr()));
 
     __syncthreads();  // ensure all setup (cached_args, prefix_f4) is visible before warp groups diverge
-    
+
     // ===== 4-path signal layout (per-SM) =====
     // Offsets in u64 from sig_ptr(peer). The gstart slot counter occupies
     // [2*Nlr*num_sms, 2*Nlr*num_sms + num_sms) (see c1_gstart_ptr above), so
@@ -430,13 +430,13 @@ scattergather_kernel(
     auto c3_ack_ptr = [&](const int& N) -> uint64_t* {
         return reinterpret_cast<uint64_t*>(sig_ptr(local_rank)) + sig_base_c3ack + (size_t)sm_id * num_nodes + N;
     };
-    
+
     // GIN signal indices for multi-node
     auto rdma_ready_sig_w_index = [&]() { return static_cast<uint32_t>(sm_id * num_nodes + node_id); };
     auto rdma_ready_sig_r_index = [&](const int& src_node) { return static_cast<uint32_t>(sm_id * num_nodes + src_node); };
     auto rdma_picked_sig_w_index = [&]() { return static_cast<uint32_t>(num_sms * num_nodes + sm_id * num_nodes + node_id); };
     auto rdma_picked_sig_r_index = [&](const int& dst_node) { return static_cast<uint32_t>(num_sms * num_nodes + sm_id * num_nodes + dst_node); };
-    
+
     // ===== Push data accessors (per-SM sliced) =====
     // Send buf layout within each GPU's gin_win: [sm][dst_node][R slot][src_local].
     // c1 NVL-store target: write to forwarder (dst_local)'s send buf, sub-slot = local_rank.
@@ -831,7 +831,7 @@ scattergather_kernel(
         }
     }
     __syncthreads();
-    
+
     // Update global slot counter
     if (threadIdx.x == 0) {
         st_na_global(c1_gstart_ptr(), static_cast<uint64_t>(gstart_id + seg_batch));
@@ -994,23 +994,23 @@ void scattergatherfunc(std::vector<TensorLayout> layouts, std::vector<TensorLayo
 
     const int num_tensors = layouts.size();
     if (num_tensors == 0) return;
-    
+
     const int local_rank = rank % num_local_ranks;
     const int node_id = rank / num_local_ranks;
     const int num_nodes = num_ranks / num_local_ranks;
     const bool is_single_node = (num_local_ranks == num_ranks);
     const size_t slot_bytes = sizeof(int4) * GIN_CTA_THREADS * unroll;
-    
+
     sg_mem_layout ml(p2p_ptrs, nvl_ring, rdma_ring, slot_bytes, rank, num_local_ranks, num_ranks);
-    
+
     // Calculate total size across all tensors (per-rank chunk size)
     size_t total_chunk_bytes = 0;
     for (int i = 0; i < num_tensors; ++i) {
         total_chunk_bytes += align_up(layouts[i].get_total_bytes() / num_ranks, sizeof(int4));
     }
-    
+
     const int send_times = ceil_div(total_chunk_bytes, slot_bytes);
-    
+
     // Early return if no work to do
     if (send_times == 0) {
         return;
@@ -1128,17 +1128,17 @@ void scattergatherfunc(std::vector<TensorLayout> layouts, std::vector<TensorLayo
         }
         CUCHECK(cuStreamBatchMemOp(copy_stream, n_entries, mparam, 0));
     };
-    
+
     // Launch coordination kernel ONCE for multi-node (flat across all tensors)
     if (!is_single_node) {
         scattergathercordkernel<<<1, 128, 0, stream>>>(gin_win, signal_buffer, unroll, nvl_ring, rdma_ring,
             total_send_slots, send_times, capture_round_n, rank, num_local_ranks, num_ranks, dev_comm);
         CUDACHECK(cudaGetLastError());
     }
-    
+
     // Track position for flat iteration
     int tidx = 0;
-    
+
     const bool debug = false;  // debug output off by default
 
     size_t common_bytes, most_blocks, most_massive, src_stride, dst_stride;
@@ -1190,7 +1190,7 @@ void scattergatherfunc(std::vector<TensorLayout> layouts, std::vector<TensorLayo
     }
     // Pending tasks per dst_rank for each stream
     size_t work_remain = 0;
-    
+
     auto tensor_proceed = [&](const size_t& bytes) {
         work_remain -= bytes;
         src_z += bytes;
@@ -1499,8 +1499,8 @@ void scattergather_kernel_func(
 
     // p2p_ptrs is at the beginning of signal_buffer
     void **p2p_ptrs_dev = reinterpret_cast<void**>(signal_buffer);
-    
-    
+
+
     // Launch kernel
     const size_t rdma_unroll = static_cast<size_t>(unroll);
     int flat_mode = 3;

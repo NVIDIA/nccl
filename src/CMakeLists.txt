@@ -123,6 +123,7 @@ set(NCCL_PRIVATE_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
     ${CMAKE_BINARY_DIR}/obj/include
 )
 if(NOT NCCL_OS_WINDOWS AND DOCA_HOME)
@@ -179,9 +180,6 @@ if(NOT NCCL_OS_WINDOWS AND DEVICE_EFA_DP_HEADERS)
 endif()
 add_custom_target(nccl_header DEPENDS ${NCCL_HEADER_DEPS})
 
-if(TARGET nccl_net_nd_compile)
-    add_dependencies(nccl_net_nd_compile nccl_header)
-endif()
 add_dependencies(nccl nccl_header)
 add_dependencies(nccl_device nccl_header)
 if(NCCL_OS_LINUX)
@@ -333,6 +331,7 @@ target_include_directories(nccl_static
     transport/net_ib/gdaki/doca-gpunetio/include
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
     ${CMAKE_BINARY_DIR}/obj/include
 )
 

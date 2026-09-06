@@ -350,6 +350,7 @@ constexpr int ncclNvmlMaxDevices = 32;
 struct ncclNvmlDeviceInfo {
   nvmlDevice_t handle;
   int computeCapabilityMajor, computeCapabilityMinor;
+  bool cudaVisible;
 };
 struct ncclNvmlDevicePairInfo {
   nvmlGpuP2PStatus_t p2pStatusRead, p2pStatusWrite;

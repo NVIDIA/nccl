@@ -52,7 +52,7 @@ class ThreadScope(IntEnum):
     SYSTEM = 0
     DEVICE = 1
     BLOCK = 2
-    THREAD = 3
+    THREAD = 10  # libcu++ __ATOMIC_THREAD deliberately leaves a gap.
 
 
 class GinFenceLevel(IntFlag):

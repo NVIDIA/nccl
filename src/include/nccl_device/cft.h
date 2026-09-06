@@ -88,20 +88,12 @@ struct ncclCft : ncclCft_internal<Coop> {
                                      RedOp const& red, void* smemSource, uint32_t bytes);
 
   template <typename RedOp, typename OpCoop>
-  NCCL_DEVICE_INLINE void redCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemSource,
-                                    uint32_t bytes, uint16_t cpMask);
-
-  template <typename RedOp, typename OpCoop>
   NCCL_DEVICE_INLINE void redMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,
                                       void* smemSource, uint32_t bytes);
 
   template <typename RedOp, typename OpCoop>
   NCCL_DEVICE_INLINE void redMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset,
                                              RedOp const& red, void* smemSource, uint32_t bytes);
-
-  template <typename RedOp, typename OpCoop>
-  NCCL_DEVICE_INLINE void redMultimemCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,
-                                            void* smemSource, uint32_t bytes, uint16_t cpMask);
 
   template <typename RedOp, typename OpCoop>
   NCCL_DEVICE_INLINE void pullRed(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,

@@ -23,6 +23,7 @@
 
 #include <windows.h>
 #include "os.h"
+#include "crypt.h"
 #include <cstring>
 #include <cstdbool>
 #include "socket.h"
@@ -117,6 +118,10 @@ size_t ncclOsGetPageSize() {
   SYSTEM_INFO si;
   GetSystemInfo(&si);
   return (size_t)si.dwPageSize;
+}
+
+size_t ncclOsGetCommMempoolMaxSize() {
+  return (size_t)1 << 30;
 }
 
 void* ncclOsAlignedAlloc(size_t alignment, size_t size) {
@@ -669,11 +674,11 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
     if (sock->state > ncclSocketStateNone && sock->state < ncclSocketStateNum && ncclOsSocketIsValid(sock)) {
       if (wait) {
         char data;
-        int closed = 0;
+        bool closed = false;
         do {
           int offset = 0;
           if (ncclSocketProgress(NCCL_SOCKET_RECV, sock, &data, sizeof(char), &offset, &closed) != ncclSuccess) break;
-        } while (closed == 0);
+        } while (!closed);
       }
       /* shutdown() is needed to send FIN packet to proxy thread; shutdown() is not affected
        * by refcount of fd, but close() is. close() won't close a fd and send FIN packet if
@@ -681,6 +686,10 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
        * connection close here. */
       (void)shutdown(sock->socketDescriptor, SD_BOTH);
       (void)closesocket(sock->socketDescriptor);
+    }
+    if (sock->crypto) {
+      ncclCryptFree(sock->crypto);
+      sock->crypto = nullptr;
     }
     sock->state = ncclSocketStateClosed;
     sock->socketDescriptor = NCCL_INVALID_SOCKET;
@@ -704,47 +713,81 @@ void ncclOsUnsetMutexCondShared(std::mutex& mutex, std::condition_variable& cond
 }
 
 void ncclOsCpuZero(ncclAffinity& affinity) {
-  affinity = 0;
+  memset(&affinity, 0, sizeof(affinity));
 }
 
 int ncclOsCpuCount(const ncclAffinity& affinity) {
-  return _mm_popcnt_u64(affinity);
+  int count = 0;
+  for (int group = 0; group < NCCL_WINDOWS_PROCESSOR_GROUP_COUNT; group++) {
+    count += _mm_popcnt_u64((unsigned long long)affinity.masks[group]);
+  }
+  return count;
 }
 
 void ncclOsCpuSet(ncclAffinity& affinity, int cpu) {
-  affinity |= (1ULL << cpu);
+  if (cpu < 0 || cpu >= NCCL_WINDOWS_MAX_CPUS) return;
+  int group = cpu / NCCL_WINDOWS_PROCESSORS_PER_GROUP;
+  int index = cpu % NCCL_WINDOWS_PROCESSORS_PER_GROUP;
+  affinity.masks[group] |= ((KAFFINITY)1 << index);
 }
 
 bool ncclOsCpuIsSet(const ncclAffinity& affinity, int cpu) {
-  return (affinity & (1ULL << cpu)) != 0;
+  if (cpu < 0 || cpu >= NCCL_WINDOWS_MAX_CPUS) return false;
+  int group = cpu / NCCL_WINDOWS_PROCESSORS_PER_GROUP;
+  int index = cpu % NCCL_WINDOWS_PROCESSORS_PER_GROUP;
+  return (affinity.masks[group] & ((KAFFINITY)1 << index)) != 0;
 }
 
 ncclAffinity ncclOsCpuAnd(const ncclAffinity& a, const ncclAffinity& b) {
-  return a & b;
+  ncclAffinity result = {};
+  for (int group = 0; group < NCCL_WINDOWS_PROCESSOR_GROUP_COUNT; group++) {
+    result.masks[group] = a.masks[group] & b.masks[group];
+  }
+  return result;
 }
 
 ncclResult_t ncclOsGetAffinity(ncclAffinity* affinity) {
-  DWORD_PTR processAffinityMask, systemAffinityMask;
-  BOOL result = GetProcessAffinityMask(GetCurrentProcess(), &processAffinityMask, &systemAffinityMask);
+  GROUP_AFFINITY groupAffinity = {};
+  BOOL result = GetThreadGroupAffinity(GetCurrentThread(), &groupAffinity);
   if (result == FALSE) {
-    WARN("GetProcessAffinityMask failed with error: %ld", GetLastError());
+    WARN("GetThreadGroupAffinity failed with error: %ld", GetLastError());
     return ncclSystemError;
   }
-  *affinity = processAffinityMask;
+  ncclOsCpuZero(*affinity);
+  affinity->masks[groupAffinity.Group] = groupAffinity.Mask;
   return ncclSuccess;
 }
 
 ncclResult_t ncclOsSetAffinity(const ncclAffinity& affinity) {
-  BOOL result = SetProcessAffinityMask(GetCurrentProcess(), affinity);
+  int groupCount = 0;
+  WORD selectedGroup = 0;
+  for (WORD group = 0; group < NCCL_WINDOWS_PROCESSOR_GROUP_COUNT; group++) {
+    if (affinity.masks[group] != 0) {
+      selectedGroup = group;
+      groupCount++;
+    }
+  }
+  if (groupCount != 1) {
+    WARN("SetThreadGroupAffinity requires exactly one non-empty processor group, found %d", groupCount);
+    return ncclInvalidArgument;
+  }
+
+  GROUP_AFFINITY groupAffinity = {};
+  groupAffinity.Group = selectedGroup;
+  groupAffinity.Mask = affinity.masks[selectedGroup];
+  BOOL result = SetThreadGroupAffinity(GetCurrentThread(), &groupAffinity, NULL);
   if (result == FALSE) {
-    WARN("SetProcessAffinityMask failed with error: %ld", GetLastError());
+    WARN("SetThreadGroupAffinity failed for group %u mask 0x%llx with error: %ld", (unsigned int)groupAffinity.Group,
+         (unsigned long long)groupAffinity.Mask, GetLastError());
     return ncclSystemError;
   }
   return ncclSuccess;
 }
 
 int ncclOsGetCpu() {
-  return GetCurrentProcessorNumber();
+  PROCESSOR_NUMBER processorNumber = {};
+  GetCurrentProcessorNumberEx(&processorNumber);
+  return processorNumber.Group * NCCL_WINDOWS_PROCESSORS_PER_GROUP + processorNumber.Number;
 }
 
 ncclResult_t ncclOsNvmlOpen(ncclOsLibraryHandle* handle) {
@@ -1419,9 +1462,11 @@ ncclResult_t ncclOsTopoGetStrFromSys(const char* path, const char* fileName, cha
 }
 
 /* NUMA and PCI device class functions */
-ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen) {
+ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen, int* cpuOffset) {
+  *cpuOffset = 0;
   GROUP_AFFINITY groupAffinity = {};
   if (GetNumaNodeProcessorMaskEx((USHORT)numaId, &groupAffinity)) {
+    *cpuOffset = groupAffinity.Group * NCCL_WINDOWS_PROCESSORS_PER_GROUP;
     KAFFINITY mask = groupAffinity.Mask;
     uint32_t hi = (uint32_t)((uint64_t)mask >> 32);
     uint32_t lo = (uint32_t)((uint64_t)mask & 0xFFFFFFFF);

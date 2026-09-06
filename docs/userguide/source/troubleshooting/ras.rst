@@ -377,6 +377,9 @@ RAS Diagnostics
 RAS diagnostics provide a readiness probe for NCCL jobs by comparing GPU inventory, PCI configuration, CUDA and
 NVIDIA graphics driver versions, and NCCL configuration across ranks.
 
+RAS diagnostics run asynchronously, so collection and reporting may be delayed. For short-lived communicators, this may
+result in incomplete information.
+
 Available Checks
 ^^^^^^^^^^^^^^^^
 

@@ -101,6 +101,8 @@ elseif(NCCL_COMPILER_MSVC)
     set(DEBUG_HOST_FLAGS "/Od /Zi /FS" CACHE STRING "Host CXX flags applied when DEBUG=ON (overrides default)")
 endif()
 set(DEBUG_DEVICE_FLAGS "-O0 -g -lineinfo" CACHE STRING "Device (NVCC) flags applied when DEBUG=ON (overrides default)")
+set(TLS_BACKEND "$ENV{TLS_BACKEND}" CACHE STRING "TLS backend (empty or OPENSSL3)")
+set_property(CACHE TLS_BACKEND PROPERTY STRINGS "" OPENSSL3)
 
 find_package(CUDAToolkit REQUIRED)
 find_package(Threads REQUIRED)
@@ -235,6 +237,15 @@ if(PROFAPI)
 endif()
 
 set(EXTRA_LIBS)
+
+set(NCCL_TLS_INCLUDE_DIRS)
+if(TLS_BACKEND STREQUAL "OPENSSL3")
+    find_package(OpenSSL 3.0 REQUIRED COMPONENTS SSL Crypto)
+    add_compile_definitions(NCCL_TLS_BACKEND_OPENSSL3=1)
+    list(APPEND NCCL_TLS_INCLUDE_DIRS ${OPENSSL_INCLUDE_DIR})
+elseif(NOT TLS_BACKEND STREQUAL "")
+    message(FATAL_ERROR "Unsupported TLS_BACKEND '${TLS_BACKEND}'; expected OPENSSL3 or empty")
+endif()
 
 # RDMA and MLX5DV are Linux-specific features
 if(RDMA_CORE)

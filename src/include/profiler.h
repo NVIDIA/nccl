@@ -44,7 +44,6 @@ struct ncclProfilerThread;
 struct ncclProfilerCommState {
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
-  struct ncclDevProfilerPhases* workPhases /*[MAXCHANNELS]*/;
   uint64_t workCounter[MAXCHANNELS];
   // Dedicated counter/buffers for symmetric collectives: sym kernels read a fixed
   // counter from the args buffer and never advance the device channels[].workCounter,
@@ -136,6 +135,7 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
 // Profiler utility functions
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
 bool ncclProfilerPluginLoaded(void);
+uint8_t ncclProfilerDeviceMode(int eActivationMask);
 
 // Dedicated profiler thread API
 ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent);

@@ -55,6 +55,8 @@ union ncclSocketAddress {
 };
 #endif
 
+struct ncclSocketCrypto;
+
 enum ncclSocketState {
   ncclSocketStateNone = 0,
   ncclSocketStateInitialized = 1,
@@ -81,6 +83,12 @@ enum ncclSocketType {
   ncclSocketTypeNetNd = 6
 };
 
+// The stock hello: socket magic + type, sent by the connector as the first
+// application data. In encrypted mode it travels inside the TLS channel.
+#define NCCL_SOCKET_PLAIN_HELLO_BYTES (sizeof(uint64_t) + sizeof(enum ncclSocketType))
+
+// Contains owned OS and TLS state. Do not copy with raw struct assignment or
+// memcpy; use ncclSocketMove when transferring socket ownership.
 struct ncclSocket {
   ncclSocketDescriptor socketDescriptor;
   ncclSocketDescriptor acceptSocketDescriptor;
@@ -94,7 +102,8 @@ struct ncclSocket {
   enum ncclSocketType type;
   int customRetry;
   int finalizeCounter; // Used to keep track of initial handshake for async sockets.
-  char finalizeBuffer[sizeof(uint64_t)]; // Used to keep track of initial handshake for async sockets.
+  char finalizeBuffer[NCCL_SOCKET_PLAIN_HELLO_BYTES]; // Used to keep track of initial handshake for async sockets.
+  struct ncclSocketCrypto* crypto;
 #ifdef NCCL_OS_WINDOWS
   int socketBlockingMode; // 0 - blocking mode; 1 - non-blocking mode
 #endif
@@ -120,6 +129,8 @@ uint64_t ncclSocketDefaultMagic(void);
 ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddress* addr = NULL,
                             uint64_t magic = ncclSocketDefaultMagic(), enum ncclSocketType type = ncclSocketTypeUnknown,
                             volatile uint32_t* abortFlag = NULL, int asyncFlag = 0, int customRetry = 0);
+// Move an initialized socket into an uninitialized destination.
+void ncclSocketMove(struct ncclSocket* dst, struct ncclSocket* src);
 // Create a listening socket. sock->addr can be pre-filled with IP & port info. sock->fd is set after a successful call
 ncclResult_t ncclSocketListen(struct ncclSocket* sock);
 ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress* addr);
@@ -137,14 +148,15 @@ ncclResult_t ncclSocketSetFd(ncclSocketDescriptor socketDescriptor, struct ncclS
 #define NCCL_SOCKET_RECV 1
 
 int ncclEnvSocketFamily(void);
-ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int* closed = NULL);
+ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset,
+                                bool* closed = nullptr);
 ncclResult_t ncclSocketWait(int op, struct ncclSocket* sock, void* ptr, int size, int* offset);
 ncclResult_t ncclSocketSend(struct ncclSocket* sock, void* ptr, int size);
 ncclResult_t ncclSocketRecv(struct ncclSocket* sock, void* ptr, int size);
 ncclResult_t ncclSocketSendRecv(struct ncclSocket* sendSock, void* sendPtr, int sendSize, struct ncclSocket* recvSock,
                                 void* recvPtr, int recvSize);
 ncclResult_t ncclSocketMultiOp(struct ncclSocketOp* ops, int numOps);
-ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed, bool blocking);
+ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, bool* closed, bool blocking);
 ncclResult_t ncclSocketShutdown(struct ncclSocket* sock, int how);
 ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait = false);
 uint16_t ncclSocketToPort(union ncclSocketAddress* addr);

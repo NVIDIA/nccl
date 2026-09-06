@@ -135,11 +135,11 @@ std::tuple<std::optional<torch::Tensor>, std::optional<EventHandle>> AGComm::All
             stream_wait(launch_stream, compute_stream);
         }
     }
-    
+
     // Handle output tensors: use provided tensors or allocate new ones
     // Output pointers are stored in args_cpu[4*i+2]
     std::optional<torch::Tensor> result = std::nullopt;  // Only set when output_tensors is not provided
-    
+
     if (output_tensors.has_value()) {
         // Use provided output tensors - store their pointers in args_cpu
         const auto& out_tensors = output_tensors.value();

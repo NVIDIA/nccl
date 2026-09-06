@@ -25,7 +25,8 @@ enum {
   ncclProfileCeColl = (1 << 12), // CE collective operation
   ncclProfileCeSync = (1 << 13), // CE synchronization operation
   ncclProfileCeBatch = (1 << 14), // CE batch operation
-  // Kernel phase events (v7)
+  // Symmetric kernels only; implies ncclProfileKernelCh. Regular and P2P kernels
+  // emit no phase sub-events.
   ncclProfileKernelPhase = (1 << 15), // kernel barrier phase sub-event
 };
 

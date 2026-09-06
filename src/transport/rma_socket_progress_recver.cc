@@ -165,7 +165,7 @@ static ncclResult_t ncclRmaSocketProxyStartRecvPut(struct ncclRmaSocketProxyColl
 }
 
 static ncclResult_t ncclRmaSocketProxyProgressControlAck(struct ncclRmaSocketProxyPeerReceiver* receiver, int peer) {
-  int closed = 0;
+  bool closed = false;
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_SEND, &receiver->sock, &receiver->controlAck, sizeof(receiver->controlAck),
                                &receiver->controlAckOffset, &closed));
   if (closed) {
@@ -234,7 +234,7 @@ static ncclResult_t ncclRmaSocketProxyHandleRequestGetData(struct ncclRmaSocketP
 
 static ncclResult_t ncclRmaSocketProxyProgressRecvControl(struct ncclRmaSocketProxyCollComm* comm, int peer) {
   struct ncclRmaSocketProxyPeerReceiver* receiver = &comm->peerReceiver[peer];
-  int closed = 0;
+  bool closed = false;
   NCCLCHECK(ncclSocketProgress(NCCL_SOCKET_RECV, &receiver->sock, &receiver->controlMsg, sizeof(receiver->controlMsg),
                                &receiver->controlMsgOffset, &closed));
   if (closed) {
@@ -254,7 +254,7 @@ static ncclResult_t ncclRmaSocketProxyProgressRecvPayload(struct ncclRmaSocketPr
   struct ncclRmaSocketProxyPeerReceiver* receiver = &comm->peerReceiver[peer];
   size_t payloadSize = (size_t)receiver->controlMsg.size;
   if (receiver->recvPayloadOffset < payloadSize) {
-    int closed = 0;
+    bool closed = false;
     if (receiver->recvChunkSize == 0) {
       size_t remaining = payloadSize - receiver->recvPayloadOffset;
       receiver->recvChunkSize = (int)(remaining < NCCL_RMA_SOCKET_CHUNK_SIZE ? remaining : NCCL_RMA_SOCKET_CHUNK_SIZE);

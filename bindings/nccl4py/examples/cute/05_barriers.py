@@ -97,8 +97,9 @@ def barriers_kernel(
     # === LSA ===
 
     # Convenience form: team_lsa + dev_comm.lsa_barrier.
-    nccl_cute.lsa_default(coop, dev_comm, index=INDEX).sync(
-        coop, nccl_cute.MemoryOrder.ACQ_REL)
+    default_lsa = nccl_cute.lsa_default(coop, dev_comm, index=INDEX)
+    default_lsa.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
+    default_lsa.destroy()
 
     # Explicit form on the separately requested handle. Only the LSA session
     # exposes arrive and wait as separate phases.
@@ -106,6 +107,7 @@ def barriers_kernel(
         coop, dev_comm, dev_comm.team_lsa, lsa_handle, index=INDEX)
     explicit_lsa.arrive(coop, nccl_cute.MemoryOrder.RELEASE)
     explicit_lsa.wait(coop, nccl_cute.MemoryOrder.ACQUIRE)
+    explicit_lsa.destroy()
 
     # === GIN ===
 
@@ -113,33 +115,44 @@ def barriers_kernel(
     # `gin` is bound to — needed when puts span several, at a flush per
     # (context, peer). The fence level says what the barrier drains besides
     # synchronizing: NONE nothing, PUT inbound puts, GET this rank's gets.
-    nccl_cute.world_gin(
-        coop, nccl_cute.GIN_ALL_CONTEXTS, dev_comm, index=INDEX
-    ).sync(coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
+    all_contexts = nccl_cute.world_gin(
+        coop, nccl_cute.GIN_ALL_CONTEXTS, dev_comm, index=INDEX)
+    all_contexts.sync(
+        coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
+    all_contexts.destroy()
 
     if NCCL_GIN_SESSION_TAKES_PTR:
-        nccl_cute.world_gin(coop, gin, dev_comm, index=INDEX).sync(
-            coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
+        world = nccl_cute.world_gin(coop, gin, dev_comm, index=INDEX)
+        world.sync(coop, nccl_cute.MemoryOrder.ACQ_REL,
+                   nccl_cute.GinFenceLevel.PUT)
+        world.destroy()
 
-        nccl_cute.rail_gin(coop, gin, dev_comm, index=INDEX).sync(
+        rail = nccl_cute.rail_gin(coop, gin, dev_comm, index=INDEX)
+        rail.sync(
             coop, nccl_cute.MemoryOrder.ACQ_REL,
             nccl_cute.GinFenceLevel.PUT | nccl_cute.GinFenceLevel.GET)
+        rail.destroy()
 
         # Explicit form: any team, any GIN barrier handle.
-        nccl_cute.gin_session(
-            coop, gin, dev_comm, dev_comm.team_world, gin_handle, index=INDEX
-        ).sync(coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
+        explicit_gin = nccl_cute.gin_session(
+            coop, gin, dev_comm, dev_comm.team_world, gin_handle, index=INDEX)
+        explicit_gin.sync(
+            coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
+        explicit_gin.destroy()
 
         # === Hybrid ===
 
         # LSA within the node, GIN across nodes: one rank per node carries
         # the outer stage.
-        nccl_cute.world_hybrid(coop, gin, dev_comm, index=INDEX).sync(
+        world_hybrid = nccl_cute.world_hybrid(
+            coop, gin, dev_comm, index=INDEX)
+        world_hybrid.sync(
             coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
+        world_hybrid.destroy()
 
         # Both stages named explicitly; the handles come from the devcomm's
         # hybrid pair, sized by requirements.barrier_count.
-        nccl_cute.hybrid_session(
+        explicit_hybrid = nccl_cute.hybrid_session(
             coop,
             dev_comm.team_lsa,
             dev_comm.team_world,
@@ -147,7 +160,10 @@ def barriers_kernel(
             dev_comm.hybrid_lsa_barrier,
             dev_comm.hybrid_rail_gin_barrier,
             index=INDEX,
-        ).sync(coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
+        )
+        explicit_hybrid.sync(
+            coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
+        explicit_hybrid.destroy()
 
     if 0 == tidx:
         cute.printf(f"rank {dev_comm.rank}: barrier sessions completed")

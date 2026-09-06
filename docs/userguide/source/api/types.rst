@@ -439,9 +439,149 @@ ncclCollConfig_t
 .. c:type:: ncclCollConfig_t
 
  Per-collective configuration passed through an ``nccl*Config`` collective API.
- Initialize a new configuration with :c:macro:`NCCL_COLLCONFIG_INITIALIZER`.
+ Every :c:type:`ncclCollConfig_t` must be initialized with
+ :c:macro:`NCCL_COLLCONFIG_INITIALIZER` before any member is set. Passing
+ ``NULL`` to a config-taking collective is equivalent to calling the
+ corresponding collective without a configuration.
 
- .. c:macro:: launchCompletionEvent
+ The application owns the configuration and any storage it references, and must
+ keep them valid for the duration of each call that uses them. Set the same
+ configuration on every rank unless a member is documented otherwise.
+
+ For options that also have environment-variable and communicator-level forms,
+ NCCL applies values in the following order: environment variable, per-collective
+ configuration, communicator configuration, and library default. Leave resource and CTA-policy
+ members at ``NCCL_CONFIG_UNDEF_INT`` to fall through to the next source in this list.
+
+ .. c:macro:: NCCL_COLLCONFIG_INITIALIZER
+
+  (since 2.31)
+
+  Initializes a new :c:type:`ncclCollConfig_t` with default values.
+
+ .. c:member:: ncclConfigExt_t* ext
+
+  (since 2.31)
+
+  Head of a linked list of vendor-specific :c:type:`ncclConfigExt_t` options,
+  or ``NULL``. The official NCCL library does not read this member; it exists
+  for vendor libraries layered on top of NCCL to forward their own
+  vendor-defined options through the same call.
+
+ .. c:member:: int minCTAs
+
+  (since 2.31)
+
+  Per-collective override of ``minCTAs`` in :ref:`ncclconfig`. Accepts the
+  same value range as :ref:`NCCL_MIN_CTAS`; an out-of-range value is ignored
+  and NCCL falls through to the next priority source. If the resolved value
+  exceeds the resolved ``maxCTAs``, NCCL resets ``minCTAs`` to ``1``.
+
+ .. c:member:: int maxCTAs
+
+  (since 2.31)
+
+  Per-collective override of ``maxCTAs`` in :ref:`ncclconfig`. Accepts the
+  same value range as :ref:`NCCL_MAX_CTAS`; an out-of-range value is ignored
+  and NCCL falls through to the next priority source. The resolved value is
+  further clamped to the communicator's ``maxCTAs`` and applies only to this
+  collective, including when calls are grouped.
+
+ .. c:member:: int nvlsCTAs
+
+  (since 2.31)
+
+  Per-collective override of ``nvlsCTAs`` in :ref:`ncclconfig`. This setting applies only to NVLS algorithms.
+
+ .. c:member:: int cgaClusterSize
+
+  (since 2.31)
+
+  Per-collective override of ``cgaClusterSize`` in :ref:`ncclconfig`. Accepts
+  the same value range as :ref:`NCCL_CGA_CLUSTER_SIZE`; an out-of-range value
+  is ignored and NCCL falls through to the next priority source. All
+  collectives in a group must use the same value; inconsistent values result
+  in undefined behavior.
+
+ .. c:member:: const char* algSelection
+
+  (since 2.31)
+
+  A case-insensitive expression that filters the algorithms and kernels NCCL may
+  use for this call. ``NULL`` or an empty string requests automatic selection.
+
+  Each name is matched as a prefix from the start of a known name. For example,
+  ``ring`` selects ``RING_LL``, ``RING_LL128``, and ``RING_SIMPLE``, but does not
+  select ``SYMK_RailRing_LsaSTMC``; similarly, ``nvls`` selects both ``NVLS_SIMPLE``
+  and ``NVLSTREE_SIMPLE``. The supported operators are ``+`` (AND), ``,``
+  (OR), and ``^`` (NOT); parentheses are not supported. For example,
+  ``tree,ring`` permits either family, ``ring + ^RING_LL128`` permits Ring except
+  LL128, and ``^symk`` excludes symmetric kernels.
+
+  The selectable built-in names and the collectives for which they are valid are:
+
+  * AllReduce: ``TREE_LL``, ``TREE_LL128``, ``TREE_SIMPLE``, ``RING_LL``,
+    ``RING_LL128``, ``RING_SIMPLE``, ``COLLNET_DIRECT_SIMPLE``,
+    ``COLLNET_CHAIN_SIMPLE``, ``NVLS_SIMPLE``, ``NVLSTREE_SIMPLE``,
+    ``SYMK_AGxLL_R``, ``SYMK_AGxLLMC_R``, ``SYMK_RSxTmaLD_AGxTmaST``,
+    ``SYMK_RSxLD_AGxST``, and ``SYMK_RSxLDMC_AGxSTMC``.
+  * AllGather: ``RING_LL``, ``RING_LL128``, ``RING_SIMPLE``,
+    ``COLLNET_DIRECT_SIMPLE``, ``NVLS_SIMPLE``, ``PAT_SIMPLE``, ``SYMK_LL``,
+    ``SYMK_LLMC``, ``SYMK_TmaST``, ``SYMK_ST``, ``SYMK_TmaSTMC``,
+    ``SYMK_STMC``, and ``SYMK_RailRing_LsaSTMC``.
+  * ReduceScatter: ``RING_LL``, ``RING_LL128``, ``RING_SIMPLE``,
+    ``COLLNET_DIRECT_SIMPLE``, ``NVLS_SIMPLE``, ``PAT_SIMPLE``, ``SYMK_LL``,
+    ``SYMK_TmaLD``, ``SYMK_LD``, ``SYMK_LDMC``, ``SYMK_RailA2A_LsaLD``, and
+    ``SYMK_RailA2A_LsaLDMC``.
+  * Broadcast and Reduce: ``RING_LL``, ``RING_LL128``, and ``RING_SIMPLE``.
+
+  The ``SYMK_*`` names refer to symmetric-memory kernels built on the NCCL
+  Device API. ``LL`` is a low-latency protocol that tags data with an inline
+  flag instead of a separate synchronization step; ``LD``/``ST`` are ordinary
+  load/store data movement and ``TmaLD``/``TmaST`` use the Tensor Memory
+  Accelerator for bulk asynchronous copies; the ``MC`` suffix (as in
+  ``LLMC``, ``LDMC``, ``STMC``) means the load, store, or reduction is done
+  through NVLink SHARP multimem (multicast) instead of per-peer accesses; and
+  ``Rail``/``Lsa`` names are multi-node kernels that combine a local
+  NVLink-domain (``Lsa``) step with a network exchange between same-rail ranks
+  across nodes.
+
+  Algorithm names are implementation details and may evolve. AllToAll,
+  Gather, and Scatter lower to point-to-point sends and receives and expose
+  no selectable names; Copy Engine paths are likewise not selectable here.
+  Request a Copy Engine path with ``CTAPolicy`` instead.
+
+ .. c:member:: int forceAlgSelection
+
+  (since 2.31)
+
+  Controls what happens when ``algSelection`` is invalid or cannot be honored.
+  With the default value, ``1``, NCCL returns an error. Set it to ``0`` to
+  fall back to automatic selection instead.
+
+ .. c:member:: int CTAPolicy
+
+  (since 2.31)
+
+  Per-collective override of the communicator's CTA policy. A set value replaces
+  the communicator value; see :ref:`cta_policy_flags`. If both
+  ``NCCL_CTA_POLICY_ZERO`` and ``NCCL_CTA_POLICY_EFFICIENCY`` are set, Zero-CTA
+  takes precedence. Copy Engine paths are selected through this policy, not
+  ``algSelection``.
+
+ .. c:member:: uint64_t userProfilerTag
+
+  (since 2.31)
+
+  An opaque value delivered with the call's events to profiler plugins that
+  support profiler interface v7. Zero denotes an untagged call; older profiler
+  interfaces ignore the tag.
+
+  The tag does not affect execution. NCCL reserves values with the
+  most-significant bit set for possible future use; applications should use
+  values with that bit clear.
+
+ .. c:member:: cudaEvent_t launchCompletionEvent
 
   (since 2.32)
 
@@ -466,6 +606,19 @@ ncclCollConfig_t
   provide a launch-completion guarantee. CUDA launch completion is best effort and does not
   guarantee that dependent work overlaps the collective. Graph capture is supported with a
   capture-compatible event; sharing a recorded event across graphs is not supported.
+
+.. c:type:: ncclConfigExt_t
+
+ A vendor-specific key-value option that can be linked through its ``next``
+ member and attached to :c:member:`ncclCollConfig_t.ext`. Each option has a key
+ consisting of ``key.vendorId`` and ``key.optionId`` and one value in the
+ ``val.i``, ``val.s``, or ``val.raw`` union member. The list is unordered and
+ must not contain duplicate keys.
+
+ Vendors should choose a non-zero ``vendorId`` under ``2^24`` that is unlikely
+ to collide with other vendor libraries, for example by picking a random
+ number; ``optionId`` then distinguishes options within that vendor's own
+ namespace.
 
 .. _ncclsiminfo:
 

@@ -39,7 +39,10 @@ struct ncclComm;
 
 int64_t ncclParamMultiSegmentRegister();
 extern int64_t ncclParamNvlsEnable();
+int ncclPatEnable(struct ncclComm* comm);
 
+// ncclPeerInfo is exchanged before NCCL version validation.
+// Preserve its wire ABI by appending new fields.
 struct ncclPeerInfo {
   int rank;
   int cudaDev;
@@ -53,8 +56,6 @@ struct ncclPeerInfo {
   struct ncclComm* comm;
   int cudaCompCap;
   int gpuCftSupport;
-  bool gpuCftMulticastSupport;
-  bool gpuCftCountedSupport;
   size_t totalGlobalMem;
   // MNNVL support
   nvmlGpuFabricInfoV_t fabricInfo;
@@ -67,6 +68,9 @@ struct ncclPeerInfo {
   bool cuMemGdrSupport;
   int mloPart; // MLOPart partition index, or -1 if not an MLOPart GPU
   int cudaDriverVersion;
+  bool gpuCftMulticastSupport;
+  bool gpuCftCountedSupport;
+  uint32_t gitVersionHash;
 };
 
 #define CONNECT_SIZE 256

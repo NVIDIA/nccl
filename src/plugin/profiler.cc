@@ -1214,7 +1214,9 @@ static void profilerEnqueueOp(struct ncclProfilerThread* pt, struct ncclComm* co
       // Sym collectives poll a dedicated buffer set (see ncclProfilerCommState).
       op->workStarted = sym ? comm->profiler.symWorkStarted : comm->profiler.workStarted;
       op->workCompleted = sym ? comm->profiler.symWorkCompleted : comm->profiler.workCompleted;
-      op->workPhases = sym ? comm->profiler.symWorkPhases : comm->profiler.workPhases;
+      // Null for regular/p2p: they never publish a phases counter, so the completion
+      // check would otherwise wait on it forever.
+      op->workPhases = sym ? comm->profiler.symWorkPhases : nullptr;
       op->kernelEventHandle = nullptr;
       op->started = false;
       op->completed = false;
@@ -1274,7 +1276,7 @@ void ncclProfilerReserveSymCounters(struct ncclComm* comm, struct ncclKernelPlan
   struct ncclTaskColl* sct = ncclIntruQueueHead(&plan->collTaskQueue);
   if (sct == nullptr || !(sct->eActivationMask & ncclProfileKernelCh)) return;
   struct ncclSymkDevWorkArgs* argsBuf = (struct ncclSymkDevWorkArgs*)plan->kernelSymArgs;
-  if (!argsBuf->profilerEnabled) return;
+  if (!argsBuf->profilerMode) return;
   uint64_t* counters = argsBuf->getProfilerCounters();
   int nChannels = countOneBits(plan->channelMask);
   for (int c = 0; c < nChannels; c++) counters[c] = ++comm->profiler.symWorkCounter[c];
@@ -1289,7 +1291,7 @@ static void profilerPostPlanWorkSym(struct ncclComm* comm, struct ncclKernelPlan
   struct ncclProfilerThread* pt = comm->profiler.profilerThread;
   if (pt == nullptr) return;
   struct ncclSymkDevWorkArgs* argsBuf = (struct ncclSymkDevWorkArgs*)plan->kernelSymArgs;
-  if (!argsBuf->profilerEnabled) return;
+  if (!argsBuf->profilerMode) return;
   uint64_t* counters = argsBuf->getProfilerCounters();
   int nChannels = countOneBits(plan->channelMask);
   for (int c = 0; c < nChannels; c++) {
@@ -1362,6 +1364,17 @@ ncclResult_t ncclProfilerPostPlanWork(struct ncclComm* comm, struct ncclKernelPl
 
 bool ncclProfilerPluginLoaded(void) {
   return (COMPILER_EXPECT(ncclProfiler != NULL, 0));
+}
+
+uint8_t ncclProfilerDeviceMode(int eActivationMask) {
+  if (!ncclProfilerPluginLoaded()) return ncclDevProfilerModeNone;
+
+  uint8_t mode = ncclDevProfilerModeNone;
+  if (eActivationMask & ncclProfileKernelCh) mode |= ncclDevProfilerModeKernelCh;
+  if (eActivationMask & ncclProfileKernelPhase) {
+    mode |= ncclDevProfilerModeKernelCh | ncclDevProfilerModeKernelPhase;
+  }
+  return mode;
 }
 
 ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData) {

@@ -1940,12 +1940,12 @@ void* ncclProxyService(void* _args) {
       // Check for additional ops coming in
       const int readableFlag = NCCL_POLLIN;
       if (pollfds[s].revents & readableFlag) {
-        int closed;
+        bool closed;
         res = ncclSocketTryRecv(sock, &type, sizeof(int), &closed, false /*blocking*/);
         if (res != ncclSuccess && res != ncclInProgress) {
           if (!COMPILER_ATOMIC_LOAD(proxyState->abortFlag, std::memory_order_relaxed)) {
             ATTN("[Service thread] Could not receive type from localRank %d, res=%u, closed=%d", peer->tpLocalRank, res,
-                 closed);
+                 closed ? 1 : 0);
           }
           closeConn = 1;
         } else if (closed) {
@@ -2103,7 +2103,8 @@ void* ncclProxyServiceUDS(void* _args) {
   }
 
   (void)ncclIpcSocketClose(&proxyState->ipcSock);
-  INFO(NCCL_PROXY, "[Proxy Service UDS] exit: stop %d abortFlag %d", proxyState->stop, *proxyState->abortFlag);
+  INFO(NCCL_PROXY, "[Proxy Service UDS] exit: stop %d abortFlag %d", proxyState->stop,
+       (int)COMPILER_ATOMIC_LOAD(proxyState->abortFlag, std::memory_order_acquire));
   return NULL;
 }
 
@@ -2169,7 +2170,7 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
     struct ncclProxyState* sharedProxyState = comm->proxyState;
 
     if ((comm->proxyRefCountOld = ncclAtomicRefCountDecrement(&sharedProxyState->refCount)) == 0) {
-      if (*comm->abortFlag == 0 && sharedProxyState->peerAddresses) {
+      if (COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire) == 0 && sharedProxyState->peerAddresses) {
         // We need to send a ncclProxyMsgStop message to our own proxy
         struct ncclSocket sock;
         int type = ncclProxyMsgStop;

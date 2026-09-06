@@ -88,8 +88,8 @@ int ncclTuningCalcSatBlocksReduceScatterRailA2A(struct ncclComm* comm, bool ldmc
   return std::ceil(std::min(double(1 << 30), minLsaGinEffBw / (smBw / smMul)));
 }
 
-void ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, float* timeUs,
-                      int* nBlocks) {
+ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
+                              float* timeUs, int* nBlocks) {
   struct ncclComm* comm = input->comm;
   struct ncclSymkState* symk = &comm->symkState;
   // ncclTeam world = ncclTeamWorld(comm);
@@ -157,4 +157,5 @@ void ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId ker
     constexpr float smPenalty = .025f; // 2.5% increase in time per SM.
     *timeUs *= 1.0f + smPenalty * (*nBlocks);
   }
+  return ncclSuccess;
 }

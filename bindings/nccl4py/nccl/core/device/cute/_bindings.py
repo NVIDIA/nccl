@@ -561,6 +561,9 @@ def nccl_lsa_barrier_session_sync(
     session: _LLVMPtrType, coop: ncclCoopAny, order: cutlass.Int32,
 ) -> None: ...
 
+@cute.extern(name="ncclLsaBarrierSessionDestroy", source=_BC)
+def nccl_lsa_barrier_session_destroy(session: _LLVMPtrType) -> None: ...
+
 
 # === GIN Barrier Session API ===
 
@@ -582,6 +585,9 @@ def nccl_gin_barrier_session_sync(
     fence: cutlass.Int32,
 ) -> None: ...
 
+@cute.extern(name="ncclGinBarrierSessionDestroy", source=_BC)
+def nccl_gin_barrier_session_destroy(session: _LLVMPtrType) -> None: ...
+
 
 # === Hybrid Barrier Session API ===
 
@@ -598,6 +604,9 @@ def nccl_barrier_session_sync(
     session: _LLVMPtrType, coop: ncclCoopAny, order: cutlass.Int32,
     fence: cutlass.Int32,
 ) -> None: ...
+
+@cute.extern(name="ncclBarrierSessionDestroy", source=_BC)
+def nccl_barrier_session_destroy(session: _LLVMPtrType) -> None: ...
 
 
 # === Session size getters ===

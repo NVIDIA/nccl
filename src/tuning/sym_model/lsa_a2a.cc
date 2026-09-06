@@ -26,16 +26,12 @@ const struct ncclSymkLsaA2AParameters
       {}, // AllReduce_RSxTmaLD_AGxTmaST
       {}, // AllReduce_RSxLD_AGxST
       {}, // AllReduce_RSxLDMC_AGxSTMC
-      {true, 7.1084750551652, 0.10654011428850794, 2.2893660529970514, 15.644419484316165, 250.0, 0.0,
-       false}, // AllGather_LL
-      {true, 7.422942875504045, 0.10305284365579362, 2.1932792738155609, 27.46, 316.06998873472355, 3.3805041954925987,
-       true}, // AllGather_LLMC
-      {true, 10.061860371492349, 0.067985251913265293, 0.0, 64.15772392585157, 671.60525655802655, 0.0,
-       false}, // AllGather_TmaST
-      {true, 10.590215893817202, 0.056361727150537638, 0.0, 64.48109855086463, 650.43780647742426, 0.0,
-       false}, // AllGather_ST
-      {true, 8.2723873901367178, 0.062372589111328119, 0.0, 51.55, 715.14513870274175, 0.0, true}, // AllGather_TmaSTMC
-      {true, 8.3313720703125007, 0.056103515625000003, 0.0, 50.83, 715.14513870274175, 0.0, true}, // AllGather_STMC
+      {true, 7.1084, 0.1065, 2.32, 15.87, 250.0, {{0.99, 0.69}}, 0.0, false}, // AllGather_LL
+      {true, 7.4229, 0.1030, 2.1932, 27.46, 316.0699, {{1.0, 1.0}}, 3.3805, true}, // AllGather_LLMC
+      {true, 10.0618, 0.0679, 0.0, 64.1577, 671.6052, {{1.0, 1.0}}, 0.0, false}, // AllGather_TmaST
+      {true, 10.5902, 0.0563, 0.0, 64.4810, 650.4378, {{1.0, 1.0}}, 0.0, false}, // AllGather_ST
+      {true, 8.2723, 0.0623, 0.0, 51.55, 715.1451, {{1.0, 1.0}}, 0.0, true}, // AllGather_TmaSTMC
+      {true, 8.3313, 0.0561, 0.0, 50.83, 715.1451, {{1.0, 1.0}}, 0.0, true}, // AllGather_STMC
       {}, // AllGather_RailRing_LsaSTMC
       {}, // ReduceScatter_LL
       {}, // ReduceScatter_TmaLD
@@ -51,16 +47,14 @@ const struct ncclSymkLsaA2AParameters
       {}, // AllReduce_RSxTmaLD_AGxTmaST
       {}, // AllReduce_RSxLD_AGxST
       {}, // AllReduce_RSxLDMC_AGxSTMC
-      {true, 7.1084750551652, 0.10654011428850794, 2.2893660529970514, 15.644419484316165, 250.0, 0.0,
-       false}, // AllGather_LL
-      {true, 7.422942875504045, 0.10305284365579362, 2.1932792738155609, 27.46, 316.06998873472355, 3.3805041954925987,
-       true}, // AllGather_LLMC
-      {true, 10.061860371492349, 0.067985251913265293, 0.0, 64.15772392585157, 671.60525655802655, 0.0,
-       false}, // AllGather_TmaST
-      {true, 10.590215893817202, 0.056361727150537638, 0.0, 64.48109855086463, 650.43780647742426, 0.0,
-       false}, // AllGather_ST
-      {true, 8.2723873901367178, 0.062372589111328119, 0.0, 51.55, 715.14513870274175, 0.0, true}, // AllGather_TmaSTMC
-      {true, 8.3313720703125007, 0.056103515625000003, 0.0, 50.83, 715.14513870274175, 0.0, true}, // AllGather_STMC
+      {true, 7.1084, 0.1065, 2.32, 15.87, 250.0, {{0.99, 0.69}}, 0.0, false}, // AllGather_LL
+      {true, 7.4229, 0.1030, 2.1932, 27.46, 316.0699, {{1.0, 1.0}}, 3.3805, true}, // AllGather_LLMC
+      {
+        true, 10.0618, 0.0679, 0.0, 64.1577, 671.6052, {{1.0, 1.0}}, 0.0, false, 12.1475, 639.6826, 585.7896
+      }, // AllGather_TmaST
+      {true, 10.5902, 0.0563, 0.0, 64.4810, 650.4378, {{1.0, 1.0}}, 0.0, false}, // AllGather_ST
+      {true, 8.2723, 0.0623, 0.0, 51.55, 715.1451, {{1.0, 1.0}}, 0.0, true}, // AllGather_TmaSTMC
+      {true, 8.3313, 0.0561, 0.0, 50.83, 715.1451, {{1.0, 1.0}}, 0.0, true}, // AllGather_STMC
       {}, // AllGather_RailRing_LsaSTMC
       {}, // ReduceScatter_LL
       {}, // ReduceScatter_TmaLD
@@ -84,6 +78,47 @@ static int activeCtasForEachWork(size_t logicalBytes, int requestedCtas) {
   size_t cells = divUp(logicalBytes, size_t(NCCL_SYM_KERNEL_CELL_SIZE));
   size_t cellsPerCta = divUp(cells, size_t(requestedCtas));
   return (int)divUp(cells, cellsPerCta);
+}
+
+// Apply measured effective-CTA scaling for AllGather kernels.
+static double allGatherCtaScale(const struct ncclSymkLsaA2AParameters* parameters, enum ncclSymkKernelId kernelId,
+                                int nRanks, int activeCtas) {
+  if (kernelId == ncclSymkKernelId_AllGather_TmaSTMC && activeCtas == 1) return 1.1445;
+  if (kernelId != ncclSymkKernelId_AllGather_LL || nRanks <= 4 || activeCtas <= 4 || activeCtas >= 64) return 1.0;
+  static constexpr double log2CtaPositions[] = {2.0, 3.0, 5.0, 6.0};
+  static constexpr int positionCount = sizeof(log2CtaPositions) / sizeof(log2CtaPositions[0]);
+  double log2ActiveCtas = std::log2(static_cast<double>(activeCtas));
+  for (int upper = 1; upper < positionCount; upper++) {
+    if (log2ActiveCtas <= log2CtaPositions[upper]) {
+      double lowerScale = upper == 1 ? 1.0 : parameters->ctaScalingCurve.ctaScale[upper - 2];
+      double upperScale = upper == positionCount - 1 ? 1.0 : parameters->ctaScalingCurve.ctaScale[upper - 1];
+      double fraction =
+        (log2ActiveCtas - log2CtaPositions[upper - 1]) / (log2CtaPositions[upper] - log2CtaPositions[upper - 1]);
+      return lowerScale + fraction * (upperScale - lowerScale);
+    }
+  }
+  return 1.0;
+}
+
+static bool modelBlackwellTmaSTBehavior(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId,
+                                        const struct ncclSymkLsaA2AParameters* parameters, int activeCtas,
+                                        double* peakBw, double* extraLatencyUs) {
+  *peakBw = parameters->peakBw;
+  *extraLatencyUs = 0.0;
+  if (kernelId != ncclSymkKernelId_AllGather_TmaST || input->comm->minCompCap < 100 ||
+      RUBIN_AND_LATER(input->comm->minCompCap)) {
+    return true;
+  }
+
+  if (parameters->ctaTroughPeakBw > 0.0 && activeCtas >= 14 && activeCtas % 4 == 2) {
+    if (parameters->ctaTroughLatUs < 0.0) return false;
+    *peakBw = std::min(*peakBw, parameters->ctaTroughPeakBw);
+    *extraLatencyUs = parameters->ctaTroughLatUs;
+  }
+  if (parameters->rankLimitedPeakBw > 0.0 && activeCtas < input->comm->nRanks) {
+    *peakBw = std::min(*peakBw, parameters->rankLimitedPeakBw);
+  }
+  return true;
 }
 
 static const struct ncclSymkLsaA2AParameters* parametersFor(const struct ncclTuningInput_t* input,
@@ -111,16 +146,20 @@ bool ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKer
   int nRanks = input->comm->nRanks;
 
   int modeledCtas = activeCtasForEachWork(logicalBytes, requestedCtas);
+  double effectiveCtas = modeledCtas * allGatherCtaScale(parameters, kernelId, nRanks, modeledCtas);
+  double peakBw;
+  double extraLatencyUs;
+  if (!modelBlackwellTmaSTBehavior(input, kernelId, parameters, modeledCtas, &peakBw, &extraLatencyUs)) return false;
   double rankLatencyUs = (nRanks - 1) * parameters->rankLatUs;
   double rankFactor = parameters->peakRankEfficiency ? (double)(nRanks - 1) / nRanks : 1.0;
   double ctaCopies = isLowLatencyMulticast ? nRanks : isStoreMulticast ? 1.0 : nRanks - (input->inPlace != 0);
-  double ctaTransferTimeUs = ctaCopies * logicalBytes / (modeledCtas * parameters->ctaBw * bwToBytesPerUs);
+  double ctaTransferTimeUs = ctaCopies * logicalBytes / (effectiveCtas * parameters->ctaBw * bwToBytesPerUs);
   double computeTimeUs = 0.0;
   if (parameters->computeCtaBw > 0.0) {
-    computeTimeUs = logicalBytes / (modeledCtas * parameters->computeCtaBw * bwToBytesPerUs);
+    computeTimeUs = logicalBytes / (effectiveCtas * parameters->computeCtaBw * bwToBytesPerUs);
   }
   double ctaTimeUs = computeTimeUs + ctaTransferTimeUs;
-  double peakTransferTimeUs = (nRanks - 1) * logicalBytes / (parameters->peakBw * rankFactor * bwToBytesPerUs);
+  double peakTransferTimeUs = (nRanks - 1) * logicalBytes / (peakBw * rankFactor * bwToBytesPerUs);
   double bandwidthBoundTime = std::max(ctaTimeUs, peakTransferTimeUs);
   double estimateUs;
   if (isLowLatencyMulticast) {
@@ -128,7 +167,7 @@ bool ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKer
     double exposedShorterTimeUs = (1.0 - overlapFraction) * std::min(rankLatencyUs, bandwidthBoundTime);
     estimateUs = parameters->baseLatUs + std::max(rankLatencyUs, bandwidthBoundTime) + exposedShorterTimeUs;
   } else {
-    estimateUs = parameters->baseLatUs + rankLatencyUs + bandwidthBoundTime;
+    estimateUs = parameters->baseLatUs + rankLatencyUs + extraLatencyUs + bandwidthBoundTime;
   }
   if (!std::isfinite(estimateUs) || !(estimateUs > 0.0)) return false;
 

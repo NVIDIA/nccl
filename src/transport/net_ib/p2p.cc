@@ -296,6 +296,8 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     *request = NULL;
     return ncclSuccess;
   }
+  // Order the nreqs load after the idx load above; on weakly ordered CPUs it could otherwise return a stale value.
+  std::atomic_thread_fence(std::memory_order_acquire);
   nreqs = slots[0].nreqs;
   // Wait until all data has arrived
   for (int r = 1; r < nreqs; r++) {

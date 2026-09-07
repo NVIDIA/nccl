@@ -1033,12 +1033,26 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     stepSize[dir] = comm->p2pChunkSize;
     nChannels[dir] = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, stepSize[dir], comm->nNodes);
 
-    // Select protocol (LL vs SIMPLE) used based on payload per channel
-    if (bytes[dir] != -1) protoLL[dir] &= bytes[dir] <= nChannels[dir] * ncclParamP2pLLThreshold();
+    // Select protocol (LL vs SIMPLE) using the SIMPLE-derived per-channel P2P_LL_THRESHOLD first.
+    // Allow LL beyond that cutoff if the payload still fits in one LL data step across the LL
+    // channel plan, capped by nChannelsMax * P2P_LL_THRESHOLD.
+    if (bytes[dir] != -1 && protoLL[dir]) {
+      protoLL[dir] = bytes[dir] <= (ssize_t)nChannels[dir] * ncclParamP2pLLThreshold();
+      if (!protoLL[dir] && bytes[dir] <= (ssize_t)nChannelsMax * ncclParamP2pLLThreshold()) {
+        int llStoragePerStep = comm->buffSizes[NCCL_PROTO_LL] / NCCL_STEPS;
+        int llChannels = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, llStoragePerStep, comm->nNodes);
+        // NCCL_CHUNK_SIZE overrides the executed chunk only; eligibility still uses the LL FIFO step.
+        int llChunkSize = computeP2pChunkSize(llStoragePerStep, NCCL_PROTO_LL, bytes[dir],
+                                              paramChunkSize == 0 && network[dir], 0);
+        protoLL[dir] = bytes[dir] <= (ssize_t)llChannels * p2pPayloadPerChunk(llChunkSize, NCCL_PROTO_LL);
+      }
+    }
     protocol[dir] = protoLL[dir] ? NCCL_PROTO_LL : NCCL_PROTO_SIMPLE;
 
-    stepSize[dir] = comm->buffSizes[protocol[dir]] / NCCL_STEPS;
-    if (protocol[dir] == NCCL_PROTO_SIMPLE) stepSize[dir] = comm->p2pChunkSize;
+    if (protocol[dir] == NCCL_PROTO_LL) {
+      stepSize[dir] = comm->buffSizes[NCCL_PROTO_LL] / NCCL_STEPS;
+      nChannels[dir] = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, stepSize[dir], comm->nNodes);
+    }
     chunkSize[dir] = computeP2pChunkSize(stepSize[dir], protocol[dir], bytes[dir], network[dir], paramChunkSize);
     chunkDataSize[dir] = p2pPayloadPerChunk(chunkSize[dir], protocol[dir]);
     chunkDataSize_u32fp8[dir] = u32fp8Encode(chunkDataSize[dir]);

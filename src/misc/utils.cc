@@ -267,13 +267,22 @@ void* ncclMemoryStack::allocateSpilled(struct ncclMemoryStack* me, size_t size, 
     }
   }
 
-  { // If the next hunk we're going to allocate wouldn't be big enough but the
+  { // If the next hunk existing or to be allocated wouldn't be big enough but the
     // Unhunk proxy fits in the current hunk then go allocate as unhunked.
     size_t nextSize = (top ? top->size : 0) + (64 << 10);
     constexpr size_t maxAlign = 64;
     if (nextSize < sizeof(struct Hunk) + maxAlign + size) {
       uintptr_t uproxy = (me->topFrame.bumper + alignof(Unhunk) - 1) & -uintptr_t(alignof(Unhunk));
       if (uproxy + sizeof(struct Unhunk) <= me->topFrame.end) goto unhunked;
+    }
+
+    // The Unhunk proxy can fit in the next hunk if existing
+    if (top && top->above) {
+      struct Hunk* top1 = top->above;
+      me->topFrame.hunk = top1;
+      me->topFrame.end = reinterpret_cast<uintptr_t>(top1) + top1->size;
+      me->topFrame.bumper = reinterpret_cast<uintptr_t>(top1) + sizeof(struct Hunk);
+      goto unhunked;
     }
 
     // At this point we must need another hunk, either to fit the object

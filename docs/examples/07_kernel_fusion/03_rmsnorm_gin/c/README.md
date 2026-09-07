@@ -225,24 +225,24 @@ The receive window's strided layout **after Phase 1 PUT** can be represented as 
 \text{Token 0 from GPU 0} \\
 \text{Token 1 from GPU 0} \\
 \vdots \\
-\text{Token } (L/N-1) \text{ from GPU 0} \\[10pt]
+\text{Token } (B-1) \text{ from GPU 0} \\[10pt]
 \text{Token 0 from GPU 1} \\
 \text{Token 1 from GPU 1} \\
 \vdots \\
-\text{Token } (L/N-1) \text{ from GPU 1} \\[10pt]
+\text{Token } (B-1) \text{ from GPU 1} \\[10pt]
 \vdots \\[10pt]
 \text{Token 0 from GPU } (N-1) \\
 \text{Token 1 from GPU } (N-1) \\
 \vdots \\
-\text{Token } (L/N-1) \text{ from GPU } (N-1)
-\end{array}\right] \in \mathbb{R}^{L \times H}
+\text{Token } (B-1) \text{ from GPU } (N-1)
+\end{array}\right] \in \mathbb{R}^{(N \cdot B) \times H}
 ```
 
-Each "Token $t$ from GPU $p$" block contains $H$ elements. Note that "Token $t$" refers to the local token index on GPU $p$ (i.e., `blockIdx.x = t`), which corresponds to global token $`p \cdot \frac{L}{N} + t`$. For rank 0, the tokens in the first section are global tokens 0 through $`\frac{L}{N} - 1`$. Other ranks have the same structure but process different global tokens.
+Each "Token $t$ from GPU $p$" block contains $H$ elements. Let $B = \texttt{tokens\_per\_gpu}$ and $L = N \cdot B$. "Token $t$" refers to the local token index on GPU $p$ (i.e., `blockIdx.x = t`), which corresponds to global token $`p \cdot B + t`$. For rank 0, the tokens in the first section are global tokens 0 through $`B - 1`$. Other ranks have the same structure but process different global tokens.
 
 **Reduction into the First Section**: After receiving all contributions, each GPU performs the reduction **in-place** by summing across peer contributions and storing the results in the **first part** of the buffer (offsets `0` to `tokens_per_gpu * hidden_dim - 1`). Specifically:
-- GPU with rank $`r`$ sums contributions for its assigned tokens, where *k* is a global token index satisfying $`r \cdot \frac{L}{N} \leq k \leq (r+1) \cdot \frac{L}{N} - 1`$.
-- For block $`b`$ processing token $`t = r \cdot \frac{L}{N} + b`$:
+- GPU with rank $`r`$ sums contributions for its assigned tokens, where *k* is a global token index satisfying $`r \cdot B \leq k \leq (r+1) \cdot B - 1`$.
+- For block $`b`$ processing token $`t = r \cdot B + b`$:
   - Reads from positions: `my_token_data[j + i * hidden_dim * gridDim.x]` for peer $`i \in \{0, 1, \ldots, N-1\}`$
   - Writes sum to: `my_token_data[j]` (the first section, overwriting peer 0's contribution)
 - After reduction, only the first `tokens_per_gpu * hidden_dim` elements contain valid summed data

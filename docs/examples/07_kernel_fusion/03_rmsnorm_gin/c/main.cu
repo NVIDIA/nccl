@@ -221,26 +221,12 @@ void *rms_norm(int my_rank, int total_ranks, int local_device, int devices_per_r
   const float eps = 1e-6f;                    // Epsilon for numerical stability
   const int hidden_size = 1024;               // Hidden dimension per token
   const int threads_per_block = 256;          // Threads per CUDA block
-  const int sequence_length = 4096;           // Total tokens (all GPUs)
+  const int tokens_per_gpu = 64;              // Fixed local token and CTA count
+  const int sequence_length = tokens_per_gpu * total_ranks;
 
   // Derived parameters
   const size_t tensor_size = sequence_length * hidden_size;
   const size_t tensor_size_bytes = tensor_size * sizeof(float);
-  const int tokens_per_gpu = sequence_length / total_ranks;
-
-  //----------------------------------------------------------------------------
-  // Validate Configuration
-  //----------------------------------------------------------------------------
-  if (sequence_length % total_ranks != 0) {
-    if (my_rank == 0) {
-      fprintf(stderr, "ERROR: sequence_length (%d) must be divisible by number of ranks (%d)\n",
-              sequence_length, total_ranks);
-      fprintf(stderr, "       Each rank must process an equal number of tokens.\n");
-      fprintf(stderr, "       sequence_length %% total_ranks = %d (must be 0)\n",
-              sequence_length % total_ranks);
-    }
-    return NULL;
-  }
 
   //============================================================================
   // Step 1: Initialize NCCL Communicator

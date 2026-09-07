@@ -15,7 +15,7 @@ This directory contains examples that demonstrate how to fuse computation with c
 
 **Note**: The sources in this directory are written and tested against **NCCL 2.30 and later**. Device API types, `ncclDevCommRequirements` fields, and symbol names can differ in older NCCL releases. If you build against an earlier NCCL version, expect to adjust includes, requirement flags, and API calls to match that version’s headers and documentation.
 
-**Note**: Throughout these examples, the sequence length (number of tokens) is assumed to be divisible by the number of ranks. That assumption keeps partitioning and indexing straightforward. In real deployments you typically need to handle edge cases—for example when the sequence length is not evenly divisible by the rank count—using padding, remainder slices, or other strategies appropriate to your workload. That is why the examples still use `sequence_length` through host and device APIs even when a given kernel does not use it: a production implementation would rely on it for bounds, padding, and remainder handling. Under the even-split assumption here, it is often redundant in the kernel body on purpose, so the code stays simple while the signature matches what you would extend for those cases.
+**Note**: Each example uses a fixed 64 tokens/CTAs per GPU. The total sequence length is derived from that local count and the number of ranks, so the per-GPU launch size stays unchanged as the communicator grows. This keeps the example configuration simple and avoids validating a rank-dependent CTA count. Production implementations commonly need a larger, potentially uneven token distribution and can process additional logical tokens per CTA when scaling beyond this example configuration.
 
 Traditional approaches separate computation and communication into distinct phases. However, modern GPU architectures and NCCL's Device API enables kernels to perform both computation and communication simultaneously, reducing overall latency and improving throughput. These examples demonstrate RMSNorm (Root Mean Square Normalization) operations fused with reduce-scatter and all-gather communication patterns.
 
@@ -386,7 +386,8 @@ mpirun -np 2 ./rmsnorm_hybrid
 ## Configuration
 
 All examples use the following default configuration:
-- **Sequence Length**: 4096 tokens (must be divisible by number of GPUs)
+- **Tokens per GPU**: 64 tokens/CTAs
+- **Sequence Length**: `64 * number_of_GPUs` tokens
 - **Hidden Dimension**: 1024 elements per token
 - **Threads per Block**: 256
 - **Epsilon**: 1e-6 (for numerical stability)
@@ -409,9 +410,6 @@ These parameters can be modified in the source code to match your specific use c
 - **Solution**: Ensure `rmsnorm_utils.cuh` is included and the include path is set correctly
 
 ### Runtime Errors
-
-**Issue**: Sequence length not divisible by number of GPUs
-- **Solution**: Adjust `sequence_length` in the code to be a multiple of the GPU count
 
 **Issue**: LSA barriers failing
 - **Solution**: Verify NVLink connectivity with `nvidia-smi topo -m`

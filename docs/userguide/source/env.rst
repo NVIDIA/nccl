@@ -1840,11 +1840,16 @@ NCCL_P2P_LL_THRESHOLD
 ---------------------
 (since 2.14)
 
-The ``NCCL_P2P_LL_THRESHOLD`` is the maximum message size that NCCL will use the LL protocol for P2P operations.
+The ``NCCL_P2P_LL_THRESHOLD`` is the per-channel message size threshold that NCCL uses when selecting the LL protocol
+for P2P operations. The effective cutoff depends on the number of P2P channels considered by the protocol selector.
+The cutoff selects LL for eligible transfers at or below it, but it is not a strict upper bound: larger transfers may
+still use LL when they fit in one LL data step across the selected P2P channels.
+For collective operations implemented with P2P transfers, the size compared against this cutoff is the per-peer P2P
+transfer size, not the total collective buffer size.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-Decimal number. Default is 16384.
+Decimal number, in bytes. Default is 16384.
 
 NCCL_ALLOC_P2P_NET_LL_BUFFERS
 -----------------------------

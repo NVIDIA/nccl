@@ -105,6 +105,9 @@ ncclResult_t ncclTransportPatConnect(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
   if (ncclPatEnable(comm) == 0) goto exit;
   if (comm && comm->nRanks > 1) {
+    // Skip PAT setup on every rank for uneven local-rank layouts, so that no
+    // rank enters connection setup while another skips it.
+    if (comm->minLocalRanks != comm->maxLocalRanks) goto exit;
     int denseLocalRank = 0;
     // Connect corresponding NVLS-dense rails across nodes.
     if (!comm->isOneRPN) {

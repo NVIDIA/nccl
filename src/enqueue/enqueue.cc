@@ -949,6 +949,36 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
 NCCL_PARAM(P2pLLThreshold, "P2P_LL_THRESHOLD", 16384);
 NCCL_PARAM(ChunkSize, "CHUNK_SIZE", 0);
 
+static int computeP2pChannels(ssize_t bytes, int nChannelsMin, int nChannelsMax, ssize_t stepSize, int nNodes) {
+  if (bytes == -1) return 0;
+  if (bytes == 0) return 1;
+
+  ssize_t minPartSize = nNodes > 1 ? stepSize / 2 : stepSize / 8;
+  ssize_t maxPartSize = nNodes > 1 ? stepSize : stepSize * 32;
+  int nChannels = std::min<int>(nChannelsMin, divUp(bytes, minPartSize));
+  size_t partSize = std::max(minPartSize, divUp(bytes, nChannels));
+  while (partSize > maxPartSize && nChannels <= nChannelsMax / 2) {
+    nChannels *= 2;
+    partSize = divUp(bytes, nChannels);
+  }
+  return nChannels;
+}
+
+// FIFO bytes per scheduled P2P chunk (before LL flag packing).
+static int computeP2pChunkSize(int stepSize, int protocol, ssize_t bytes, bool network, ssize_t paramChunkSize) {
+  if (paramChunkSize != 0) return (int)paramChunkSize;
+  int chunkSize = stepSize;
+  if (network) {
+    if (protocol == NCCL_PROTO_SIMPLE && bytes < stepSize) chunkSize /= 4;
+    else if (bytes < 8 * stepSize) chunkSize /= 2;
+  }
+  return chunkSize;
+}
+
+static inline int p2pPayloadPerChunk(int chunkSize, int protocol) {
+  return protocol == NCCL_PROTO_LL ? chunkSize / 2 : chunkSize;
+}
+
 // Put p2p op in plan assuming there is sizeof(ncclDevWorkBatch) in batch budget
 // and sizeof(ncclDevWorkP2p) in work budget. "sendRank" and "recvRank" must
 // match the corresponding values for this round of the p2p schedule (no -1's).
@@ -1001,21 +1031,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     // 0=recv, 1=send
     // Assume SIMPLE protocol to start with to determine number of channels
     stepSize[dir] = comm->p2pChunkSize;
-
-    if (bytes[dir] == -1) {
-      nChannels[dir] = 0;
-    } else if (bytes[dir] == 0) {
-      nChannels[dir] = 1;
-    } else {
-      ssize_t minPartSize = comm->nNodes > 1 ? stepSize[dir] / 2 : stepSize[dir] / 8;
-      ssize_t maxPartSize = comm->nNodes > 1 ? stepSize[dir] : stepSize[dir] * 32;
-      nChannels[dir] = std::min<int>(nChannelsMin, divUp(bytes[dir], minPartSize));
-      size_t partSize = std::max(minPartSize, divUp(bytes[dir], nChannels[dir]));
-      while (partSize > maxPartSize && nChannels[dir] <= nChannelsMax / 2) {
-        nChannels[dir] *= 2;
-        partSize = divUp(bytes[dir], nChannels[dir]);
-      }
-    }
+    nChannels[dir] = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, stepSize[dir], comm->nNodes);
 
     // Select protocol (LL vs SIMPLE) used based on payload per channel
     if (bytes[dir] != -1) protoLL[dir] &= bytes[dir] <= nChannels[dir] * ncclParamP2pLLThreshold();
@@ -1023,17 +1039,8 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
 
     stepSize[dir] = comm->buffSizes[protocol[dir]] / NCCL_STEPS;
     if (protocol[dir] == NCCL_PROTO_SIMPLE) stepSize[dir] = comm->p2pChunkSize;
-    chunkSize[dir] = stepSize[dir];
-    if (paramChunkSize != 0) {
-      chunkSize[dir] = paramChunkSize;
-    } else if (network[dir]) {
-      // Tune chunk size for the network
-      if (protocol[dir] == NCCL_PROTO_SIMPLE && bytes[dir] < stepSize[dir]) chunkSize[dir] /= 4;
-      else if (bytes[dir] < 8 * stepSize[dir]) chunkSize[dir] /= 2;
-    }
-
-    chunkDataSize[dir] = chunkSize[dir];
-    if (protocol[dir] == NCCL_PROTO_LL) chunkDataSize[dir] /= 2;
+    chunkSize[dir] = computeP2pChunkSize(stepSize[dir], protocol[dir], bytes[dir], network[dir], paramChunkSize);
+    chunkDataSize[dir] = p2pPayloadPerChunk(chunkSize[dir], protocol[dir]);
     chunkDataSize_u32fp8[dir] = u32fp8Encode(chunkDataSize[dir]);
     chunkDataSize[dir] = u32fp8Decode(chunkDataSize_u32fp8[dir]);
     chunkSize[dir] = chunkDataSize[dir];

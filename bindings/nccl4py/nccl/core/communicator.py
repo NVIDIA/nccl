@@ -1070,37 +1070,36 @@ class Communicator:
     ) -> Communicator:
         """Grows the communicator by adding new ranks.
 
-        Creates a new communicator that includes both existing ranks from
-        this communicator and new ranks joining the group. There are three
-        roles:
+        Creates a **new** communicator that includes both existing ranks from
+        this communicator and new ranks joining the group. The original
+        communicator is unchanged.  There are two roles in grow:
 
-            - Existing root: the one existing rank that called
-              :py:meth:`get_unique_id`.
-            - Existing non-root: all other existing ranks.
-            - New ranks: ranks joining via a null communicator
-              (``Communicator()``).
+            - Existing ranks: ranks already in an existing communicator.
+            - New ranks: ranks joining the existing communicator.
 
-        This is a collective operation. All ranks (existing and new) must
+        ``grow()`` is a collective operation. All ranks (existing and new) must
         call this method. Usage by role:
 
-            - Existing root: ``new_comm = existing_comm.grow(nranks, uid)``
-            - Existing non-root: ``new_comm = existing_comm.grow(nranks)``
-            - New rank: ``new_comm = Communicator().grow(nranks, uid, rank=assigned_rank)``
+            - Existing rank: ``new_comm = existing_comm.grow(nranks)``
+            - New rank: ``new_comm = Communicator().grow(nranks, uid,
+              rank=assigned_rank)``
 
-        The UID is consumed upon successful grow and cannot be reused.
+        The UID is consumed upon successful grow and cannot be reused.  Exactly
+        one UID should be generated before each grow.
 
         Args:
             nranks: Total number of ranks in the new communicator (existing
                 plus new). All roles must pass the same value.
             unique_id: Unique identifier from :py:meth:`get_unique_id`.
-                Existing root and new ranks must pass the
-                :py:class:`~nccl.core.UniqueId`; existing non-root must pass
-                ``None``. Defaults to ``None``.
+                New ranks must pass the :py:class:`~nccl.core.UniqueId`.
+                Existing ranks may leave this as ``None`` because NCCL does not
+                use this parameter for existing ranks. Defaults to ``None``.
             rank: This rank's ID in the new communicator. New ranks must
                 pass their assigned rank, which must be ``>=`` the parent
-                communicator size. Existing ranks must pass ``None``.
-                Defaults to ``None``.
-            config: Configuration for the new communicator. Defaults to ``None``.
+                communicator size. Existing ranks must pass ``None``. Defaults
+                to ``None``.
+            config: Configuration for the new communicator. Defaults to
+                ``None``.
 
         Returns:
             New :py:class:`Communicator` containing all ranks.

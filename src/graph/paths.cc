@@ -938,7 +938,7 @@ ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* 
   system->inter = system->nodes[GPU].count == comm->nRanks ? 0 : 1;
 exit:
   free(domains);
-  if (ids) free(ids);
+  free(ids);
   return ret;
 fail:
   goto exit;
@@ -1135,7 +1135,7 @@ ncclResult_t ncclTopoSplitNvLink(struct ncclTopoSystem* system, int* splitNvLink
   *splitNvLink = nvlDomains == 2 ? 1 : 0;
 
 exit:
-  if (nvlDomain) free(nvlDomain);
-  if (nvlDomainCount) free(nvlDomainCount);
+  free(nvlDomain);
+  free(nvlDomainCount);
   return res;
 }

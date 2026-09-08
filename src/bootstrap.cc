@@ -397,8 +397,8 @@ out:
     (void)ncclSocketClose(listenSock);
     free(listenSock);
   }
-  if (rankInfo) free(rankInfo);
-  if (rankAddressesRoot) free(rankAddressesRoot);
+  free(rankInfo);
+  free(rankAddressesRoot);
   free(rargs);
 
   TRACE(NCCL_BOOTSTRAP, "DONE");
@@ -425,8 +425,8 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
 exit:
   return ret;
 fail:
-  if (listenSock) free(listenSock);
-  if (args) free(args);
+  free(listenSock);
+  free(args);
   goto exit;
 }
 

@@ -2974,7 +2974,7 @@ exit:
   return ret;
 fail:
   if (ceInitJob) ncclCeInitAsyncJobFree(ceInitJob);
-  if (ceTask) free(ceTask);
+  free(ceTask);
   goto exit;
 }
 

@@ -322,7 +322,7 @@ static void initPluginLibsOnceFunc() {
       }
       netPluginName = strtok_r(nullptr, ",", &savePtr);
     }
-    if (envNetPluginList) free(envNetPluginList);
+    free(envNetPluginList);
   } else {
     // Add default net plugin
     netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;

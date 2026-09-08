@@ -555,9 +555,7 @@ destroy_resources:
                 DOCA_LOG(LOG_ERR, "Failed to destroy gpu ring buffer umem");
         }
 
-        if (cq_ring_haddr) {
-            free(cq_ring_haddr);
-        }
+        free(cq_ring_haddr);
 
         if (gpu_umem_dev_ptr != 0) {
             tmp_status = doca_gpu_mem_free(gpu_dev, gpu_umem_dev_ptr);
@@ -567,7 +565,7 @@ destroy_resources:
         }
     }
 
-    if (cq_ring_haddr) free(cq_ring_haddr);
+    free(cq_ring_haddr);
 
     return status;
 }

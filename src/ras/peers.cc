@@ -91,7 +91,7 @@ ncclResult_t rasLocalHandleAddRanks(struct rasRankInit* ranks, int nranks) {
   NCCLCHECKGOTO(rasNetUpdatePeers(rankPeers, nRankPeers, /*updateDeadPeers*/ false, ranks, nranks), ret, fail);
 
 exit:
-  if (rankPeers) free(rankPeers);
+  free(rankPeers);
   free(ranks);
   return ret;
 fail:
@@ -368,7 +368,7 @@ static ncclResult_t rasPeersUpdate(struct rasPeerInfo* rankPeers, int* nRankPeer
   }
 
   if (newRasPeers != rasPeers) {
-    if (rasPeers) free(rasPeers);
+    free(rasPeers);
     rasPeers = newRasPeers;
     nRasPeers = newNRasPeers;
     if (newMyPeerIdx == -1) {

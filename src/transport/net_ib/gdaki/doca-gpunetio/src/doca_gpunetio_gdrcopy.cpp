@@ -163,9 +163,7 @@ out:
         if (handle) {
             dlclose(handle);
         }
-        if (table) {
-            free(table);
-        }
+        free(table);
     }
     return status;
 }
@@ -301,9 +299,7 @@ int doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t size, bool for
 
 out:
     if (status) {
-        if (mh) {
-            free(mh);
-        }
+        free(mh);
     }
     return status;
 }

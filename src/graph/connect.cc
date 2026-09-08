@@ -534,14 +534,14 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   NCCLCHECKGOTO(ncclBuildRings(nChannels, rings, comm->rank, comm->nRanks, ringPrev, ringNext), ret, fail);
 
 exit:
-  if (ringRecv) free(ringRecv);
-  if (ringSend) free(ringSend);
-  if (ringPrev) free(ringPrev);
-  if (ringNext) free(ringNext);
-  if (treeToParent) free(treeToParent);
-  if (treeToChild0) free(treeToChild0);
-  if (treeToChild1) free(treeToChild1);
-  if (nvlsHeads) free(nvlsHeads);
+  free(ringRecv);
+  free(ringSend);
+  free(ringPrev);
+  free(ringNext);
+  free(treeToParent);
+  free(treeToChild0);
+  free(treeToChild1);
+  free(nvlsHeads);
   return ret;
 fail:
   goto exit;

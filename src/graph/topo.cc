@@ -1715,7 +1715,7 @@ ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netI
 out:
   free(physNetNodes);
   free(props);
-  if (placedDevs) free(placedDevs);
+  free(placedDevs);
   return res;
 }
 
@@ -2180,8 +2180,8 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   }
 
 exit:
-  if (!comm->MNNVL && localRanks) free(localRanks);
-  if (mem) free(mem);
+  if (!comm->MNNVL) free(localRanks);
+  free(mem);
   free(xml);
   return ret;
 fail:

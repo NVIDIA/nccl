@@ -1243,7 +1243,7 @@ fail:
   *regBufFlag = 0;
   *offsetOut = 0;
   *peerRmtAddrsOut = NULL;
-  if (newInfo) free(newInfo);
+  free(newInfo);
   INFO(NCCL_REG, "rank %d failed to IPC register userbuff %p buffSize %ld nPeers %d isLegacyIpc %d type %s", comm->rank,
        userbuff, buffSize, nPeers, isLegacyIpc ? *isLegacyIpc : -1,
        ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR ? "POSIX_FD" : "FABRIC");

@@ -2302,7 +2302,7 @@ exit:
     /* assign it to user pointer. */
     COMPILER_ATOMIC_STORE(job->newcomm, comm, std::memory_order_release);
   }
-  if (parentRanks) free(parentRanks);
+  free(parentRanks);
   return res;
 fail:
   COMPILER_ATOMIC_STORE(&comm->initState, res, std::memory_order_release);

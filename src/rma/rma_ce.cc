@@ -532,7 +532,7 @@ ncclResult_t ncclRmaCeWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* p
   ncclMemoryPoolFree(&comm->memPool_ncclTaskRma, task);
 
 exit:
-  if (batchParams) free(batchParams);
+  free(batchParams);
   ncclCeFreeBatchOpsParams(&ceParams);
   return ret;
 invalid_task:

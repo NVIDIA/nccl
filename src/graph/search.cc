@@ -1442,7 +1442,7 @@ ncclResult_t ncclTopoDumpGraphs(struct ncclTopoSystem* system, int ngraphs, stru
     NCCLCHECKGOTO(ncclTopoDumpXmlToFile(str, xml), ret, fail);
   }
 exit:
-  if (xml) free(xml);
+  free(xml);
   return ret;
 fail:
   goto exit;

@@ -224,7 +224,7 @@ ncclResult_t ncclReallocDebug(T** ptr, size_t oldNelem, size_t nelem, const char
     return ncclSystemError;
   }
   if (oldp && oldNelem) memcpy(p, oldp, oldNelem * ncclSizeOfT<T>());
-  if (oldp) free(oldp);
+  free(oldp);
   memset(p + oldNelem, 0, (nelem - oldNelem) * ncclSizeOfT<T>());
   *ptr = (T*)p;
   if (logHostAlloc)

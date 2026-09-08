@@ -108,7 +108,7 @@ ncclResult_t ncclGinIbInitType(void** ctx, uint64_t commId, ncclDebugLogger_t lo
 }
 
 ncclResult_t ncclGinIbFinalize(void* ctx) {
-  if (ctx) free(ctx);
+  free(ctx);
   return ncclIbFinalizeDevices();
 }
 
@@ -191,7 +191,7 @@ static ncclResult_t ncclGinIbAllToAll(struct ncclGinIbCollComm* cComm, void* src
   }
 
 out:
-  if (tmp_buf) free(tmp_buf);
+  free(tmp_buf);
 
   return status;
 }

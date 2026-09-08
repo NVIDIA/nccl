@@ -359,7 +359,7 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream, struct nc
 exit:
   // Stop CE sync profiling - always attempt if started, even on error
   ncclProfilerStopCeSyncEvent(comm, ceSyncHandle, stream);
-  if (batchParams) free(batchParams);
+  free(batchParams);
   return ret;
 fail:
   goto exit;
@@ -398,16 +398,16 @@ exit:
 #endif
   return ret;
 fail:
-  if (srcs) free(srcs);
+  free(srcs);
   srcs = nullptr;
-  if (dsts) free(dsts);
+  free(dsts);
   dsts = nullptr;
-  if (sizes) free(sizes);
+  free(sizes);
   sizes = nullptr;
 #if CUDART_VERSION >= 12080
-  if (attrs) free(attrs);
+  free(attrs);
   attrs = nullptr;
-  if (attrIdxs) free(attrIdxs);
+  free(attrIdxs);
   attrIdxs = nullptr;
 #endif
   goto exit;

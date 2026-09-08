@@ -201,7 +201,7 @@ static void initPluginLibsOnceFunc() {
       }
       rmaPluginName = strtok_r(nullptr, ",", &savePtr);
     }
-    if (envRmaPluginList) free(envRmaPluginList);
+    free(envRmaPluginList);
   } else {
     // Add default rma plugin
     pluginLibs[pluginCounter].state = ncclRmaPluginStateLoadReady;

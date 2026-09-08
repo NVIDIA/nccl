@@ -231,7 +231,7 @@ static void initPluginLibsOnceFunc() {
       }
       ginPluginName = strtok_r(nullptr, ",", &savePtr);
     }
-    if (envGinPluginList) free(envGinPluginList);
+    free(envGinPluginList);
   } else {
     // Add default gin plugin
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;

@@ -919,25 +919,25 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
     ret = bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xCAFE);
     if (ret != ncclSuccess) {
       // Cleanup
-      if (allCounts) free(allCounts);
-      if (localInfos) free(localInfos);
-      if (allInfos) free(allInfos);
+      free(allCounts);
+      free(localInfos);
+      free(allInfos);
       WARN("MemManager: Final barrier failed during resume");
       return ret;
     }
   }
 
   // Cleanup
-  if (allCounts) free(allCounts);
-  if (localInfos) free(localInfos);
-  if (allInfos) free(allInfos);
+  free(allCounts);
+  free(localInfos);
+  free(allInfos);
 
   return ncclSuccess;
 
 fail:
-  if (allCounts) free(allCounts);
-  if (localInfos) free(localInfos);
-  if (allInfos) free(allInfos);
+  free(allCounts);
+  free(localInfos);
+  free(allInfos);
   return ret;
 }
 

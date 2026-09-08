@@ -1185,7 +1185,7 @@ out:
     if (status != DOCA_SUCCESS) {
         if (qp_gpus_d) doca_gpu_mem_free(gpu_dev, qp_gpus_d);
     }
-    if (qp_gpus_h) free(qp_gpus_h);
+    free(qp_gpus_h);
     return status;
 }
 
@@ -1418,7 +1418,7 @@ doca_error_t doca_gpu_verbs_create_service(doca_gpu_verbs_service_t *out_service
 out:
     if (status) {
         if (service->qps) delete service->qps;
-        if (service) free(service);
+        free(service);
     }
     return doca_status;
 }

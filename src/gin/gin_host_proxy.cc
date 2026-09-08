@@ -491,7 +491,7 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
   NCCLCHECKGOTO(rmaBackend->createContext(cComm->collComm, &rmaConfig, &proxyCtx->rmaCtx), ret, fail);
 
   // query flush capabilities
-  NCCLCHECK(ncclGinProxyFlushesAllPutsOnAnySignal(collComm, &proxyCtx->flushesAllPutsOnAnySignal));
+  NCCLCHECKGOTO(ncclGinProxyFlushesAllPutsOnAnySignal(collComm, &proxyCtx->flushesAllPutsOnAnySignal), ret, fail);
 
   // Parse poll batch size
   pollBatchParam = ncclParamGinProxyPollBatch();

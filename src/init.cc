@@ -757,6 +757,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->hostHash = getHostHash() + commHash;
   info->pidHash = getPidHash() + commHash;
   info->cuMemSupport = ncclCuMemEnable();
+  info->cuMemHostSupport = ncclCuMemEnable() && ncclCuMemHostEnable();
   info->fabricHandleSupport = 0;
   CUdevice currentDev;
   CUCHECK(cuDeviceGet(&currentDev, comm->cudaDev));

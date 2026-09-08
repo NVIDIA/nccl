@@ -18,6 +18,7 @@
 #define NCCL_NVLINK_BW_IDX_HOPPER 0
 #define NCCL_NVLINK_BW_IDX_BLACKWELL 1
 #define NCCL_NVLINK_BW_IDX_NUM 2
+#define NCCL_SM_PENALTY_IDX_NUM 2
 
 // NVLS max bws NCCL can achieve.
 static const float nvlinkBws[NCCL_NVLINK_BW_IDX_NUM] = {
@@ -71,6 +72,19 @@ static double getSmBw_ReduceScatter_RailA2A(struct ncclComm* comm, bool ldmc) {
 double ncclTuningGetSmLatReduceScatterRailA2A(struct ncclComm* comm, bool ldmc) {
   // Processing delay. Larger value means bigger network buffers.
   return 10.e-6;
+}
+
+// Time penalty per SM/CTA for resource use. Keep the standard 2.5% penalty
+// except for Blackwell unicast RS+GIN, where the max penalty makes MC win.
+static const float smPenalty[NCCL_SM_PENALTY_IDX_NUM][2] = {
+  {.025f, .025f}, // Hopper
+  {.025f, 1.0f}, // Blackwell
+};
+
+static double ncclTuningGetSmPenalty(struct ncclComm* comm, enum ncclSymkKernelId kernelId) {
+  int compCapIndex = comm->minCompCap >= 100 ? NCCL_NVLINK_BW_IDX_BLACKWELL : NCCL_NVLINK_BW_IDX_HOPPER;
+  int slot = kernelId == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD ? 1 : 0;
+  return smPenalty[compCapIndex][slot];
 }
 
 // Calculate saturation block count.
@@ -154,9 +168,7 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   }
 
   if (*nBlocks > 0 && std::isfinite(*timeUs)) {
-    bool ldmc = kernelId == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
-    float smPenalty = ldmc ? .025f : 1.0f; // 2.5% increase in time per SM for MC, 100% for UC.
-    *timeUs *= 1.0f + smPenalty * (*nBlocks);
+    *timeUs *= 1.0f + ncclTuningGetSmPenalty(comm, kernelId) * (*nBlocks);
   }
   return ncclSuccess;
 }

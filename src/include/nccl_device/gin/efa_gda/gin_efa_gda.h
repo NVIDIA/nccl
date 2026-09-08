@@ -312,7 +312,7 @@ NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle
 
       uint32_t sq_idx = my_slot & qp->sq.wq.queue_mask;
       int wqe_phase = (int)((my_slot >> qp->sq.wq.queue_size_shift) & 1u);
-      EFA_SET(&wr_storage.meta.ctrl2, EFA_IO_TX_META_DESC_PHASE, wqe_phase);
+      wr_storage.meta.ctrl2 = (wr_storage.meta.ctrl2 & ~(uint8_t)1u) | ((uint8_t)wqe_phase & (uint8_t)1u);
       uint64_t* src = (uint64_t*)&wr_storage;
       uint64_t* dst = (uint64_t*)(qp->sq.wq.buf + sq_idx * wqe_size);
       /* One final system-scope fence publishes the complete WQE after these

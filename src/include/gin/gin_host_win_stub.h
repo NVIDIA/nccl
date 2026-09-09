@@ -19,8 +19,8 @@
 #include "plugin/nccl_net.h"
 #include "os.h"
 #include <thread>
-#include <mutex>
-#include <condition_variable>
+#include <atomic>
+#include <shared_mutex>
 
 #define NCCL_GIN_MAX_CONNECTIONS 4
 
@@ -72,31 +72,40 @@ typedef struct ncclGin ncclGin_t;
 
 struct ncclGinStateDevComm {
   int contextCount;
+  int backendIndex;
   void* ginCtx[NCCL_GIN_MAX_CONNECTIONS];
   ncclNetDeviceHandle_t* devHandles[NCCL_GIN_MAX_CONNECTIONS];
   struct ncclGinStateDevComm* next;
 };
 
-struct ncclGinState {
-  ncclAffinity cpuAffinity;
+struct ncclGinBackendState {
+  bool supported;
+  ncclGinType_t ginType;
   ncclGin_t* ncclGin;
   void* ginInstance;
-  bool connected;
-  ncclGinType_t ginType;
+  int pluginIndex;
   int ginCommCount;
   void* ginComms[NCCL_GIN_MAX_CONNECTIONS];
   ncclNetProperties_t ginProps[NCCL_GIN_MAX_CONNECTIONS];
-  int needsProxyProgress;
-  int ginProgress;
-  std::thread thread;
-  std::mutex mutex;
-  std::condition_variable cond;
-  ncclResult_t asyncResult;
-  int ginVersion;
   bool supportsStrongSignals;
   bool supportsVASignals;
+};
+
+struct ncclGinState {
+  ncclAffinity cpuAffinity;
+  bool connected;
+  bool supported;
+  int proxyNthreads;
+  bool proxyThreadsCreated;     // Set once the GIN progress thread is spawned.
+  std::atomic<bool> proxyThreadStopSignal;  // Signals the GIN progress thread to exit.
+  std::atomic<bool> writePending;
+  std::shared_timed_mutex devCommRwMutex;
+  std::thread thread[NCCL_GIN_MAX_CONNECTIONS];
+  ncclResult_t asyncResult;
   struct ncclGinStateDevComm* devComms;
   ncclGinConnectionType_t ginConnectionType;
+  int numActiveBackends;
+  struct ncclGinBackendState backends[NCCL_GIN_MAX_ACTIVE_BACKENDS];
 };
 
 struct ncclComm;
@@ -111,19 +120,20 @@ ncclResult_t ncclGetRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType)
 ncclResult_t ncclGinConnectOnce(struct ncclComm* comm);
 ncclResult_t ncclGinHostFinalize(struct ncclComm* comm);
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                 struct ncclDevComm* devComm);
+                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion);
 ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const* devComm);
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
-                             void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS],
-                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags, bool multiSegment,
-                             int memType);
-ncclResult_t ncclGinDeregister(struct ncclComm* comm, void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS]);
+                             void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS],
+                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS],
+                             int winFlags, bool multiSegment = false, int memType = NCCL_PTR_CUDA);
+ncclResult_t ncclGinDeregister(struct ncclComm* comm,
+                               void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS]);
 ncclResult_t ncclGinQueryLastError(struct ncclGinState* ginState, bool* hasError);
 ncclResult_t ncclGinGetDevCount(int ginPluginIndex, int* nPhysDev, int* nVirtDev);
+ncclResult_t ncclGinSetDefaultBackend(struct ncclComm* comm, uint64_t globalBitmask);
 
 /* Internal GIN API (from include/gin.h); stubbed on Windows */
 ncclResult_t ncclGinInit(struct ncclComm* comm);
-ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclGinFinalize(struct ncclComm* comm);
 
 #endif

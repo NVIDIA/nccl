@@ -79,9 +79,16 @@ typedef enum { ncclSuccess                 =  0,
 /* ncclCommRevoke flags */
 #define NCCL_REVOKE_DEFAULT 0x00 /* reserved for future use; must be 0 */
 
+typedef enum {
+  ncclHostCftDefault = NCCL_CONFIG_UNDEF_INT,
+  ncclHostCftEnable = 1,
+  ncclHostCftDisable = 2,
+  ncclHostCftFallback = 3
+} ncclHostCftMode_t;
+
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
-typedef struct ncclConfig_v23000 {
+typedef struct ncclConfig_v23100 {
   /* attributes that users should never touch. */
   size_t size;
   unsigned int magic;
@@ -105,6 +112,10 @@ typedef struct ncclConfig_v23000 {
   int numRmaCtx;
   int maxP2pPeers;
   int graphStreamOrdering;
+  int launchOrderImplicit;
+  int numRmaSig;
+  int rmaEagerInit;
+  int hostCftMode;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -131,6 +142,79 @@ typedef struct ncclConfig_v23000 {
   NCCL_CONFIG_UNDEF_INT,                    /* numRmaCtx */             \
   NCCL_CONFIG_UNDEF_INT,                    /* maxP2pPeers */           \
   NCCL_CONFIG_UNDEF_INT,                    /* graphStreamOrdering */   \
+  NCCL_CONFIG_UNDEF_INT,                    /* launchOrderImplicit */   \
+  NCCL_CONFIG_UNDEF_INT,                    /* numRmaSig */             \
+  NCCL_CONFIG_UNDEF_INT,                    /* rmaEagerInit */          \
+  NCCL_CONFIG_UNDEF_INT,                    /* hostCftMode */          \
+}
+
+/* A single vendor-specific option expressed as a key-value pair. Multiple options can be
+ * chained into a non-circular linked list through the next pointer and attached to a ncclCollConfig_t
+ * via its ext member. The official NCCL library ignores every extension; a vendor library
+ * should assign a unique value to key.vendorId to avoid collision among vendor libraries.
+ * It can usually be done by picking a random number.
+ * Vendors should choose a non-zero vendorId (less than 2^24) that is unlikely to collide
+ * with other vendor libraries. The list is unordered and must not contain duplicate keys. */
+typedef struct ncclConfigExt {
+  struct ncclConfigExt* next;       /* next option in the list, or NULL to terminate */
+  struct {
+    int vendorId;                   /* vendor choose their own unique value as vendorId */
+    int optionId;                   /* vendor-defined id distinguishing options within a vendor */
+  } key;
+  union {
+    int i;                          /* integer value */
+    const char* s;                  /* C-style string value */
+    void* raw;                      /* opaque pointer-sized value */
+  } val;
+} ncclConfigExt_t;
+
+/* Per-collective configuration. Users assign values to attributes to customize an
+ * individual collective call issued through one of the nccl*Config() entry points.
+ * Like ncclConfig_t, this is a versioned, append-only struct: in the future, any new
+ * members will be added at the end, and existing members will never be removed or
+ * reordered. The user owns the storage and must keep the struct (and any linked ncclConfigExt_t)
+ * valid for the duration of every call that uses it. The same configuration must be
+ * set on every rank; NCCL validates it only locally. */
+typedef struct ncclCollConfig_v23100 {
+  /* attributes that users should never touch. */
+  size_t size;
+  unsigned int magic;
+  unsigned int version;
+  /* non-circular linked list of vendor-specific extension options, or NULL. */
+  ncclConfigExt_t* ext;
+  /* resource tuning (NCCL_CONFIG_UNDEF_INT == unset; NCCL picks). */
+  int minCTAs;          /* lower bound on channels/CTAs */
+  int maxCTAs;          /* upper bound on channels/CTAs, must be <= comm->maxCTAs */
+  int nvlsCTAs;         /* NVLS-pool-specific channel cap */
+  int cgaClusterSize;   /* CUDA thread-block-cluster size (Hopper+), should be the same for all
+                           collectives in the same Group. Inconsistent cgaClusterSize in a Group
+                           is undefined behavior. */
+  /* algorithm selection: filter which algorithm(s) this call may use. */
+  const char* algSelection;   /* selection string; NULL/UNDEF/"" == automatic */
+  int forceAlgSelection;      /* default 1 (true): unsatisfiable selection is an error */
+  int CTAPolicy;              /* NCCL_CTA_POLICY_* bitmask; UNDEF == inherit comm-level CTAPolicy */
+  /* user-provided profiler tag: an opaque value delivered verbatim to profiler plugins with this
+   * call's profiler events. Default to 0 as untagged. It does not affect execution. NCCL reserves
+   * profiler-tag values with the most-significant bit set (>= 0x8000000000000000) for possible future
+   * predefined tags; applications should use values with the MSB clear. */
+  uint64_t userProfilerTag;
+} ncclCollConfig_t;
+
+/* NCCL_COLLCONFIG_INITIALIZER must be used to initialize a ncclCollConfig_t when it is
+ * created. An uninitialized config will result in a NCCL error. */
+#define NCCL_COLLCONFIG_INITIALIZER {                                 \
+  sizeof(ncclCollConfig_t),                 /* size */                \
+  NCCL_API_MAGIC,                           /* magic */               \
+  NCCL_VERSION_CODE,                        /* version */             \
+  NCCL_CONFIG_UNDEF_PTR,                    /* ext */                 \
+  NCCL_CONFIG_UNDEF_INT,                    /* minCTAs */             \
+  NCCL_CONFIG_UNDEF_INT,                    /* maxCTAs */             \
+  NCCL_CONFIG_UNDEF_INT,                    /* nvlsCTAs */            \
+  NCCL_CONFIG_UNDEF_INT,                    /* cgaClusterSize */      \
+  NCCL_CONFIG_UNDEF_PTR,                    /* algSelection */        \
+  1,                                        /* forceAlgSelection */   \
+  NCCL_CONFIG_UNDEF_INT,                    /* CTAPolicy */           \
+  0,                                        /* userProfilerTag */     \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -573,6 +657,50 @@ ncclResult_t  ncclScatter(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
 ncclResult_t pncclScatter(const void* sendbuff, void* recvbuff, size_t count,
     ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream);
+
+/* nccl*Config: per-collective-config variant of every collective. It takes a trailing
+ * ncclCollConfig_t describing per-call customization. Initialize the config with
+ * NCCL_COLLCONFIG_INITIALIZER and set it identically on every rank. config == NULL is
+ * equivalent to the plain API. */
+ncclResult_t  ncclAllReduceConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclAllReduceConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+
+ncclResult_t  ncclBroadcastConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclBroadcastConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+
+ncclResult_t  ncclReduceConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclReduceConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+
+ncclResult_t  ncclAllGatherConfig(const void* sendbuff, void* recvbuff, size_t sendcount, ncclDataType_t datatype,
+    ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclAllGatherConfig(const void* sendbuff, void* recvbuff, size_t sendcount, ncclDataType_t datatype,
+    ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+
+ncclResult_t  ncclReduceScatterConfig(const void* sendbuff, void* recvbuff, size_t recvcount, ncclDataType_t datatype,
+    ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclReduceScatterConfig(const void* sendbuff, void* recvbuff, size_t recvcount, ncclDataType_t datatype,
+    ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+
+ncclResult_t  ncclAlltoAllConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclAlltoAllConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+
+ncclResult_t  ncclGatherConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclGatherConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+
+ncclResult_t  ncclScatterConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
+ncclResult_t pncclScatterConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype,
+    int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config);
 
 /*
  * Send

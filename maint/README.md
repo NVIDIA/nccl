@@ -36,6 +36,10 @@ Useful options:
 ./maint/run-clang-format.sh --diff [path]
 ```
 
+`--list` reports the files that would actually change if reformatted, plus a
+separate list of files skipped via `.clang-format-ignore`; `--diff` prints the
+unified diff of those changes. Neither modifies any files.
+
 The script requires `clang-format` version 22 or newer. Set `CLANG_FORMAT` to
 use a non-default binary:
 

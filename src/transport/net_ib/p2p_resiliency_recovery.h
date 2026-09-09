@@ -31,4 +31,6 @@ ncclResult_t ncclIbPortRecoveryQpsDestroy(struct ncclIbResiliency* resCtx, int n
 
 ncclResult_t ncclIbPortRecoveryHandleFailure(struct ncclIbResiliency* resCtx, int devIndex);
 
+ncclResult_t ncclIbPortRecoveryQpsReconfigure(struct ncclIbResiliency* resCtx, int devIndex, bool* success);
+
 #endif // NET_IB_P2P_RESILIENCY_RECOVERY_H_

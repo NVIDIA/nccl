@@ -84,6 +84,10 @@ needed, automatically falls back to the /dev/shm code. In prior versions, the sa
 specifying ``NCCL_CUMEM_HOST_ENABLE=0``. We still recommend configuring the underlying system to ensure that cuMem host
 allocations work, as they provide improved reliability during communicator aborts.
 
+NUMA support is also important for memory affinity.
+For best performance, place each rank and its host memory close to the GPU and NIC it uses.
+See :ref:`cpu_memory_affinity` for details.
+
 cuMem host allocations may fail on systems without CUDA P2P connectivity if CUDA driver version prior to 13.0 is being
 used. Furthermore, `CUDA Forward Compatibility
 <https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html>`_ feature can affect NCCL's ability to

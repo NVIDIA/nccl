@@ -25,4 +25,6 @@ python multiple_devices_single_process.py
 - **Communicator init**: `nccl.Communicator.init_all()` creates a host-local communicator,
   returning one object per visible device, matching C's `ncclCommInitAll`.
 - **Querying properties**: Each communicator exposes `.rank`, `.nranks`, and `.device` properties.
-- **Cleanup**: `comm.finalize()` + `comm.destroy()` for each communicator.
+- **Cleanup**: `comm.finalize()` for each communicator within a single `nccl.group()`,
+  then `comm.destroy()` for each. With multiple GPUs per thread, `finalize()` is a
+  collective and must be grouped to avoid a hang.

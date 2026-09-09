@@ -279,18 +279,32 @@ static inline ncclResult_t ncclCuMemFreeAddr(void* ptr, struct ncclMemManager* m
   if (ptr == NULL) return ncclSuccess;
   ncclResult_t result = ncclSuccess;
   size_t totalSize = 0;
-  for (int segment = 0; segment < numSegments; segment++) {
-    size_t segmentSize = 0;
-    CUCHECK(cuMemGetAddressRange(NULL, &segmentSize, (CUdeviceptr)ptr + totalSize));
-    CUCHECK(cuMemUnmap((CUdeviceptr)ptr + totalSize, segmentSize));
-    totalSize += segmentSize;
-  }
+  struct ncclMemUntrackInfo info = {};
 
-  // Untrack from memory manager
+  // Untrack the dynamic entry (if any) first, so we can tell whether the memory was already released
+  // by a suspend.  In that case the cuMem release functions below would fail, so we must skip them.
   if (manager != nullptr) {
-    NCCLCHECK(ncclMemUntrack(manager, ptr, totalSize));
+    NCCLCHECKGOTO(ncclMemUntrackDynamic(manager, ptr, &info), result, fail);
   }
 
+  if (info.memType != ncclMemPersist && info.dynMemState == ncclDynMemStateReleased) {
+    // Suspended dynamic memory: physical backing already released.
+    totalSize = info.dynMemSize;
+  } else {
+    // Unmap for each segment for active dynamic memory and persistent memory.
+    for (int segment = 0; segment < numSegments; segment++) {
+      size_t segmentSize = 0;
+      CUCHECKGOTO(cuMemGetAddressRange(NULL, &segmentSize, (CUdeviceptr)ptr + totalSize), result, fail);
+      CUCHECKGOTO(cuMemUnmap((CUdeviceptr)ptr + totalSize, segmentSize), result, fail);
+      totalSize += segmentSize;
+    }
+    // Untrack persistent memory.
+    if (manager != nullptr && info.memType == ncclMemPersist) {
+      NCCLCHECKGOTO(ncclMemUntrackPersist(manager, ptr, totalSize), result, fail);
+    }
+  }
+
+fail:
   CUCHECK(cuMemAddressFree((CUdeviceptr)ptr, totalSize));
   return result;
 }
@@ -335,24 +349,38 @@ static inline ncclResult_t ncclCuMemFree(void* ptr, struct ncclMemManager* manag
   if (ptr == NULL) return ncclSuccess;
   ncclResult_t result = ncclSuccess;
   size_t totalSize = 0;
-  for (int segment = 0; segment < numSegments; segment++) {
-    CUmemGenericAllocationHandle handle;
-    size_t segmentSize = 0;
-    CUCHECK(cuMemRetainAllocationHandle(&handle, (void*)((char*)ptr + totalSize)));
-    CUCHECK(cuMemRelease(handle));
-    CUCHECK(cuMemGetAddressRange(NULL, &segmentSize, (CUdeviceptr)ptr + totalSize));
-    TRACE(NCCL_ALLOC, "CuMem Free Size %zu pointer %p handle 0x%llx segment %d numSegments %d", segmentSize, ptr,
-          handle, segment, numSegments);
-    CUCHECK(cuMemUnmap((CUdeviceptr)ptr + totalSize, segmentSize));
-    CUCHECK(cuMemRelease(handle));
-    totalSize += segmentSize;
-  }
+  struct ncclMemUntrackInfo info = {};
 
-  // Update tracking with total size after processing all segments
+  // Untrack the dynamic entry (if any) first, so we can tell whether the memory was already released
+  // by a suspend.  In that case the cuMem release functions below would fail, so we must skip them.
   if (manager != nullptr) {
-    NCCLCHECK(ncclMemUntrack(manager, ptr, totalSize));
+    NCCLCHECKGOTO(ncclMemUntrackDynamic(manager, ptr, &info), result, fail);
   }
 
+  if (info.memType != ncclMemPersist && info.dynMemState == ncclDynMemStateReleased) {
+    // Suspended dynamic memory: physical backing already released.
+    totalSize = info.dynMemSize;
+  } else {
+    // Unmap and release physical memory handles for each segment for active dynamic memory and persistent memory.
+    for (int segment = 0; segment < numSegments; segment++) {
+      CUmemGenericAllocationHandle handle;
+      size_t segmentSize = 0;
+      CUCHECKGOTO(cuMemRetainAllocationHandle(&handle, (void*)((char*)ptr + totalSize)), result, fail);
+      CUCHECKGOTO(cuMemRelease(handle), result, fail);
+      CUCHECKGOTO(cuMemGetAddressRange(NULL, &segmentSize, (CUdeviceptr)ptr + totalSize), result, fail);
+      TRACE(NCCL_ALLOC, "CuMem Free Size %zu pointer %p handle 0x%llx segment %d numSegments %d", segmentSize, ptr,
+            handle, segment, numSegments);
+      CUCHECKGOTO(cuMemUnmap((CUdeviceptr)ptr + totalSize, segmentSize), result, fail);
+      CUCHECKGOTO(cuMemRelease(handle), result, fail);
+      totalSize += segmentSize;
+    }
+    // Untrack persistent memory.
+    if (manager != nullptr && info.memType == ncclMemPersist) {
+      NCCLCHECKGOTO(ncclMemUntrackPersist(manager, ptr, totalSize), result, fail);
+    }
+  }
+
+fail:
   CUCHECK(cuMemAddressFree((CUdeviceptr)ptr, totalSize));
   return result;
 }

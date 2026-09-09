@@ -120,63 +120,150 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SIMPLE
     using Proto = ProtoSimple<1, 1>;
     const int nranks = ncclShmem.comm.nRanks;
     const int rank = ncclShmem.comm.rank;
+    const int nNodes = ncclShmem.comm.nNodes;
+    const int node = ncclShmem.comm.node;
+    const int localRanks = nranks / nNodes;
     size_t count, channelOffset, channelCount, chunkCount;
     ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), &count, &channelOffset, &channelCount,
                     &chunkCount);
 
     static constexpr int nworkers = NCCL_PAT_NWORKERS;
+    static constexpr int nGatherWorkers = NCCL_MAX_NTHREADS - NCCL_PAT_NWORKERS - WARP_SIZE;
     struct ncclPatShmem* shmem = (struct ncclPatShmem*)ncclScratchForWarp(0);
     uint64_t pollCount = 0;
     __syncthreads(); // Don't start using shared mem until everyone arrives
-    for (int i = tid; i < NCCL_SHMEM_PAT_STEPS; i += nthreads) shmem->patSteps[i].flags = 0;
+    for (int i = tid; i < NCCL_SHMEM_PAT_STEPS; i += nthreads) {
+      shmem->patSteps[i].flags = 0;
+      shmem->patSteps[i].step = -1;
+    }
     if (tid == 0) shmem->localAccSize = 0;
-    if (tid == nworkers) shmem->parallelFactor = 0;
+    if (tid == 0) shmem->parallelFactor = 0;
     __syncthreads();
 
-    if (tid == nworkers) {
-      // Algo computation thread
-      PatAGAlgorithm<T> patAlgo(chunkCount * sizeof(T), NCCL_STEPS, NCCL_PAT_NWORKERS / WARP_SIZE, channelOffset,
-                                channelOffset + channelCount, count, chunkCount, rank, nranks);
-      int parallelFactor = shmem->parallelFactor = patAlgo.getParallelFactor();
-      int step = 0;
-      while (1) {
-        struct ncclPatStep* ps = shmem->patSteps + (step % NCCL_SHMEM_PAT_STEPS);
-        cuda::atomic_ref<int, cuda::thread_scope_block> poll(ps->flags);
-        // Wait for workers to be done with step 'step-NCCL_SHMEM_PAT_STEPS'
-        while (poll.load(cuda::memory_order_acquire) != 0) pollCount++;
-        patAlgo.getNextOp(ps);
-        int last = ps->last;
-        step++;
-        if (last == 2) break;
+    if (work->isOneRPN) {
+      if (tid == nworkers) {
+        // Algo computation thread
+        PatAGAlgorithm<T> patAlgo(chunkCount * sizeof(T), NCCL_STEPS, NCCL_PAT_NWORKERS / WARP_SIZE, channelOffset,
+                                  channelOffset + channelCount, count, chunkCount, rank, nranks);
+        int parallelFactor = shmem->parallelFactor = patAlgo.getParallelFactor();
+        int step = 0;
+        while (1) {
+          struct ncclPatStep* ps = shmem->patSteps + (step % NCCL_SHMEM_PAT_STEPS);
+          cuda::atomic_ref<int, cuda::thread_scope_block> poll(ps->flags);
+          // Wait for workers to be done with step 'step-NCCL_SHMEM_PAT_STEPS'
+          while (poll.load(cuda::memory_order_acquire) != 0) pollCount++;
+          patAlgo.getNextOp(ps);
+          int last = ps->last;
+          step++;
+          if (last == 2) break;
+        }
+      } else if (tid < nworkers) {
+        // Worker threads
+        T* inputBuf = (T*)work->sendbuff;
+        T* outputBuf = (T*)work->recvbuff;
+        int parallelFactor = 0;
+        volatile int* pfPtr = &shmem->parallelFactor;
+        while (parallelFactor == 0) parallelFactor = *pfPtr;
+
+        int groupSize = nworkers / (WARP_SIZE * parallelFactor) * WARP_SIZE;
+        int group = tid / groupSize;
+        int nGroups = nworkers / groupSize;
+        int tidInGroup = tid - group * groupSize;
+        Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0> prims(tidInGroup, groupSize, (int*)shmem->recvDims,
+                                                                 (int*)shmem->sendDims, inputBuf, outputBuf,
+                                                                 work->redOpArg, group, 0, 0, nullptr, nullptr, 0,
+                                                                 primsModePatAg);
+
+        int step = group;
+        while (1) {
+          struct ncclPatStep* ps = shmem->patSteps + (step % NCCL_SHMEM_PAT_STEPS);
+          cuda::atomic_ref<int, cuda::thread_scope_block> poll(ps->flags);
+          while (poll.load(cuda::memory_order_acquire) == 0) pollCount++; // Wait for compute thread
+          int last = ps->last;
+          prims.patCopy(ps, shmem);
+          if (tidInGroup == 0) poll.store(0, cuda::memory_order_release); // Return element to compute thread
+          if (last) break;
+          step += nGroups;
+        }
       }
-    } else if (tid < nworkers) {
-      // Worker threads
-      T* inputBuf = (T*)work->sendbuff;
-      T* outputBuf = (T*)work->recvbuff;
-      int parallelFactor = 0;
-      volatile int* pfPtr = &shmem->parallelFactor;
-      while (parallelFactor == 0) parallelFactor = *pfPtr;
+    } else {
+      if (tid == NCCL_MAX_NTHREADS - 1) {
+        // Algo computation thread
+        size_t patCount = count * localRanks;
+        PatAGAlgorithm<T> patAlgo(chunkCount * sizeof(T), NCCL_STEPS, NCCL_PAT_NWORKERS / WARP_SIZE, channelOffset,
+                                  channelOffset + channelCount, patCount, chunkCount, node, nNodes);
+        shmem->parallelFactor = patAlgo.getParallelFactor();
+        int step = 0;
+        while (1) {
+          struct ncclPatStep* ps = shmem->patSteps + (step % NCCL_SHMEM_PAT_STEPS);
+          cuda::atomic_ref<int, cuda::thread_scope_block> schedulerStep(ps->step);
+          while (schedulerStep.load(cuda::memory_order_acquire) != -1) pollCount++;
+          patAlgo.getNextOp(ps);
+          schedulerStep.store(step, cuda::memory_order_release);
+          int last = ps->last;
+          step++;
+          if (last == 2) break;
+        }
+      } else if (tid < nworkers) {
+        // Worker threads
+        T* inputBuf = (T*)work->sendbuff;
+        T* outputBuf = (T*)work->recvbuff;
+        int parallelFactor = 0;
+        volatile int* pfPtr = &shmem->parallelFactor;
+        while (parallelFactor == 0) parallelFactor = *pfPtr;
 
-      int groupSize = nworkers / (WARP_SIZE * parallelFactor) * WARP_SIZE;
-      int group = tid / groupSize;
-      int nGroups = nworkers / groupSize;
-      int tidInGroup = tid - group * groupSize;
-      // We don't use recvPeers/sendPeers so let's pass shmem structs instead
-      Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0> prims(tidInGroup, groupSize, (int*)shmem->recvDims,
-                                                               (int*)shmem->sendDims, inputBuf, outputBuf,
-                                                               work->redOpArg, group, 0, 0, nullptr, nullptr, 0,
-                                                               primsModePatAg);
+        int groupSize = nworkers / (WARP_SIZE * parallelFactor) * WARP_SIZE;
+        int group = tid / groupSize;
+        int nGroups = nworkers / groupSize;
+        int tidInGroup = tid - group * groupSize;
+        Primitives<T, RedOp, FanSymmetric<1>, 0, Proto, 0> prims(tidInGroup, groupSize, (int*)shmem->recvDims,
+                                                                 (int*)shmem->sendDims, inputBuf, outputBuf,
+                                                                 work->redOpArg, group, 0, 0, nullptr, nullptr, 0,
+                                                                 primsModePatAg);
 
-      int step = group;
-      while (1) {
-        struct ncclPatStep* ps = shmem->patSteps + (step % NCCL_SHMEM_PAT_STEPS);
-        cuda::atomic_ref<int, cuda::thread_scope_block> poll(ps->flags);
-        while (poll.load(cuda::memory_order_acquire) == 0) pollCount++; // Wait for compute thread
-        int last = ps->last;
-        prims.patCopy(ps, shmem);
-        if (tidInGroup == 0) poll.store(0, cuda::memory_order_release); // Return element to compute thread
-        if (last) break;
-        step += nGroups;
+        int step = group;
+        while (1) {
+          struct ncclPatStep* ps = shmem->patSteps + (step % NCCL_SHMEM_PAT_STEPS);
+          cuda::atomic_ref<int, cuda::thread_scope_block> schedulerStep(ps->step);
+          while (schedulerStep.load(cuda::memory_order_acquire) != step) pollCount++;
+          int last = ps->last;
+          prims.template patCopy<true>(ps, shmem);
+          if (last) break;
+          step += nGroups;
+        }
+      } else if (tid < nworkers + nGatherWorkers) {
+        T* inputBuf = (T*)work->sendbuff;
+        T* outputBuf = (T*)work->recvbuff;
+        struct ncclNvls* nvls = &ncclShmem.channel.nvls;
+        int gatherTid = tid - nworkers;
+        Primitives<T, RedOp, FanAsymmetric<NCCL_MAX_NVLS_ARITY, 0>, /*Direct=*/0, Proto, 0> prims(
+          gatherTid, nGatherWorkers, nvls->up, nullptr, inputBuf, outputBuf, work->redOpArg,
+          /*group=*/1, /*connIndexRecv=*/1, /*connIndexSend=*/0);
+
+        int parallelFactor = 0;
+        volatile int* pfPtr = &shmem->parallelFactor;
+        while (parallelFactor == 0) parallelFactor = *pfPtr;
+        int step = 0;
+        while (1) {
+          struct ncclPatStep* ps = shmem->patSteps + (step % NCCL_SHMEM_PAT_STEPS);
+          cuda::atomic_ref<int, cuda::thread_scope_block> schedulerStep(ps->step);
+          while (schedulerStep.load(cuda::memory_order_acquire) != step) pollCount++;
+          int last = ps->last;
+          prims.patGather(ps, shmem, step, parallelFactor, count);
+          int localIdx = step % parallelFactor;
+          if (gatherTid == 0 && localIdx == parallelFactor - 1) {
+            // Release the scheduler slots only after the whole NVLS gather wave
+            // has completed. Steps in one wave share one NVLS FIFO step.
+            int waveStart = step - localIdx;
+            for (int i = 0; i < parallelFactor; i++) {
+              struct ncclPatStep* donePs = shmem->patSteps + ((waveStart + i) % NCCL_SHMEM_PAT_STEPS);
+              cuda::atomic_ref<int, cuda::thread_scope_block> doneStep(donePs->step);
+              doneStep.store(-1, cuda::memory_order_release);
+            }
+          }
+          if (last == 2) break;
+          step++;
+        }
       }
     }
 #endif
@@ -227,7 +314,7 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
           ssize_t railOneEnd = railOneBeg + countPerRank;
           ssize_t railOneOffset = (railAllBeg + railAllOffset) - railOneBeg;
           int delta = min(railAllEnd, railOneEnd) - (railAllBeg + railAllOffset);
-          int rank = ncclShmem.comm.collNetDenseToUserRank[node * nRails + rail];
+          int rank = ncclShmem.comm.denseToUserRank[node * nRails + rail];
           ssize_t userOneBeg = rank * countPerRank + railOneOffset;
           int outIsDst = (inPlace && rank == ncclShmem.comm.rank) || BcastSendNotRecv || work->regUsed ? 0 : 1;
           if (nSrcs != 0 && outIsDst + nDsts != 0) {
@@ -456,7 +543,7 @@ struct RunWorkColl<ncclFuncAllGather, T, RedOp, NCCL_ALGO_COLLNET_DIRECT, NCCL_P
           ssize_t railOneEnd = railOneBeg + countPerRank;
           ssize_t railOneOffset = (railAllBeg + railAllOffset) - railOneBeg;
           int delta = min(railAllEnd, railOneEnd) - (railAllBeg + railAllOffset);
-          int rank = ncclShmem.comm.collNetDenseToUserRank[node * nRails + rail];
+          int rank = ncclShmem.comm.denseToUserRank[node * nRails + rail];
           ssize_t userOneBeg = rank * countPerRank + railOneOffset;
           int outIsDst = (inPlace && rank == ncclShmem.comm.rank) ? 0 : 1;
           if (nSrcs != 0 && outIsDst + nDsts != 0) {

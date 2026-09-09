@@ -191,6 +191,8 @@ being flushed and freed.
 Once all NCCL operations are complete, the communicator will transition to the *ncclSuccess* state. Users
 can query that state with *ncclCommGetAsyncError*.
 
+This function is an intra-node collective call. When a single thread finalizes multiple ranks (multiple GPUs per thread), the calls must be grouped with *ncclGroupStart*/*ncclGroupEnd* to avoid a hang.
+
 ncclCommDestroy
 ---------------
 

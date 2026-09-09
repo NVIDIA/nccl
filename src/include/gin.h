@@ -11,7 +11,6 @@
 #include "nccl_gin.h"
 
 ncclResult_t ncclGinInit(struct ncclComm* comm);
-ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclGinGetDevCount(int ginPluginIndex, int* nPhysDev, int* nVirtDev);
 ncclResult_t ncclGinFinalize(struct ncclComm* comm);
 

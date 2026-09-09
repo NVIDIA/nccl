@@ -42,6 +42,16 @@ ncclResult_t ncclRasAddRanks(struct rasRankInit* ranks, int nranks) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclRunDiagnosticsActive(struct ncclComm* comm) {
+  (void)comm;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclRunDiagnosticsPassive(struct ncclComm* comm) {
+  (void)comm;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclRasCommFini(const struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;
@@ -189,10 +199,11 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                 struct ncclDevComm* devComm) {
+                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion) {
   (void)comm;
   (void)reqs;
   (void)devComm;
+  (void)deviceCodeVersion;
   return ncclSuccess;
 }
 
@@ -203,9 +214,9 @@ ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const*
 }
 
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
-                             void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS],
-                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS], int winFlags, bool multiSegment,
-                             int memType) {
+                             void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS],
+                             ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS],
+                             int winFlags, bool multiSegment, int memType) {
   (void)comm;
   (void)address;
   (void)size;
@@ -217,7 +228,8 @@ ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinDeregister(struct ncclComm* comm, void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS]) {
+ncclResult_t ncclGinDeregister(struct ncclComm* comm,
+                               void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS]) {
   (void)comm;
   (void)ginHostWins;
   return ncclSuccess;
@@ -258,6 +270,14 @@ int64_t ncclParamIbDataDirect(void) {
 }
 
 int64_t ncclParamGinEnable(void) {
+  return 0;
+}
+
+int64_t ncclParamRasDiagnostics() {
+  return 0;
+}
+
+int64_t ncclParamDiagnostics() {
   return 0;
 }
 
@@ -398,16 +418,14 @@ ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t start) {
-  (void)args;
-  (void)s;
+ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t start) {
+  (void)op;
   (void)start;
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop) {
-  (void)args;
-  (void)s;
+ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t stop) {
+  (void)op;
   (void)stop;
   return ncclSuccess;
 }
@@ -435,10 +453,26 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
   return ncclSuccess;
 }
 
-bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
+ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent) {
   (void)comm;
-  (void)op;
-  return false;
+  (void)parent;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerThreadDestroy(struct ncclComm* comm) {
+  (void)comm;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclProfilerPostPlanWork(struct ncclComm* comm, struct ncclKernelPlan* plan) {
+  (void)comm;
+  (void)plan;
+  return ncclSuccess;
+}
+
+void ncclProfilerReserveSymCounters(struct ncclComm* comm, struct ncclKernelPlan* plan) {
+  (void)comm;
+  (void)plan;
 }
 
 /* CE profiler stubs (ncclCeCollArgs / ncclCeBatchOpsParams forward-declared in profiler.h) */
@@ -522,14 +556,14 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
+ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
   (void)comm;
-  (void)parent;
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
+ncclResult_t ncclGinSetDefaultBackend(struct ncclComm* comm, uint64_t globalBitmask) {
   (void)comm;
+  (void)globalBitmask;
   return ncclSuccess;
 }
 

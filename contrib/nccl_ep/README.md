@@ -1,3 +1,7 @@
+> **This project has moved.**
+> `nccl_ep` is now developed in the [NVIDIA/nccl-extensions](https://github.com/NVIDIA/nccl-extensions) repository.
+> Please open all new issues and pull requests there.
+
 # NCCL EP (Expert Parallelism) API
 
 NCCL EP is a high-performance NCCL API extension for efficient Mixture-of-Experts (MoE) communication.
@@ -73,11 +77,9 @@ ncclEpComplete(handle, config, stream);  // LL mode only
 
 ### Python API
 
-Install nccl4py, which includes the NCCL EP Python bindings as `nccl.ep`. Only CUDA 13 is supported as of now.
-
-```bash
-$ pip install nccl4py[cu13]
-```
+The NCCL EP Python bindings are distributed separately from nccl4py. Both
+distributions contribute packages to the implicit `nccl` namespace, so they
+can be installed together without either distribution owning `nccl/__init__.py`.
 
 Import and use NCCL EP in a python application
 ```python
@@ -277,6 +279,28 @@ For debugging, the following variables can be set
 export NCCL_DEBUG=INFO        # Enable NCCL debug output
 export NCCL_DEBUG_SUBSYS=ALL  # All subsystems
 ```
+
+### High-Throughput tuning
+
+```bash
+# Override the HT dispatch/combine tokens-per-chunk. HT mode only; resolved once
+# per group at ncclEpCreateGroup. Must be a multiple of 32 (non-conforming values
+# are rounded up with a warning). When unset, the chunk size defaults to:
+#   - RDMA / multi-node configs:  64
+#   - LSA-only / single-node:     NUM_OF_TOKENS_PER_GROUP (4) * resolved SM count,
+#                                 rounded up to a multiple of 32
+export NCCL_EP_TOKENS_PER_CHUNK=128
+
+# Dump every resolved NCCL EP environment variable (name + value, or "unset")
+# at group creation, including NCCL_EP_TOKENS_PER_CHUNK.
+export NCCL_EP_ENV_VERBOSE=1
+```
+
+By default EP guards its internal communication buffers so that neighboring
+dispatch/combine calls cannot corrupt each other's data; this is safe and needs
+no configuration. Advanced callers that can already guarantee consecutive EP
+operations will not race on these buffers may disable the guard to reclaim its
+overhead with `export NCCL_EP_DISABLE_GUARD=1`.
 
 
 # Core Concepts

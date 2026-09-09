@@ -25,6 +25,12 @@
 #include "rma/rma.h"
 #include "argcheck.h"
 #include "mem_manager.h"
+#include "tuning.h"
+#include "enqueue/raw_task.h"
+#include "enqueue/task_pretuning.h"
+#include "enqueue/task_classify.h"
+#include "enqueue/task_posttuning.h"
+#include "enqueue/mgmt_task_enq.h"
 
 #if defined(NCCL_OS_WINDOWS)
 #include "gin/gin_host_win_stub.h"
@@ -232,6 +238,24 @@ struct ncclTaskColl {
   void* collApiEventHandle;
   void* eventHandle;
   uint8_t nChannels;
+  // Inclusive channel range this task ran on; mirrors devWork->channelLo/Hi.
+  uint8_t channelLo;
+  uint8_t channelHi;
+
+  // Per-collective config related members
+  bool aggIsolate; // Whether task needs to be isolated from aggregation because of config options.
+                   // Config options related to resource and algorithm usually need the isolation.
+  int minCTAs;
+  int maxCTAs;
+  int nvlsCTAs;
+  int cgaClusterSize;
+  // Resolved algorithm selection, captured at append time for the same reason.
+  uint64_t algMask;    // set bit == algorithm allowed by the filter; 0 == automatic (no filter)
+  int forceAlgSelection; // 1 (default) == error on unsatisfiable selection; 0 == fall back to automatic
+  int CTAPolicy;  // resolved effective CTAPolicy for this task
+  // Per-call profiler annotation (0 == untagged), resolved at task-append time and
+  // delivered verbatim to profiler plugins.
+  uint64_t profilerTag;
 };
 
 struct ncclTaskBcast {
@@ -253,6 +277,7 @@ struct ncclTaskBcast {
   void* collApiEventHandle;
   void* eventHandle;
   uint8_t nChannels;
+  uint64_t profilerTag; // Per-call profiler annotation (0 == untagged)
 };
 
 struct ncclTaskP2p {
@@ -272,6 +297,12 @@ struct ncclTaskP2p {
   void* p2pApiEventHandle;
   void* eventHandle;
   uint8_t nChannels;
+  uint64_t profilerTag; // Per-call profiler annotation (0 == untagged)
+  // Per-direction channels used by this task; read by the profiler to emit and
+  // advertise KernelCh per direction (StartTaskEvents / PostPlanWork).
+  uint64_t channelMask;
+  // Shared by both tasks of an addP2pToPlan() pair; 0 = unassigned.
+  uint16_t p2pPairId;
 };
 
 struct ncclTaskRma {
@@ -292,8 +323,12 @@ struct ncclTaskRma {
 
   // Signal operations
   ncclSignalMode_t signalMode;
+  int signalIdx;
+
+  // WaitSignal operations
   int* peers;
   int* nsignals;
+  int* signalIdxs;
   int npeers;
 
   // Profiler plugin
@@ -330,7 +365,12 @@ struct ncclKernelPlan {
   size_t kernelArgsSize;
   uint64_t channelMask; // bitset of which channels are present
   bool hasProxyOps; // does any channel have a non-empty proxyOpQueue
+  // Any task with ncclProfileKernelCh; gates the captured host callback.
+  bool hasProfilerOps;
+  // Source of ncclTaskP2p::p2pPairId; incremented per addP2pToPlan() call.
+  uint16_t p2pPairCounter;
   int threadPerBlock;
+  int cgaClusterSize;  // per-launch CGA cluster size; defaults to comm->config.cgaClusterSize
 
   int collOpCount; // Number of collectives in this plan.
   int nWorkBatches; // Number of work batches.
@@ -506,7 +546,9 @@ struct ncclKernelPlanner {
 typedef enum ncclGroupTaskType {
   ncclGroupTaskTypeCollective = 0,
   ncclGroupTaskTypeSymRegister = 1,
-  ncclGroupTaskTypeNum = 2,
+  ncclGroupTaskTypeRawTask = 2,
+  ncclGroupTaskTypeMgmtTask = 3,
+  ncclGroupTaskTypeNum = 4,
 } ncclGroupTaskType_t;
 
 struct ncclCommSymTeams;
@@ -538,14 +580,13 @@ struct ncclComm {
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next> legacyRegCleanupQueue;
   bool peerInfoValid;
   int minNetCount; // Minimum number of network devices local to a rank
+  float minLocalNetBw; // Minimum total network bandwidth local to a GPU
   float minNetBw; // Minimum bw of any network device local to a rank
 
   ncclNet_t* ncclNet;
   void* netContext;
-  void* ginContext;
   void* rmaContext;
   int netPluginIndex;
-  int ginPluginIndex;
   int rmaPluginIndex;
   int ncclNetVer;
   ncclNetDeviceType netDeviceType;
@@ -595,6 +636,7 @@ struct ncclComm {
   int MNNVL; // true when MNNVL is available
   struct cliqueInfo clique; // Our MNNVL clique information
   int cliqueRank; // Our rank within the MNNVL clique
+  int contiguousRanksPerHost; // Number contiguous ranks per host. INT_MAX if non-uniform.
 
   // NVL Domain info
   ncclNvlDomainInfo_v5_t nvlDomainInfo;
@@ -636,11 +678,7 @@ struct ncclComm {
   int nvlDomainSize;
 
   // Tuner values
-  ncclTunerConstants_t tunerConstants;
-  ssize_t threadThresholds[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float latencies[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float bandwidths[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  int maxThreads[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+  struct ncclTuningContext_t tuningContext;
 
   /* This attribute can indicate the states of communicators and return code of
    * asynchronous NCCL operations. */
@@ -688,8 +726,8 @@ struct ncclComm {
   int* collNetHeads;
   int collNetHeadsNum;
   int collNetChainSupport;
-  int* collNetDenseToUserRank;
-  int* collNetUserToDenseRank;
+  // Node-major rank order with transport heads first on each node.
+  int* denseToUserRank;
   /* sharable collNet proxy progress resource. */
   struct ncclCollNetSharedRes* collNetSharedRes;
 
@@ -704,6 +742,7 @@ struct ncclComm {
   struct ncclMemoryPool memPool_ncclTaskColl;
   struct ncclMemoryPool memPool_ncclTaskP2p;
   struct ncclMemoryPool memPool_ncclTaskRma;
+  struct ncclMemoryPool memPool_ncclRawTask;
   struct ncclMemoryPool memPool_ncclProxyOp;
   struct ncclMemoryPool memPool_ncclKernelPlan;
 
@@ -719,6 +758,12 @@ struct ncclComm {
   }* p2pSchedule;
 
   struct ncclKernelPlanner planner;
+  struct ncclRawTaskQueue rawTaskQueue;
+  struct ncclClassifiedTaskQueues classifiedTaskQueues;
+  // Queue of management tasks (comm init/destroy/finalize/etc.) enqueued for this
+  // comm during a ncclGroup[Start|End]() scope.
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> mgmtTaskQueue;
+  bool simulationMode;
   void* ringTasks; // An array of nRanks pointers used in ring sorting rooted collectives (bcast)
 
   cudaMemPool_t memPool;
@@ -757,7 +802,7 @@ struct ncclComm {
   // Profiler plugin
   void* profilerContext;
   uint64_t seqNumber[NCCL_NUM_FUNCTIONS];
-  struct ncclProfilerProxy profiler;
+  struct ncclProfilerCommState profiler;
 
   // RMA state
   struct ncclRmaState rmaState;
@@ -777,6 +822,7 @@ struct ncclComm {
   bool isAllCudaP2p; // Raw CUDA capability (for local ranks only).
   bool isAllDirectNvlink; // All GPUs are directly connected to each other through NVLink.
   int symmetricSupport;
+  int gpuCftSupport;
   bool useNetPXN;
   bool useGdr;
   bool hasMloPart; // if mlopart is used
@@ -907,5 +953,8 @@ static inline ncclRedOp_t ncclUserRedOpMangle(ncclComm* comm, ncclRedOp_t op) {
 
 ncclResult_t ncclCommEnsureReady(ncclComm_t comm);
 ncclResult_t ncclCommSetAsyncError(ncclComm_t comm, ncclResult_t nextState);
+
+// Process-wide NCCL_CTA_POLICY env override, or NCCL_CONFIG_UNDEF_INT when unset/invalid.
+int ncclGetEnvCtaPolicy();
 
 #endif

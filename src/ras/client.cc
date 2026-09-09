@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <climits>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +15,9 @@
 
 #include "os.h"
 #include "nccl.h"
+#ifndef NCCL_RAS_CLIENT
 #define NCCL_RAS_CLIENT // Only pull client-specific definitions from the header file below.
+#endif
 #include "ras_internal.h"
 
 #define STR2(v) #v
@@ -23,11 +26,23 @@
 // Local timeout increment compared to the '-t' argument, in seconds.
 #define TIMEOUT_INCREMENT 1
 
+static void timevalAddSeconds(struct timeval* tv, double seconds) {
+  if (seconds <= 0.0) return;
+  const int64_t usec = (int64_t)(seconds * 1e6);
+  tv->tv_usec += (suseconds_t)(usec % 1000000);
+  tv->tv_sec += (time_t)(usec / 1000000);
+  if (tv->tv_usec >= 1000000) {
+    tv->tv_sec += tv->tv_usec / 1000000;
+    tv->tv_usec %= 1000000;
+  }
+}
+
 static const char* hostName = "localhost";
 static const char* port = STR(NCCL_RAS_CLIENT_PORT);
-static int timeout = -1;
+static double timeout = -1.0;
 static bool verbose = false;
 static bool monitorMode = false;
+static bool diagnosticsMode = false;
 static const char* format = nullptr;
 static const char* events = nullptr;
 static int sock = -1;
@@ -38,6 +53,7 @@ static void printUsage(const char* argv0) {
           "Usage: %s [OPTION]...\n"
           "Query the state of a running NCCL job.\n"
           "\nOptions:\n"
+          "  -D, --diagnostics   Run NCCL RAS diagnostics\n"
           "  -f, --format=FMT    Output format: text or json (text by default)\n"
           "  -h, --host=HOST     Host name or IP address of the RAS client socket of the\n"
           "                      NCCL job to connect to (localhost by default)\n"
@@ -48,10 +64,18 @@ static void printUsage(const char* argv0) {
           "                      (" STR(NCCL_RAS_CLIENT_PORT) " by default)\n"
           "  -t, --timeout=SECS  Maximum time for the local NCCL process to wait for\n"
           "                      responses from other NCCL processes\n"
-          "                      (" STR(RAS_COLLECTIVE_LEG_TIMEOUT_SEC) " secs by default; 0 disables the timeout)\n"
+          "                      (" STR(RAS_COLLECTIVE_LEG_TIMEOUT_SEC) " secs by default, scaled by\n"
+          "                      NCCL_RAS_TIMEOUT_FACTOR; 0 disables the timeout)\n"
           "  -v, --verbose       Increase the verbosity level of the RAS output\n"
           "      --help          Print this help and exit\n"
-          "      --version       Print the version number and exit\n", argv0);
+          "      --version       Print the version number and exit\n"
+          "\nCommands (given as positional arguments; sent to the NCCL job):\n"
+          "  CONTROL PROFILER_MASK VALUE\n"
+          "                      Enable/disable NCCL profiler events job-wide, out-of-band.\n"
+          "                      VALUE: none | all | 0xHEX | DECIMAL | name[,name...]\n"
+          "                      (names: group,coll,p2p,proxyop,proxystep,proxyctrl,kernelch,\n"
+          "                       netplugin,groupapi,collapi,p2papi,kernellaunch,cecoll,cesync,cebatch)\n"
+          "\nWith no command, the job status is printed (see --monitor for live events).\n", argv0);
   // clang-format on
 }
 
@@ -60,20 +84,24 @@ static void parseArgs(int argc, char** argv) {
   int optIdx = 0;
   // clang-format off
   struct option longOpts[] = {
-    {"format",  required_argument, NULL, 'f'},
-    {"help",    no_argument,       NULL, 'e'},
-    {"host",    required_argument, NULL, 'h'},
-    {"monitor", optional_argument, NULL, 'm'},
-    {"port",    required_argument, NULL, 'p'},
-    {"timeout", required_argument, NULL, 't'},
-    {"verbose", no_argument,       NULL, 'v'},
-    {"version", no_argument,       NULL, 'r'},
+    {"diagnostics", no_argument,       NULL, 'D'},
+    {"format",      required_argument, NULL, 'f'},
+    {"help",        no_argument,       NULL, 'e'},
+    {"host",        required_argument, NULL, 'h'},
+    {"monitor",     optional_argument, NULL, 'm'},
+    {"port",        required_argument, NULL, 'p'},
+    {"timeout",     required_argument, NULL, 't'},
+    {"verbose",     no_argument,       NULL, 'v'},
+    {"version",     no_argument,       NULL, 'r'},
     {0}
   };
   // clang-format on
 
-  while ((c = getopt_long(argc, argv, "f:h:m::p:t:v", longOpts, &optIdx)) != -1) {
+  while ((c = getopt_long(argc, argv, "Df:h:m::p:t:v", longOpts, &optIdx)) != -1) {
     switch (c) {
+    case 'D':
+      diagnosticsMode = true;
+      break;
     case 'f':
       format = optarg;
       if (strcasecmp(format, "text") != 0 && strcasecmp(format, "json") != 0) {
@@ -96,8 +124,9 @@ static void parseArgs(int argc, char** argv) {
     case 't':
       {
         char* endPtr = nullptr;
-        timeout = strtol(optarg, &endPtr, 10);
-        if (timeout < 0 || !endPtr || *endPtr != '\0') {
+        errno = 0;
+        timeout = strtod(optarg, &endPtr);
+        if (errno != 0 || !endPtr || *endPtr != '\0' || !std::isfinite(timeout) || timeout < 0.0) {
           fprintf(stderr, "Invalid timeout: %s\n", optarg);
           exit(1);
         }
@@ -162,7 +191,8 @@ static int connectToNCCL() {
   int ret;
   char msgBuf[1024];
   int bytes;
-  struct timeval tv = {TIMEOUT_INCREMENT, 0};
+  struct timeval tv = {0, 0};
+  timevalAddSeconds(&tv, rasTimeoutFactorSec(TIMEOUT_INCREMENT));
 
 retry:
   hints.ai_family = AF_UNSPEC;
@@ -180,7 +210,7 @@ retry:
       continue;
     }
     // Initially start with a small, 1-sec timeout to quickly eliminate non-responsive processes...
-    if (timeout) {
+    if (timeout != 0.0) {
 #if defined(NCCL_OS_LINUX)
       if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0 ||
           setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
@@ -251,8 +281,8 @@ retry:
             msgBuf + strlen("SERVER PROTOCOL "), NCCL_RAS_CLIENT_PROTOCOL);
   }
 
-  if (timeout >= 0) {
-    snprintf(msgBuf, sizeof(msgBuf), "TIMEOUT %d\n", timeout);
+  if (timeout >= 0.0) {
+    snprintf(msgBuf, sizeof(msgBuf), "TIMEOUT %g\n", timeout);
     if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         goto timeout;
@@ -277,9 +307,10 @@ retry:
       goto fail;
     }
   }
-  if (timeout) {
+  if (timeout != 0.0) {
     // Increase the socket timeout to accommodate NCCL timeout.
-    tv.tv_sec += (timeout > 0 ? timeout : RAS_COLLECTIVE_LEG_TIMEOUT_SEC) + RAS_COLLECTIVE_EXTRA_TIMEOUT_SEC;
+    const double legTimeout = (timeout > 0.0 ? timeout : rasTimeoutFactorSec(RAS_COLLECTIVE_LEG_TIMEOUT_SEC));
+    timevalAddSeconds(&tv, legTimeout + rasTimeoutFactorSec(RAS_COLLECTIVE_EXTRA_TIMEOUT_SEC));
 #if defined(NCCL_OS_LINUX)
     if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
 #elif defined(NCCL_OS_WINDOWS)
@@ -333,19 +364,12 @@ static int setOutputFormat() {
   return 0;
 }
 
-static int getNCCLStatus() {
+static int streamRasResponseToStdout() {
   char msgBuf[4096];
-  int bytes;
+  ssize_t bytes;
 
-  // Send the status command.
-  snprintf(msgBuf, sizeof(msgBuf), "%sSTATUS\n", (verbose ? "VERBOSE " : ""));
-  if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) fprintf(stderr, "Connection timed out\n");
-    else perror("write to socket");
-    return 1;
-  }
   for (;;) {
-    bytes = rasRead(sock, msgBuf, sizeof(msgBuf), /*untileNewLine*/ false);
+    bytes = rasRead(sock, msgBuf, sizeof(msgBuf), /*untilNewline*/ false);
     if (bytes < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) fprintf(stderr, "Connection timed out\n");
       else perror("read socket");
@@ -355,7 +379,7 @@ static int getNCCLStatus() {
       // EOF
       break;
     }
-    if (fwrite(msgBuf, 1, bytes, stdout) != bytes) {
+    if (fwrite(msgBuf, 1, bytes, stdout) != (size_t)bytes) {
       fprintf(stderr, "fwrite to stdout failed!\n");
       return 1;
     }
@@ -365,6 +389,31 @@ static int getNCCLStatus() {
     }
   }
   return 0;
+}
+
+static int getNCCLStatus() {
+  char msgBuf[4096];
+
+  // Send the status command.
+  snprintf(msgBuf, sizeof(msgBuf), "%sSTATUS\n", (verbose ? "VERBOSE " : ""));
+  if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) fprintf(stderr, "Connection timed out\n");
+    else perror("write to socket");
+    return 1;
+  }
+  return streamRasResponseToStdout();
+}
+
+static int runNCCLDiagnostics() {
+  char msgBuf[4096];
+
+  snprintf(msgBuf, sizeof(msgBuf), "DIAGNOSTICS\n");
+  if (socketWrite(sock, msgBuf, strlen(msgBuf)) != strlen(msgBuf)) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) fprintf(stderr, "Connection timed out\n");
+    else perror("write to socket");
+    return 1;
+  }
+  return streamRasResponseToStdout();
 }
 
 static int monitorNCCLEvents() {
@@ -402,7 +451,12 @@ static int monitorNCCLEvents() {
   }
 
   // Disable receive timeout for monitor mode (wait indefinitely for notifications).
+#if defined(NCCL_OS_LINUX)
   if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
+#elif defined(NCCL_OS_WINDOWS)
+  DWORD timeout_ms = tv.tv_sec * 1000 + tv.tv_usec / 1000;
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms)) != 0) {
+#endif
     perror("Failed to disable socket timeout for monitor mode");
     return 1;
   }
@@ -455,6 +509,39 @@ static int monitorNCCLEvents() {
   return 0;
 }
 
+// Sends the positional args as one command line and prints the reply; returns non-zero on ERROR or failure.
+static int sendCommand(int argc, char** argv) {
+  char msgBuf[4096];
+  size_t len = 0;
+  for (int i = optind; i < argc; i++) {
+    int w = snprintf(msgBuf + len, sizeof(msgBuf) - len, "%s%s", (i > optind ? " " : ""), argv[i]);
+    if (w < 0 || len + (size_t)w >= sizeof(msgBuf) - 1) {
+      fprintf(stderr, "Command too long\n");
+      return 1;
+    }
+    len += (size_t)w;
+  }
+  msgBuf[len++] = '\n';
+  msgBuf[len] = '\0';
+  if (socketWrite(sock, msgBuf, len) != (ssize_t)len) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) fprintf(stderr, "Connection timed out\n");
+    else perror("write to socket");
+    return 1;
+  }
+  ssize_t bytes = rasRead(sock, msgBuf, sizeof(msgBuf));
+  if (bytes < 0) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK) fprintf(stderr, "Connection timed out\n");
+    else perror("read socket");
+    return 1;
+  }
+  if (bytes == 0) {
+    fprintf(stderr, "NCCL unexpectedly closed the connection\n");
+    return 1;
+  }
+  fputs(msgBuf, stdout);
+  return (strncasecmp(msgBuf, "ERROR", 5) == 0) ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
   parseArgs(argc, argv);
 
@@ -467,8 +554,13 @@ int main(int argc, char** argv) {
   }
 
   int result;
-  if (monitorMode) {
+  if (optind < argc) {
+    // Positional command (e.g. CONTROL PROFILER_MASK <value>): send verbatim.
+    result = sendCommand(argc, argv);
+  } else if (monitorMode) {
     result = monitorNCCLEvents();
+  } else if (diagnosticsMode) {
+    result = runNCCLDiagnostics();
   } else {
     result = getNCCLStatus();
   }

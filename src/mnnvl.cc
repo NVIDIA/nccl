@@ -16,14 +16,9 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
   if (!ncclCuMemEnable()) return ncclSuccess;
 
   // MNNVL also requires FABRIC handle support
-  int cudaDev;
-  int flag = 0;
-  CUdevice currentDev;
-  CUDACHECK(cudaGetDevice(&cudaDev));
-  CUCHECK(cuDeviceGet(&currentDev, cudaDev));
-  // Ignore error if CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED is not supported
-  (void)CUPFN(cuDeviceGetAttribute(&flag, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED, currentDev));
-  if (!flag) return ncclSuccess;
+  for (int i = 0; i < comm->nRanks; i++) {
+    if (!comm->peerInfo[i].fabricHandleSupport) return ncclSuccess;
+  }
   // Check that all ranks have initialized the fabric fully
   for (int i = 0; i < comm->nRanks; i++) {
     if (comm->peerInfo[i].fabricInfo.state != NVML_GPU_FABRIC_STATE_COMPLETED) return ncclSuccess;

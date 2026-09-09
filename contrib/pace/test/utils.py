@@ -1,0 +1,348 @@
+import inspect
+import os
+import sys
+import torch
+import torch.distributed as dist
+from typing import Optional, Tuple, Union, Dict
+import numpy as np
+import json
+from pathlib import Path
+import tempfile
+
+def init_dist(local_rank: int, num_local_ranks: int, backend : str = 'nccl'):
+    # NOTES: you may rewrite this function with your own cluster settings
+    ip = os.getenv('MASTER_ADDR', '127.0.0.1')
+    port = int(os.getenv('MASTER_PORT', '8361'))
+    num_nodes = int(os.getenv('WORLD_SIZE', 1))
+    node_rank = int(os.getenv('RANK', 0))
+
+    sig = inspect.signature(dist.init_process_group)
+    params = {
+        'backend': backend,
+        'init_method': f'tcp://{ip}:{port}',
+        'world_size': num_nodes * num_local_ranks,
+        'rank': node_rank * num_local_ranks + local_rank,
+    }
+    # `device_id` is OFF by default: on some torch builds (e.g. 2.7.0a0) it
+    # breaks dist.broadcast_object_list ("EOFError: Ran out of input") and can
+    # leave a pending GPU op that makes torch.cuda.synchronize() hang during
+    # PACE's connect. Set PACE_USE_DEVICE_ID=1 to opt back in on torch builds
+    # where it is known-good.
+    if os.getenv('PACE_USE_DEVICE_ID', '0') == '1' and 'device_id' in sig.parameters:
+        # noinspection PyTypeChecker
+        params['device_id'] = torch.device(f'cuda:{local_rank}')
+    dist.init_process_group(**params)
+    torch.set_default_dtype(torch.bfloat16)
+    torch.set_default_device('cuda')
+    torch.cuda.set_device(local_rank)
+
+    return dist.get_rank(), dist.get_world_size(), dist.new_group(list(range(num_local_ranks * num_nodes)))
+
+def bench(fn, num_warmups: int = 20, num_tests: int = 50, post_fn=None):
+    # Flush L2 cache with 256 MB data
+    torch.cuda.synchronize()
+    cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+
+    # Warmup
+    for _ in range(num_warmups):
+        fn()
+
+    # Flush L2
+    cache.zero_()
+
+    # Testing
+    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_tests)]
+    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_tests)]
+    for i in range(num_tests):
+        # Record
+        start_events[i].record()
+        fn()
+        end_events[i].record()
+        if post_fn is not None:
+            post_fn()
+    torch.cuda.synchronize()
+
+    times = np.array([s.elapsed_time(e) / 1e3 for s, e in zip(start_events, end_events)])[1:]
+    return np.average(times), np.min(times), np.max(times)
+
+
+class empty_suppress:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+
+class suppress_stdout_stderr:
+    def __enter__(self):
+        self.outnull_file = open(os.devnull, 'w')
+        self.errnull_file = open(os.devnull, 'w')
+
+        self.old_stdout_fileno_undup = sys.stdout.fileno()
+        self.old_stderr_fileno_undup = sys.stderr.fileno()
+
+        self.old_stdout_fileno = os.dup(sys.stdout.fileno())
+        self.old_stderr_fileno = os.dup(sys.stderr.fileno())
+
+        self.old_stdout = sys.stdout
+        self.old_stderr = sys.stderr
+
+        os.dup2(self.outnull_file.fileno(), self.old_stdout_fileno_undup)
+        os.dup2(self.errnull_file.fileno(), self.old_stderr_fileno_undup)
+
+        sys.stdout = self.outnull_file
+        sys.stderr = self.errnull_file
+        return self
+
+    def __exit__(self, *_):
+        sys.stdout = self.old_stdout
+        sys.stderr = self.old_stderr
+
+        os.dup2(self.old_stdout_fileno, self.old_stdout_fileno_undup)
+        os.dup2(self.old_stderr_fileno, self.old_stderr_fileno_undup)
+
+        os.close(self.old_stdout_fileno)
+        os.close(self.old_stderr_fileno)
+
+        self.outnull_file.close()
+        self.errnull_file.close()
+
+def bench_kineto(fn, kernel_names: Union[str, tuple], num_tests: int = 30, suppress_kineto_output: bool = False,
+                 trace_path: Optional[str] = None, barrier_comm_profiling: bool = False,
+                 num_kernels_per_period: Union [int, Dict [str, int]] = 1):
+    # Profile
+    suppress = suppress_stdout_stderr if suppress_kineto_output else empty_suppress
+    with suppress():
+        schedule = torch.profiler.schedule(wait=1, warmup=0, active=1, repeat=1)
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], schedule=schedule) as prof:
+            for i in range(2):
+                # NOTES: use a large kernel and a barrier to eliminate the unbalanced CPU launch overhead
+                if barrier_comm_profiling:
+                    lhs = torch.randn((8192, 8192), dtype=torch.float, device='cuda')
+                    rhs = torch.randn((8192, 8192), dtype=torch.float, device='cuda')
+                    lhs @ rhs
+                    dist.all_reduce(torch.ones(1, dtype=torch.float, device='cuda'))
+                for _ in range(num_tests):
+                    fn()
+                torch.cuda.synchronize()
+                prof.step()
+
+    # Parse the profiling table
+    assert isinstance(kernel_names, str) or isinstance(kernel_names, tuple)
+    is_tuple = isinstance(kernel_names, tuple)
+    prof_lines = prof.key_averages().table(sort_by='cuda_time_total', max_name_column_width=100).split('\n')
+    kernel_names = (kernel_names, ) if isinstance(kernel_names, str) else kernel_names
+    assert all([isinstance(name, str) for name in kernel_names])
+    # Normalize num_kernels_per_period to dict early for validation
+    num_kernels_per_period = {name : num_kernels_per_period for name in kernel_names} if isinstance(num_kernels_per_period, int) else num_kernels_per_period
+    # Save chrome traces
+    if trace_path is not None:
+        prof.export_chrome_trace(trace_path)
+        profile_data = json.loads(Path(trace_path).read_text())
+    for name in kernel_names:
+        match_count = sum([name in line for line in prof_lines])
+        # When num_kernels_per_period > 1, multiple profiling table entries are
+        # expected (e.g. aligned + non-aligned RS kernel template instantiations)
+        if match_count < 1 or (match_count != 1 and num_kernels_per_period[name] <= 1):
+            print(f'Errors of the kernel {name} in the profiling table, {match_count}\n{'\n'.join(prof_lines)}')
+            return [None for _ in kernel_names]
+
+
+    # Return average kernel durations (sum across matching entries when multiple)
+    units = {'ms': 1e3, 'us': 1e6, 's': 1.0}
+    kernel_durations = {name : None for name in kernel_names}
+    for name in kernel_names:
+        total_dur = 0.0
+        found = False
+        for line in prof_lines:
+            if name in line:
+                time_str = line.split()[-2]
+                for unit, scale in units.items():
+                    if unit in time_str:
+                        total_dur += float(time_str.replace(unit, '')) / scale
+                        found = True
+                        break
+                if num_kernels_per_period[name] <= 1:
+                    break  # single match expected, stop at first
+        if found:
+            kernel_durations[name] = total_dur
+
+    # Expand the kernels by periods
+    if max(num_kernels_per_period.values()) > 1:
+        if trace_path is None:
+            with tempfile.NamedTemporaryFile(suffix='.json') as tmp:
+                prof.export_chrome_trace(tmp.name)
+                profile_data = json.loads(Path(tmp.name).read_text())
+
+        for i, kernel_name in enumerate(kernel_names):
+            events = [event for event in profile_data['traceEvents'] if f'{kernel_name}' in event['name']]
+            events = sorted(events, key=lambda event: event['ts'])
+            durations = [event['dur'] / 1e6 for event in events]
+            if len(durations) % num_kernels_per_period[kernel_name] != 0:
+                print(f'Error: {kernel_name} durations len {len(durations)} not divided by {num_kernels_per_period[kernel_name]}', flush=True)
+            num_kernel_patterns = len(durations) // num_kernels_per_period[kernel_name]
+            kernel_durations[kernel_name] = [sum(durations[j::num_kernels_per_period[kernel_name]]) / num_kernel_patterns
+                               for j in range(num_kernels_per_period[kernel_name])]
+
+    # Return execution durations
+    return [kernel_durations[name] for name in kernel_names] if is_tuple else kernel_durations[kernel_names[0]]
+
+
+def per_token_cast_to_fp8(x: torch.Tensor):
+    assert x.dim() == 2
+    m, n = x.shape
+    aligned_n = align_up(n, 128)
+    x_padded = torch.nn.functional.pad(x, (0, aligned_n - n), mode='constant', value=0)
+    x_padded_view = x_padded.view(m, -1, 128)
+    x_amax = x_padded_view.abs().float().amax(dim=2).view(m, -1).clamp(1e-4)
+    return (x_padded_view * (448.0 / x_amax.unsqueeze(2))).to(torch.float8_e4m3fn).view(m, aligned_n)[:, :n].contiguous(), (x_amax / 448.0).view(m, -1)
+
+
+def per_token_cast_back(x_fp8: torch.Tensor, x_scales: torch.Tensor):
+    if x_fp8.numel() == 0:
+        return x_fp8.to(torch.bfloat16)
+
+    assert x_fp8.dim() == 2
+    m, n = x_fp8.shape
+    aligned_n = align_up(n, 128)
+    x_fp8_padded = torch.nn.functional.pad(x_fp8, (0, aligned_n - n), mode='constant', value=0)
+    if x_scales.dtype == torch.int:
+        x_scales = x_scales.view(dtype=torch.uint8).to(torch.int) << 23
+        x_scales = x_scales.view(dtype=torch.float)
+    x_fp32_padded = x_fp8_padded.to(torch.float32).view(x_fp8.size(0), -1, 128)
+    x_scales = x_scales.view(x_fp8.size(0), -1, 1)
+    return (x_fp32_padded * x_scales).view(x_fp8_padded.shape).to(torch.bfloat16)[:,:n].contiguous()
+
+
+def quant_per_token_cast_back(qopt, x_fp8: torch.Tensor, x_scales: torch.Tensor):
+    """Dequantize MXFP8 (QUANT_FP8_E8M0S) data back to bf16.
+
+    MXFP8 format: 32 e4m3 values share 1 e8m0fnu scale.
+    Dequant: bf16_value = fp8_value * 2^(e8m0_raw - 127), with e8m0_raw==0 -> scale=1.
+    """
+    if x_fp8.numel() == 0:
+        return x_fp8.to(torch.bfloat16)
+
+    assert x_fp8.dim() == 2
+    m, n = x_fp8.shape
+
+    # View fp8 data as float8_e4m3fn
+    x_fp8_e4m3 = x_fp8.view(torch.float8_e4m3fn)
+
+    # Convert e8m0fnu scales to float32: scale = 2^(e8m0_raw - 127)
+    # e8m0fnu is uint8, each byte is a power-of-2 exponent
+    x_scales_u8 = x_scales.view(torch.uint8).to(torch.int32)
+    scale_float = torch.pow(2.0, (x_scales_u8 - 127).float())
+    scale_float = torch.where(x_scales_u8 == 0, torch.ones_like(scale_float), scale_float)
+
+    # Reshape to apply per-32-element block scales
+    # fp8: [m, n] -> [m, n//32, 32]
+    # scales: [m, n//32] -> [m, n//32, 1]
+    x_fp8_blocks = x_fp8_e4m3.reshape(m, -1, 32)
+    scale_float = scale_float.reshape(m, -1, 1)
+
+    # Dequantize: fp8 * 2^(e8m0 - 127)
+    x_fp32 = x_fp8_blocks.float() * scale_float
+    return x_fp32.reshape(m, n).to(torch.bfloat16).contiguous()
+
+def quantize_bfloat16_to_nvfp4(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    assert x.dim() == 2 and x.size(1) % 16 == 0
+    m, n = x.shape
+    x_global_amax = x.abs().float().amax(dim=1).view(m, -1).clamp(1e-4)
+    sf_scales = (6.0 * 448.0) / x_global_amax
+    x_global_quantized = (x * sf_scales).view(m, n)
+    x_view = x_global_quantized.view(m, -1, 16)
+    x_amax = x_view.abs().float().amax(dim=2).view(m, -1).clamp(1e-4)
+    x_quantized = (x_view * (6.0 / x_amax.unsqueeze(2))).view(m, n)
+    x_nvfp4_packed = pack_8xnvfp4_to_int32(x_quantized)
+    x_scales = (x_amax / 6.0).view(m, -1)
+    return x_nvfp4_packed, x_scales.to(torch.float8_e4m3fn).view(dtype=torch.int32), sf_scales
+
+def pack_8xnvfp4_to_int32(x: torch.Tensor) -> torch.Tensor:
+    num_tokens, hidden = x.shape
+    NVFP4_TABLE = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6], dtype=torch.float32, device=x.device)
+    NVFP4_INTREPL = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7], dtype=torch.int32, device=x.device)
+    sign = (x < 0).to(torch.int32)
+    diff = (x.abs().unsqueeze(-1) - NVFP4_TABLE.view(1, 1, 8)).abs()
+    idx = diff.argmin(dim=-1)
+    repl = NVFP4_INTREPL[idx]
+    int32_elm = ((sign << 3) + repl)
+    int32_elm = int32_elm.reshape(num_tokens, hidden // 8, 8)
+    shift = int32_elm << torch.tensor([28, 24, 20, 16, 12, 8, 4, 0], dtype=torch.int32, device=x.device)
+    uint32_shift = shift.view(dtype=torch.uint32)
+    final = uint32_shift.sum(dim=-1).to(dtype=torch.uint32).view(dtype=torch.int32)
+    return final
+
+def int32_to_8floats_lookup(tensor: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
+    """
+    Decomposes each int32 in the input tensor into 8 4-bit values,
+    and converts them into float values using a lookup table.
+
+    Args:
+        tensor: (int32 Tensor) Tensor of any shape, e.g., [B, N]
+        table: (float Tensor) A 1D lookup table of length 16 that maps all 4-bit values to floats
+
+    Returns:
+        float32 Tensor: Merges the last two dimensions, so shape is [..., n*M], where n is the number of int32 and 8 per int32.
+    """
+    assert tensor.dtype == torch.int32, "Input must be of int32 type"
+    assert table.numel() == 16 and table.ndim == 1, "Lookup table must be 1D with length 16"
+
+    result = []
+    for i in range(8):
+        shift = (7 - i) * 4
+        idx = ((tensor >> shift) & 0xF).long()  # Extract 4-bit index [0, 15]
+        val = table[idx].unsqueeze(-1)  # Lookup and preserve dimensions
+        result.append(val)
+
+    out = torch.cat(result, dim=-1)  # Output shape: [..., 8]
+    # Merge the last two dimensions if shape is [..., M, 8]
+    out = out.reshape(*out.shape[:-2], -1) if out.ndim > 2 else out
+    return out
+
+
+def dequantize_nvfp4_back_to_bfloat16(x_nvfp4: torch.Tensor, x_scales: torch.Tensor, x_sf_scale: torch.Tensor, use_ue8m0_for_nvfp4_sf: bool = False):
+    if x_nvfp4.numel() == 0:
+        ratio = int(x_nvfp4.dtype.itemsize * 8 / 4)
+        return x_nvfp4.to(torch.bfloat16).view(x_nvfp4.size(0), x_nvfp4.size(1) * ratio)
+    NVFP4_TABLE = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1.0, -1.5, -2, -3, -4, -6], dtype=torch.float32, device=x_nvfp4.device)   
+    if use_ue8m0_for_nvfp4_sf:
+        x_scales = x_scales.view(dtype=torch.int8).to(torch.int) << 23
+        x_scales = x_scales.view(dtype=torch.float)
+    else:
+        x_scales = x_scales.view(dtype=torch.float8_e4m3fn).to(torch.float32)
+    x_sf_scale = 1 / x_sf_scale
+    x_scales = x_scales * x_sf_scale
+    
+    x_fp32 = int32_to_8floats_lookup(x_nvfp4, NVFP4_TABLE)
+    
+    x_fp32 = x_fp32.view(*x_fp32.shape[:-1], -1, 16)
+    x_scales = x_scales.view(*x_scales.shape[:-1], -1, 1)
+    x_fp32 = x_fp32 * x_scales
+    x_fp32 = x_fp32.view(*x_nvfp4.shape[:-1], -1).to(torch.bfloat16)
+
+    return x_fp32
+
+def calc_diff(x: torch.Tensor, y: torch.Tensor):
+    x, y = x.double() + 1, y.double() + 1
+    denominator = (x * x + y * y).sum()
+    sim = 2 * (x * y).sum() / denominator
+    return (1 - sim).item()
+
+def inplace_unique(x: torch.Tensor, num_slots: int):
+    assert x.dim() == 2
+    mask = x < 0
+    x_padded = x.masked_fill(mask, num_slots)
+    bin_count = torch.zeros((x.size(0), num_slots + 1), dtype=x.dtype, device=x.device)
+    bin_count.scatter_add_(1, x_padded, torch.ones_like(x_padded))
+    bin_count = bin_count[:, :num_slots]
+    sorted_bin_count, sorted_bin_idx = torch.sort(bin_count, dim=-1, descending=True)
+    sorted_bin_idx.masked_fill_(sorted_bin_count == 0, -1)
+    sorted_bin_idx = torch.sort(sorted_bin_idx, descending=True, dim=-1).values
+    x[:, :].fill_(-1)
+    valid_len = min(num_slots, x.size(1))
+    x[:, :valid_len] = sorted_bin_idx[:, :valid_len]
+
+def align_up(x, y):
+    return (x + y - 1) // y * y

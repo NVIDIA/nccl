@@ -14,19 +14,18 @@
 // ============================================================================
 // HT-specific configuration constants
 // ============================================================================
-#define HYBRIDEP_MAX_NUM_SMS_PER_RANK 16
+#define NCCL_EP_HT_DFLT_NUM_SMS 16
 // ============================================================================
 // Dispatch configuration constants
 // ============================================================================
 #define HYBRIDEP_DISPATCH_NUM_OF_STAGES 12
 #define HYBRIDEP_DISPATCH_NUM_OF_IN_FLIGHT_S2G 4
-#define HYBRIDEP_DISPATCH_NUM_OF_BLOCKS HYBRIDEP_MAX_NUM_SMS_PER_RANK
+#define HYBRIDEP_DISPATCH_NUM_OF_BLOCKS NCCL_EP_HT_DFLT_NUM_SMS
 #define HYBRIDEP_DISPATCH_NUM_OF_PIPELINES_PER_BLOCK 2
 #define HYBRIDEP_DISPATCH_N2N_WARPS 2
 // Maximum consecutive tokens batched into a single RDMA put in dispatch N2N.
 // Larger batches reduce NIC doorbell overhead but may delay first-byte latency.
 #define HYBRIDEP_DISPATCH_RDMA_BATCH_SIZE 4
-
 
 // ============================================================================
 // Combine configuration constants
@@ -40,7 +39,7 @@
 #define HYBRIDEP_COMBINE_MULTINODE_NUM_OF_STAGES_S2G 2
 
 #define HYBRIDEP_COMBINE_NUM_OF_TOKENS_PER_GROUP 4
-#define HYBRIDEP_COMBINE_NUM_OF_BLOCKS HYBRIDEP_MAX_NUM_SMS_PER_RANK
+#define HYBRIDEP_COMBINE_NUM_OF_BLOCKS NCCL_EP_HT_DFLT_NUM_SMS
 #define HYBRIDEP_COMBINE_NUM_OF_ADDITIONAL_IN_FLIGHT_S2G 2
 
 // Streaming overlap: tokens between drain+signal from reduction warp to RDMA warp.
@@ -51,7 +50,20 @@
 // Preprocessing kernel configuration
 // ============================================================================
 #define HYBRIDEP_NUM_THREADS_PER_BLOCK_PREPROCESSING 512
-#define HYBRIDEP_NUM_BLOCKS_PREPROCESSING HYBRIDEP_MAX_NUM_SMS_PER_RANK
 
 // Max local experts per rank for expert-major remap kernel register arrays (runtime-asserted).
 #define HYBRIDEP_MAX_LOCAL_EXPERTS_PER_RANK 64
+
+// ============================================================================
+// EM local-fanout kernels (local_dup, local_reduce).
+// Used only when NCCL_EP_HT_EM_LOCAL_DUP=1.
+// ============================================================================
+#define NCCLEP_LOCAL_DUP_PIPE_DEPTH 8
+#define NCCLEP_LOCAL_REDUCE_PIPE_DEPTH 8
+#define NCCLEP_LOCAL_REDUCE_OUT_STAGES 2
+
+// local_reduce uses __shfl_sync over lanes 0..PIPE_DEPTH-1 for the cooperative
+// G2S source-list broadcast, so PIPE_DEPTH must fit in a warp.
+static_assert(
+    NCCLEP_LOCAL_REDUCE_PIPE_DEPTH <= 32,
+    "NCCLEP_LOCAL_REDUCE_PIPE_DEPTH must be <= 32 (warp shuffle width)");

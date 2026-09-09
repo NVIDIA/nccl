@@ -6,7 +6,7 @@
 #
 
 # NCCL Device API Examples
-EXAMPLES = 01_allreduce_lsa 02_alltoall_gin 03_alltoall_hybrid
+EXAMPLES = 01_allreduce_lsa 02_alltoall_gin 03_alltoall_hybrid 04_cft_barrier
 
 # Default target
 all: $(EXAMPLES)
@@ -51,10 +51,12 @@ help:
 	@echo "  01_allreduce_lsa          - AllReduce collective operation"
 	@echo "  02_alltoall_gin           - Pure GIN AlltoAll (network-only)"
 	@echo "  03_alltoall_hybrid        - Hybrid GIN+LSA AlltoAll (optimized)"
+	@echo "  04_cft_barrier            - CFT barrier"
 	@echo ""
 	@echo "To build/run individual examples:"
 	@echo "  make -C 01_allreduce_lsa/c"
 	@echo "  make -C 02_alltoall_gin/c"
 	@echo "  make -C 03_alltoall_hybrid/c"
+	@echo "  make -C 04_cft_barrier/c"
 
 .PHONY: all clean test install help $(EXAMPLES)

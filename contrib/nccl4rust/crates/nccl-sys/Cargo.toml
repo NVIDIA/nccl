@@ -1,0 +1,17 @@
+[package]
+name = "nccl-sys"
+description = "Raw bindgen-generated Rust bindings to NCCL's public host API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+links = "nccl"
+readme = "README.md"
+
+[build-dependencies]
+bindgen = "=0.71.1"
+
+[lints]
+workspace = true

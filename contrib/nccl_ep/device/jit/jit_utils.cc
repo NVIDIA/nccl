@@ -16,6 +16,8 @@
 #include <functional>
 #include <fcntl.h>
 #include <iterator>
+#include <mutex>
+#include <set>
 #include <sstream>
 #include <sys/file.h>
 #include <thread>
@@ -31,21 +33,21 @@ std::string env_value(const char* name) {
 bool env_flag_enabled(const char* name, bool default_value) {
     std::string value = env_value(name);
     if (value.empty()) return default_value;
-    return value[0] != '0' &&
-           value != "false" &&
-           value != "FALSE" &&
-           value != "off" &&
-           value != "OFF";
+    return value[0] != '0' && value != "false" && value != "FALSE" && value != "off" && value != "OFF";
+}
+
+bool announce_once(const std::string& key) {
+    // Returns true the first time each distinct `key` is seen.
+    static std::mutex mtx;
+    static std::set<std::string> announced;
+    std::lock_guard<std::mutex> lock(mtx);
+    return announced.insert(key).second;
 }
 
 void jit_log(std::string_view message) {
     if (!env_flag_enabled("NCCL_EP_JIT_LOG")) return;
-    std::fprintf(
-        stderr,
-        "[nccl_ep jit] pid=%ld %.*s\n",
-        static_cast<long>(getpid()),
-        static_cast<int>(message.size()),
-        message.data());
+    std::fprintf(stderr, "[nccl_ep jit] pid=%ld %.*s\n", static_cast<long>(getpid()), static_cast<int>(message.size()),
+                 message.data());
 }
 
 ScopedFileLock::~ScopedFileLock() {
@@ -122,12 +124,24 @@ std::string json_escape(std::string_view text) {
     std::ostringstream out;
     for (char c : text) {
         switch (c) {
-        case '\\': out << "\\\\"; break;
-        case '"': out << "\\\""; break;
-        case '\n': out << "\\n"; break;
-        case '\r': out << "\\r"; break;
-        case '\t': out << "\\t"; break;
-        default: out << c; break;
+        case '\\':
+            out << "\\\\";
+            break;
+        case '"':
+            out << "\\\"";
+            break;
+        case '\n':
+            out << "\\n";
+            break;
+        case '\r':
+            out << "\\r";
+            break;
+        case '\t':
+            out << "\\t";
+            break;
+        default:
+            out << c;
+            break;
         }
     }
     return out.str();
@@ -148,9 +162,8 @@ bool write_file_atomic(const std::filesystem::path& path, const std::string& dat
     }
 
     std::ostringstream tmp_name;
-    tmp_name << path.string()
-             << ".tmp." << static_cast<long>(getpid())
-             << "." << std::hash<std::thread::id>{}(std::this_thread::get_id());
+    tmp_name << path.string() << ".tmp." << static_cast<long>(getpid()) << "."
+             << std::hash<std::thread::id>{}(std::this_thread::get_id());
     const std::filesystem::path tmp_path = tmp_name.str();
     const auto mode = binary ? (std::ios::binary | std::ios::trunc) : std::ios::trunc;
     {

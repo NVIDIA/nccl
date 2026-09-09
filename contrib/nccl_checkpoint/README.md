@@ -152,15 +152,14 @@ make install PREFIX=/path/to/install
 
 ### Dependencies and Build Configuration
 
-The NCCL Checkpoint library has build-dependencies on CUDA, hiredis, and NCCL
-itself.  The checkpointing library depends on both public and internal NCCL
-headers from `NCCL_SRC`.  It is recommended the version of NCCL found in the
-`NCCL_SRC` path precisely matches the version of the NCCL library used at
-runtime.
+The NCCL Checkpoint library has build-dependencies on CUDA, hiredis, and public
+NCCL headers from `NCCL_SRC`. It is recommended the version of NCCL found in
+the `NCCL_SRC` path precisely matches the version of the NCCL library used at
+runtime. NCCL Checkpoint requires NCCL 2.31.0 or newer.
 
 | Variable | Purpose | Default Value |
 | --- | --- | --- |
-| `NCCL_SRC` | NCCL source tree. Used for both internal and public NCCL headers. | `../../src` |
+| `NCCL_SRC` | NCCL source tree. Used for public NCCL headers and NCCL makefile metadata. | `../../src` |
 | `BUILDDIR` | NCCL Checkpoint build directory for generated shim code, objects, libraries, and test binaries. | `./build` |
 | `PREFIX` | Install prefix used by `make install`; the shim installs under `$PREFIX/lib`. | `/usr/local` |
 | `CUDA_HOME` | CUDA Toolkit root inherited from the NCCL common Makefile. | `/usr/local/cuda` |
@@ -224,7 +223,14 @@ services).
 
 `NCCL_CHECKPOINT_KVS_TIMEOUT` controls how long the restore path waits for the
 redis server to accept connections and for restore keys to appear. The value is
-in seconds and defaults to 300.
+in seconds and defaults to 300. This timeout only covers the checkpoint shim's
+redis rendezvous. Once communicator replay has entered NCCL transport setup,
+lower-level NCCL transport calls use their normal NCCL behavior and may require
+their own transport-specific diagnostics.
+
+For restore diagnostics, set `NCCL_DEBUG=INFO` to print checkpoint progress
+messages. Set `NCCL_DEBUG=TRACE NCCL_DEBUG_SUBSYS=CHECKPOINT` for more detailed
+checkpoint shim stage logs.
 
 ## Additional Documentation
 

@@ -29,6 +29,44 @@ This document uses `ncclImpl` to refer to NCCL's internal (non-customized)
 implementations of these APIs. References to `ncclImpl`
 are just examples, custom implementations may make other design decisions.
 
+## Plugin architecture
+
+### Plugin name and supporting multiple GIN plugins
+
+When NCCL is initialized, it will look for a `libnccl-gin.so` library and
+dynamically load it, then look for symbols inside the library.
+
+The `NCCL_GIN_PLUGIN` environment variable allows users to select one or more
+GIN plugins. If set to a bare plugin name such as `mygin`, NCCL can load a
+library named `libnccl-gin-mygin.so`. `NCCL_GIN_PLUGIN` can also be set to a
+shared library file name or an absolute path to the plugin file. Multiple
+plugins can be specified as a comma-separated list.
+
+For example, any of the following can be used to load a plugin:
+
+```shell
+export NCCL_GIN_PLUGIN=mygin
+export NCCL_GIN_PLUGIN=libnccl-gin-mygin.so
+export NCCL_GIN_PLUGIN=/path/to/your/plugin/libnccl-gin-mygin.so
+```
+
+Set the `LD_LIBRARY_PATH` to include the plugin directory when using a bare name
+or shared library file name:
+
+```shell
+export LD_LIBRARY_PATH=/path/to/your/plugin:$LD_LIBRARY_PATH
+```
+
+### Struct versioning
+
+Once a library is found, NCCL will look for a symbol named `ncclGinPlugin_vX`,
+with `X` increasing over time. The versioning ensures that the plugin and NCCL
+core are compatible.
+
+Plugins are encouraged to provide multiple of those symbols, implementing
+multiple versions of the NCCL GIN API, so that the same plugin can be compiled
+and support a wide range of NCCL versions.
+
 ## GIN Concepts
 
 ### Core Concepts
@@ -91,6 +129,12 @@ puts and signals, including the bundled put in the case of put+signal. The visib
 signal guarantees the completion/visibility of the bundled put (in the case of put+signal), but makes
 no guarantees on previous puts or previous signals.
 
+**Signal read/wait/reset**
+Signals are consumed locally by reading or waiting on their value. `readSignal` returns the
+current signal value, while `waitSignal` blocks until the signal meets or exceeds a requested
+value. `resetSignal` reinitializes a signal before reuse and must not race with concurrent
+signal updates.
+
 **Flush**  
 Flush ensures all previous operations are locally complete. In the case of gets, flush indicates
 the data is visible and ready to use. In the case of puts, flush indicates source buffers are
@@ -103,10 +147,31 @@ nor local completion of any previous puts.
 
 ## Host-side Plugin (`ncclGin`)
 
+### Lifecycle
+
+NCCL calls `init` when initializing a communicator and passes a plugin-owned
+context pointer back to later host-side calls. `init` should validate that the
+backend is usable for GIN on the current system and return an error if it is
+not. For example, basic requirements such as device availability, required
+driver support, and any mandatory GPUDirect capabilities should be checked here
+rather than deferred to `listen`, `connect`, or `createContext`.
+
+After `init`, NCCL calls `devices` to determine whether the plugin has usable
+GIN devices. If initialization fails or no devices are available, NCCL will not
+use that backend for GIN.
+
+NCCL calls `finalize` with the plugin context when the communicator is torn
+down. `finalize` should release resources allocated by `init`; resources tied
+to later objects are released by their matching teardown calls, such as
+`closeListen`, `closeColl`, `destroyContext`, and `deregMrSym`.
+
 ### Query properties
 
-Some features (e.g. strong signals, VA signals) are not supported by all backends. Feature support is
-queried via `getGinProperties`.
+GIN plugins expose two property queries. `getProperties` returns an
+`ncclNetProperties_t` for a GIN-capable device; this structure is shared with
+the network plugin API and is documented in `plugins/net/README.md`.
+`getGinProperties` returns GIN-specific capabilities, such as strong signal and
+VA signal support.
 
 If an application requires a feature that is not supported by a specific backend, NCCL will not use
 that backend. NCCL will fall back to a backend that supports the required features, if such a backend is available.
@@ -143,6 +208,14 @@ GIN memory registration is symmetric. If a call to `regMrSym` is made on one ran
 assume `regMrSym` is called on all ranks. The returned handles should have enough information
 for the custom implementation to execute GIN operations on the local buffer and the
 remote buffers of all peers.
+
+`regMrSymDmaBuf` is the DMA-BUF variant of `regMrSym`. DMA-BUF is the Linux kernel mechanism
+for sharing buffers across device drivers and is the recommended GPUDirect RDMA registration
+mechanism over the legacy `nvidia-peermem` kernel module. `regMrSymDmaBuf` registers the same
+logical memory region as `regMrSym`, but receives an exported DMA-BUF file descriptor and
+offset in addition to the virtual address, size, memory type, and flags. Plugins should use the
+DMA-BUF information when their underlying registration path can import memory through DMA-BUF;
+otherwise the symmetry and returned handle requirements are the same as `regMrSym`.
 
 Registered memory is referenced via the opaque types `mHandle` and `ginHandle`.
 `mHandle` is used for host-side control operations like `deregMr`. `ginHandle`
@@ -263,3 +336,31 @@ version to the plugin. Plugins can use the backend version in a few ways:
 gracefully.
 2. Implement a compatibility layer. If `backendVersion` is *older* than the version of the plugin,
 allocate/initialize the structs according to the format that existed at the time of `backendVersion`.
+
+## Example
+
+`plugins/gin/example` contains a minimal GIN plugin example. It exports the current v14
+interface while preserving older example exports for compatibility. Build it with:
+
+```shell
+make -C plugins/gin/example
+```
+
+### Loading the example plugin
+
+Set the `LD_LIBRARY_PATH` to include the example plugin directory:
+
+```shell
+export LD_LIBRARY_PATH=/path/to/nccl/plugins/gin/example:$LD_LIBRARY_PATH
+```
+
+Set `NCCL_GIN_PLUGIN` to either the plugin name, the shared library file name, or
+the absolute path to the plugin file. Any of the following can work:
+
+```shell
+export NCCL_GIN_PLUGIN=example
+export NCCL_GIN_PLUGIN=libnccl-gin-example.so
+export NCCL_GIN_PLUGIN=/path/to/nccl/plugins/gin/example/libnccl-gin-example.so
+```
+
+NCCL will automatically discover and load the plugin based on the exported symbol names.

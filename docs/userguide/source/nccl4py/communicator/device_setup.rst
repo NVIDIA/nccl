@@ -19,7 +19,7 @@ create_dev_comm
 GIN type enums
 ==============
 
-GPU Interconnect Network (GIN) enums describing what device-side network
+GPU-Initiated Networking (GIN) enums describing what device-side network
 transport is available on a communicator and which connection topology
 the user requires.
 

@@ -72,8 +72,8 @@ __hidden void printGroupEventTrailer(FILE* fh, struct group* event) {
 
 static __thread int collId;
 __hidden void printCollEventHeader(FILE* fh, struct collective* event) {
-  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"SeqNum\": %lu, \"CommHash\": %lu, \"Rank\": %d, \"Count\": %lu, \"Datatype\": \"%s\", \"Algorithm\": \"%s\", \"Protocol\": \"%s\", \"nChannels\": %d}},\n",
-          event->base.func, collId, getpid(), 1, event->base.startTs, event->seqNumber, ((struct collApi*)event->base.parent)->ctx->commHash, event->base.rank, event->count, event->datatype, event->algo, event->proto, event->nChannels);
+  fprintf(fh, "{\"name\": \"%s\", \"cat\": \"COLL\", \"ph\": \"b\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"args\": {\"SeqNum\": %lu, \"CommHash\": %lu, \"Rank\": %d, \"Count\": %lu, \"Datatype\": \"%s\", \"Algorithm\": \"%s\", \"Protocol\": \"%s\", \"nChannels\": %d, \"KernelVariant\": \"%s\", \"IsSymColl\": %d}},\n",
+          event->base.func, collId, getpid(), 1, event->base.startTs, event->seqNumber, ((struct collApi*)event->base.parent)->ctx->commHash, event->base.rank, event->count, event->datatype, event->algo, event->proto, event->nChannels, event->kernelVariant ? event->kernelVariant : "", event->isSymColl ? 1 : 0);
 }
 
 __hidden void printCollEventTrailer(FILE* fh, struct collective* event) {
@@ -164,6 +164,18 @@ __hidden void printKernelChEventTrailer(FILE* fh, struct kernelCh* event) {
   if (event->type != ncclProfileKernelCh) return;
   fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GPU\", \"ph\": \"e\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f},\n",
           "KernelCh", kernelId, getpid(), 1, event->stopTs);
+}
+
+// v7: emit each kernel phase as a complete event; duration is from the GPU globaltimer (ns->us)
+__hidden void printKernelPhaseEvents(FILE* fh, struct kernelCh* event) {
+  if (event->type != ncclProfileKernelCh) return;
+  for (int i = 0; i < MAX_KERNEL_PHASES; i++) {
+    struct kernelPhase* p = &event->phases[i];
+    if (p->type != ncclProfileKernelPhase) continue;
+    double durUs = (p->stopGpuClk > p->startGpuClk) ? (double)(p->stopGpuClk - p->startGpuClk) / 1000.0 : 0.0;
+    fprintf(fh, "{\"name\": \"%s\", \"cat\": \"GPU\", \"ph\": \"X\", \"id\": %d, \"pid\": %d, \"tid\": %d, \"ts\": %f, \"dur\": %f, \"args\": {\"Channel\": %d, \"PhaseId\": %d, \"StartGpuClk\": %lu, \"StopGpuClk\": %lu}},\n",
+            p->phaseName ? p->phaseName : "phase", kernelId, getpid(), 1, p->startTs, durUs, p->channelId, p->phaseId, p->startGpuClk, p->stopGpuClk);
+  }
 }
 
 static __thread int proxyCtrlId;
@@ -390,19 +402,20 @@ void printEvent(FILE* fh, void* handle) {
   if (type == ncclProfileGroupApi) {
     struct groupApi* g = (struct groupApi*) handle;
     printGroupApiEventHeader(fh, g);
+    // Other comms' children are dumped by their own context.
     struct kernelLaunch* kernelLaunchHead = profilerQueueHead(&g->kernelLaunchEvents);
     while (kernelLaunchHead != NULL) {
-      printEvent(fh, kernelLaunchHead);
+      if (kernelLaunchHead->ctx == g->ctx) printEvent(fh, kernelLaunchHead);
       kernelLaunchHead = kernelLaunchHead->next;
     }
     struct collApi* collApiHead = profilerQueueHead(&g->collApiEvents);
     while (collApiHead != NULL) {
-      printEvent(fh, collApiHead);
+      if (collApiHead->ctx == g->ctx) printEvent(fh, collApiHead);
       collApiHead = collApiHead->next;
     }
     struct p2pApi* p2pApiHead = profilerQueueHead(&g->p2pApiEvents);
     while (p2pApiHead != NULL) {
-      printEvent(fh, p2pApiHead);
+      if (p2pApiHead->ctx == g->ctx) printEvent(fh, p2pApiHead);
       p2pApiHead = p2pApiHead->next;
     }
     printGroupApiEventTrailer(fh, g);
@@ -445,6 +458,7 @@ void printEvent(FILE* fh, void* handle) {
     printCollEventHeader(fh, c);
     for (int i = 0; i < MAX_CHANNELS; i++) {
       printKernelChEventHeader(fh, &c->kernel[i]);
+      printKernelPhaseEvents(fh, &c->kernel[i]);
       for (int j = 0; j < c->nProxyOps[i]; j++) {
         printEvent(fh, &c->op[i][j]);
       }
@@ -456,6 +470,7 @@ void printEvent(FILE* fh, void* handle) {
     printP2pEventHeader(fh, p);
     for (int i = 0; i < MAX_CHANNELS; i++) {
       printKernelChEventHeader(fh, &p->kernel[i]);
+      printKernelPhaseEvents(fh, &p->kernel[i]);
       printEvent(fh, &p->op[i]);
       printKernelChEventTrailer(fh, &p->kernel[i]);
     }

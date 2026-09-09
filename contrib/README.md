@@ -1,3 +1,7 @@
+> **`nccl_ep` and `nccl_m2n` have moved.**
+> Both projects are now developed in the [NVIDIA/nccl-extensions](https://github.com/NVIDIA/nccl-extensions) repository.
+> Please open all new issues and pull requests there.
+
 # Contribution Policy for `contrib/`
 
 This directory hosts community and partner contributions that extend NCCL with
@@ -22,10 +26,13 @@ contribution process described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 | Directory | Description |
 |-----------|-------------|
 | [`custom_algos/`](custom_algos/) | Reference custom collective kernels built on the NCCL Device API |
+| [`pace/`](pace/) | PACE: parallelism-aware AG / RS / SG collectives built on the NCCL GIN device API |
+| [`nccl4rust/`](nccl4rust/) | Experimental Rust host and device bindings with Rust-style wrappers over NCCL's public APIs |
 | [`nccl_checkpoint/`](nccl_checkpoint/) | NCCL Checkpoint library for multi-node, communicator-aware checkpoint and restore |
-| [`nccl_ep/`](nccl_ep/) | NCCL Expert Parallelism (EP) API for MoE communication (dispatch/combine primitives) |
+| [`nccl_ep/`](nccl_ep/) | NCCL Expert Parallelism (EP) API for MoE communication (dispatch/combine primitives) — **moved to [NVIDIA/nccl-extensions](https://github.com/NVIDIA/nccl-extensions)** |
 | [`nccl_ubx/`](nccl_ubx/) | UB-X (Ultra Bandwidth — eXperimental): low-latency NVLink collectives with compute fusion (residual + RMSNorm, mxfp8 dispatch) on a symmetric allocator |
-| [`nccl_m2n/`](nccl_m2n/) | NCCL Cross-group Transfer (M2N) API for RL communication (reshard primitives) |
+| [`nccl_m2n/`](nccl_m2n/) | NCCL Cross-group Transfer (M2N) API for RL communication (reshard primitives) — **moved to [NVIDIA/nccl-extensions](https://github.com/NVIDIA/nccl-extensions)** |
+| [`niin/`](niin/) | NIIN (NVSHMEM Implemented In NCCL) header-only NVSHMEM compatibility layer built on NCCL public host and device APIs |
 
 ## Upstreaming to contrib/
 

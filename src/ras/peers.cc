@@ -723,7 +723,8 @@ static ncclResult_t rasLinkReinitConns(struct rasLink* link) {
 
   if (linkConn->conn && linkConn->conn->experiencingDelays) {
     INFO(NCCL_RAS, "RAS connection experiencingDelays %d, startRetryTime %.2fs, socket status %d",
-         linkConn->conn->experiencingDelays, (clockNano() - linkConn->conn->startRetryTime) / 1e9,
+         linkConn->conn->experiencingDelays,
+         (double)(clockNano() - linkConn->conn->startRetryTime) / CLOCK_UNITS_PER_SEC,
          (linkConn->conn->sock ? linkConn->conn->sock->status : -1));
     NCCLCHECK(rasLinkAddFallback(link, linkConn->conn));
   }

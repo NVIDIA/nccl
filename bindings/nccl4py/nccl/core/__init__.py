@@ -8,11 +8,16 @@
 This module provides the main public API for NCCL operations.
 """
 
+from nccl.core._version import __version__  # noqa: I001
+
 # Core types and enums
 from nccl.core.typing import *
 
 # Constants
 from nccl.core.constants import *
+
+# Team values and operations
+from nccl.core.team import *
 
 # Communicator and configuration
 from nccl.core.communicator import *
@@ -29,15 +34,21 @@ from nccl.core.utils import *
 # Memory management
 from nccl.core.buffer import *
 
+# Parameter access
+from nccl.core.params import *
+
 # The following __all__ exports define the stable, public API surface of NCCL4Py.
 # Semantic versioning guarantees apply only to the symbols explicitly listed below.
 # All other modules, functions, and symbols are internal implementation details and are subject to change without notice.
-__all__ = [
+__all__ = [  # noqa: RUF022
     # Types and specs
     "NcclDataType",
     "NcclRedOp",
     "NcclGinType",
     "NcclGinConnectionType",
+    "NcclHostCftMode",
+    "NcclCftTeamMode",
+    "NcclCftCap",
     "NcclCommMemStat",
     "NcclBufferSpec",
     "NcclScalarSpec",
@@ -76,12 +87,26 @@ __all__ = [
     "WindowFlag",
     # Communicator
     "NCCLConfig",
+    "NCCLCollConfig",
+    "VendorOption",
+    "NCCLCommProperties",
     "WaitSignalDesc",
+    "TeamRequirement",
+    "LsaBarrierRequirement",
+    "GinBarrierRequirement",
+    "LLA2ARequirement",
     "NCCLDevCommRequirements",
     "Communicator",
+    # Team
+    "NCCLTeam",
     # Resources
+    "MultimemHandle",
+    "LsaBarrierHandle",
+    "GinBarrierHandle",
+    "LLA2AHandle",
     "RegisteredBufferHandle",
     "RegisteredWindowHandle",
+    "CftLeInfo",
     "CustomRedOp",
     "DevCommResource",
     # Group
@@ -90,16 +115,20 @@ __all__ = [
     "group_end",
     "GroupSimInfo",
     # Utilities
-    "Version",
+    "__version__",
+    "LibraryInfo",
+    "VersionInfo",
     "get_version",
-    "get_lib_version",
-    "get_lib_path",
+    "show_versions",
     "UniqueId",
     "get_unique_id",
     "get_error_string",
     # Memory
     "mem_alloc",
     "mem_free",
+    # Parameters
+    "params",
+    "dump_params",
     # Interop modules (lazy-loaded)
     "cupy",
     "torch",

@@ -525,7 +525,7 @@ struct ibv_pd *doca_verbs_srq_init_attr_get_pd(
 }
 
 doca_error_t doca_verbs_srq_init_attr_set_external_umem(
-    struct doca_verbs_srq_init_attr *verbs_srq_init_attr, struct doca_verbs_umem *external_umem,
+    struct doca_verbs_srq_init_attr *verbs_srq_init_attr, doca_verbs_umem_t *external_umem,
     uint64_t external_umem_offset) {
     if (verbs_srq_init_attr == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter verbs_srq_init_attr is NULL");
@@ -543,8 +543,8 @@ doca_error_t doca_verbs_srq_init_attr_set_external_umem(
 }
 
 doca_error_t doca_verbs_srq_init_attr_get_external_umem(
-    const struct doca_verbs_srq_init_attr *verbs_srq_init_attr,
-    struct doca_verbs_umem **external_umem, uint64_t *external_umem_offset) {
+    const struct doca_verbs_srq_init_attr *verbs_srq_init_attr, doca_verbs_umem_t **external_umem,
+    uint64_t *external_umem_offset) {
     if (verbs_srq_init_attr == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to get external_umem: parameter verbs_srq_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;

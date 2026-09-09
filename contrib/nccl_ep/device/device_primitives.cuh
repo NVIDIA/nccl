@@ -12,41 +12,39 @@
 #pragma once
 
 #include "common.hpp"
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 //==============================================================================
 // Macros
 //==============================================================================
 
 #define UNROLLED_WARP_COPY(UNROLL_FACTOR, LANE_ID, N, DST, SRC, LD_FUNC, ST_FUNC) \
-{ \
-    constexpr int kLoopStride = 32 * (UNROLL_FACTOR); \
-    typename std::remove_reference<decltype(LD_FUNC((SRC) + 0))>::type unrolled_values[(UNROLL_FACTOR)]; \
-    auto __src = (SRC); \
-    auto __dst = (DST); \
-    for (int __i = (LANE_ID); __i < ((N) / kLoopStride) * kLoopStride; __i += kLoopStride) { \
-        _Pragma("unroll") \
-        for (int __j = 0; __j < (UNROLL_FACTOR); ++ __j) \
-            unrolled_values[__j] = LD_FUNC(__src + __i + __j * 32); \
-        _Pragma("unroll") \
-        for (int __j = 0; __j < (UNROLL_FACTOR); ++ __j) \
-            ST_FUNC(__dst + __i + __j * 32, unrolled_values[__j]); \
-    } \
     { \
-        int __i = ((N) / kLoopStride) * kLoopStride + (LANE_ID); \
-        _Pragma("unroll") \
-        for (int __j = 0; __j < (UNROLL_FACTOR); ++ __j) { \
-            if (__i + __j * 32 < (N)) { \
-                unrolled_values[__j] = LD_FUNC(__src + __i + __j * 32); \
-            } \
-        } \
-        _Pragma("unroll") \
-        for (int __j = 0; __j < (UNROLL_FACTOR); ++ __j) { \
-            if (__i + __j * 32 < (N)) { \
+        constexpr int kLoopStride = 32 * (UNROLL_FACTOR); \
+        typename std::remove_reference<decltype(LD_FUNC((SRC) + 0))>::type unrolled_values[(UNROLL_FACTOR)]; \
+        auto __src = (SRC); \
+        auto __dst = (DST); \
+        for (int __i = (LANE_ID); __i < ((N) / kLoopStride) * kLoopStride; __i += kLoopStride) { \
+            _Pragma("unroll") for (int __j = 0; __j < (UNROLL_FACTOR); ++__j) unrolled_values[__j] = \
+                LD_FUNC(__src + __i + __j * 32); \
+            _Pragma("unroll") for (int __j = 0; __j < (UNROLL_FACTOR); ++__j) \
                 ST_FUNC(__dst + __i + __j * 32, unrolled_values[__j]); \
+        } \
+        { \
+            int __i = ((N) / kLoopStride) * kLoopStride + (LANE_ID); \
+            _Pragma("unroll") for (int __j = 0; __j < (UNROLL_FACTOR); ++__j) { \
+                if (__i + __j * 32 < (N)) { \
+                    unrolled_values[__j] = LD_FUNC(__src + __i + __j * 32); \
+                } \
+            } \
+            _Pragma("unroll") for (int __j = 0; __j < (UNROLL_FACTOR); ++__j) { \
+                if (__i + __j * 32 < (N)) { \
+                    ST_FUNC(__dst + __i + __j * 32, unrolled_values[__j]); \
+                } \
             } \
         } \
-    } \
-}
+    }
 
 namespace nccl_ep {
 
@@ -54,23 +52,165 @@ namespace nccl_ep {
 // Type Traits and Helper Types
 //==============================================================================
 
+// Compile-time wire-dtype helpers — single source of truth for token element width
+// and semantics, shared by the LL and HT dispatch/combine paths. Keyed on the
+// ncclDataType_t so FP16 and BF16 (same 2 B width) stay distinguishable for the
+// combine decode/encode. Primary size_* templates are intentionally undefined:
+// an unsupported dtype is a compile error.
+template <ncclDataType_t kDt>
+__host__ __device__ constexpr bool is_fp32() {
+    return kDt == ncclFloat32;
+}
+template <ncclDataType_t kDt>
+__host__ __device__ constexpr bool is_fp16() {
+    return kDt == ncclFloat16;
+}
+
+// Bytes per wire element.
+template <ncclDataType_t kDt>
+__host__ __device__ constexpr int size_u8();
+template <>
+__host__ __device__ constexpr int size_u8<ncclFloat32>() {
+    return sizeof(uint32_t);
+}
+template <>
+__host__ __device__ constexpr int size_u8<ncclFloat16>() {
+    return sizeof(uint16_t);
+}
+template <>
+__host__ __device__ constexpr int size_u8<ncclBfloat16>() {
+    return sizeof(uint16_t);
+}
+template <>
+__host__ __device__ constexpr int size_u8<ncclFloat8e4m3>() {
+    return sizeof(uint8_t);
+}
+template <>
+__host__ __device__ constexpr int size_u8<ncclFloat8e5m2>() {
+    return sizeof(uint8_t);
+}
+
+// Wire element width in uint16_t units (token buffers use a uint16_t* base; FP8 has no
+// uint16_t-unit stride, so it is intentionally not specialized here).
+template <ncclDataType_t kDt>
+__host__ __device__ constexpr int size_u16();
+template <>
+__host__ __device__ constexpr int size_u16<ncclFloat32>() {
+    return sizeof(uint32_t) / sizeof(uint16_t);
+}
+template <>
+__host__ __device__ constexpr int size_u16<ncclFloat16>() {
+    return sizeof(uint16_t) / sizeof(uint16_t);
+}
+template <>
+__host__ __device__ constexpr int size_u16<ncclBfloat16>() {
+    return sizeof(uint16_t) / sizeof(uint16_t);
+}
+
+// Unsigned integer "wire type" of the same width as a token dtype, for the
+// byte-copy dispatch path (which moves tokens by raw width, never decoding
+// values). FP16 and BF16 collapse to uint16_t (identical byte transport);
+// FP32 -> uint32_t, FP8 -> uint8_t. Primary template is undefined so an
+// unsupported dtype is a compile error (mirrors size_u8).
+template <ncclDataType_t kDt>
+struct wire_type;
+template <>
+struct wire_type<ncclFloat32> {
+    using type = uint32_t;
+};
+template <>
+struct wire_type<ncclFloat16> {
+    using type = uint16_t;
+};
+template <>
+struct wire_type<ncclBfloat16> {
+    using type = uint16_t;
+};
+template <>
+struct wire_type<ncclFloat8e4m3> {
+    using type = uint8_t;
+};
+template <>
+struct wire_type<ncclFloat8e5m2> {
+    using type = uint8_t;
+};
+template <ncclDataType_t kDt>
+using wire_t = typename wire_type<kDt>::type;
+
+// Decode/encode one token "pair" (2 elements) at pair-index idx, against a raw
+// token buffer base. Centralizes the per-dtype conversion used by the combine
+// reduce paths. Pair stride is dtype-implicit: float2 (8 B) for FP32, half2 /
+// bf162 (4 B) for the 16-bit types. Primary undefined -> unsupported dtype is a
+// compile error (mirrors size_u8 / size_u16).
+template <ncclDataType_t kTokenDtype>
+__device__ __forceinline__ float2 ld_token_pair(const void* base, int idx);
+template <>
+__device__ __forceinline__ float2 ld_token_pair<ncclFloat32>(const void* base, int idx) {
+    return reinterpret_cast<const float2*>(base)[idx];
+}
+template <>
+__device__ __forceinline__ float2 ld_token_pair<ncclFloat16>(const void* base, int idx) {
+    return __half22float2(reinterpret_cast<const __half2*>(base)[idx]);
+}
+template <>
+__device__ __forceinline__ float2 ld_token_pair<ncclBfloat16>(const void* base, int idx) {
+    return __bfloat1622float2(reinterpret_cast<const __nv_bfloat162*>(base)[idx]);
+}
+
+template <ncclDataType_t kTokenDtype>
+__device__ __forceinline__ void st_token_pair(void* base, int idx, float2 v);
+template <>
+__device__ __forceinline__ void st_token_pair<ncclFloat32>(void* base, int idx, float2 v) {
+    reinterpret_cast<float2*>(base)[idx] = v;
+}
+template <>
+__device__ __forceinline__ void st_token_pair<ncclFloat16>(void* base, int idx, float2 v) {
+    reinterpret_cast<__half2*>(base)[idx] = __float22half2_rn(v);
+}
+template <>
+__device__ __forceinline__ void st_token_pair<ncclBfloat16>(void* base, int idx, float2 v) {
+    reinterpret_cast<__nv_bfloat162*>(base)[idx] = __float22bfloat162_rn(v);
+}
+
+// Number of token pairs packed into one 16-byte int4/uint4 chunk for this wire
+// dtype: FP32 -> 2, the 16-bit types -> 4. Bounds the ld/st_token_pair loops
+// over a vectorized token chunk.
+template <ncclDataType_t kTokenDtype>
+__device__ __host__ constexpr int pairs_per_int4() {
+    constexpr int kElemsPerPair = 2;                 // float2 / half2 / bf162
+    return sizeof(int4) / (kElemsPerPair * size_u8<kTokenDtype>());
+}
+
 template <int kBytes>
 struct VecInt {};
-template<> struct VecInt<1>  { using vec_t = int8_t; };
-template<> struct VecInt<2>  { using vec_t = int16_t; };
-template<> struct VecInt<4>  { using vec_t = int; };
-template<> struct VecInt<8>  { using vec_t = int64_t; };
-template<> struct VecInt<16> { using vec_t = int4; };
+template <>
+struct VecInt<1> {
+    using vec_t = int8_t;
+};
+template <>
+struct VecInt<2> {
+    using vec_t = int16_t;
+};
+template <>
+struct VecInt<4> {
+    using vec_t = int;
+};
+template <>
+struct VecInt<8> {
+    using vec_t = int64_t;
+};
+template <>
+struct VecInt<16> {
+    using vec_t = int4;
+};
 
 template <typename FuncT>
 struct PatternVisitor {
     FuncT func;
 
-    __device__ __host__
-    explicit PatternVisitor(FuncT&& func): func(std::forward<FuncT>(func)) {}
+    __device__ __host__ explicit PatternVisitor(FuncT&& func) : func(std::forward<FuncT>(func)) {}
 
-    __device__ __host__
-    auto operator [](const uint32_t& i) {
+    __device__ __host__ auto operator[](const uint32_t& i) {
         return func(i);
     }
 };
@@ -93,13 +233,13 @@ __forceinline__ __device__ int get_lane_id() {
 // Math Utilities
 //==============================================================================
 
-__device__ __forceinline__ float log2f_approx(const float &x) {
+__device__ __forceinline__ float log2f_approx(const float& x) {
     float ret;
     asm volatile("lg2.approx.f32 %0, %1;" : "=f"(ret) : "f"(x));
     return ret;
 }
 
-__device__ __forceinline__ float exp2f_approx(const float &x) {
+__device__ __forceinline__ float exp2f_approx(const float& x) {
     float ret;
     asm volatile("ex2.approx.f32 %0, %1;" : "=f"(ret) : "f"(x));
     return ret;
@@ -151,15 +291,15 @@ __forceinline__ __device__ out_dtype_t extract_required_scale_format(float value
 //==============================================================================
 
 __device__ __forceinline__ void memory_fence() {
-    asm volatile("fence.acq_rel.sys;":: : "memory");
+    asm volatile("fence.acq_rel.sys;" ::: "memory");
 }
 
 __device__ __forceinline__ void memory_fence_gpu() {
-    asm volatile("fence.acq_rel.gpu;":: : "memory");
+    asm volatile("fence.acq_rel.gpu;" ::: "memory");
 }
 
 __device__ __forceinline__ void memory_fence_cta() {
-    asm volatile("fence.acq_rel.cta;":: : "memory");
+    asm volatile("fence.acq_rel.cta;" ::: "memory");
 }
 
 // Drains async-proxy (TMA) stores into the generic memory path. Caller must be
@@ -172,25 +312,25 @@ __device__ __forceinline__ void fence_proxy_async() {
 // Load Operations - Volatile
 //==============================================================================
 
-__device__ __forceinline__ int ld_volatile_global(const int *ptr) {
+__device__ __forceinline__ int ld_volatile_global(const int* ptr) {
     int ret;
     asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ float ld_volatile_global(const float *ptr) {
+__device__ __forceinline__ float ld_volatile_global(const float* ptr) {
     float ret;
     asm volatile("ld.volatile.global.f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ int64_t ld_volatile_global(const int64_t *ptr) {
+__device__ __forceinline__ int64_t ld_volatile_global(const int64_t* ptr) {
     int64_t ret;
     asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ int64_t ld_volatile_global(const uint64_t *ptr) {
+__device__ __forceinline__ int64_t ld_volatile_global(const uint64_t* ptr) {
     int64_t ret;
     asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
     return ret;
@@ -206,12 +346,15 @@ __device__ __forceinline__ uint32_t ld_relaxed_sys_global(const uint32_t* ptr) {
     return ret;
 }
 
+__device__ __forceinline__ uint64_t ld_relaxed_sys_global(const uint64_t* ptr) {
+    uint64_t ret;
+    asm volatile("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr) : "memory");
+    return ret;
+}
+
 __device__ __forceinline__ uint64_t ld_relaxed_gpu_global(const uint64_t* ptr) {
     uint64_t ret;
-    asm volatile("ld.relaxed.gpu.global.b64 %0, [%1];"
-                 : "=l"(ret)
-                 : "l"(__cvta_generic_to_global(ptr))
-                 : "memory");
+    asm volatile("ld.relaxed.gpu.global.b64 %0, [%1];" : "=l"(ret) : "l"(__cvta_generic_to_global(ptr)) : "memory");
     return ret;
 }
 
@@ -219,25 +362,25 @@ __device__ __forceinline__ uint64_t ld_relaxed_gpu_global(const uint64_t* ptr) {
 // Load Operations - Acquire
 //==============================================================================
 
-__device__ __forceinline__ int ld_acquire_sys_global(const int *ptr) {
+__device__ __forceinline__ int ld_acquire_sys_global(const int* ptr) {
     int ret;
     asm volatile("ld.acquire.sys.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ uint64_t ld_acquire_sys_global(const uint64_t *ptr) {
+__device__ __forceinline__ uint64_t ld_acquire_sys_global(const uint64_t* ptr) {
     uint64_t ret;
     asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ int ld_acquire_global(const int *ptr) {
+__device__ __forceinline__ int ld_acquire_global(const int* ptr) {
     int ret;
     asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ int ld_acquire_cta(const int *ptr) {
+__device__ __forceinline__ int ld_acquire_cta(const int* ptr) {
     int ret;
     asm volatile("ld.acquire.cta.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
     return ret;
@@ -247,25 +390,25 @@ __device__ __forceinline__ int ld_acquire_cta(const int *ptr) {
 // Load Operations - Relaxed (No Allocate)
 //==============================================================================
 
-__device__ __forceinline__ uint8_t ld_na_relaxed(const uint8_t *ptr) {
+__device__ __forceinline__ uint8_t ld_na_relaxed(const uint8_t* ptr) {
     uint16_t ret;
     asm volatile("ld.relaxed.gpu.global.L1::no_allocate.b8 %0, [%1];" : "=h"(ret) : "l"(ptr));
     return static_cast<uint8_t>(ret);
 }
 
-__device__ __forceinline__ uint16_t ld_na_relaxed(const uint16_t *ptr) {
+__device__ __forceinline__ uint16_t ld_na_relaxed(const uint16_t* ptr) {
     uint16_t ret;
     asm volatile("ld.relaxed.gpu.global.L1::no_allocate.b16 %0, [%1];" : "=h"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ uint32_t ld_na_relaxed(const uint32_t *ptr) {
+__device__ __forceinline__ uint32_t ld_na_relaxed(const uint32_t* ptr) {
     uint32_t ret;
     asm volatile("ld.relaxed.gpu.global.L1::no_allocate.b32 %0, [%1];" : "=r"(ret) : "l"(ptr));
     return ret;
 }
 
-__device__ __forceinline__ uint64_t ld_na_relaxed(const uint64_t *ptr) {
+__device__ __forceinline__ uint64_t ld_na_relaxed(const uint64_t* ptr) {
     uint64_t ret;
     asm volatile("ld.relaxed.gpu.global.L1::no_allocate.b64 %0, [%1];" : "=l"(ret) : "l"(ptr));
     return ret;
@@ -283,13 +426,13 @@ __device__ __forceinline__ uint64_t ld_na_relaxed(const uint64_t *ptr) {
 #endif
 
 template <typename dtype_t>
-__device__ __forceinline__ dtype_t ld_nc_global(const dtype_t *ptr) {
+__device__ __forceinline__ dtype_t ld_nc_global(const dtype_t* ptr) {
     auto ret = ld_nc_global(reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(ptr));
     return *reinterpret_cast<dtype_t*>(&ret);
 }
 
 template <>
-__device__ __forceinline__ uint8_t ld_nc_global(const uint8_t *ptr) {
+__device__ __forceinline__ uint8_t ld_nc_global(const uint8_t* ptr) {
     uint16_t ret;
     // NOTES: we must use `uint16_t` as inline ASM does not support 8-bit constraint letter (`h` below means unsigned 16-bit)
     asm volatile(LD_NC_FUNC ".u8 %0, [%1];" : "=h"(ret) : "l"(ptr));
@@ -297,38 +440,39 @@ __device__ __forceinline__ uint8_t ld_nc_global(const uint8_t *ptr) {
 }
 
 template <>
-__device__ __forceinline__ int ld_nc_global(const int *ptr) {
+__device__ __forceinline__ int ld_nc_global(const int* ptr) {
     int ret;
     asm volatile(LD_NC_FUNC ".s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
     return ret;
 }
 
 template <>
-__device__ __forceinline__ int64_t ld_nc_global(const int64_t *ptr) {
+__device__ __forceinline__ int64_t ld_nc_global(const int64_t* ptr) {
     int64_t ret;
     asm volatile(LD_NC_FUNC ".s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
     return ret;
 }
 
 template <>
-__device__ __forceinline__ float ld_nc_global(const float *ptr) {
+__device__ __forceinline__ float ld_nc_global(const float* ptr) {
     float ret;
     asm volatile(LD_NC_FUNC ".f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
     return ret;
 }
 
 template <>
-__device__ __forceinline__ int2 ld_nc_global(const int2 *ptr) {
+__device__ __forceinline__ int2 ld_nc_global(const int2* ptr) {
     int2 ret;
     asm volatile(LD_NC_FUNC ".v2.s32 {%0, %1}, [%2];" : "=r"(ret.x), "=r"(ret.y) : "l"(ptr));
     return ret;
 }
 
 template <>
-__device__ __forceinline__ int4 ld_nc_global(const int4 *ptr) {
+__device__ __forceinline__ int4 ld_nc_global(const int4* ptr) {
     int4 ret;
     asm volatile(LD_NC_FUNC ".v4.s32 {%0, %1, %2, %3}, [%4];"
-            : "=r"(ret.x), "=r"(ret.y), "=r"(ret.z), "=r"(ret.w) : "l"(ptr));
+                 : "=r"(ret.x), "=r"(ret.y), "=r"(ret.z), "=r"(ret.w)
+                 : "l"(ptr));
     return ret;
 }
 
@@ -336,60 +480,71 @@ __device__ __forceinline__ int4 ld_nc_global(const int4 *ptr) {
 // Store Operations - Release
 //==============================================================================
 
-__device__ __forceinline__ void st_release_sys_global(const int *ptr, int val) {
-    asm volatile("st.release.sys.global.s32 [%0], %1;"::"l"(ptr), "r"(val) : "memory");
+__device__ __forceinline__ void st_release_sys_global(const int* ptr, int val) {
+    asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 }
 
-__device__ __forceinline__ void st_release_cta(const int *ptr, int val) {
-    asm volatile("st.release.cta.s32 [%0], %1;"::"l"(ptr), "r"(val) : "memory");
+__device__ __forceinline__ void st_release_cta(const int* ptr, int val) {
+    asm volatile("st.release.cta.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 }
 
 //==============================================================================
 // Store Operations - Relaxed
 //==============================================================================
 
-__device__ __forceinline__ void st_relaxed_sys_global(const int *ptr, int val) {
-    asm volatile("st.relaxed.sys.global.s32 [%0], %1;"::"l"(ptr), "r"(val) : "memory");
+__device__ __forceinline__ void st_relaxed_sys_global(const int* ptr, int val) {
+    asm volatile("st.relaxed.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 }
 
 __device__ __forceinline__ void st_relaxed_gpu_global(uint64_t* ptr, uint64_t val) {
-    asm volatile("st.relaxed.gpu.global.b64 [%0], %1;"
-                 :
-                 : "l"(__cvta_generic_to_global(ptr)), "l"(val)
-                 : "memory");
+    asm volatile("st.relaxed.gpu.global.b64 [%0], %1;" : : "l"(__cvta_generic_to_global(ptr)), "l"(val) : "memory");
 }
 
-__device__ __forceinline__ void st_na_relaxed(const uint8_t *ptr, uint8_t val) {
+__device__ __forceinline__ void st_na_relaxed(const uint8_t* ptr, uint8_t val) {
     asm volatile("st.relaxed.gpu.global.L1::no_allocate.b8 [%0], %1;" : : "l"(ptr), "h"(static_cast<uint16_t>(val)));
 }
 
-__device__ __forceinline__ void st_na_relaxed(const uint16_t *ptr, uint16_t val) {
+__device__ __forceinline__ void st_na_relaxed(const uint16_t* ptr, uint16_t val) {
     asm volatile("st.relaxed.gpu.global.L1::no_allocate.b16 [%0], %1;" : : "l"(ptr), "h"(val));
 }
 
-__device__ __forceinline__ void st_na_relaxed(const uint32_t *ptr, uint32_t val) {
+__device__ __forceinline__ void st_na_relaxed(const uint32_t* ptr, uint32_t val) {
     asm volatile("st.relaxed.gpu.global.L1::no_allocate.b32 [%0], %1;" : : "l"(ptr), "r"(val));
 }
 
-__device__ __forceinline__ void st_na_relaxed(const int *ptr, int val) {
+__device__ __forceinline__ void st_na_relaxed(const int* ptr, int val) {
     asm volatile("st.relaxed.gpu.global.L1::no_allocate.b32 [%0], %1;" : : "l"(ptr), "r"(val));
 }
 
-__device__ __forceinline__ void st_na_relaxed(const int4 *ptr, int4 val) {
+__device__ __forceinline__ void st_na_relaxed(const int4* ptr, int4 val) {
     asm volatile("st.relaxed.gpu.global.L1::no_allocate.v4.s32 [%0], {%1, %2, %3, %4};"
-            : : "l"(ptr), "r"(val.x), "r"(val.y), "r"(val.z), "r"(val.w));
+                 :
+                 : "l"(ptr), "r"(val.x), "r"(val.y), "r"(val.z), "r"(val.w));
 }
 
-__device__ __forceinline__ void st_na_release(const int *ptr, int val) {
+__device__ __forceinline__ void st_na_release(const int* ptr, int val) {
     asm volatile("st.release.gpu.global.L1::no_allocate.b32 [%0], %1;" : : "l"(ptr), "r"(val));
 }
 
-__device__ __forceinline__ void st_na_release(const uint32_t *ptr, uint32_t val) {
+__device__ __forceinline__ void st_na_release(const uint32_t* ptr, uint32_t val) {
     asm volatile("st.release.gpu.global.L1::no_allocate.b32 [%0], %1;" : : "l"(ptr), "r"(val));
 }
 
-__device__ __forceinline__ void st_na_release(const uint64_t *ptr, uint64_t val) {
+__device__ __forceinline__ void st_na_release(const uint64_t* ptr, uint64_t val) {
     asm volatile("st.release.gpu.global.L1::no_allocate.b64 [%0], %1;" : : "l"(ptr), "l"(val));
+}
+
+//==============================================================================
+// Store Operations - Cache Global (st.cg)
+//==============================================================================
+
+// 16B cache-global int4 store: keeps the line resident in L2 instead of being
+// force-evicted, so a downstream consumer in the same launch sees an L2 hit.
+__device__ __forceinline__ void st_cg_global(int4* ptr, const int4& val) {
+    asm volatile("st.global.cg.v4.u32 [%0], {%1, %2, %3, %4};"
+                 :
+                 : "l"(ptr), "r"(val.x), "r"(val.y), "r"(val.z), "r"(val.w)
+                 : "memory");
 }
 
 //==============================================================================
@@ -404,30 +559,35 @@ __device__ __forceinline__ void st_na_release(const uint64_t *ptr, uint64_t val)
 #endif
 
 template <typename dtype_t>
-__device__ __forceinline__ void st_na_global(const dtype_t *ptr, const dtype_t& value) {
-    st_na_global(reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(ptr),
-                 *reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(&value));
+__device__ __forceinline__ void st_na_global(const dtype_t* ptr, const dtype_t& value) {
+    st_na_global(
+        reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(ptr),
+        *reinterpret_cast<const typename VecInt<sizeof(dtype_t)>::vec_t*>(&value));
 }
 
 template <>
-__device__ __forceinline__ void st_na_global(const int *ptr, const int& value) {
+__device__ __forceinline__ void st_na_global(const int* ptr, const int& value) {
     asm volatile(ST_NA_FUNC ".s32 [%0], %1;" ::"l"(ptr), "r"(value));
 }
 
 template <>
-__device__ __forceinline__ void st_na_global(const int64_t *ptr, const int64_t& value) {
+__device__ __forceinline__ void st_na_global(const int64_t* ptr, const int64_t& value) {
     asm volatile(ST_NA_FUNC ".s64 [%0], %1;" ::"l"(ptr), "l"(value));
 }
 
 template <>
-__device__ __forceinline__ void st_na_global(const float *ptr, const float& value) {
+__device__ __forceinline__ void st_na_global(const float* ptr, const float& value) {
     asm volatile(ST_NA_FUNC ".f32 [%0], %1;" ::"l"(ptr), "f"(value));
 }
 
 template <>
-__device__ __forceinline__ void st_na_global(const int4 *ptr, const int4& value) {
-    asm volatile(ST_NA_FUNC ".v4.s32 [%0], {%1, %2, %3, %4};"
-            ::"l"(ptr), "r"(value.x), "r"(value.y), "r"(value.z), "r"(value.w));
+__device__ __forceinline__ void st_na_global(const int4* ptr, const int4& value) {
+    asm volatile(
+        ST_NA_FUNC ".v4.s32 [%0], {%1, %2, %3, %4};" ::"l"(ptr),
+        "r"(value.x),
+        "r"(value.y),
+        "r"(value.z),
+        "r"(value.w));
 }
 
 //==============================================================================
@@ -462,7 +622,10 @@ __device__ __forceinline__ void red_add_release_sys_global(uint32_t* ptr, uint32
 
 __forceinline__ __device__ int atomic_cas_cta_acquire(int* addr, int x, int y) {
     int ret;
-    asm volatile("atom.acquire.cta.shared::cta.cas.b32 %0, [%1], %2, %3;" : "=r"(ret) : "l"(addr), "r"(x), "r"(y) : "memory");
+    asm volatile("atom.acquire.cta.shared::cta.cas.b32 %0, [%1], %2, %3;"
+                 : "=r"(ret)
+                 : "l"(addr), "r"(x), "r"(y)
+                 : "memory");
     return ret;
 }
 
@@ -497,8 +660,8 @@ __device__ __forceinline__ dtype_t broadcast(dtype_t& ptr, int src_lane_idx) {
     EP_STATIC_ASSERT(sizeof(dtype_t) % sizeof(int) == 0, "");
     auto send_int_values = reinterpret_cast<int*>(&ptr);
     int recv_int_values[sizeof(dtype_t) / sizeof(int)];
-    #pragma unroll
-    for (int i = 0; i < sizeof(dtype_t) / sizeof(int); ++ i)
+#pragma unroll
+    for (int i = 0; i < sizeof(dtype_t) / sizeof(int); ++i)
         recv_int_values[i] = __shfl_sync(0xffffffff, send_int_values[i], src_lane_idx);
     return *reinterpret_cast<dtype_t*>(recv_int_values);
 }
@@ -507,30 +670,56 @@ __device__ __forceinline__ dtype_t broadcast(dtype_t& ptr, int src_lane_idx) {
 // Warp-Level Reduction Operations
 //==============================================================================
 
-template <typename T> struct ReduceSum { __device__ T operator()(T a, T b) const { return a + b; } };
-template <typename T> struct ReduceMax { __device__ T operator()(T a, T b) const { return a > b ? a : b; } };
-template <typename T> struct ReduceMin { __device__ T operator()(T a, T b) const { return a < b ? a : b; } };
-template <typename T> struct ReduceAnd { __device__ T operator()(T a, T b) const { return a & b; } };
-template <typename T> struct ReduceOr  { __device__ T operator()(T a, T b) const { return a | b; } };
+template <typename T>
+struct ReduceSum {
+    __device__ T operator()(T a, T b) const {
+        return a + b;
+    }
+};
+template <typename T>
+struct ReduceMax {
+    __device__ T operator()(T a, T b) const {
+        return a > b ? a : b;
+    }
+};
+template <typename T>
+struct ReduceMin {
+    __device__ T operator()(T a, T b) const {
+        return a < b ? a : b;
+    }
+};
+template <typename T>
+struct ReduceAnd {
+    __device__ T operator()(T a, T b) const {
+        return a & b;
+    }
+};
+template <typename T>
+struct ReduceOr {
+    __device__ T operator()(T a, T b) const {
+        return a | b;
+    }
+};
 
 template <int kNumLanesPerGroup, bool kIntergroupReduce, typename T, typename Op>
 __forceinline__ __device__ T warp_reduce(T value, Op op) {
-    EP_STATIC_ASSERT(kNumLanesPerGroup == 32 or kNumLanesPerGroup == 16 or kNumLanesPerGroup == 8 or
-                     kNumLanesPerGroup ==  4 or kNumLanesPerGroup == 2  or kNumLanesPerGroup == 1,
-                     "Invalid number of lanes");
+    EP_STATIC_ASSERT(
+        kNumLanesPerGroup == 32 or kNumLanesPerGroup == 16 or kNumLanesPerGroup == 8 or kNumLanesPerGroup == 4 or
+            kNumLanesPerGroup == 2 or kNumLanesPerGroup == 1,
+        "Invalid number of lanes");
     constexpr uint32_t mask = 0xffffffff;
     if constexpr (kIntergroupReduce) {
-        if constexpr (kNumLanesPerGroup <=  1) value = op(value, __shfl_xor_sync(mask, value,  1));
-        if constexpr (kNumLanesPerGroup <=  2) value = op(value, __shfl_xor_sync(mask, value,  2));
-        if constexpr (kNumLanesPerGroup <=  4) value = op(value, __shfl_xor_sync(mask, value,  4));
-        if constexpr (kNumLanesPerGroup <=  8) value = op(value, __shfl_xor_sync(mask, value,  8));
+        if constexpr (kNumLanesPerGroup <= 1) value = op(value, __shfl_xor_sync(mask, value, 1));
+        if constexpr (kNumLanesPerGroup <= 2) value = op(value, __shfl_xor_sync(mask, value, 2));
+        if constexpr (kNumLanesPerGroup <= 4) value = op(value, __shfl_xor_sync(mask, value, 4));
+        if constexpr (kNumLanesPerGroup <= 8) value = op(value, __shfl_xor_sync(mask, value, 8));
         if constexpr (kNumLanesPerGroup <= 16) value = op(value, __shfl_xor_sync(mask, value, 16));
     } else {
         if constexpr (kNumLanesPerGroup >= 32) value = op(value, __shfl_xor_sync(mask, value, 16));
-        if constexpr (kNumLanesPerGroup >= 16) value = op(value, __shfl_xor_sync(mask, value,  8));
-        if constexpr (kNumLanesPerGroup >=  8) value = op(value, __shfl_xor_sync(mask, value,  4));
-        if constexpr (kNumLanesPerGroup >=  4) value = op(value, __shfl_xor_sync(mask, value,  2));
-        if constexpr (kNumLanesPerGroup >=  2) value = op(value, __shfl_xor_sync(mask, value,  1));
+        if constexpr (kNumLanesPerGroup >= 16) value = op(value, __shfl_xor_sync(mask, value, 8));
+        if constexpr (kNumLanesPerGroup >= 8) value = op(value, __shfl_xor_sync(mask, value, 4));
+        if constexpr (kNumLanesPerGroup >= 4) value = op(value, __shfl_xor_sync(mask, value, 2));
+        if constexpr (kNumLanesPerGroup >= 2) value = op(value, __shfl_xor_sync(mask, value, 1));
     }
     return value;
 }
@@ -575,8 +764,7 @@ __forceinline__ __device__ void release_lock(int* mutex) {
 }
 
 template <int kNumRanks, bool kSyncOnly = false>
-__forceinline__ __device__ void
-barrier_block(int** barrier_signal_ptrs, int rank) {
+__forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int rank) {
     auto thread_id = static_cast<int>(threadIdx.x);
 
     // For non-sync-only cases, the memory operations by other threads in the block must be visible to the `sys` scope
@@ -596,8 +784,7 @@ barrier_block(int** barrier_signal_ptrs, int rank) {
     auto start_time = clock64();
     while (true) {
         auto value = thread_id < kNumRanks ? ld_volatile_global(barrier_signal_ptrs[rank] + thread_id) : 0;
-        if (__all_sync(0xffffffff, value <= 0))
-            break;
+        if (__all_sync(0xffffffff, value <= 0)) break;
 
         if (clock64() - start_time > NUM_TIMEOUT_CYCLES and thread_id < kNumRanks) {
             printf("NCCL EP timeout check failed: rank = %d, thread = %d, value = %d)\n", rank, thread_id, value);
@@ -611,8 +798,8 @@ barrier_block(int** barrier_signal_ptrs, int rank) {
 // Task Distribution
 //==============================================================================
 
-__forceinline__ __device__ void get_channel_task_range(int num_tokens, int num_sms, int sm_id,
-                                                       int& token_start_idx, int& token_end_idx) {
+__forceinline__ __device__ void
+get_channel_task_range(int num_tokens, int num_sms, int sm_id, int& token_start_idx, int& token_end_idx) {
     int num_tokens_per_sm = ceil_div(num_tokens, num_sms);
     token_start_idx = min(num_tokens_per_sm * sm_id, num_tokens);
     token_end_idx = min(token_start_idx + num_tokens_per_sm, num_tokens);
@@ -626,61 +813,63 @@ __forceinline__ __device__ void get_channel_task_range(int num_tokens, int num_s
 
 __device__ __forceinline__ uint32_t elect_one_sync() {
     uint32_t pred = 0;
-    asm volatile(
-        "{\n"
-        ".reg .b32 %%rx;\n"
-        ".reg .pred %%px;\n"
-        "      elect.sync %%rx|%%px, %1;\n"
-        "@%%px mov.s32 %0, 1;\n"
-        "}\n"
-        : "+r"(pred)
-        : "r"(0xffffffff));
+    asm volatile("{\n"
+                 ".reg .b32 %%rx;\n"
+                 ".reg .pred %%px;\n"
+                 "      elect.sync %%rx|%%px, %1;\n"
+                 "@%%px mov.s32 %0, 1;\n"
+                 "}\n"
+                 : "+r"(pred)
+                 : "r"(0xffffffff));
     return pred;
 }
 
 // Fence operations for async proxy
 __device__ __forceinline__ void fence_view_async_shared() {
-    asm volatile("fence.proxy.async.shared::cta; \n" :: );
+    asm volatile("fence.proxy.async.shared::cta; \n" ::);
 }
 
 __device__ __forceinline__ void fence_barrier_init() {
-    asm volatile("fence.mbarrier_init.release.cluster; \n" :: );
+    asm volatile("fence.mbarrier_init.release.cluster; \n" ::);
 }
 
 // Mbarrier operations
 __device__ __forceinline__ void mbarrier_init(uint64_t* mbar_ptr, uint32_t arrive_count) {
     auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
-    asm volatile("mbarrier.init.shared::cta.b64 [%1], %0;" :: "r"(arrive_count), "r"(mbar_int_ptr));
+    asm volatile("mbarrier.init.shared::cta.b64 [%1], %0;" ::"r"(arrive_count), "r"(mbar_int_ptr));
 }
 
 __device__ __forceinline__ void mbarrier_inval(uint64_t* mbar_ptr) {
     auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
-    asm volatile("mbarrier.inval.shared::cta.b64 [%0];" :: "r"(mbar_int_ptr));
+    asm volatile("mbarrier.inval.shared::cta.b64 [%0];" ::"r"(mbar_int_ptr));
 }
 
 template <bool kWithMultiStages = false>
 __device__ __forceinline__ void mbarrier_wait(uint64_t* mbar_ptr, uint32_t& phase, int stage_idx = 0) {
     auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
     const auto& wait = kWithMultiStages ? (phase >> stage_idx) & 1 : phase;
-    asm volatile("{\n\t"
-                 ".reg .pred       P1; \n\t"
-                 "LAB_WAIT: \n\t"
-                 "mbarrier.try_wait.parity.shared::cta.b64 P1, [%0], %1, %2; \n\t"
-                 "@P1 bra DONE; \n\t"
-                 "bra     LAB_WAIT; \n\t"
-                 "DONE: \n\t"
-                 "}" :: "r"(mbar_int_ptr), "r"(wait), "r"(0x989680));
+    asm volatile(
+        "{\n\t"
+        ".reg .pred       P1; \n\t"
+        "LAB_WAIT: \n\t"
+        "mbarrier.try_wait.parity.shared::cta.b64 P1, [%0], %1, %2; \n\t"
+        "@P1 bra DONE; \n\t"
+        "bra     LAB_WAIT; \n\t"
+        "DONE: \n\t"
+        "}" ::"r"(mbar_int_ptr),
+        "r"(wait),
+        "r"(0x989680));
     phase ^= kWithMultiStages ? (1 << stage_idx) : 1;
 }
 
 __device__ __forceinline__ void mbarrier_arrive_and_expect_tx(uint64_t* mbar_ptr, int num_bytes) {
     auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
-    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%1], %0; \n\t" :: "r"(num_bytes), "r"(mbar_int_ptr));
+    asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%1], %0; \n\t" ::"r"(num_bytes), "r"(mbar_int_ptr));
 }
 
 __device__ __forceinline__ void mbarrier_arrive(uint64_t* mbar_ptr) {
     auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
-    asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0]; \n\t" :: "r"(mbar_int_ptr));
+    asm volatile("mbarrier.arrive.shared::cta.b64 _, [%0]; \n\t" ::"r"(mbar_int_ptr));
 }
 
 // TMA operations
@@ -688,30 +877,38 @@ constexpr uint64_t kEvictFirst = 0x12f0000000000000;
 constexpr uint64_t kEvictNormal = 0x1000000000000000;
 
 __device__ __forceinline__ void tma_store_fence() {
-    asm volatile ("fence.proxy.async.shared::cta;");
+    asm volatile("fence.proxy.async.shared::cta;");
 }
 
-__device__ __forceinline__ void tma_load_1d(const void* smem_ptr, const void* gmem_ptr, uint64_t* mbar_ptr, int num_bytes,
-                                            bool evict_first = true) {
+__device__ __forceinline__ void
+tma_load_1d(const void* smem_ptr, const void* gmem_ptr, uint64_t* mbar_ptr, int num_bytes, bool evict_first = true) {
     auto mbar_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(mbar_ptr));
-    auto smem_int_ptr  = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
-    const auto cache_hint = evict_first ? kEvictFirst : kEvictNormal;
-    asm volatile("cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes.L2::cache_hint [%0], [%1], %2, [%3], %4;\n"
-                 :: "r"(smem_int_ptr), "l"(gmem_ptr), "r"(num_bytes), "r"(mbar_int_ptr), "l"(cache_hint) : "memory");
-}
-
-__device__ __forceinline__ void tma_store_1d(const void* smem_ptr, const void* gmem_ptr, int num_bytes,
-                                             bool evict_first = true) {
     auto smem_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
     const auto cache_hint = evict_first ? kEvictFirst : kEvictNormal;
-    asm volatile("cp.async.bulk.global.shared::cta.bulk_group.L2::cache_hint [%0], [%1], %2, %3;\n"
-                 :: "l"(gmem_ptr), "r"(smem_int_ptr), "r"(num_bytes), "l"(cache_hint) : "memory");
+    asm volatile("cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes.L2::cache_hint [%0], [%1], %2, "
+                 "[%3], %4;\n" ::"r"(smem_int_ptr),
+                 "l"(gmem_ptr),
+                 "r"(num_bytes),
+                 "r"(mbar_int_ptr),
+                 "l"(cache_hint)
+                 : "memory");
+}
+
+__device__ __forceinline__ void
+tma_store_1d(const void* smem_ptr, const void* gmem_ptr, int num_bytes, bool evict_first = true) {
+    auto smem_int_ptr = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
+    const auto cache_hint = evict_first ? kEvictFirst : kEvictNormal;
+    asm volatile("cp.async.bulk.global.shared::cta.bulk_group.L2::cache_hint [%0], [%1], %2, %3;\n" ::"l"(gmem_ptr),
+                 "r"(smem_int_ptr),
+                 "r"(num_bytes),
+                 "l"(cache_hint)
+                 : "memory");
     asm volatile("cp.async.bulk.commit_group;");
 }
 
 template <int N = 0>
 __device__ __forceinline__ void tma_store_wait() {
-    asm volatile("cp.async.bulk.wait_group.read %0;" :: "n"(N) : "memory");
+    asm volatile("cp.async.bulk.wait_group.read %0;" ::"n"(N) : "memory");
 }
 
 #endif // DISABLE_SM90_FEATURES

@@ -12,8 +12,7 @@ CPPFLAGS := \
 	-I$(CUDA_HOME)/include \
 	-I$(CUDA_HOME)/include/cccl \
 	-I$(NCCL_SRC)/../build/include \
-	-I$(NCCL_SRC)/include \
-	-I$(NCCL_SRC)/include/plugin
+	-I$(NCCL_SRC)/include
 
 LDFLAGS := \
 	-Wl,--gc-sections \

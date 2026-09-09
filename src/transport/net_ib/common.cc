@@ -16,12 +16,15 @@ int ncclNIbDevs = -1;
 struct ncclIbMergedDev ncclIbMergedDevs[MAX_IB_VDEVS];
 struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];
 int ncclIbRelaxedOrderingEnabled = 0;
+uint64_t ncclIbSpeedChangeCounter = 0;
 
 ncclProfilerCallback_t ncclProfilerFunction;
 
 NCCL_PARAM(IbSplitDataOnQps, "IB_SPLIT_DATA_ON_QPS", 0);
 NCCL_PARAM(IbPrepostReceiveWorkRequests, "IB_PREPOST_RECEIVE_WORK_REQUESTS", -2);
 NCCL_PARAM(IbAsyncEvents, "IB_RETURN_ASYNC_EVENTS", 1);
+NCCL_PARAM(IbEventBasedLb, "IB_EVENT_BASED_LB", 0);
+NCCL_PARAM(IbEventBasedLbRemote, "IB_EVENT_BASED_LB_REMOTE", 1);
 
 extern int ncclParamIbReceiverSideMatchingScheme();
 extern int ncclParamIbOooRq();
@@ -61,6 +64,10 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
   baseComm->nDataQps = -1;
   baseComm->isSend = isSend;
   baseComm->ready = 0;
+  baseComm->speedChangeCounter = 0;
+  baseComm->totalSpeed = 0;
+  memset(baseComm->weights, 0, sizeof(baseComm->weights));
+  memset(baseComm->devSpeeds, 0, sizeof(baseComm->devSpeeds));
 
   NCCLCHECK(ncclIbResiliencyInit(baseComm, &baseComm->resiliency));
   baseComm->recvMatchingScheme =
@@ -104,6 +111,55 @@ ncclResult_t ncclIbRecvCommInit(struct ncclIbRecvComm* recvComm) {
 ncclResult_t ncclIbSendCommInit(struct ncclIbSendComm* sendComm) {
   NCCLCHECK(ncclIbBaseCommInit(&sendComm->base, true));
   return ncclSuccess;
+}
+
+static ncclResult_t ncclIbEventGidChange(struct ncclIbDev* dev) {
+  INFO(NCCL_NET, "NET/IB: %s: GID table changed on %s:%d", __func__, dev->devName, dev->portNum);
+  if (dev->gidInfo.link_layer != IBV_LINK_LAYER_ETHERNET) {
+    INFO(NCCL_NET, "NET/IB : %s:%d link is not Ethernet; ignoring GID change", dev->devName, dev->portNum);
+    return ncclSuccess;
+  }
+  struct ibv_port_attr portAttr;
+  ncclResult_t res = wrap_ibv_query_port(dev->context, dev->portNum, &portAttr);
+  if (res != ncclSuccess) {
+    WARN("NET/IB : %s:%d query_port failed during GID change (res=%d)", dev->devName, dev->portNum, (int)res);
+    return res;
+  }
+
+  std::lock_guard<std::mutex> lock(dev->mutex);
+  int oldIdx = dev->gidInfo.localGidIndex;
+  union ibv_gid oldGid = dev->gidInfo.localGid;
+  res = ncclIbGidInfoQuery(dev->context, dev->portNum, &portAttr, &dev->gidInfo);
+  if (res != ncclSuccess) {
+    WARN("NET/IB : %s:%d GID info query failed (%d) during GID change", dev->devName, dev->portNum, (int)res);
+    return res;
+  }
+  dev->portAttr = portAttr; // publish only once everything succeeded
+  char oldGidStr[INET6_ADDRSTRLEN] = "";
+  char newGidStr[INET6_ADDRSTRLEN] = "";
+  ibvGetGidStr(&oldGid, oldGidStr, sizeof(oldGidStr));
+  ibvGetGidStr(&dev->gidInfo.localGid, newGidStr, sizeof(newGidStr));
+  INFO(NCCL_NET, "NET/IB : %s:%d GID refreshed: idx %d -> %d, gid %s -> %s", dev->devName, dev->portNum, oldIdx,
+       dev->gidInfo.localGidIndex, oldGidStr, newGidStr);
+  return ncclSuccess;
+}
+
+static void ncclIbUpdateDeviceSpeed(struct ncclIbDev* dev) {
+  uint64_t oldSpeed = COMPILER_ATOMIC_LOAD(&dev->currSpeed, std::memory_order_relaxed);
+  uint64_t newSpeed = 0;
+  if (wrap_ibv_query_port_speed(dev->context, dev->portNum, &newSpeed) != ncclSuccess) return;
+
+  // In cases of port failover, the speed change event is ignored and will be considered as a port fail event
+  if (newSpeed == 0) return;
+  // ibv_query_port_speed returns speed in granularity of 100 Mbps
+  newSpeed *= 100;
+
+  if (newSpeed != oldSpeed) {
+    INFO(NCCL_NET, "NET/IB : %s:%d speed change detected: %lu -> %lu Mbps", dev->devName, dev->portNum,
+         (unsigned long)oldSpeed, (unsigned long)newSpeed);
+    COMPILER_ATOMIC_STORE(&dev->currSpeed, newSpeed, std::memory_order_relaxed);
+    COMPILER_ATOMIC_FETCH_ADD(&ncclIbSpeedChangeCounter, (uint64_t)1, std::memory_order_release);
+  }
 }
 
 std::thread ncclIbAsyncThread;
@@ -150,20 +206,15 @@ void* ncclIbAsyncThreadMain(void* args) {
       WARN("NET/IB : %s:%d async fatal event on SRQ, unused for now (%p): %s", dev->devName, dev->portNum, srq, str);
       break;
     case IBV_EVENT_GID_CHANGE:
-      WARN("NET/IB : %s:%d GID table changed", dev->devName, dev->portNum);
+      if (ncclIbEventGidChange(dev) != ncclSuccess) {
+        WARN("NET/IB : %s:%d marking device with fatal error after GID-change event handler failed", dev->devName,
+             dev->portNum);
+        ncclIbDevFatalError(dev);
+      }
       break;
     case IBV_EVENT_DEVICE_SPEED_CHANGE:
-      {
-        uint64_t newSpeed = 0;
-        char speedStr[32] = "";
-      // ibv_query_port_speed returns speed in granularity of 100 Mbps
-        if (wrap_ibv_query_port_speed(dev->context, dev->portNum, &newSpeed) == ncclSuccess) {
-          snprintf(speedStr, sizeof(speedStr), "%lu", (unsigned long)(newSpeed * 100));
-        }
-        INFO(NCCL_NET, "NET/IB : %s:%d speed change detected: %d -> %s Mbps", dev->devName, dev->portNum, dev->speed,
-             strlen(speedStr) ? speedStr : "N/A");
-        break;
-      }
+      ncclIbUpdateDeviceSpeed(dev);
+      break;
     case IBV_EVENT_PATH_MIG_ERR:
     case IBV_EVENT_PORT_ERR:
     case IBV_EVENT_PATH_MIG:

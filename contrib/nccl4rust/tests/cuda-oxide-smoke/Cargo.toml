@@ -1,0 +1,21 @@
+[package]
+name = "nccl4rust-cuda-oxide-smoke"
+description = "CUDA-Oxide compile-and-link smoke kernels for nccl4rust"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", rev = "c9a55dfb5e7c06f17aa8a50c1d17ae8bfa984fda" }
+cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git", rev = "c9a55dfb5e7c06f17aa8a50c1d17ae8bfa984fda" }
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", rev = "c9a55dfb5e7c06f17aa8a50c1d17ae8bfa984fda" }
+libnvvm-sys = { git = "https://github.com/NVlabs/cuda-oxide.git", rev = "c9a55dfb5e7c06f17aa8a50c1d17ae8bfa984fda" }
+nvjitlink-sys = { git = "https://github.com/NVlabs/cuda-oxide.git", rev = "c9a55dfb5e7c06f17aa8a50c1d17ae8bfa984fda" }
+nccl-device = { path = "../../crates/nccl-device", features = ["cuda-oxide"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"

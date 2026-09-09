@@ -20,7 +20,7 @@
 /* No GIN backends on Windows */
 #define NCCL_GIN_BACKEND_MASK_ALL 0u
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <unsigned backendMask>
 struct ncclGin_BackendMask {
   ncclDevComm const& comm;

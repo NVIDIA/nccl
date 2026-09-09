@@ -8,13 +8,13 @@ Codegen target — each entry is 1:1 with a C struct definition.
 
 import cutlass
 import cutlass.cute as cute
-from cutlass._mlir import ir
+from cutlass.cutlass_dsl import ir
 
 
 # === MLIR type adapters ===
 
 class _LLVMPtrType:
-    """Wraps ``!llvm.ptr`` for use in ``cute.ffi`` signatures and as a
+    """Wraps ``!llvm.ptr`` for use in ``@cute.extern`` signatures and as a
     ``@cute.native_struct`` field annotation."""
 
     @staticmethod
@@ -25,6 +25,17 @@ class _LLVMPtrType:
     def __get_mlir_types__():
         return [_LLVMPtrType.mlir_type()]
 
+    @classmethod
+    def isinstance(cls, value):
+        """Match an ``!llvm.ptr`` ir.Value during ``@cute.extern`` dispatch.
+
+        Callers pass pointers as bare ``!llvm.ptr`` ir.Values — a wrapper's
+        ``.ptr``, or ``_to_ptr`` for an integer address — so the extern
+        overload matcher needs this hook to recognize them against a
+        ``_LLVMPtrType`` annotation.
+        """
+        return isinstance(value, ir.Value) and value.type == cls.mlir_type()
+
 
 def _array_i8(n: int):
     """Build a fixed-size byte array type for opaque struct storage."""
@@ -33,6 +44,17 @@ def _array_i8(n: int):
         @staticmethod
         def mlir_type():
             return ir.Type.parse(f"!llvm.array<{n} x i8>")
+
+    return T
+
+
+def _array_ptr(n: int):
+    """Build a fixed-size opaque-pointer array type."""
+
+    class T:
+        @staticmethod
+        def mlir_type():
+            return ir.Type.parse(f"!llvm.array<{n} x ptr>")
 
     return T
 
@@ -68,11 +90,89 @@ class ncclGinBarrierHandle:
 
 
 @cute.native_struct
+class ncclCftBarrierHandle:
+    """``struct ncclCftBarrierHandle { ncclDevResourceHandle_t bufHandle; int nBarriers; }``
+    (src/include/nccl_device/impl/cft_barrier__types.h)."""
+
+    bufHandle: cutlass.Uint32
+    nBarriers: cutlass.Int32
+
+
+@cute.native_struct
 class ncclMultimemHandle:
     """``struct ncclMultimemHandle { void* mcBasePtr; }``
     (src/include/nccl_device/impl/core__types.h)."""
 
     mcBasePtr: _LLVMPtrType
+
+
+@cute.native_struct
+class ncclResourceWindow_vidmem:
+    """``ncclResourceWindow_vidmem_t`` from ``impl/core__types.h``."""
+
+    lsa_flat_base: _LLVMPtrType
+    stride4g: cutlass.Uint32
+    mc_offset4k: cutlass.Uint32
+
+
+@cute.native_struct
+class DevCommValue:
+    """By-value ABI mirror of ``struct ncclDevComm``.
+
+    Field order and types must stay synchronized with
+    ``nccl_device_expanded.h`` used to generate the low-level bindings. The
+    unpacked LLVM struct supplies the same natural padding as the C structure.
+    """
+
+    magic: cutlass.Uint32
+    version: cutlass.Uint32
+
+    rank: cutlass.Int32
+    n_ranks: cutlass.Int32
+    n_ranks_rcp32: cutlass.Uint32
+    lsa_rank: cutlass.Int32
+    lsa_size: cutlass.Int32
+    lsa_size_rcp32: cutlass.Uint32
+
+    window_table: _LLVMPtrType
+    resource_window: _LLVMPtrType
+    resource_window_inlined: ncclResourceWindow_vidmem
+
+    hybrid_dense_gin_barrier: ncclGinBarrierHandle
+
+    lsa_multimem: ncclMultimemHandle
+    lsa_barrier: ncclLsaBarrierHandle
+    rail_gin_barrier: ncclGinBarrierHandle
+
+    gin_connection_count: cutlass.Uint8
+    backend_index: cutlass.Uint8
+    gin_net_device_types: _array_i8(4)
+    gin_handles: _array_ptr(4)
+    gin_signal_count: cutlass.Int32
+    gin_counter_count: cutlass.Int32
+    gin_signal_shadows: _LLVMPtrType
+    gin_context_count: cutlass.Uint32
+    gin_connection_stride: cutlass.Int32
+    gin_context_stride: cutlass.Int32
+    gin_strong_legacy_signals: cutlass.Uint8
+
+    abort_flag: _LLVMPtrType
+
+    hybrid_lsa_barrier: ncclLsaBarrierHandle
+    hybrid_rail_gin_barrier: ncclGinBarrierHandle
+
+    world_gin_barrier: ncclGinBarrierHandle
+    gin_connection_stride_rcp32: cutlass.Uint32
+
+    cft_rank: cutlass.Int32
+    cft_size: cutlass.Int32
+    cft_multimem_rank: cutlass.Int32
+    cft_multimem_size: cutlass.Int32
+    cft_multimem_size_rcp32: cutlass.Uint32
+    uc_le_id: cutlass.Uint32
+    mc_le_id: cutlass.Uint32
+    cft_barrier: ncclCftBarrierHandle
+    cft_multimem_barrier: ncclCftBarrierHandle
 
 
 @cute.native_struct

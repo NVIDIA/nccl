@@ -35,9 +35,9 @@
 
 #include <unordered_map>
 
-#include "doca_verbs_cuda_wrapper.h"
+#include "doca_gpunetio_cuda_wrapper.h"
 
-struct doca_gpu {
+struct doca_gpu_open {
     CUdevice cuda_dev; /* CUDA device handler */
     std::unordered_map<uintptr_t, struct doca_gpu_mtable *>
         *mtable;                       /* Table of GPU/CPU memory allocated addresses */
@@ -57,4 +57,6 @@ struct doca_gpu {
                                        ///< is supported
     bool need_mcst;                    ///< Boolean value that indicates if memory consistency
                                        ///< algorithm is required for igress GPU data
+    bool support_gdrcopy_data_direct;  ///< Boolean value that indicates if gdrcopy
+                                       ///< with the data direct path is supported
 };

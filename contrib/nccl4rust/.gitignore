@@ -1,0 +1,8 @@
+target/
+/build/
+.oxide-artifacts/
+**/.oxide-artifacts/
+*.ltoir
+*.cubin
+*.ptx
+*.ll

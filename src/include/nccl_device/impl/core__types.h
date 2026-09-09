@@ -17,6 +17,9 @@ typedef void* ncclGinWindow_t;
 #include "nccl_device/gin/gin_device_host_common.h"
 #endif
 
+// CFT Logical Endpoint ID
+#define NCCL_LE_ID_INVALID ((ncclCftLeId_t) - 1)
+
 struct ncclSegmentWindow {
   ncclGinWindow_t ginWins[NCCL_GIN_MAX_CONNECTIONS];
   size_t segmentSize;
@@ -32,21 +35,19 @@ struct ncclWindow_vidmem {
   uint32_t stride4G;
   uint32_t mcOffset4K;
   uint32_t ginOffset4K;
-  ncclGinWindow_t ginWins[NCCL_GIN_MAX_CONNECTIONS];
+  ncclGinWindow_t ginWinsDefaultBackend[NCCL_GIN_MAX_CONNECTIONS];
   struct ncclSegmentWindow* ginMultiSegmentWins; // multi-segment: pointer to accommodate variable num segments
   int numSegments;
+  int cftFlatRank;
 };
 
 // Inlined resource-window. A subset of ncclWindow_vidmem with only the fields used
 // for resource-buffer addressing. lsaFlatBase / stride4G / mcOffset4K stay at the same
 // offsets they have inside ncclWindow_vidmem for byte-level compatibility.
 typedef struct ncclResourceWindow_vidmem {
-  char reserved1[8];
   char* lsaFlatBase;
-  char reserved2[8];
   uint32_t stride4G;
   uint32_t mcOffset4K;
-  char reserved3[32];  // NOTE: shrunk from 40 in 2.30u1 to reclaim 8 bytes
 } ncclResourceWindow_vidmem_t;
 
 struct ncclMultimemHandle {

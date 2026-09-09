@@ -19,13 +19,18 @@ TRANSPORT_CC := $(filter-out transport/net_socket_stub.cc transport/net_ib_stub.
 endif
 
 LIBSRCFILES := \
-	bootstrap.cc channel.cc collectives.cc debug.cc enqueue.cc group.cc \
-	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
+	bootstrap.cc channel.cc collectives.cc debug.cc group.cc \
+	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc cft_dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
+	$(wildcard config/*.cc) \
 	$(wildcard graph/*.cc) \
+	$(wildcard enqueue/*.cc) \
+	$(wildcard enqueue/task_prep/*.cc) \
+	$(wildcard enqueue/task_sched/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(TRANSPORT_CC) \
 	$(wildcard transport/net_ib/*.cc) \
 	$(wildcard transport/net_ib/gdaki/*.cc) \
+	$(wildcard transport/net_ib/gdaki/gpucontext/*.cc) \
 	$(wildcard register/*.cc) \
 	$(wildcard plugin/*.cc) \
 	$(wildcard plugin/net/*.cc) \
@@ -37,15 +42,17 @@ LIBSRCFILES := \
 	$(wildcard nccl_device/*.cc) \
 	$(wildcard scheduler/*.cc) \
 	$(wildcard gin/*.cc) \
+	$(wildcard gin/proxy_gpucontext/*.cc) \
 	$(wildcard rma/*.cc) \
 	$(wildcard devcomm/*.cc) \
+	$(wildcard tuning/*.cc) \
 	$(filter-out param/ncclparam.cc,$(wildcard param/*.cc)) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc
 PARAMBINSRCFILES := param/ncclparam.cc
 
 ifeq ($(NCCL_OS_LINUX), 1)
-	LIBSRCFILES += os/linux.cc os/linux_ipcsocket.cc os/linux_socket_pair.cc
+	LIBSRCFILES += os/linux.cc os/linux_ipcsocket.cc os/linux_socket_pair.cc diagnostics.cc $(wildcard diagnostics/*.cc)
 else ifeq ($(NCCL_OS_WINDOWS), 1)
 	LIBSRCFILES += os/windows.cc os/windows_ipcsocket.cc os/windows_socket_pair.cc
 endif
@@ -84,13 +91,18 @@ LIBTARGET  := $(LIBNAME:%=%.$(NCCL_MAJOR).$(NCCL_MINOR).$(NCCL_PATCH))
 STATICLIBTARGET := $(STATICLIBNAME)
 PKGTARGET  := $(PKGCONFIGFILE)
 LIBOBJ     := $(LIBSRCFILES:%.cc=$(OBJDIR)/%.o)
-BINOBJ     := $(BINSRCFILES:%.cc=$(OBJDIR)/%.o)
+BINOBJ     := $(BINSRCFILES:%.cc=$(OBJDIR)/%.o) $(OBJDIR)/ras/ras_param_client.o
 PARAMBINOBJ     := $(PARAMBINSRCFILES:%.cc=$(OBJDIR)/%.o)
 DEPFILES   := $(LIBOBJ:%.o=%.d) $(BINOBJ:%.o=%.d) $(PARAMBINOBJ:%.o=%.d)
 LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
 INCPLUGIN  := include/plugin
 
 DEVMANIFEST := $(BUILDDIR)/obj/device/manifest
+DIAG_DEVMANIFEST := $(BUILDDIR)/obj/diagnostics/device/manifest
+DEVMANIFESTS := $(DEVMANIFEST)
+ifeq ($(NCCL_OS_LINUX), 1)
+DEVMANIFESTS += $(DIAG_DEVMANIFEST)
+endif
 
 
 GIT_VERSION_FILE := $(OBJDIR)/include/nccl_git_version.h
@@ -105,9 +117,16 @@ DOCA_OBJDIR      := $(OBJDIR)/transport/net_ib/gdaki/doca-gpunetio
 DOCA_INCLUDES    := $(DOCA_HOME)/include/doca_gpunetio_device.h $(wildcard $(DOCA_HOME)/include/common/*.h) $(wildcard $(DOCA_HOME)/include/device/*.cuh)
 DOCA_INCTARGETS  := $(DOCA_INCLUDES:$(DOCA_HOME)/include/%=$(DOCA_INC_INSTALL)/%)
 INCTARGETS       += $(DOCA_INCTARGETS)
-DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_verbs_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp
+DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_verbs_dev.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp doca_gpunetio_sdk_wrapper.cpp doca_verbs_dev_sdk_wrapper.cpp doca_verbs_umem_sdk_wrapper.cpp doca_verbs_uar_sdk_wrapper.cpp doca_verbs_cq_sdk_wrapper.cpp doca_verbs_qp_sdk_wrapper.cpp
 DOCA_LIBOBJ      := $(DOCA_LIBSRC:%.cpp=$(DOCA_OBJDIR)/%.o)
 LIBOBJ           += $(DOCA_LIBOBJ)
+
+# EFA-DP-Direct device header installation (mirrors DOCA pattern above)
+EFA_DP_DIRECT_HOME        := transport/net_efa_gda/efa-dp-direct
+EFA_DP_DIRECT_INC_INSTALL := $(INCDIR)/nccl_device/transport/net_efa_gda/efa-dp-direct
+EFA_DP_DIRECT_INCLUDES    := $(wildcard $(EFA_DP_DIRECT_HOME)/include/device/*.cuh) $(wildcard $(EFA_DP_DIRECT_HOME)/include/device/*.h) $(wildcard $(EFA_DP_DIRECT_HOME)/include/common/*.h)
+EFA_DP_DIRECT_INCTARGETS  := $(EFA_DP_DIRECT_INCLUDES:$(EFA_DP_DIRECT_HOME)/include/%=$(EFA_DP_DIRECT_INC_INSTALL)/include/%)
+INCTARGETS                += $(EFA_DP_DIRECT_INCTARGETS)
 
 ##### rules
 build : lib staticlib binary
@@ -118,8 +137,13 @@ staticlib : $(LIBDIR)/$(STATICLIBTARGET)
 
 binary : $(BINDIR)/$(BINNAME) $(BINDIR)/$(PARAMBIN)
 
+headers : $(INCTARGETS)
+
 $(DEVMANIFEST): ALWAYS_REBUILD $(INCTARGETS)
 	$(MAKE) -C ./device
+
+$(DIAG_DEVMANIFEST): ALWAYS_REBUILD $(INCTARGETS)
+	$(MAKE) -C ./diagnostics/device
 
 # Empty target to force rebuild
 .PHONY: ALWAYS_REBUILD
@@ -139,19 +163,19 @@ $(INCDIR)/nccl.h : nccl.h.in ../makefiles/version.mk
 	    -e "s/\$${nccl:Version}/$(NCCL_VERSION)/g" \
 	    $< > $@
 
-# Device objs (from device/Makefile manifest, incl. common.cu.o) are linked in so libnccl.so contains
+# Device objs (from device manifests, incl. common.cu.o) are linked in so libnccl.so contains
 # device code (e.g. ncclGin_BackendMask<...>) that tests resolve when linking with -lnccl.
-$(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVMANIFEST)
+$(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVMANIFESTS)
 	@printf "Linking    %-35s > %s\n" $(LIBTARGET) $@
 	mkdir -p $(LIBDIR)
-	$(CXX) $(CXXFLAGS) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME) -o $@ $(LIBOBJ) $$(cat $(DEVMANIFEST)) $(LDFLAGS) -Wl,--version-script=libnccl.map
+	$(CXX) $(CXXFLAGS) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME) -o $@ $(LIBOBJ) $$(cat $(DEVMANIFESTS)) $(LDFLAGS) -Wl,--version-script=libnccl.map
 	ln -sf $(LIBSONAME) $(LIBDIR)/$(LIBNAME)
 	ln -sf $(LIBTARGET) $(LIBDIR)/$(LIBSONAME)
 
-$(LIBDIR)/$(STATICLIBTARGET): $(LIBOBJ) $(DEVMANIFEST)
+$(LIBDIR)/$(STATICLIBTARGET): $(LIBOBJ) $(DEVMANIFESTS)
 	@printf "Archiving  %-35s > %s\n" $(STATICLIBTARGET) $@
 	mkdir -p $(LIBDIR)
-	ar cr $@ $(LIBOBJ) $$(cat $(DEVMANIFEST))
+	ar cr $@ $(LIBOBJ) $$(cat $(DEVMANIFESTS))
 
 $(BINDIR)/$(BINNAME): $(BINOBJ)
 	@printf "Linking    %-35s > %s\n" $(BINNAME) $@
@@ -212,6 +236,26 @@ $(INCDIR)/nccl_device/gin/proxy/%.h: include/nccl_device/gin/proxy/%.h
 	mkdir -p $(INCDIR)/nccl_device/gin/proxy
 	install -m 644 $< $@
 
+$(INCDIR)/nccl_device/gin/efa_gda/%.h: include/nccl_device/gin/efa_gda/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(INCDIR)/nccl_device/gin/efa_gda
+	install -m 644 $< $@
+
+$(EFA_DP_DIRECT_INC_INSTALL)/include/device/%.cuh: $(EFA_DP_DIRECT_HOME)/include/device/%.cuh
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(EFA_DP_DIRECT_INC_INSTALL)/include/device
+	install -m 644 $< $@
+
+$(EFA_DP_DIRECT_INC_INSTALL)/include/device/%.h: $(EFA_DP_DIRECT_HOME)/include/device/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(EFA_DP_DIRECT_INC_INSTALL)/include/device
+	install -m 644 $< $@
+
+$(EFA_DP_DIRECT_INC_INSTALL)/include/common/%.h: $(EFA_DP_DIRECT_HOME)/include/common/%.h
+	@printf "Grabbing   %-35s > %s\n" $< $@
+	mkdir -p $(EFA_DP_DIRECT_INC_INSTALL)/include/common
+	install -m 644 $< $@
+
 $(DOCA_INC_INSTALL)/%.h: $(DOCA_HOME)/include/%.h
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(DOCA_INC_INSTALL)
@@ -231,6 +275,11 @@ $(PKGDIR)/%.pc : %.pc
 	@printf "Grabbing   %-35s > %s\n" $< $@
 	mkdir -p $(PKGDIR)
 	install -m 644 $< $@
+
+$(OBJDIR)/ras/ras_param_client.o: ras/ras_param.cc $(INCTARGETS)
+	@printf "Compiling  %-35s > %s\n" $< $@
+	mkdir -p `dirname $@`
+	$(CXX) -I. -I$(INCDIR) -I$(OBJDIR)/include $(CXXFLAGS) -DNCCL_RAS_CLIENT -Iinclude -I$(INCPLUGIN) -I$(DOCA_HOME)/include -c $< -o $@
 
 $(OBJDIR)/%.o : %.cc $(INCTARGETS)
 	@printf "Compiling  %-35s > %s\n" $< $@
@@ -256,6 +305,7 @@ $(DOCA_OBJDIR)/%.o : $(DOCA_HOME)/src/%.cpp
 
 clean :
 	$(MAKE) -C device clean
+	$(MAKE) -C diagnostics/device clean
 	rm -rf ${BINDIR} ${INCDIR} ${LIBDIR} ${PKGDIR} ${OBJDIR}
 
 install : build

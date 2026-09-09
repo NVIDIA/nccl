@@ -14,11 +14,12 @@
 #include "../coop.h"
 #include <cassert>
 #include <cstdint>
+#include <type_traits>
 #if defined(__CUDA_FP8_TYPES_EXIST__)
 #include <cuda_fp8.h>
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 
 namespace nccl {
 namespace utility {
@@ -384,19 +385,36 @@ struct PackAccess<T, 0> {
 // Cast pack from element type X to element type Y
 // Works with EltPack types
 template <typename Y, typename X, int n>
+NCCL_DEVICE_INLINE EltPack<Y, n> castPack(EltPack<X, n> x);
+
+template <typename Y, typename X, int n, bool SameType = std::is_same<X, Y>::value>
+struct CastPackImpl {
+  NCCL_DEVICE_INLINE static EltPack<Y, n> run(EltPack<X, n> x) {
+    PackAccess<X, n> in;
+    PackAccess<Y, n> out;
+    in.pack = x;
+    if NCCL_IF_CONSTEXPR (n == 1) {
+      out.pack.elts()[0] = static_cast<Y>(in.pack.elts()[0]);
+    } else {
+      out.lo = castPack<Y>(in.lo);
+      out.hi = castPack<Y>(in.hi);
+    }
+    return out.pack;
+  }
+};
+
+template <typename Y, typename X, int n>
+struct CastPackImpl<Y, X, n, true> {
+  NCCL_DEVICE_INLINE static EltPack<Y, n> run(EltPack<X, n> x) {
+    return x;
+  }
+};
+
+template <typename Y, typename X, int n>
 NCCL_DEVICE_INLINE EltPack<Y, n> castPack(EltPack<X, n> x) {
   static_assert((n & (n - 1)) == 0, "EltPack requires power-of-two element count");
 
-  PackAccess<X, n> in;
-  PackAccess<Y, n> out;
-  in.pack = x;
-  if NCCL_IF_CONSTEXPR (n == 1) {
-    out.pack.elts()[0] = static_cast<Y>(in.pack.elts()[0]);
-  } else {
-    out.lo = castPack<Y>(in.lo);
-    out.hi = castPack<Y>(in.hi);
-  }
-  return out.pack;
+  return CastPackImpl<Y, X, n>::run(x);
 }
 
 // Specialization for zero-sized packs
@@ -730,18 +748,12 @@ template <template <typename> typename Red, typename T, int n>
 NCCL_DEVICE_INLINE EltPack<T, n> reducePack(Red<T> const& red, EltPack<T, n> a, EltPack<T, n> b) {
   static_assert((n & (n - 1)) == 0, "EltPack requires power-of-two element count");
 
-  PackAccess<T, n> aa;
-  PackAccess<T, n> bb;
-  PackAccess<T, n> out;
-  aa.pack = a;
-  bb.pack = b;
-  if NCCL_IF_CONSTEXPR (n == 1) {
-    out.pack.elts()[0] = red(aa.pack.elts()[0], bb.pack.elts()[0]);
-  } else {
-    out.lo = reducePack(red, aa.lo, bb.lo);
-    out.hi = reducePack(red, aa.hi, bb.hi);
+  EltPack<T, n> out;
+  NVCC_PRAGMA_UNROLL(n)
+  for (int i = 0; i < n; i++) {
+    out.elts()[i] = red(a.elts()[i], b.elts()[i]);
   }
-  return out.pack;
+  return out;
 }
 
 // Specialization for zero-sized packs
@@ -845,6 +857,6 @@ NCCL_DEVICE_INLINE EltPack<__nv_bfloat16, 2> reducePack(OpSum<__nv_bfloat16> con
 } // namespace utility
 } // namespace nccl
 
-#endif // NCCL_CHECK_CUDACC
+#endif // __CUDACC__
 
 #endif // _NCCL_DEVICE_VECTOR__FUNCS_H_

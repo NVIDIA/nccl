@@ -39,7 +39,7 @@ SHIM_HEADERS := $(NCCL_HEADER) $(NCCL_SRC)/include/nccl_device/core.h
 SHIM_AUTO := $(GENDIR)/shim_auto.cc
 SHIM_EXPORTS := $(GENDIR)/shim_exports.map
 
-INCFLAGS = -I. -I$(GENDIR) -I$(NCCL_SRC)/include -I$(NCCL_SRC)/include/plugin $(HIREDIS_CFLAGS)
+INCFLAGS = -I. -I$(GENDIR) -I$(NCCL_SRC)/include $(HIREDIS_CFLAGS)
 CXXFLAGS += $(INCFLAGS) -fPIC -fvisibility=default
 # Dependency generation flags for automatic header tracking
 DEPFLAGS = -MMD -MP

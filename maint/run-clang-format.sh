@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+#
 # run-clang-format.sh — Apply clang-format to all NCCL source files.
 #
 # The default is reformatting src/**.
@@ -6,7 +11,7 @@
 #
 # Usage:
 #   ./run-clang-format.sh [path]            # Apply formatting in-place
-#   ./run-clang-format.sh --list [path]     # Print list of files that would be formatted
+#   ./run-clang-format.sh --list [path]     # List files that would be reformatted, plus files ignored via .clang-format-ignore
 #   ./run-clang-format.sh --diff [path]     # Show unified diff of changes without applying
 
 set -euo pipefail
@@ -95,40 +100,67 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Mode dispatch
+# Process files
+#
+# A single pass classifies every file as ignored, needing formatting, or
+# already formatted, performing the per-mode side effect (print diff / format
+# in-place) inline. clang-format emits no output to stdout for files matched
+# by .clang-format-ignore; an empty probe result means the file was skipped,
+# not emptied, so it is recorded as ignored rather than diffed or written.
+# ---------------------------------------------------------------------------
+if [[ "$MODE" != "--list" ]]; then
+  echo "Checking format for ${#FILES[@]} files under $TARGET_PATH..."
+fi
+
+NEED=()
+IGNORED=()
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+for f in "${FILES[@]}"; do
+  "$CLANG_FORMAT" --style=file "$f" >"$TMP"
+  if [[ ! -s "$TMP" ]]; then
+    IGNORED+=("$f")
+    continue
+  fi
+  if diff -q "$f" "$TMP" >/dev/null; then
+    continue
+  fi
+  NEED+=("$f")
+  case "$MODE" in
+    --diff)
+      echo "--- $f"
+      diff -u "$f" "$TMP" || true
+      ;;
+    "")
+      "$CLANG_FORMAT" -i --style=file "$f"
+      ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Per-mode summary
 # ---------------------------------------------------------------------------
 case "$MODE" in
   --list)
-    echo "Files that would be formatted (${#FILES[@]} total):"
-    for f in "${FILES[@]}"; do
+    echo "Files under $TARGET_PATH that would be reformatted (${#NEED[@]} of ${#FILES[@]}):"
+    for f in ${NEED[@]+"${NEED[@]}"}; do
+      echo "  $f"
+    done
+    echo "Files ignored via top-level .clang-format-ignore (${#IGNORED[@]} of ${#FILES[@]}):"
+    for f in ${IGNORED[@]+"${IGNORED[@]}"}; do
       echo "  $f"
     done
     ;;
 
   --diff)
-    echo "Showing diff for ${#FILES[@]} files..."
-    ANY=0
-    for f in "${FILES[@]}"; do
-      DIFF=$("$CLANG_FORMAT" --style=file "$f" | diff -u "$f" - || true)
-      if [[ -n "$DIFF" ]]; then
-        echo "--- $f"
-        echo "$DIFF"
-        ANY=1
-      fi
-    done
-    if [[ "$ANY" -eq 0 ]]; then
+    if [[ ${#NEED[@]} -eq 0 ]]; then
       echo "All files already formatted."
     fi
+    echo "Ignored ${#IGNORED[@]} of ${#FILES[@]} files via top-level .clang-format-ignore."
     ;;
 
   "")
-    echo "Formatting ${#FILES[@]} files..."
-    "$CLANG_FORMAT" -i --style=file "${FILES[@]}"
+    echo "Ignored ${#IGNORED[@]} of ${#FILES[@]} files via top-level .clang-format-ignore."
     echo "Done."
-    ;;
-
-  *)
-    usage
-    exit 1
     ;;
 esac

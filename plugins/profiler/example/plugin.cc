@@ -296,14 +296,14 @@ __hidden ncclResult_t exampleProfilerInit(void** context, uint64_t commId,
                                           const char* commName, int nNodes,
                                           int nranks, int rank,
                                           ncclDebugLogger_t logfn) {
-  if (pthread_mutex_trylock(&lock) != 0) {
-    *context = NULL;
-    return ncclSuccess;
-  }
+  // Must not be skipped: a comm left without a context produces no trace.
+  pthread_mutex_lock(&lock);
 
   if (__atomic_fetch_add(&initialized, 1, __ATOMIC_RELAXED) == 0) {
     ncclResult_t ret = initGlobalProfiler(eActivationMask);
     if (ret != ncclSuccess) {
+      // Init failed, so finalize is never called for this comm.
+      __atomic_fetch_sub(&initialized, 1, __ATOMIC_RELAXED);
       pthread_mutex_unlock(&lock);
       return ret;
     }
@@ -313,7 +313,10 @@ __hidden ncclResult_t exampleProfilerInit(void** context, uint64_t commId,
   eActivationMaskPtr = eActivationMask;
 
   struct context* ctx = (struct context *)calloc(1, sizeof(*ctx));
-  if (!ctx) return ncclSystemError;
+  if (!ctx) {
+    __atomic_fetch_sub(&initialized, 1, __ATOMIC_RELAXED);
+    return ncclSystemError;
+  }
 
   ctx->commName = commName;
   ctx->commHash = commId;
@@ -327,6 +330,7 @@ __hidden ncclResult_t exampleProfilerInit(void** context, uint64_t commId,
   ncclResult_t ret = allocateContextPools(ctx);
   if (ret != ncclSuccess) {
     free(ctx);
+    __atomic_fetch_sub(&initialized, 1, __ATOMIC_RELAXED);
     return ret;
   }
 
@@ -361,6 +365,30 @@ static void printAllEvents(FILE* fh, struct context* ctx) {
   end = ctx->groupApiPoolIndex;
   for (int i = start; i < end; i++) {
     printEvent(fh, &ctx->groupApiPool[i % groupApiPoolSize]);
+  }
+
+  // Only a group's first comm owns the group API event, so every other comm's
+  // events hang off a foreign root. Emit them here or its trace comes out empty.
+  start = (ctx->collApiPoolIndex - collApiPoolSize >= 0) ? ctx->collApiPoolIndex - collApiPoolSize : 0;
+  end = ctx->collApiPoolIndex;
+  for (int i = start; i < end; i++) {
+    struct collApi* event = &ctx->collApiPool[i % collApiPoolSize];
+    if (event->parent == NULL || event->parent->ctx != ctx) printEvent(fh, event);
+  }
+
+  start = (ctx->p2pApiPoolIndex - p2pApiPoolSize >= 0) ? ctx->p2pApiPoolIndex - p2pApiPoolSize : 0;
+  end = ctx->p2pApiPoolIndex;
+  for (int i = start; i < end; i++) {
+    struct p2pApi* event = &ctx->p2pApiPool[i % p2pApiPoolSize];
+    if (event->parent == NULL || event->parent->ctx != ctx) printEvent(fh, event);
+  }
+
+  start = (ctx->kernelLaunchPoolIndex - kernelLaunchPoolSize >= 0)
+            ? ctx->kernelLaunchPoolIndex - kernelLaunchPoolSize : 0;
+  end = ctx->kernelLaunchPoolIndex;
+  for (int i = start; i < end; i++) {
+    struct kernelLaunch* event = &ctx->kernelLaunchPool[i % kernelLaunchPoolSize];
+    if (event->parent == NULL || event->parent->ctx != ctx) printEvent(fh, event);
   }
 
   start = (ctx->proxyCtrlPoolIndex - proxyCtrlPoolSize >= 0) ? ctx->proxyCtrlPoolIndex - proxyCtrlPoolSize : 0;
@@ -473,23 +501,29 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
   if (eDescr->type == ncclProfileGroupApi) {
     struct groupApi* event;
     int groupApiId = __atomic_fetch_add(&ctx->groupApiPoolIndex, 1, __ATOMIC_RELAXED);
-    if ((groupApiId - __atomic_load_n(&ctx->groupApiPoolBase, __ATOMIC_RELAXED)) < groupApiPoolSize) {
+    event = &ctx->groupApiPool[groupApiId%groupApiPoolSize];
+    // Recycle the slot only if it is within the ring window AND its previous
+    // owner has fully retired it (refCount==0). The acquire load pairs with the
+    // ACQ_REL decrement in updateEvent, so out-of-order, cross-thread completion
+    // can never make us reset/reuse a slot that is still live.
+    if ((groupApiId - __atomic_load_n(&ctx->groupApiPoolBase, __ATOMIC_RELAXED)) < groupApiPoolSize &&
+        __atomic_load_n(&event->refCount, __ATOMIC_ACQUIRE) == 0) {
       // if there are available group API events grab one
-      event = &ctx->groupApiPool[groupApiId%groupApiPoolSize];
-      // Make sure all child events of the picked group API event are cleared
+      // Make sure all child events of the picked group API event are cleared.
+      // A group can span comms, so each child returns to its own context's pool.
       while (!profilerQueueEmpty(&event->collApiEvents)) {
         struct collApi *collApiEvent = profilerQueueDequeue(&event->collApiEvents);
-        resetTaskEvents(collApiEvent, ctx);
-        __atomic_fetch_add(&ctx->collApiPoolBase, 1, __ATOMIC_RELAXED);
+        resetTaskEvents(collApiEvent, collApiEvent->ctx);
+        __atomic_fetch_add(&collApiEvent->ctx->collApiPoolBase, 1, __ATOMIC_RELAXED);
       }
       while (!profilerQueueEmpty(&event->p2pApiEvents)) {
         struct p2pApi *p2pApiEvent = profilerQueueDequeue(&event->p2pApiEvents);
-        resetTaskEvents(p2pApiEvent, ctx);
-        __atomic_fetch_add(&ctx->p2pApiPoolBase, 1, __ATOMIC_RELAXED);
+        resetTaskEvents(p2pApiEvent, p2pApiEvent->ctx);
+        __atomic_fetch_add(&p2pApiEvent->ctx->p2pApiPoolBase, 1, __ATOMIC_RELAXED);
       }
       while (!profilerQueueEmpty(&event->kernelLaunchEvents)) {
-        profilerQueueDequeue(&event->kernelLaunchEvents);
-        __atomic_fetch_add(&ctx->kernelLaunchPoolBase, 1, __ATOMIC_RELAXED);
+        struct kernelLaunch *kernelLaunchEvent = profilerQueueDequeue(&event->kernelLaunchEvents);
+        __atomic_fetch_add(&kernelLaunchEvent->ctx->kernelLaunchPoolBase, 1, __ATOMIC_RELAXED);
       }
     } else {
       // else drop this event
@@ -507,9 +541,11 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     if (eDescr->parentObj == NULL) return ncclSuccess;
     struct collApi* event;
     int collApiId = __atomic_fetch_add(&ctx->collApiPoolIndex, 1, __ATOMIC_RELAXED);
-    if ((collApiId - __atomic_load_n(&ctx->collApiPoolBase, __ATOMIC_RELAXED)) < collApiPoolSize) {
+    event = &ctx->collApiPool[collApiId%collApiPoolSize];
+    // Recycle only a fully-retired slot (refCount==0, acquire). See ncclProfileGroupApi.
+    if ((collApiId - __atomic_load_n(&ctx->collApiPoolBase, __ATOMIC_RELAXED)) < collApiPoolSize &&
+        __atomic_load_n(&event->refCount, __ATOMIC_ACQUIRE) == 0) {
       // if there are available Coll API events grab one
-      event = &ctx->collApiPool[collApiId%collApiPoolSize];
       resetTaskEvents(event, ctx);
     } else {
       // else drop this event
@@ -534,9 +570,11 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     if (eDescr->parentObj == NULL) return ncclSuccess;
     struct p2pApi* event;
     int p2pApiId = __atomic_fetch_add(&ctx->p2pApiPoolIndex, 1, __ATOMIC_RELAXED);
-    if ((p2pApiId - __atomic_load_n(&ctx->p2pApiPoolBase, __ATOMIC_RELAXED)) < p2pApiPoolSize) {
+    event = &ctx->p2pApiPool[p2pApiId%p2pApiPoolSize];
+    // Recycle only a fully-retired slot (refCount==0, acquire). See ncclProfileGroupApi.
+    if ((p2pApiId - __atomic_load_n(&ctx->p2pApiPoolBase, __ATOMIC_RELAXED)) < p2pApiPoolSize &&
+        __atomic_load_n(&event->refCount, __ATOMIC_ACQUIRE) == 0) {
       // if there are available p2p API events grab one
-      event = &ctx->p2pApiPool[p2pApiId%p2pApiPoolSize];
       resetTaskEvents(event, ctx);
     } else {
       // else drop this event
@@ -569,6 +607,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       return ncclSuccess;
     }
     event->type = ncclProfileKernelLaunch;
+    event->ctx = ctx;
     event->stream = (cudaStream_t) eDescr->kernelLaunch.stream;
     struct groupApi* parent = (struct groupApi *) eDescr->parentObj;
     event->parent = parent;
@@ -640,6 +679,8 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     event->nWarps = eDescr->coll.nWarps;
     event->algo = eDescr->coll.algo;
     event->proto = eDescr->coll.proto;
+    event->kernelVariant = NULL;   // filled by the v7 startEvent when a v7 core is loaded
+    event->isSymColl = false;
     *eHandle = event;
     taskEventQueueEnqueue(parent, (struct taskEventBase *)event);
     // increment the group ref counter so the event will stay open
@@ -664,7 +705,6 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     event->base.type = ncclProfileP2p;
     event->base.rank = eDescr->rank;
     event->base.func = eDescr->p2p.func;
-    event->base.next = parent->eventHead;
     event->base.startTs = gettime() - startTime;
     event->base.parent = parent;
     event->buff = eDescr->p2p.buff;
@@ -783,6 +823,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       event->startGpuClk = eDescr->kernelCh.pTimer;
       event->parent = eventBase;
       event->startTs = gettime() - startTime;
+      memset(event->phases, 0, sizeof(event->phases)); // clear stale v7 phase data on slot reuse
       *eHandle = event;
       __atomic_fetch_add(&parent->base.refCount, 1, __ATOMIC_RELAXED);
       debugEvent(event, "KernelChStart");
@@ -794,6 +835,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       event->startGpuClk = eDescr->kernelCh.pTimer;
       event->parent = eventBase;
       event->startTs = gettime() - startTime;
+      memset(event->phases, 0, sizeof(event->phases)); // clear stale v7 phase data on slot reuse
       *eHandle = event;
       __atomic_fetch_add(&parent->base.refCount, 1, __ATOMIC_RELAXED);
       debugEvent(event, "KernelChStart");
@@ -850,13 +892,13 @@ void updateEvent(void* handle) {
   uint64_t type = *(uint64_t *)handle;
   if (type == ncclProfileGroupApi) {
     struct groupApi* event = (struct groupApi*) handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->groupApiPoolBase, 1, __ATOMIC_RELAXED);
     }
   } else if (type == ncclProfileCollApi) {
     struct collApi* event = (struct collApi*) handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->collApiPoolBase, 1, __ATOMIC_RELAXED);
     }
@@ -864,7 +906,7 @@ void updateEvent(void* handle) {
     return;
   } else if (type == ncclProfileP2pApi) {
     struct p2pApi* event = (struct p2pApi*) handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->p2pApiPoolBase, 1, __ATOMIC_RELAXED);
     }
@@ -876,7 +918,7 @@ void updateEvent(void* handle) {
     updateEvent(event->parent);
   } else if (type == ncclProfileGroup) {
     struct group* event = (struct group *)handle;
-    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       // return group event to the pool
       __atomic_fetch_add(&event->ctx->groupPoolBase, 1, __ATOMIC_RELAXED);
@@ -884,7 +926,7 @@ void updateEvent(void* handle) {
     debugEvent(event, "GroupStop");
   } else if (type == ncclProfileColl) {
     struct collective* event = (struct collective *)handle;
-    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->base.stopTs = gettime() - startTime;
       debugEvent(event, "CollStop");
       updateEvent(event->base.parent);
@@ -893,7 +935,7 @@ void updateEvent(void* handle) {
     debugEvent(event, "CollStop");
   } else if (type == ncclProfileP2p) {
     struct p2p* event = (struct p2p *)handle;
-    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_RELAXED) == 0) {
+    if (__atomic_sub_fetch(&event->base.refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->base.stopTs = gettime() - startTime;
       debugEvent(event, "P2pStop");
       updateEvent(event->base.parent);
@@ -1137,6 +1179,79 @@ ncclProfiler_v6_t ncclProfiler_v6 = {
   exampleProfilerStartEvent_v6,
   exampleProfilerStopEvent_v6,
   exampleProfilerRecordEventState_v6,
+  exampleProfilerFinalize,
+};
+
+// ============================================================================
+// v7 implementation: kernel phase sub-events + symmetric-kernel coll metadata
+// ============================================================================
+
+#include "nccl/profiler_v7.h"
+
+__hidden ncclResult_t exampleProfilerStartEvent_v7(void* context, void** eHandle, ncclProfilerEventDescr_v7_t* eDescr) {
+  struct context* ctx = (struct context*)context;
+  if (ctx == NULL) { *eHandle = NULL; return ncclSuccess; }
+
+  // v7 adds the kernel phase sub-event: a child of a kernelCh, stored in the parent.
+  if (eDescr->type == ncclProfileKernelPhase) {
+    *eHandle = NULL;
+    if (__atomic_load_n(&ctx->finalizing, __ATOMIC_RELAXED)) return ncclSuccess;
+    struct kernelCh* parent = (struct kernelCh*)eDescr->parentObj;
+    if (parent == NULL || parent->type != ncclProfileKernelCh) return ncclSuccess;
+    int idx = eDescr->kernelPhase.phaseId;
+    if (idx < 0 || idx >= MAX_KERNEL_PHASES) return ncclSuccess;
+    struct kernelPhase* phase = &parent->phases[idx];
+    phase->type = ncclProfileKernelPhase;
+    phase->channelId = eDescr->kernelPhase.channelId;
+    phase->phaseId = eDescr->kernelPhase.phaseId;
+    phase->phaseName = eDescr->kernelPhase.phaseName;
+    phase->startGpuClk = eDescr->kernelPhase.pTimer;
+    phase->stopGpuClk = 0;
+    phase->startTs = gettime() - startTime;
+    phase->parent = parent;
+    *eHandle = phase;
+    return ncclSuccess;
+  }
+
+  // Other events: the v6 coll layout is a prefix of v7, so the v6 handler reads it
+  // safely. Capture the v7-only coll metadata on the created event afterwards.
+  ncclResult_t ret = exampleProfilerStartEvent_v6(context, eHandle, (ncclProfilerEventDescr_v6_t*)eDescr);
+  if (eDescr->type == ncclProfileColl && *eHandle) {
+    struct collective* c = (struct collective*)*eHandle;
+    c->kernelVariant = eDescr->coll.kernelVariant;
+    c->isSymColl = eDescr->coll.isSymColl;
+  }
+  return ret;
+}
+
+__hidden ncclResult_t exampleProfilerStopEvent_v7(void* eHandle) {
+  if (eHandle == NULL) return ncclSuccess;
+  if (*(uint64_t*)eHandle == ncclProfileKernelPhase) {
+    struct kernelPhase* phase = (struct kernelPhase*)eHandle;
+    phase->stopTs = gettime() - startTime;
+    return ncclSuccess;
+  }
+  return exampleProfilerStopEvent_v6(eHandle);
+}
+
+__hidden ncclResult_t exampleProfilerRecordEventState_v7(void* eHandle, ncclProfilerEventState_v7_t eState, ncclProfilerEventStateArgs_v7_t* eStateArgs) {
+  if (eHandle == NULL) return ncclSuccess;
+  if (*(uint64_t*)eHandle == ncclProfileKernelPhase) {
+    if (eState == ncclProfilerKernelPhaseStop) {
+      struct kernelPhase* phase = (struct kernelPhase*)eHandle;
+      phase->stopGpuClk = eStateArgs->kernelCh.pTimer;
+    }
+    return ncclSuccess;
+  }
+  return exampleProfilerRecordEventState_v6(eHandle, (ncclProfilerEventState_v6_t)eState, (ncclProfilerEventStateArgs_v6_t*)eStateArgs);
+}
+
+ncclProfiler_v7_t ncclProfiler_v7 = {
+  "Example-profiler-v7",
+  exampleProfilerInit,
+  exampleProfilerStartEvent_v7,
+  exampleProfilerStopEvent_v7,
+  exampleProfilerRecordEventState_v7,
   exampleProfilerFinalize,
 };
 

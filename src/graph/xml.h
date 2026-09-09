@@ -15,8 +15,9 @@
 #include <stdlib.h>
 #include <cinttypes>
 
-// PCI device class for NVSwitch (used to identify remote NVLink targets)
 #define PCI_NVSWITCH_CLASS "0x068000"
+#define PCI_GPU_CLASS "0x03"
+#define PCI_IBMNPU_CLASS "0x068001"
 
 // A few constraints to make the implementation easy
 #define MAX_STR_LEN 255
@@ -101,10 +102,19 @@ static ncclResult_t xmlGetAttr(struct ncclXmlNode* node, const char* attrName, c
   return ncclSuccess;
 }
 
+inline void printMissingTopoAttrHint(const char* attrName, const char* nodeName) {
+  if (strcmp(attrName, "busid") == 0 && strcmp(nodeName, "nic") == 0) {
+    INFO(NCCL_GRAPH, "HINT: In many cases this error indicates that NCCL could not obtain complete PCI topology "
+                     "information, which inside a container is often caused by running with '--net host'.");
+    INFO(NCCL_GRAPH, "HINT: To confirm, run the container without '--net host' (or provide a valid topology file).");
+  }
+}
+
 static ncclResult_t xmlGetAttrStr(struct ncclXmlNode* node, const char* attrName, const char** value) {
   NCCLCHECK(xmlGetAttr(node, attrName, value));
   if (*value == NULL) {
     WARN("Attribute %s of node %s not found", attrName, node->name);
+    printMissingTopoAttrHint(attrName, node->name);
     return ncclInternalError;
   }
   return ncclSuccess;
@@ -412,7 +422,7 @@ static ncclResult_t xmlAddTree(struct ncclXml* dst, struct ncclXmlNode* parent, 
 
 inline void printMissingTopoDictValueHint() {
   INFO(NCCL_GRAPH,
-       "HINT: In many cases this issue indicates missing or faulty information in the provided topology file.");
+       "HINT: In many cases this error indicates missing or faulty information in the provided topology file.");
   INFO(NCCL_GRAPH, "HINT: To confirm, set NCCL_TOPO_DUMP_FILE=topo.xml to produce the topology NCCL has detected and "
                    "compare to the one provided.");
 }

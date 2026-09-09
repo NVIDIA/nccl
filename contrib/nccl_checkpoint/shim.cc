@@ -25,16 +25,21 @@ static CommInitParams* allocInitParams(int nranks, int rank, const ncclConfig_t*
   params->configProvided = configPtr != nullptr;
   params->net_name[0] = '\0';
   params->comm_name[0] = '\0';
+  params->config = NCCL_CONFIG_INITIALIZER;
   if (configPtr) {
-    params->config = *configPtr;
-    if (configPtr->netName) {
-      strncpy(params->net_name, configPtr->netName, sizeof(params->net_name) - 1);
+    size_t configSize = configPtr->size;
+    if (configSize > sizeof(ncclConfig_t)) configSize = sizeof(ncclConfig_t);
+    memcpy(&params->config, configPtr, configSize);
+    if (params->config.netName) {
+      strncpy(params->net_name, params->config.netName, sizeof(params->net_name) - 1);
+      params->net_name[sizeof(params->net_name) - 1] = '\0';
+      params->config.netName = params->net_name;
     }
-    if (configPtr->commName) {
-      strncpy(params->comm_name, configPtr->commName, sizeof(params->comm_name) - 1);
+    if (params->config.commName) {
+      strncpy(params->comm_name, params->config.commName, sizeof(params->comm_name) - 1);
+      params->comm_name[sizeof(params->comm_name) - 1] = '\0';
+      params->config.commName = params->comm_name;
     }
-  } else {
-    params->config = NCCL_CONFIG_INITIALIZER;
   }
   params->config.size = sizeof(ncclConfig_t);
   params->config.magic = NCCL_API_MAGIC;
@@ -113,16 +118,9 @@ static ncclResult_t captureCommRuntimeState(ncclComm_t synthComm, ncclComm_t rea
   const CommHandleEntry* entry = nullptr;
   NCCLCHECK(g_commHandles.find(synthComm, &entry));
   if (entry->config == nullptr) return ncclSuccess;
-  if (realComm->endMagic != NCCL_MAGIC) {
-    WARN("Compile and runtime version mismatch (Magic Mismatch).  libnccl-checkpoint-shim.so detected"
-         " that NCCL runtime is a different version.  Please recompile with the same versions.");
-    return ncclInternalError;
-  }
 
   CommInitParams* params = g_commHandles[synthComm].config;
-  params->commHash = realComm->commHash;
-  params->cudaDev = realComm->cudaDev;
-  return ncclSuccess;
+  return captureCommRuntimeProperties(realComm, params);
 }
 
 // CREATE:comm — records init params for restore

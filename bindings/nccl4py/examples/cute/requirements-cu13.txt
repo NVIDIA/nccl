@@ -1,0 +1,4 @@
+# CUDA 13. nccl4py[cu13] brings in cuda.core and nvidia-cutlass-dsl.
+nccl4py[cu13]
+cupy-cuda13x
+mpi4py

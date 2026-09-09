@@ -37,6 +37,7 @@ ncclResult_t wrap_ibv_ack_async_event(struct ibv_async_event* event);
 ncclResult_t wrap_ibv_query_device(struct ibv_context* context, struct ibv_device_attr* device_attr);
 ncclResult_t wrap_ibv_query_port(struct ibv_context* context, uint8_t port_num, struct ibv_port_attr* port_attr);
 ncclResult_t wrap_ibv_query_gid(struct ibv_context* context, uint8_t port_num, int index, union ibv_gid* gid);
+ncclResult_t wrap_ibv_query_pkey(struct ibv_context* context, uint8_t port_num, int index, uint16_t* pkey);
 ncclResult_t wrap_ibv_query_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int attr_mask,
                                struct ibv_qp_init_attr* init_attr);
 ncclResult_t wrap_ibv_alloc_pd(struct ibv_pd** ret, struct ibv_context* context);

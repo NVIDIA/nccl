@@ -20,7 +20,12 @@ COMMON_SRC = ../../../common/src
 INCLUDES += -I$(COMMON_INC)
 
 # Source files
-SOURCES = main.cu $(COMMON_SRC)/utils.cc
+SOURCES = main.cu utils.cc
+# utils.cc is a shared helper in common/src, compiled per-example into a local
+# utils.o so parallel example builds do not race on one shared object.
+# vpath NAME DIR tells make to search DIR for the prerequisite NAME, so the
+# %.o: %.cc rule below finds utils.cc in $(COMMON_SRC) and builds a local utils.o.
+vpath utils.cc $(COMMON_SRC)
 OBJECTS = $(SOURCES:.cu=.o)
 OBJECTS := $(OBJECTS:.cc=.o)
 

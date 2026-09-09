@@ -11,7 +11,6 @@
 #include "proxy.h"
 #include "gdrwrap.h"
 #include "transport.h"
-#include "assert.h"
 #include "bootstrap.h"
 #include "channel.h"
 #include "register_inline.h"
@@ -345,10 +344,10 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
   resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
   /* collective size limits*/
   resources->maxCollBytes = props.maxCollBytes;
-  if ((resources->maxCollBytes <= 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
-    WARN("sendProxySetup: collnet plugin returned invalid value for maxCollBytes %ld \
-      [allowed range: %ld - %ld] \n",
-         resources->maxCollBytes, 0L, NCCL_MAX_NET_SIZE_BYTES);
+  if ((resources->maxCollBytes == 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
+    WARN("sendProxySetup: collnet plugin returned invalid value for maxCollBytes %zu \
+      [allowed range: %zu - %zu] \n",
+         resources->maxCollBytes, (size_t)0, (size_t)NCCL_MAX_NET_SIZE_BYTES);
     return ncclInternalError;
   }
   return ncclSuccess;
@@ -462,10 +461,10 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   /* DMA-BUF support */
   resources->useDmaBuf = resources->useGdr && proxyState->dmaBufSupport && (props.ptrSupport & NCCL_PTR_DMABUF);
   resources->maxCollBytes = props.maxCollBytes;
-  if ((resources->maxCollBytes <= 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
-    WARN("sendProxySetup: collnet plugin returned invalid value for maxCollBytes %ld \
-      [allowed range: %ld - %ld] \n",
-         resources->maxCollBytes, 0L, NCCL_MAX_NET_SIZE_BYTES);
+  if ((resources->maxCollBytes == 0) || (resources->maxCollBytes > NCCL_MAX_NET_SIZE_BYTES)) {
+    WARN("recvProxySetup: collnet plugin returned invalid value for maxCollBytes %zu \
+      [allowed range: %zu - %zu] \n",
+         resources->maxCollBytes, (size_t)0, (size_t)NCCL_MAX_NET_SIZE_BYTES);
     return ncclInternalError;
   }
 
@@ -531,6 +530,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   resources->recvMem = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(map, cpu, recvMem);
   // Don't give credits yet in shared mode.
   (resources->gdcSync ? *resources->gdcSync : resources->sendMem->head) = -NCCL_STEPS;
+  if (resources->gdcSync) wc_store_fence(); // Flush out WC write
 
   // Allocate & Register shared buffers for the Simple protocol
   int bank = resources->useGdr ? NCCL_NET_MAP_SHARED_DEVMEM : NCCL_NET_MAP_SHARED_HOSTMEM;
@@ -1003,7 +1003,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           std::atomic_thread_fence(std::memory_order_seq_cst);
         }
         volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
-        TRACE(NCCL_NET, "sendProxy [%ld/%d/%d/%d] posted offset %d @ %p signal %ld->%ld", long(sub->posted), group,
+        TRACE(NCCL_NET, "sendProxy [%ld/%d/%d/%d] posted offset %zd @ %p signal %ld->%ld", long(sub->posted), group,
               buffSlot, sub->nsteps, resources->recvMem->connFifo[buffSlot].offset,
               &resources->recvMem->connFifo[buffSlot].offset, long(*sendHead),
               long(sub->base + sub->posted + args->sliceSteps - NCCL_STEPS));
@@ -1442,8 +1442,14 @@ static ncclResult_t sendProxyRegBuffer(struct ncclProxyConnection* connection, s
   ncclResult_t ret = ncclSuccess;
   bool needReg = true;
 
-  assert(reqSize == sizeof(struct collnetRegInfo));
-  assert(respSize == sizeof(void*));
+  if (reqSize != sizeof(struct collnetRegInfo)) {
+    WARN("Invalid CollNet register request size %d, expected %zu", reqSize, sizeof(struct collnetRegInfo));
+    return ncclInternalError;
+  }
+  if (respSize != sizeof(void*)) {
+    WARN("Invalid CollNet register response size %d, expected %zu", respSize, sizeof(void*));
+    return ncclInternalError;
+  }
 
   int dmabuf_fd = -1;
 #if CUDART_VERSION >= 11070
@@ -1495,8 +1501,14 @@ static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, s
   ncclResult_t ret = ncclSuccess;
   bool needReg = true;
 
-  assert(reqSize == sizeof(struct collnetRegInfo));
-  assert(respSize == sizeof(void*));
+  if (reqSize != sizeof(struct collnetRegInfo)) {
+    WARN("Invalid CollNet register request size %d, expected %zu", reqSize, sizeof(struct collnetRegInfo));
+    return ncclInternalError;
+  }
+  if (respSize != sizeof(void*)) {
+    WARN("Invalid CollNet register response size %d, expected %zu", respSize, sizeof(void*));
+    return ncclInternalError;
+  }
   int dmabuf_fd = -1;
 #if CUDART_VERSION >= 11070
   /* DMA-BUF support */
@@ -1548,7 +1560,10 @@ static ncclResult_t sendProxyDeregBuffer(struct ncclProxyConnection* connection,
   void* handle;
   struct sendResources* resources = (struct sendResources*)(connection->transportResources);
 
-  assert(reqSize == sizeof(void*));
+  if (reqSize != sizeof(void*)) {
+    WARN("Invalid CollNet deregister request size %d, expected %zu", reqSize, sizeof(void*));
+    return ncclInternalError;
+  }
   memcpy(&handle, reqBuff, sizeof(void*));
   if (handle) {
     struct proxyMemHandle memHandle = {};
@@ -1567,7 +1582,10 @@ static ncclResult_t recvProxyDeregBuffer(struct ncclProxyConnection* connection,
   void* handle;
   struct recvResources* resources = (struct recvResources*)(connection->transportResources);
 
-  assert(reqSize == sizeof(void*));
+  if (reqSize != sizeof(void*)) {
+    WARN("Invalid CollNet deregister request size %d, expected %zu", reqSize, sizeof(void*));
+    return ncclInternalError;
+  }
   memcpy(&handle, reqBuff, sizeof(void*));
   if (handle) {
     struct proxyMemHandle memHandle = {};
@@ -1645,31 +1663,9 @@ fail:
   goto exit;
 }
 
+// Build CollNet's node-major dense rank order unless we've already built it.
 static ncclResult_t collNetInitRailRankMap(ncclComm_t comm) {
-  int rank = comm->rank;
-  uint64_t nonHeadMask = (1ull << comm->localRanks) - 1;
-
-  comm->collNetDenseToUserRank = ncclMemoryStackAlloc<int>(&comm->memPermanent, comm->nRanks);
-  comm->collNetUserToDenseRank = ncclMemoryStackAlloc<int>(&comm->memPermanent, comm->nRanks);
-  // initialize collNetUserToDenseRank[rank]
-  comm->collNetUserToDenseRank[rank] = -1;
-  for (int h = 0; h < comm->collNetHeadsNum; h++) {
-    nonHeadMask ^= 1ull << comm->rankToLocalRank[comm->collNetHeads[h]];
-    if (comm->collNetHeads[h] == rank) {
-      comm->collNetUserToDenseRank[rank] = h;
-      break;
-    }
-  }
-  if (comm->collNetUserToDenseRank[rank] == -1) {
-    comm->collNetUserToDenseRank[rank] = COMPILER_POPCOUNT64(nonHeadMask & ((1ull << comm->localRank) - 1));
-  }
-  comm->collNetUserToDenseRank[rank] += comm->node * comm->localRanks;
-
-  NCCLCHECK(bootstrapAllGather(comm->bootstrap, comm->collNetUserToDenseRank, sizeof(int)));
-  for (int r = 0; r < comm->nRanks; r++) {
-    comm->collNetDenseToUserRank[comm->collNetUserToDenseRank[r]] = r;
-  }
-  return ncclSuccess;
+  return ncclTransportInitRankMap(comm, comm->collNetHeadsNum, comm->collNetHeads);
 }
 
 // Checks if the heads used by collNetChain are either a subset of, or equal to comm->collNetHeads
@@ -1711,7 +1707,11 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
     // Head GPU index is always 0
     for (int c = 0; c < collNetGraph->nChannels; c++) {
       int head = collNetGraph->intra[c * comm->localRanks + 0];
-      assert(comm->rankToNode[head] == comm->node);
+      if (comm->rankToNode[head] != comm->node) {
+        WARN("CollNet head rank %d is on node %d, expected node %d", head, comm->rankToNode[head], comm->node);
+        ret = ncclInternalError;
+        goto fail;
+      }
       uint64_t mask0 = mask;
       mask |= 1ull << comm->rankToLocalRank[head];
       if (mask != mask0) comm->collNetHeads[comm->collNetHeadsNum++] = head;
@@ -1729,11 +1729,7 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
   // CollNetChain can only use heads that will have CollNet resources set up.
   comm->collNetChainSupport = isCollNetChainHeadsSubset(comm, graphs[NCCL_ALGO_COLLNET_CHAIN]);
 
-  if (parent && parent->config.collnetEnable && parent->nNodes == comm->nNodes) {
-    if (!parent->shareResources) {
-      collNetSetupFail = 1;
-      goto fail;
-    }
+  if (parent && parent->config.collnetEnable && parent->nNodes == comm->nNodes && parent->shareResources) {
     NCCLCHECKGOTO(ncclCalloc(&infos, comm->nRanks), ret, fail);
     /* check whether child can share collnet resources of parent. Since parent builds each collnet communicator
      * based on heads with the same head position in each node, as long as the collnet heads of child comm
@@ -1773,8 +1769,6 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
           comm->collNetSharedRes = parent->collNetSharedRes;
           for (int c = 0; c < comm->nChannels; ++c) NCCLCHECKGOTO(initCollnetChannel(comm, c, parent, true), ret, fail);
         }
-
-        NCCLCHECKGOTO(collNetInitRailRankMap(comm), ret, fail);
       } else {
         collNetSetupFail = 1;
         if (comm->rank == 0) {
@@ -1784,6 +1778,7 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
         goto fail;
       }
     }
+    NCCLCHECKGOTO(collNetInitRailRankMap(comm), ret, fail);
     share = true;
   } else {
     /* this allocated buffer will be freed on proxy side */

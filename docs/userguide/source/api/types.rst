@@ -186,6 +186,27 @@ ncclScalarResidence_t
 ncclConfig_t
 ------------
 
+.. c:type:: ncclHostCftMode_t
+
+ Values for the :c:macro:`hostCftMode` communicator configuration.
+
+ .. c:macro:: ncclHostCftDefault
+
+  Use the version-specific default.
+
+ .. c:macro:: ncclHostCftEnable
+
+  Enable host-side CFT support.
+
+ .. c:macro:: ncclHostCftDisable
+
+  Disable host-side CFT support.
+
+ .. c:macro:: ncclHostCftFallback
+
+  Try to create CFT logical endpoints. In case of an error, host-side CFT will be
+  disabled.
+
 .. c:type:: ncclConfig_t
 
  A structure-based configuration users can set to initialize a communicator; a
@@ -305,9 +326,80 @@ ncclConfig_t
   application guarantees ordering of **all** NCCL communication kernels that
   may run concurrently on the GPU.
 
+ .. c:macro:: launchOrderImplicit
+
+  (since 2.31)
+
+  Per-communicator request for :ref:`NCCL_LAUNCH_ORDER_IMPLICIT`.
+  ``1`` enables implicit launch ordering for this communicator; ``0`` disables
+  it. ``NCCL_CONFIG_UNDEF_INT`` is the default and has the same effective
+  behavior as ``0``.
+
+  Communicators with different effective values can coexist. Overlap safety is
+  about communication operations that may run concurrently on the same GPU:
+
+  * Operations on disabled/default communicators retain the existing
+    multiple-communicator ordering guarantees.
+  * Operations on enabled communicators may overlap with operations on other
+    enabled communicators if the application follows the host-side ordering
+    requirements described for :ref:`NCCL_LAUNCH_ORDER_IMPLICIT`.
+  * Operations on enabled communicators must not overlap with operations on
+    disabled/default communicators. The application must order or synchronize
+    those operations so they do not overlap, or configure the communicators
+    consistently.
+
+  NCCL logs an ``INFO`` message if a CUDA context has used both enabled and
+  disabled/default effective values, but it still initializes the communicator.
+
+  If :ref:`NCCL_LAUNCH_ORDER_IMPLICIT` is set in the environment, it overrides
+  this field before initialization.
+
  .. c:macro:: maxP2pPeers
 
   Set the maximum number of peers any rank will concurrently communicate with using P2P communication. Setting this value will influence all send/recv and send/recv-based collectives (all-to-all, scatter, gather). Values less than one or greater than the number of ranks will default to the number of ranks in the communicator.
+
+ .. c:macro:: numRmaCtx
+
+  (since 2.31)
+
+  Number of one-sided RMA communication contexts to provision on the communicator. The ``ctx`` argument of
+  :c:func:`ncclPutSignal`, :c:func:`ncclSignal`, and :c:func:`ncclWaitSignal` must lie in ``[0, numRmaCtx)``.
+  The default value is 1.
+
+ .. c:macro:: numRmaSig
+
+  (since 2.31)
+
+  Set the number of one-sided RMA signal indexes available per context. The default
+  value is ``1``.
+  Host one-sided RMA operations such as :c:func:`ncclPutSignal`, :c:func:`ncclSignal`,
+  and :c:func:`ncclWaitSignal` use ``sigIdx`` values in the range ``[0, numRmaSig)``.
+
+ .. c:macro:: rmaEagerInit
+
+  (since 2.31)
+
+  Controls when the collective one-sided RMA signal setup is initialized. With
+  ``0`` (default), it is initialized during the first window registration
+  (:c:func:`ncclCommWindowRegister`), a collective point. Use ``1`` to initialize
+  it at communicator-init time instead; this is required if a communicator issues
+  :c:func:`ncclSignal` or :c:func:`ncclWaitSignal` without first registering a
+  window, which otherwise returns ``ncclInvalidUsage``.
+
+  If :ref:`NCCL_RMA_EAGER_INIT` is set in the environment, it overrides this field
+  before initialization.
+
+ .. c:macro:: hostCftMode
+
+  (since 2.31)
+
+  Controls support for host-side Compute Fabric Transport (CFT) queries.
+  :c:macro:`ncclHostCftEnable` creates the communicator's unicast and multicast
+  logical endpoints during the first :c:func:`ncclCommWindowRegister` call on a
+  CFT-capable communicator. :c:macro:`ncclHostCftDisable` disables support, and
+  :c:macro:`ncclHostCftFallback` tries to create logical endpoints and disables
+  host-side CFT in case of error.
+  :c:macro:`ncclHostCftDefault` selects the library-defined default behavior.
 
 .. _ncclsiminfo:
 

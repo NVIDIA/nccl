@@ -89,11 +89,13 @@ def main() -> int:
     # =========================================================================
     # STEP 4: Cleanup Resources
     # =========================================================================
-    
+
     print("Cleaning up resources")
     # Finalize and destroy NCCL communicators
+    with nccl.group():
+        for comm in comms:
+            comm.finalize()
     for comm in comms:
-        comm.finalize()
         comm.destroy()
 
     print()

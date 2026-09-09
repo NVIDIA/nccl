@@ -34,6 +34,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <new>
 #include <nmmintrin.h>
 #include <cstdint>
 #include <setupapi.h>
@@ -73,7 +74,6 @@ ncclOsLibraryHandle ncclOsDlopen(const char* filename) {
   ncclOsLibraryHandle handle = (ncclOsLibraryHandle)LoadLibraryA(filename);
   if (handle == NULL) {
     saveDlError();
-    INFO(NCCL_INIT, "ncclOsDlopen(%s) failed: %s", filename, ncclDlErrorBuf);
   }
   return handle;
 }
@@ -82,7 +82,6 @@ void* ncclOsDlsym(ncclOsLibraryHandle handle, const char* symbol) {
   void* ptr = (void*)GetProcAddress((HMODULE)handle, symbol);
   if (ptr == NULL) {
     saveDlError();
-    INFO(NCCL_INIT, "ncclOsDlsym(%s) failed: %s", symbol, ncclDlErrorBuf);
   }
   return ptr;
 }
@@ -93,7 +92,9 @@ const char* ncclOsDlerror() {
 
 ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode) {
   (void)mode;
-  return (ncclOsLibraryHandle)LoadLibraryA(path);
+  ncclOsLibraryHandle handle = (ncclOsLibraryHandle)LoadLibraryA(path);
+  if (handle == NULL) saveDlError();
+  return handle;
 }
 
 void ncclOsDlclose(ncclOsLibraryHandle handle) {
@@ -687,8 +688,19 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
   return ncclSuccess;
 }
 
-void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond) {
-  // Not implemented on Windows
+void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized) {
+  if (initialized != NULL && *initialized) return;
+  // ncclShmOpen zeroes mapped storage; construct the C++ sync objects in place.
+  new (&mutex) std::mutex();
+  new (&cond) std::condition_variable();
+  if (initialized != NULL) *initialized = 1;
+}
+
+void ncclOsUnsetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized) {
+  if (initialized != NULL && *initialized == 0) return;
+  cond.~condition_variable();
+  mutex.~mutex();
+  if (initialized != NULL) *initialized = 0;
 }
 
 void ncclOsCpuZero(ncclAffinity& affinity) {
@@ -1466,7 +1478,7 @@ ncclResult_t ncclOsGetPciDeviceClassByBusId(const char* busId, char* deviceClass
         if (compatIds[i] == 'C' && compatIds[i + 1] == 'C' && compatIds[i + 2] == '_') {
           if (i + 9 < dataSize && strlen(&compatIds[i]) >= 9) {
             char classStr[16];
-            snprintf(classStr, sizeof(classStr), "0x%.2s", &compatIds[i + 3]);
+            snprintf(classStr, sizeof(classStr), "0x%.6s", &compatIds[i + 3]);
             snprintf(deviceClass, maxLen, "%s", classStr);
             INFO(NCCL_INIT, "ncclOsGetPciDeviceClassByBusId: Extracted class %s for %s", deviceClass, busId);
             RegCloseKey(hKey);
@@ -1483,20 +1495,20 @@ ncclResult_t ncclOsGetPciDeviceClassByBusId(const char* busId, char* deviceClass
   const char* classCode = strstr(devInfo.hwId, "CC_");
   if (classCode != NULL && strlen(classCode) >= 9) {
     char classStr[16];
-    snprintf(classStr, sizeof(classStr), "0x%.2s", classCode + 3);
+    snprintf(classStr, sizeof(classStr), "0x%.6s", classCode + 3);
     snprintf(deviceClass, maxLen, "%s", classStr);
     INFO(NCCL_INIT, "ncclOsGetPciDeviceClassByBusId: Extracted class %s for %s", deviceClass, busId);
     return ncclSuccess;
   }
 
   // If still no class, try to infer from vendor/device ID
-  // NVIDIA GPUs (VEN_10DE) -> class 0x03 (display)
-  // Mellanox switches (VEN_15B3) -> class 0x06 (bridge) for DEV_1979 and similar
+  // NVIDIA GPUs (VEN_10DE) -> class 0x030000 (display)
+  // Mellanox switches (VEN_15B3) -> class 0x060400 (bridge) for DEV_1979 and similar
   if (strstr(devInfo.deviceInstanceId, "VEN_10DE") != NULL) {
-    snprintf(deviceClass, maxLen, "0x03");
+    snprintf(deviceClass, maxLen, "0x030000");
   } else if (strstr(devInfo.deviceInstanceId, "VEN_15B3") != NULL &&
              strstr(devInfo.deviceInstanceId, "DEV_1979") != NULL) {
-    snprintf(deviceClass, maxLen, "0x06");
+    snprintf(deviceClass, maxLen, "0x060400");
   } else {
     deviceClass[0] = '\0';
   }
@@ -1513,7 +1525,7 @@ ncclResult_t ncclOsGetPciDeviceClass(nvmlDevice_t device, char* deviceClass, siz
   }
 
   // Use the helper function with the busId
-  ncclResult_t classRet = ncclOsGetPciDeviceClassByBusId(pciInfo.busId, deviceClass, maxLen);
+  ncclResult_t classRet = ncclOsGetPciDeviceClassByBusId(pciInfo.busIdLegacy, deviceClass, maxLen);
   if (classRet != ncclSuccess) return classRet;
   return ncclSuccess;
 }
@@ -1529,12 +1541,12 @@ ncclResult_t ncclOsGetPciDeviceParent(nvmlDevice_t device, char** parentBusId) {
     return ret;
   }
 
-  INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: Getting parent for device %s", pciInfo.busId);
+  INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: Getting parent for device %s", pciInfo.busIdLegacy);
 
   // Parse the bus ID to extract bus, device, and function numbers
   DWORD bus, dev, func;
-  if (!parsePciBusId(pciInfo.busId, &bus, &dev, &func)) {
-    WARN("ncclOsGetPciDeviceParent: Failed to parse PCI bus ID: %s", pciInfo.busId);
+  if (!parsePciBusId(pciInfo.busIdLegacy, &bus, &dev, &func)) {
+    WARN("ncclOsGetPciDeviceParent: Failed to parse PCI bus ID: %s", pciInfo.busIdLegacy);
     return ncclSystemError;
   }
 
@@ -1542,14 +1554,14 @@ ncclResult_t ncclOsGetPciDeviceParent(nvmlDevice_t device, char** parentBusId) {
   DeviceInfo devInfo;
   ret = getDeviceInfo(bus, dev, func, &devInfo);
   if (ret != ncclSuccess) {
-    INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: Could not find device %s", pciInfo.busId);
+    INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: Could not find device %s", pciInfo.busIdLegacy);
     return ncclSystemError;
   }
 
   // Get parent device instance
   DEVINST parentDevInst;
   if (CM_Get_Parent(&parentDevInst, devInfo.devInst, 0) != CR_SUCCESS) {
-    INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: No parent found for device %s", pciInfo.busId);
+    INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: No parent found for device %s", pciInfo.busIdLegacy);
     return ncclSystemError;
   }
 
@@ -1567,6 +1579,6 @@ ncclResult_t ncclOsGetPciDeviceParent(nvmlDevice_t device, char** parentBusId) {
     return ncclSystemError;
   }
 
-  INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: Device %s has parent %s", pciInfo.busId, *parentBusId);
+  INFO(NCCL_INIT, "ncclOsGetPciDeviceParent: Device %s has parent %s", pciInfo.busIdLegacy, *parentBusId);
   return ncclSuccess;
 }

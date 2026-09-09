@@ -23,7 +23,9 @@
 #define SM86_NVLINK_BW 12.0
 #define SM100_NVLINK_BW 40.1
 #define PCI_BW 12.0           // PCI Gen3 x16
-#define AMD_BW 16.0
+#define AMD_ZEN12_BW 16.0
+#define AMD_ZEN34_BW 24.0
+#define AMD_ZEN5_BW 32.0
 #define BDW_QPI_BW 6.0
 #define SKL_QPI_BW 10.0
 #define SRP_QPI_BW 22.0
@@ -78,8 +80,9 @@ struct ncclTopoLink {
 #define NCCL_TOPO_MAX_HOPS (NCCL_TOPO_MAX_NODES * NCCL_TOPO_NODE_TYPES)
 
 struct ncclTopoLinkList {
-  struct ncclTopoLink* list[NCCL_TOPO_MAX_HOPS];
-  int count;
+  struct ncclTopoLink** list;
+  int count;     // Number of links stored in list.
+  int capacity;  // Number of entries allocated for list.
   float bw;
   int type;
 };
@@ -121,6 +124,8 @@ struct ncclTopoNode {
     } dev;
     struct {
       int dev; // Plugin dev number
+      uint64_t vendor; // PCI vendor ID
+      uint64_t device; // PCI device ID
       uint64_t pciId;
       uint64_t asic;
       int port;
@@ -168,7 +173,10 @@ struct ncclTopoSystem {
 
 ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id);
 ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id);
+// Removing a node invalidates computed paths. Callers must remove any paths before calling this
+// function and recompute them before using the topology for path-dependent operations.
 ncclResult_t ncclTopoRemoveNode(struct ncclTopoSystem* system, int type, int id);
+void ncclTopoRemovePaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float bw);
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoLoadSystem(const char* xmlTopoFile, struct ncclTopoSystem* system);

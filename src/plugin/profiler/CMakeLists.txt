@@ -6,6 +6,7 @@ set(PLUGIN_PROFILER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler_v2.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler_v5.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler_v6.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler_v7.cc
 )
 
 # Add profiler plugin sources to parent scope

@@ -100,6 +100,17 @@ kernel launch without CPU involvement. Implementations are provided for
 communication.
 
 
+### [RAS (Reliability, Availability, Serviceability)](08_ras/)
+
+RAS is NCCL's built-in health monitoring subsystem. It starts automatically
+when a communicator is created and maintains a cluster-wide view of every
+process, communicator, and GPU in the job. The example here injects a process
+fault and pauses at key moments so you can query the RAS daemon yourself
+(via `nc` or `ncclras`) and watch the full `RUNNING → INCOMPLETE → DEAD`
+progression in real time. Both fault modes are covered: fast detection via
+socket close (`--type exit`) and keep-alive timeout detection via `SIGSTOP`
+(`--type suspend`).
+
 ## Prerequisites
 
 - The same prerequisites as building NCCL from source.

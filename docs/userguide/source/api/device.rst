@@ -9,6 +9,8 @@ following areas:
   pointer functions, and related types.
 * **Memory and LSA** — Load/store accessible (LSA) memory, barriers, pointer accessors, and multimem.
 * **GIN (GPU-Initiated Networking)** — One-sided transfers, signals, counters, and network barriers.
+* **CFT (Compute Fabric Transport)** — CUDA fabric logical endpoint queries, fabric transfers, reductions, and
+  CFT-backed barriers.
 * **Reduce, Broadcast, and Fused Building Blocks** — Building blocks for computation-fused kernels: reduce, copy
   (broadcast), and reduce-then-copy; used to implement algorithms such as AllReduce, AllGather, and ReduceScatter.
 
@@ -20,4 +22,5 @@ For an introduction and usage examples, see :doc:`Device-Initiated Communication
    device_setup
    device_memory
    device_gin
+   device_cft
    device_reducecopy

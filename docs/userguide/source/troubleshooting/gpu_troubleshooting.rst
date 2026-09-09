@@ -19,6 +19,8 @@ GPU-to-GPU communication
 
 **Peer-to-peer GPU memory access.** For GPU-to-GPU traffic, NCCL favors *peer-to-peer* transport when CUDA reports that GPUs can access each other's memory directly (typically over NVLink, or over PCIe when the topology and driver allow it).
 
+.. _troubleshooting_p2p_gpu_memory_access:
+
 **Checking peer-to-peer GPU memory access.** You can use ``nvidia-smi topo -p2p <capability>`` to print a matrix of P2P status between GPU pairs. The ``<capability>`` value is ``p`` for PCIe and ``n`` for NVLink.
 
 
@@ -36,7 +38,11 @@ For example, on a healthy PCI Express-based 8-GPU system with full peer-to-peer 
       GPU6      OK      OK      OK      OK      OK      OK      X       OK
       GPU7      OK      OK      OK      OK      OK      OK      OK      X
 
-If peer-to-peer GPU memory access does not work as expected with NCCL even when ``nvidia-smi topo -p2p`` shows ``OK`` for peer access on the GPU pairs you use, one common cause is **PCI Access Control Services (ACS)**; see :ref:`troubleshooting_acs`.
+If peer-to-peer GPU memory access does not work as expected with NCCL even when
+``nvidia-smi topo -p2p`` shows ``OK`` for peer access on the GPU pairs you use,
+common causes include Linux bare-metal IOMMU settings and **PCI Access Control
+Services (ACS)**; see :ref:`troubleshooting_iommu_p2p` and
+:ref:`troubleshooting_acs`.
 
 **CUDA sample.** The `cuda-samples <https://github.com/nvidia/cuda-samples>`__ repository includes a useful program for checking peer-to-peer GPU memory access. Follow the instructions there to build the sample.
 
@@ -58,6 +64,45 @@ The last line of the run should read ``Test passed``.
 To measure the available bandwidth between GPUs, we recommend using ``nvbandwidth`` rather than the CUDA sample above. Download and build it following the instructions at https://github.com/NVIDIA/nvbandwidth.
 
 **Disabling peer-to-peer GPU memory access for testing.** To see whether a problem is related to the P2P transport, compare runs with peer-to-peer GPU memory access disabled or restricted using :ref:`env_NCCL_P2P_DISABLE` and :ref:`env_NCCL_P2P_LEVEL` (see the :doc:`../env` chapter).
+
+.. _troubleshooting_iommu_p2p:
+
+Linux bare-metal IOMMU and PCIe peer-to-peer
+============================================
+
+An IOMMU is an I/O memory management unit. It can translate and restrict DMA
+addresses used by PCIe devices, which is useful for isolation and for virtual
+machines. On Linux bare-metal systems, however, CUDA and the NVIDIA driver stack
+do not support IOMMU-enabled PCIe peer-to-peer memory transfer. [The CUDA
+Programming Guide](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/multi-gpu-systems.html#host-iommu-hardware-pci-access-control-services-and-vms)
+states that the IOMMU must be disabled on Linux bare-metal
+systems to prevent silent device memory corruption.
+
+This can affect NCCL because NCCL uses CUDA peer-to-peer access for GPU-to-GPU
+traffic when CUDA reports that the path is available. On affected systems,
+symptoms can look like application or framework bugs rather than a clean NCCL
+error.
+
+As described in :ref:`the peer-to-peer GPU memory access check
+<troubleshooting_p2p_gpu_memory_access>`, a positive ``nvidia-smi topo -p2p p``
+result is useful, but it is not a complete system sanity check for this issue. On
+Linux bare-metal PCIe systems, also check the active kernel IOMMU mode.
+
+.. code:: shell
+
+  cat /proc/cmdline
+  dmesg | grep -i -E "iommu|dmar|default domain"
+
+Kernel messages vary, but output like the following indicates translated IOMMU
+mode and is concerning for Linux bare-metal PCIe P2P:
+
+.. code:: text
+
+  iommu: Default domain type: Translated
+  DMAR: IOMMU enabled
+
+On affected bare-metal systems, avoid translated IOMMU mode for GPU PCIe P2P.
+Disable IOMMU translation for the GPU path.
 
 GPU-to-NIC communication
 ========================

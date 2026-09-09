@@ -121,10 +121,8 @@ typedef struct ncclEpTensor {
 } ncclEpTensor_t;
 
 // Static tensor initializer
-#define NCCL_EP_TENSOR_INIT_INLINE \
-    .size  = (unsigned int)sizeof(ncclEpTensor_t), \
-    .magic = NCCL_EP_TENSOR_MAGIC
-#define NCCL_EP_TENSOR_INIT ((ncclEpTensor_t){ NCCL_EP_TENSOR_INIT_INLINE })
+#define NCCL_EP_TENSOR_INIT_INLINE .size = (unsigned int)sizeof(ncclEpTensor_t), .magic = NCCL_EP_TENSOR_MAGIC
+#define NCCL_EP_TENSOR_INIT ((ncclEpTensor_t){NCCL_EP_TENSOR_INIT_INLINE})
 
 // Allocation configuration for future extensions of ncclEpTensorAlloc.
 // Callers should either pass NULL (defaults) or initialise via
@@ -135,9 +133,7 @@ typedef struct {
 } ncclEpTensorAllocConfig_t;
 
 #define NCCL_EP_TENSOR_ALLOC_CONFIG_INIT \
-    ((ncclEpTensorAllocConfig_t){ \
-        .size  = (unsigned int)sizeof(ncclEpTensorAllocConfig_t), \
-        .magic = NCCL_EP_MAGIC })
+    ((ncclEpTensorAllocConfig_t){.size = (unsigned int)sizeof(ncclEpTensorAllocConfig_t), .magic = NCCL_EP_MAGIC})
 
 // Allocate a tensor descriptor sufficient to represent the requested shape.
 //
@@ -154,8 +150,7 @@ ncclResult_t ncclEpTensorAlloc(
     unsigned int ndim,
     ncclDataType_t datatype,
     const size_t* sizes,
-    const ncclEpTensorAllocConfig_t* config
-);
+    const ncclEpTensorAllocConfig_t* config);
 
 // Release a descriptor previously returned by ncclEpTensorAlloc.
 //
@@ -163,9 +158,7 @@ ncclResult_t ncclEpTensorAlloc(
 //   tensor - [IN] Pointer returned by ncclEpTensorAlloc. NULL is accepted.
 //
 // Returns: ncclResult_t error code.
-ncclResult_t ncclEpTensorDestroy(
-    ncclEpTensor_t* tensor
-);
+ncclResult_t ncclEpTensorDestroy(ncclEpTensor_t* tensor);
 
 // Allocator and free function pointer types.
 // context is the value stored in ncclEpAllocConfig_t::context and is forwarded unchanged
@@ -207,7 +200,7 @@ typedef struct {
     // RDMA buffer size in bytes for LL mode. Two modes:
     //   - NCCL_EP_AUTO: the library automatically selects the internal
     //     staging buffer size. The buffer allocation/re-allocation  may be
-    //     performed lazily in ncclEpInitHandle once all relevant sizing 
+    //     performed lazily in ncclEpInitHandle once all relevant sizing
     //     information is known.
     //   - Explicit positive value: the library allocates exactly that
     //     many bytes at ncclEpCreateGroup time. ncclEpInitHandle returns
@@ -235,12 +228,18 @@ typedef struct {
     // Can be overridden by the NCCL_EP_TIMEOUT_MS environment variable.
     // Setting too low risks false positives (slow ranks marked as failed).
     uint64_t timeout_ns;
+    // Bypass library-owned dispatch / combine token staging. When ON, the
+    // dispatch-output and combine-input tensors must be window-backed,
+    // else ncclInvalidArgument. AUTO (zero-init default) resolves to OFF.
+    ncclEpZeroCopyMode_t zero_copy;
 } ncclEpGroupConfig_t;
 
-#define NCCL_EP_GROUP_CONFIG_INIT ((ncclEpGroupConfig_t){ \
-    .size    = (unsigned int)sizeof(ncclEpGroupConfig_t), \
-    .magic   = NCCL_EP_MAGIC, \
-    .version = NCCL_EP_API_VERSION })
+#define NCCL_EP_GROUP_CONFIG_INIT \
+    ((ncclEpGroupConfig_t){ \
+        .size = (unsigned int)sizeof(ncclEpGroupConfig_t), \
+        .magic = NCCL_EP_MAGIC, \
+        .version = NCCL_EP_API_VERSION \
+    })
 
 // Opaque type forward declaration
 typedef struct ncclEpGroup* ncclEpGroup_t;
@@ -256,11 +255,7 @@ typedef struct ncclEpGroup* ncclEpGroup_t;
 // Returns:
 //   ncclResult_t error code
 
-ncclResult_t ncclEpCreateGroup(
-    ncclEpGroup_t* ep_group,
-    ncclComm_t comm,
-    const ncclEpGroupConfig_t* config
-);
+ncclResult_t ncclEpCreateGroup(ncclEpGroup_t* ep_group, ncclComm_t comm, const ncclEpGroupConfig_t* config);
 
 // Destroy an EP group and release associated resources.
 //
@@ -270,119 +265,117 @@ ncclResult_t ncclEpCreateGroup(
 // Returns:
 //   ncclResult_t error code
 
-ncclResult_t ncclEpGroupDestroy(
-    ncclEpGroup_t ep_group
-);
+ncclResult_t ncclEpGroupDestroy(ncclEpGroup_t ep_group);
 
 // Layout info passed to ncclEpCreateHandle / ncclEpUpdateHandle and ncclEpDispatch.
-// All fields are optional (NULL = not provided). Each field is a pointer to a
-// caller-owned descriptor (stack/static/struct-embedded or from ncclEpTensorAlloc).
+// Tensor-descriptor fields are optional (NULL = not provided). Each tensor
+// field is a pointer to a caller-owned descriptor (stack/static/struct-embedded
+// or from ncclEpTensorAlloc).
 typedef struct {
-    unsigned int    size;                // = sizeof(this struct); first field, never moves
-    unsigned int    magic;               // = NCCL_EP_MAGIC; second field, never moves
+    unsigned int size;                // = sizeof(this struct); first field, never moves
+    unsigned int magic;               // = NCCL_EP_MAGIC; second field, never moves
     ncclEpTensor_t* expert_counters;     // 1D [num_local_experts] int32 (or int64 for HT EM)
                                          //   HT (handle time): per-expert recv counts. Flat: unpadded int32.
                                          //                     EM: padded counts (sum equals output slot count).
-                                         //   LL/expert-major layout: per-expert received token counts (dispatch time).
-    ncclEpTensor_t* src_rank_counters;   // 1D [num_ranks] int32
-                                         //   LL/rank-major layout only: per-source-rank token counts (dispatch time).
-    ncclEpTensor_t* expert_offsets;      // 1D [num_local_experts] int32 or int64
-                                         //   HT (Handle time), expert-major layout only: prefix sum of padded per-expert counts.
-    ncclEpTensor_t* recv_total_counter;  // 1D [1] int32 or int64
-                                         //   HT (Handle time): scalar total recv token count. 
-                                         //     * Flat layout: unpadded.
-                                         //     * Expert-major layout: padded slot total.
+  //   LL/expert-major layout: per-expert received token counts (dispatch time).
+    ncclEpTensor_t* src_rank_counters; // 1D [num_ranks] int32
+  //   LL/rank-major layout only: per-source-rank token counts (dispatch time).
+    ncclEpTensor_t* expert_offsets; // 1D [num_local_experts] int32 or int64
+  //   HT (Handle time), expert-major layout only: prefix sum of padded per-expert counts.
+    ncclEpTensor_t* recv_total_counter; // 1D [1] int32 or int64
+  //   HT (Handle time): scalar total recv token count.
+  //     * Flat layout: unpadded.
+  //     * Expert-major layout: padded slot total.
+    ncclEpExpertIdKind_t recv_topk_idx_kind; // Numbering of values written to recv_topk_idx.
+  //   AUTO (zero-init default): library default; today LOCAL.
+  //   LOCAL:  per-rank local expert id, or -1 if not routed.
+  //   GLOBAL: wire-format global expert id, or -1 if not routed.
+  // Applies to layouts that populate recv_topk_idx (LL rank-major, HT flat);
+  // ignored by layouts that do not (LL/HT expert-major). AUTO preserves
+  // pre-flag callers' behavior on the wire and may shift in a future
+  // release without an ABI break; pin LOCAL or GLOBAL for a stable contract.
 } ncclEpLayoutInfo_t;
 
-#define NCCL_EP_LAYOUT_INFO_INIT ((ncclEpLayoutInfo_t){ \
-    .size  = (unsigned int)sizeof(ncclEpLayoutInfo_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_LAYOUT_INFO_INIT \
+    ((ncclEpLayoutInfo_t){.size = (unsigned int)sizeof(ncclEpLayoutInfo_t), .magic = NCCL_EP_MAGIC})
 
 // Input tensors for ncclEpDispatch.
 // All fields except tokens are optional (NULL = not provided). Each field is a
 // pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int    size;         // = sizeof(this struct); first field, never moves
-    unsigned int    magic;        // = NCCL_EP_MAGIC; second field, never moves
-    ncclEpTensor_t* tokens;       // required; 2D [num_tokens, hidden]
+    unsigned int size; // = sizeof(this struct); first field, never moves
+    unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
+    ncclEpTensor_t* tokens; // required; 2D [num_tokens, hidden]
     ncclEpTensor_t* topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
-                                  //   LL rank-major: per-token routing weights
-                                  //   HT forward: routing weights (topk_idx taken from handle)
-    ncclEpTensor_t* scales;       // Reserved for future use
+  //   LL rank-major: per-token routing weights
+  //   HT forward: routing weights (topk_idx taken from handle)
+    ncclEpTensor_t* scales; // required when tokens->datatype is FP8 (HT or LL EXTERN);
+  // 2D [num_tokens, hidden/128], ncclFloat32 or ncclUint8 (UE8M0)
 } ncclEpDispatchInputs_t;
 
-#define NCCL_EP_DISPATCH_INPUTS_INIT ((ncclEpDispatchInputs_t){ \
-    .size  = (unsigned int)sizeof(ncclEpDispatchInputs_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_DISPATCH_INPUTS_INIT \
+    ((ncclEpDispatchInputs_t){.size = (unsigned int)sizeof(ncclEpDispatchInputs_t), .magic = NCCL_EP_MAGIC})
 
 // Output tensors for ncclEpDispatch.
 // All fields except tokens are optional (NULL = not provided). Each field is a
 // pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int    size;         // = sizeof(this struct); first field, never moves
-    unsigned int    magic;        // = NCCL_EP_MAGIC; second field, never moves
-    ncclEpTensor_t* tokens;       // required; received tokens
+    unsigned int size; // = sizeof(this struct); first field, never moves
+    unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
+    ncclEpTensor_t* tokens; // required; received tokens
     ncclEpTensor_t* topk_weights; // optional; LL rank-major or HT: received top-k weights
-                                  //   LL rank-major: ncclFloat32 [num_ranks, max_dispatch_tokens_per_rank, top_k]
-    ncclEpTensor_t* scales;       // Reserved for future use
-    ncclEpTensor_t* topk_idx;     // optional; LL rank-major or HT FLAT: received top-k expert indices
-                                  //   Current dispatch-output semantics:
-                                  //     HT FLAT: int64 [N(r), top_k], local expert indices on
-                                  //       this rank, unused entries are -1.
-                                  //     LL rank-major: int32 [num_ranks, max_dispatch_tokens_per_rank, top_k],
-                                  //       preserving source top-k order; local expert index on this
-                                  //       rank, or -1 when that top-k entry is not hosted locally.
+  //   LL rank-major: ncclFloat32 [num_ranks, max_dispatch_tokens_per_rank, top_k]
+    ncclEpTensor_t* scales; // optional; FP8 only; received per-token scaling factors
+    ncclEpTensor_t* topk_idx; // optional; LL rank-major or HT FLAT: received top-k expert indices
+  // Per-slot values are either the local or global expert id, selected via
+  // ncclEpLayoutInfo_t::recv_topk_idx_kind (AUTO/LOCAL/GLOBAL; AUTO resolves
+  // to LOCAL today). -1 marks slots not routed to this rank.
 } ncclEpDispatchOutputs_t;
 
-#define NCCL_EP_DISPATCH_OUTPUTS_INIT ((ncclEpDispatchOutputs_t){ \
-    .size  = (unsigned int)sizeof(ncclEpDispatchOutputs_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_DISPATCH_OUTPUTS_INIT \
+    ((ncclEpDispatchOutputs_t){.size = (unsigned int)sizeof(ncclEpDispatchOutputs_t), .magic = NCCL_EP_MAGIC})
 
 // Input tensors for ncclEpCombine.
 // All fields except tokens are optional (NULL = not provided). Each field is a
 // pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int    size;         // = sizeof(this struct); first field, never moves
-    unsigned int    magic;        // = NCCL_EP_MAGIC; second field, never moves
-    ncclEpTensor_t* tokens;       // required; post-expert activation tensor
+    unsigned int size; // = sizeof(this struct); first field, never moves
+    unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
+    ncclEpTensor_t* tokens; // required; post-expert activation tensor
     ncclEpTensor_t* topk_weights; // optional; HT backward combine only:
-                                  //   2D [num_recv_tokens, top_k], ncclFloat32
+  //   2D [num_recv_tokens, top_k], ncclFloat32
 } ncclEpCombineInputs_t;
 
-#define NCCL_EP_COMBINE_INPUTS_INIT ((ncclEpCombineInputs_t){ \
-    .size  = (unsigned int)sizeof(ncclEpCombineInputs_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_COMBINE_INPUTS_INIT \
+    ((ncclEpCombineInputs_t){.size = (unsigned int)sizeof(ncclEpCombineInputs_t), .magic = NCCL_EP_MAGIC})
 
 // Output tensors for ncclEpCombine.
 // All fields except tokens are optional (NULL = not provided). Each field is a
 // pointer to a caller-owned descriptor.
 typedef struct {
-    unsigned int    size;         // = sizeof(this struct); first field, never moves
-    unsigned int    magic;        // = NCCL_EP_MAGIC; second field, never moves
-    ncclEpTensor_t* tokens;       // required; combined output in original token order
+    unsigned int size; // = sizeof(this struct); first field, never moves
+    unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
+    ncclEpTensor_t* tokens; // required; combined output in original token order
     ncclEpTensor_t* topk_weights; // optional; 2D [num_tokens, top_k], ncclFloat32
-                                  //   LL expert-major: per-token routing weights applied on receive side
-                                  //   HT backward: combined routing weights output
+  //   LL expert-major: per-token routing weights applied on receive side
+  //   HT backward: combined routing weights output
 } ncclEpCombineOutputs_t;
 
-#define NCCL_EP_COMBINE_OUTPUTS_INIT ((ncclEpCombineOutputs_t){ \
-    .size  = (unsigned int)sizeof(ncclEpCombineOutputs_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_COMBINE_OUTPUTS_INIT \
+    ((ncclEpCombineOutputs_t){.size = (unsigned int)sizeof(ncclEpCombineOutputs_t), .magic = NCCL_EP_MAGIC})
 
 // Opaque type forward declaration
 typedef struct ncclEpHandle* ncclEpHandle_t;
 typedef struct {
-    unsigned int size;  // = sizeof(this struct); first field, never moves
+    unsigned int size; // = sizeof(this struct); first field, never moves
     unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
-    // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
-    // Padded slots are zero-filled by dispatch.
+  // HT expert-major only: per-expert zone alignment in tokens (pow2; 0/1 = no padding).
+  // Padded slots are zero-filled by dispatch.
     size_t dispatch_output_per_expert_alignment;
 } ncclEpHandleConfig_t;
 
-#define NCCL_EP_HANDLE_CONFIG_INIT ((ncclEpHandleConfig_t){ \
-    .size  = (unsigned int)sizeof(ncclEpHandleConfig_t), \
-    .magic = NCCL_EP_MAGIC })
-
+#define NCCL_EP_HANDLE_CONFIG_INIT \
+    ((ncclEpHandleConfig_t){.size = (unsigned int)sizeof(ncclEpHandleConfig_t), .magic = NCCL_EP_MAGIC})
 
 // Query the device bytes required for a handle's routing buffers.
 //
@@ -396,17 +389,16 @@ typedef struct {
 // Returns: ncclResult_t error code
 
 ncclResult_t ncclEpHandleMemSize(
-    ncclEpGroup_t               ep_group,
-    ncclEpLayout_t              layout,
+    ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
     const ncclEpHandleConfig_t* config,
-    size_t*                     size_out,
-    int                         num_topk
-);
+    size_t* size_out,
+    int num_topk);
 
 // Create and initialize EP handle.
 // Must be called before the first ncclEpDispatch/ncclEpCombine.
 //
-// NOTE: the impact of auto-sizing of internal buffers 
+// NOTE: the impact of auto-sizing of internal buffers
 // (ncclEpGroupConfig_t::rdma_buffer_size == NCCL_EP_AUTO):
 // * collective behaviour: This function MAY be collective and must be called by all ranks
 //   in the group in the same order.
@@ -437,12 +429,12 @@ ncclResult_t ncclEpHandleMemSize(
 // Returns: ncclResult_t error code
 
 ncclResult_t ncclEpInitHandle(
-    ncclEpHandle_t*             handle,
-    ncclEpGroup_t               ep_group,
-    ncclEpLayout_t              layout,
+    ncclEpHandle_t* handle,
+    ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
     const ncclEpHandleConfig_t* config,
-    int                         num_topk,
-    const ncclEpTensor_t*       handle_mem  // NULL = library allocates internally
+    int num_topk,
+    const ncclEpTensor_t* handle_mem // NULL = library allocates internally
 );
 
 // Per-step collective: prepare the handle for the given top-k routing decisions.
@@ -450,7 +442,7 @@ ncclResult_t ncclEpInitHandle(
 //
 // Arguments:
 //   handle             - [IN]  Handle from ncclEpInitHandle
-//   topk_idx           - [IN]  [num_tokens, top_k] int64
+//   topk_idx           - [IN]  [num_tokens, top_k]; ncclInt32 or ncclInt64
 //   layout_info        - [IN/OUT, optional] Named local tensors (NULL = none provided).
 //                         HT: layout_info->expert_counters is required when
 //                         max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
@@ -462,9 +454,8 @@ ncclResult_t ncclEpInitHandle(
 ncclResult_t ncclEpUpdateHandle(
     ncclEpHandle_t handle,
     const ncclEpTensor_t* topk_idx,
-    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
-    cudaStream_t stream
-);
+    const ncclEpLayoutInfo_t* layout_info, // NULL = none
+    cudaStream_t stream);
 
 // Create, initialize and bind an EP handle to a given layout and routing decisions.
 // Must be called before the first ncclEpDispatch/ncclEpCombine.
@@ -494,10 +485,9 @@ ncclResult_t ncclEpCreateHandle(
     ncclEpGroup_t ep_group,
     ncclEpLayout_t layout,
     const ncclEpTensor_t* topk_idx,
-    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
-    const ncclEpHandleConfig_t* config,  // NULL = defaults
-    cudaStream_t stream
-);
+    const ncclEpLayoutInfo_t* layout_info, // NULL = none
+    const ncclEpHandleConfig_t* config, // NULL = defaults
+    cudaStream_t stream);
 
 // Destroy an EP handle and release all associated resources.
 //
@@ -506,33 +496,95 @@ ncclResult_t ncclEpCreateHandle(
 //
 // Returns: ncclResult_t error code
 
-ncclResult_t ncclEpHandleDestroy(
-    ncclEpHandle_t handle
+ncclResult_t ncclEpHandleDestroy(ncclEpHandle_t handle);
+
+// Query the device bytes required for a handle's routing buffers.
+//
+// Arguments:
+//   ep_group  - [IN]  A valid EP group
+//   layout    - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
+//   config    - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
+//   size_out  - [OUT] Required bytes for handle_mem
+//   num_topk  - [IN]  Required for LL (> 0); optional for HT
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpHandleMemSize(
+    ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
+    const ncclEpHandleConfig_t* config,
+    size_t* size_out,
+    int num_topk);
+
+// Allocate handle buffers without performing any collective.
+// Call ncclEpUpdateHandle before the first ncclEpDispatch/ncclEpCombine.
+//
+// handle_mem == NULL:  NCCL EP allocates via alloc_fn; handle owns the memory.
+// handle_mem != NULL:  wraps caller-owned 1D ncclUint8 tensor (>= ncclEpHandleMemSize);
+//                      handle owns no memory; ncclEpHandleDestroy frees only the struct.
+//
+// Arguments:
+//   handle     - [OUT] Newly created handle
+//   ep_group   - [IN]  A valid EP group
+//   layout     - [IN]  Receive buffer layout. Required; must not be NCCL_EP_LAYOUT_UNSET.
+//   config     - [IN]  Handle configuration (see ncclEpHandleConfig_t). NULL = defaults.
+//   num_topk   - [IN]  Required for LL (> 0); pass -1 for HT
+//   handle_mem - [IN]  NULL = internal alloc; non-NULL = caller-owned device buffer
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpInitHandle(
+    ncclEpHandle_t* handle,
+    ncclEpGroup_t ep_group,
+    ncclEpLayout_t layout,
+    const ncclEpHandleConfig_t* config,
+    int num_topk,
+    const ncclEpTensor_t* handle_mem // NULL = library allocates internally
 );
 
+// Per-step collective: prepare the handle for the given top-k routing decisions.
+// Must be called after ncclEpInitHandle and before ncclEpDispatch.
+//
+// Arguments:
+//   handle             - [IN]  Handle from ncclEpInitHandle
+//   topk_idx           - [IN]  [num_tokens, top_k]; accepts ncclInt32 or ncclInt64.
+//                                                   Caller ensures expert ids fit in
+//                                                   the chosen width.
+//   layout_info      - [IN/OUT, optional] Named local tensors (NULL = none provided).
+//                         HT: layout_info->expert_counters is required when
+//                         max_dispatch_tokens_per_rank is NCCL_EP_AUTO.
+//                         LL mode: must be NULL.
+//   stream             - [IN]  CUDA stream
+//
+// Returns: ncclResult_t error code
+
+ncclResult_t ncclEpUpdateHandle(
+    ncclEpHandle_t handle,
+    const ncclEpTensor_t* topk_idx,
+    const ncclEpLayoutInfo_t* layout_info, // NULL = none
+    cudaStream_t stream);
 
 // EP dispatch configuration structure
 typedef struct {
-    unsigned int size;         // = sizeof(this struct); first field, never moves
-    unsigned int magic;        // = NCCL_EP_MAGIC; second field, never moves
-    unsigned int send_only;    // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
-                               //   supported for LL mode only; output tensors must still be preallocated
+    unsigned int size; // = sizeof(this struct); first field, never moves
+    unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
+    unsigned int send_only; // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
+  //   supported for LL mode only; output tensors must still be preallocated
     unsigned int round_scales; // whether to round the scaling factors tensor into a power of 2
     ncclEpPassDir_t pass_direction; // forward (default) or backward pass; HT-only.
-                               //   FWD requires inputs->topk_weights; BWD forbids it and forbids
-                               //   outputs->topk_weights / outputs->topk_idx.
+  //   FWD requires inputs->topk_weights; BWD forbids it and forbids
+  //   outputs->topk_weights / outputs->topk_idx.
 } ncclEpDispatchConfig_t;
 
-#define NCCL_EP_DISPATCH_CONFIG_INIT ((ncclEpDispatchConfig_t){ \
-    .size  = (unsigned int)sizeof(ncclEpDispatchConfig_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_DISPATCH_CONFIG_INIT \
+    ((ncclEpDispatchConfig_t){.size = (unsigned int)sizeof(ncclEpDispatchConfig_t), .magic = NCCL_EP_MAGIC})
 
 // Perform EP dispatch
 //   * Sends tokens and metadata to the experts according to routing decisions.
 //   * This call is collective and must be invoked by all ranks in the group.
 //
 // Arguments:
-//   handle        - [IN,OUT] EP handle. 
+//   handle        - [IN,OUT] EP handle.
 //   inputs        - [IN]     Named input tensors (see ncclEpDispatchInputs_t).
 //                            inputs->tokens is required for all modes and layouts.
 //                            For LL mode (rank-major layout) and HT mode (all layouts, forward pass),
@@ -569,15 +621,15 @@ typedef struct {
 //
 //                            LL mode:
 //                              The set and shapes of the output tokens vary depending on the layout.
-//                              * Expert-major layout: 
+//                              * Expert-major layout:
 //                                requires only outputs->tokens [local_experts, max_dispatch_tokens_per_rank, hidden]
-//                                The actual number of tokens received by expert `e` is obtained via 
+//                                The actual number of tokens received by expert `e` is obtained via
 //                                layout_info->expert_counters[`e`] (see below).
-//                              * Rank-major layout: 
+//                              * Rank-major layout:
 //                                * outputs->tokens [num_ranks, max_dispatch_tokens_per_rank, hidden]
 //                                * outputs->topk_weights [num_ranks, max_dispatch_tokens_per_rank, num_topk]
 //                                * outputs->topk_idx [num_ranks, max_dispatch_tokens_per_rank, num_topk]
-//                                The actual number of tokens received by rank `r` is obtained via 
+//                                The actual number of tokens received by rank `r` is obtained via
 //                                layout_info->src_rank_counters[`r`] (see below).
 //   layout_info   - [IN,OUT] Named local tensors for layout-specific counters (see ncclEpLayoutInfo_t).
 //                              * For HT mode should be NULL, the counter information is available through ncclEpUpdateHandle.
@@ -596,24 +648,22 @@ ncclResult_t ncclEpDispatch(
     ncclEpHandle_t handle,
     const ncclEpDispatchInputs_t* inputs,
     const ncclEpDispatchOutputs_t* outputs,
-    const ncclEpLayoutInfo_t* layout_info,  // NULL = none
-    const ncclEpDispatchConfig_t* config,   // NULL = defaults
-    cudaStream_t stream
-);
+    const ncclEpLayoutInfo_t* layout_info, // NULL = none
+    const ncclEpDispatchConfig_t* config, // NULL = defaults
+    cudaStream_t stream);
 
 typedef struct {
-    unsigned int size;         // = sizeof(this struct); first field, never moves
-    unsigned int magic;        // = NCCL_EP_MAGIC; second field, never moves
-    unsigned int send_only;    // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
-                               //   supported for LL mode only; output tensors must still be preallocated
+    unsigned int size; // = sizeof(this struct); first field, never moves
+    unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
+    unsigned int send_only; // if non-zero, only initiate transfers; requires ncclEpComplete() afterward
+    //   supported for LL mode only; output tensors must still be preallocated
     ncclEpPassDir_t pass_direction; // forward (default) or backward pass; HT-only.
-                               //   FWD forbids inputs->topk_weights; BWD requires inputs->topk_weights
-                               //   and outputs->topk_weights.
+    //   FWD forbids inputs->topk_weights; BWD requires inputs->topk_weights
+    //   and outputs->topk_weights.
 } ncclEpCombineConfig_t;
 
-#define NCCL_EP_COMBINE_CONFIG_INIT ((ncclEpCombineConfig_t){ \
-    .size  = (unsigned int)sizeof(ncclEpCombineConfig_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_COMBINE_CONFIG_INIT \
+    ((ncclEpCombineConfig_t){.size = (unsigned int)sizeof(ncclEpCombineConfig_t), .magic = NCCL_EP_MAGIC})
 
 // Perform EP combine
 //   * Gathers outputs from experts and returns them to their source in original token order.
@@ -643,9 +693,8 @@ ncclResult_t ncclEpCombine(
     ncclEpHandle_t handle,
     const ncclEpCombineInputs_t* inputs,
     const ncclEpCombineOutputs_t* outputs,
-    const ncclEpCombineConfig_t* config,    // NULL = defaults
-    cudaStream_t stream
-);
+    const ncclEpCombineConfig_t* config, // NULL = defaults
+    cudaStream_t stream);
 
 // Reserved config struct for future options. Callers may pass NULL (defaults)
 // or initialise via NCCL_EP_COMPLETE_CONFIG_INIT. The size/magic header fields
@@ -654,13 +703,12 @@ ncclResult_t ncclEpCombine(
 // typedef stays struct-form rather than pointer-form — callers can spell
 // pointer-to-const as `const ncclEpCompleteConfig_t*` naturally.
 typedef struct ncclEpCompleteConfig {
-    unsigned int size;  // = sizeof(this struct); first field, never moves
+    unsigned int size; // = sizeof(this struct); first field, never moves
     unsigned int magic; // = NCCL_EP_MAGIC; second field, never moves
 } ncclEpCompleteConfig_t;
 
-#define NCCL_EP_COMPLETE_CONFIG_INIT ((ncclEpCompleteConfig_t){ \
-    .size  = (unsigned int)sizeof(ncclEpCompleteConfig_t), \
-    .magic = NCCL_EP_MAGIC })
+#define NCCL_EP_COMPLETE_CONFIG_INIT \
+    ((ncclEpCompleteConfig_t){.size = (unsigned int)sizeof(ncclEpCompleteConfig_t), .magic = NCCL_EP_MAGIC})
 
 // Continues a staged EP operation to completion.
 //   * This should be called after a prior `ncclEpDispatch()` or `ncclEpCombine()` call with `send_only` flag set.
@@ -679,12 +727,7 @@ typedef struct ncclEpCompleteConfig {
 // Returns:
 //   ncclResult_t error code
 
-ncclResult_t ncclEpComplete(
-    ncclEpHandle_t handle,
-    const ncclEpCompleteConfig_t* config,
-    cudaStream_t stream
-);
-
+ncclResult_t ncclEpComplete(ncclEpHandle_t handle, const ncclEpCompleteConfig_t* config, cudaStream_t stream);
 
 // Query the active-mask status of all ranks.
 //   Copies the mask buffer to a user-provided device tensor.
@@ -697,11 +740,7 @@ ncclResult_t ncclEpComplete(
 //
 // Returns: ncclResult_t error code
 
-ncclResult_t ncclEpMaskQuery(
-    ncclEpGroup_t ep_group,
-    int* mask_status,
-    cudaStream_t stream
-);
+ncclResult_t ncclEpMaskQuery(ncclEpGroup_t ep_group, int* mask_status, cudaStream_t stream);
 
 // Set the mask for all ranks at once.
 //   Requires enable_mask=true in the group config.
@@ -713,11 +752,7 @@ ncclResult_t ncclEpMaskQuery(
 //
 // Returns: ncclResult_t error code
 
-ncclResult_t ncclEpMaskUpdate(
-    ncclEpGroup_t ep_group,
-    const int* mask,
-    cudaStream_t stream
-);
+ncclResult_t ncclEpMaskUpdate(ncclEpGroup_t ep_group, const int* mask, cudaStream_t stream);
 
 // Reset masks and RDMA buffers so previously masked ranks can re-join.
 //   Collective: all surviving ranks must call simultaneously.
@@ -734,10 +769,7 @@ ncclResult_t ncclEpMaskUpdate(
 //
 // Returns: ncclResult_t error code
 
-ncclResult_t ncclEpMaskClean(
-    ncclEpGroup_t ep_group,
-    cudaStream_t stream
-);
+ncclResult_t ncclEpMaskClean(ncclEpGroup_t ep_group, cudaStream_t stream);
 
 // Poll for asynchronous errors (e.g., rank timeout).
 //   Lightweight host-side check — reads a pinned CPU flag, no GPU sync required.
@@ -751,10 +783,7 @@ ncclResult_t ncclEpMaskClean(
 //
 // Returns: ncclResult_t error code
 
-ncclResult_t ncclEpGetAsyncError(
-    ncclEpGroup_t ep_group,
-    int* error_out
-);
+ncclResult_t ncclEpGetAsyncError(ncclEpGroup_t ep_group, int* error_out);
 
 // Clear the async error flag.
 //   Lightweight host-side reset — writes zero to the pinned CPU flag.
@@ -768,9 +797,7 @@ ncclResult_t ncclEpGetAsyncError(
 //
 // Returns: ncclResult_t error code
 
-ncclResult_t ncclEpErrorClear(
-    ncclEpGroup_t ep_group
-);
+ncclResult_t ncclEpErrorClear(ncclEpGroup_t ep_group);
 
 #ifdef __cplusplus
 }

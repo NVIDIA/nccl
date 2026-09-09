@@ -85,11 +85,13 @@ typedef struct {
 } ncclNetProperties_v12_t;
 
 /* GIN plugin versioned interfaces */
+#include "gin_v14.h"
 #include "gin_v13.h"
 #include "gin_v12.h"
 #include "gin_v11.h"
 
-typedef ncclGin_v13_t ncclGin_t;
-typedef ncclGinConfig_v13_t ncclGinConfig_t;
+typedef ncclGin_v14_t ncclGin_t;
+typedef ncclGinConfig_v14_t ncclGinConfig_t;
+typedef ncclGinProperties_v14_t ncclGinProperties_t;
 
 #endif // end include guard

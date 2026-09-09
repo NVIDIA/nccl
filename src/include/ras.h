@@ -23,5 +23,6 @@ struct rasRankInit {
 ncclResult_t ncclRasCommInit(struct ncclComm* comm, struct rasRankInit* myRank);
 ncclResult_t ncclRasCommFini(const struct ncclComm* comm);
 ncclResult_t ncclRasAddRanks(struct rasRankInit* ranks, int nranks);
+ncclResult_t ncclRunDiagnosticsPassive(struct ncclComm* comm);
 
 #endif // !NCCL_RAS_H_

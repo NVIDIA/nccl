@@ -43,7 +43,7 @@ struct doca_verbs_srq_init_attr {
     enum doca_verbs_srq_type srq_type { DOCA_VERBS_SRQ_TYPE_LINKED_LIST };
     uint32_t srq_wr{};
     uint32_t receive_max_sges{};
-    struct doca_verbs_umem *external_umem{};
+    doca_verbs_umem_t *external_umem{};
     uint64_t external_umem_offset{};
 };
 

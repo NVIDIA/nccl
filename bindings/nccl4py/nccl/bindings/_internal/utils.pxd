@@ -167,4 +167,3 @@ cdef int get_resource_ptrs(nullable_unique_ptr[ vector[PtrT*] ] &in_out_ptr, obj
 cdef int get_nested_resource_ptr(nested_resource[ResT] &in_out_ptr, object obj, ResT* __unused) except 1
 
 cdef bint is_nested_sequence(data)
-cdef void* get_buffer_pointer(buf, Py_ssize_t size, readonly=*) except*

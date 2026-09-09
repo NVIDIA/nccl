@@ -336,4 +336,160 @@ Monitoring mode can also be used in conjunction with JSON output:
 Unlike in the previously shown communicator output (where each rank was printed separately), here the entity of concern
 is a `process` so ``cuda_devs`` and ``nvml_devs`` need to be arrays (since a process can manage multiple GPUs).
 
+Control Commands
+----------------
+
+Starting with NCCL 2.31, RAS adds a ``CONTROL`` command namespace for adjusting NCCL behavior at run time,
+out-of-band, and consistently across the whole job.  Unlike ``STATUS`` and ``MONITOR`` (which only *read* the
+job's state), ``CONTROL`` commands *modify* the running job.
+
+The first such command toggles the NCCL profiler's event mask, so that profiling (NCCL Telemetry, NCCL
+Inspector, and other Profiler-based plugins) can be enabled or disabled dynamically, without restarting the
+job:
+
+.. code::
+
+  ncclras CONTROL PROFILER_MASK none            # disable all profiler events job-wide
+  ncclras CONTROL PROFILER_MASK coll,kernelch   # enable a subset of events
+  ncclras CONTROL PROFILER_MASK all             # enable all events
+  ncclras CONTROL PROFILER_MASK 0x42            # raw hexadecimal mask
+
+The equivalent wire-level command is ``CONTROL PROFILER_MASK <value>`` (e.g., ``echo "CONTROL PROFILER_MASK
+none" | nc localhost 28028``), to which RAS replies ``OK``.  The ``<value>``
+may be ``none``, ``all``, a hexadecimal (``0x``-prefixed) or decimal integer, or a comma-separated list of
+event names (``group``, ``coll``, ``p2p``, ``proxyop``, ``proxystep``, ``proxyctrl``, ``kernelch``,
+``netplugin``, ``groupapi``, ``collapi``, ``p2papi``, ``kernellaunch``, ``cecoll``, ``cesync``, ``cebatch``).
+
+The change is applied to the entire job: the contacted RAS thread broadcasts the new mask over the RAS
+network and every process updates its profiler event mask, taking effect as each rank receives the control
+command.  A profiler plugin must be loaded for the change to have any effect; with the mask set to ``0`` the
+plugin stays resident but no event callbacks fire, so the profiling overhead drops to near zero.
+
+The mask is sampled when NCCL work is enqueued, so the change applies to operations enqueued after it
+arrives.  Work already captured into a CUDA graph keeps the mask that was in effect at capture time until
+the graph is recaptured.
+
+.. _ras_diagnostics:
+
+RAS Diagnostics
+---------------
+
+RAS diagnostics provide a readiness probe for NCCL jobs by checking the selected GPU, CUDA driver, and NCCL
+configuration information across ranks.
+
+The report includes results for the following checks:
+
+* **GPU inventory:** Checks that communicator ranks report the same number of GPUs and use the same GPU model.
+* **CUDA driver version:** Checks that all ranks report the same CUDA version supported by the driver.
+* **Volatile ECC errors:** Checks volatile SRAM and DRAM ECC error counters for the GPU used by each rank.
+* **NVLink state:** Checks that ranks report the same number of NVLinks and that all reported links are active.
+* **NCCL environment:** Checks that ``NCCL_*`` environment-variable names and values are consistent across ranks.
+
+.. note::
+
+   RAS diagnostics do not exercise NCCL data paths and do not provide a comprehensive assessment of cluster health.
+
+Prerequisites
+^^^^^^^^^^^^^
+
+RAS diagnostics require the RAS subsystem to be enabled, which is the default; see
+:ref:`env_NCCL_RAS_ENABLE`.
+
+Running During Communicator Initialization
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Initialization-triggered diagnostics are disabled by default. To run them, set
+``NCCL_RUN_RAS_DIAGNOSTICS=1`` before starting the application:
+
+.. code::
+
+  NCCL_RUN_RAS_DIAGNOSTICS=1 <application> [arguments]
+
+Setting ``NCCL_RUN_RAS_DIAGNOSTICS=1`` triggers diagnostics at each communicator initialization. Each request is scoped
+to the newly initialized communicator, and the report is printed to the standard output of the process hosting rank 0
+for that communicator.
+
+Running On Demand
+^^^^^^^^^^^^^^^^^
+
+RAS diagnostics can be requested at any time while an application is running, regardless of whether
+``NCCL_RUN_RAS_DIAGNOSTICS`` is set. An on-demand request runs diagnostics for all communicators currently known to the
+responding RAS peers.
+
+RAS diagnostics can be triggered through the ``ncclras`` client with the ``-D`` option:
+
+.. code::
+
+  ncclras -D
+  ncclras -h <host> -p 28028 -D
+
+RAS diagnostics can also be triggered directly through the text protocol with netcat:
+
+.. code::
+
+  echo diagnostics | nc <host> 28028
+
+RAS returns the report over the TCP connection that submitted the request. The ``ncclras`` client prints the response
+to its standard output.
+
+.. warning::
+
+   ``NCCL_RAS_ADDR`` configures the RAS listening address used by NCCL processes. When a non-default address is
+   configured, the host and port in the ``ncclras`` or netcat command must be updated accordingly. See
+   :ref:`env_NCCL_RAS_ADDR` for address configuration and security considerations.
+
+Output Format
+^^^^^^^^^^^^^
+
+Each report line starts with the host name and process ID of the NCCL process that initiated the request, followed by
+``NCCL DIAG``. A report includes a header, result lines organized by check and communicator, and a completion line.
+For example, an on-demand report with no reported issues might look like:
+
+.. code::
+
+  node042:12345 NCCL DIAG === RAS Diagnostics ===
+  node042:12345 NCCL DIAG [OK]   GPU inventory: 8x NVIDIA H100 per node consistent across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   CUDA driver version: 13000 consistent across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   ECC: no uncorrected volatile errors across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   NVLink: found 18 link(s) per device, all active across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   NCCL environment: NCCL_* env vars consistent across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG RAS diagnostics completed in 12.3 ms across 8 RAS peers
+
+.. note::
+
+   Some checks may be omitted from the report when they are not applicable. For example, the NVLink check is omitted
+   on PCIe-only systems.
+
+Result lines use the following tags:
+
+* ``[OK]`` indicates that a check completed without reporting an issue.
+* ``[INFO]`` identifies a condition that may require review, such as inconsistent values or unavailable, partial, or
+  incomplete information.
+
+A check can use multiple lines to group ranks by value:
+
+.. code::
+
+  node042:12345 NCCL DIAG [INFO] NCCL environment: mismatch across 8 ranks in comm 0x1234 for NCCL_DEBUG
+  node042:12345 NCCL DIAG [INFO] NCCL environment: NCCL_DEBUG=INFO on rank(s) {0,1,2,3}
+  node042:12345 NCCL DIAG [INFO] NCCL environment: NCCL_DEBUG=WARN on rank(s) {4,5,6,7}
+  node042:12345 NCCL DIAG [INFO] NCCL environment: 1 NCCL_* env var(s) differ across ranks in comm 0x1234
+
+Rank lists contain a limited number of entries. If a group contains additional ranks, the list ends with an ellipsis
+and reports the total group size.
+
+Concurrent Requests
+^^^^^^^^^^^^^^^^^^^
+
+If an NCCL process already has a diagnostics request in progress, including one triggered during communicator
+initialization, a new on-demand command returns:
+
+.. code::
+
+  BUSY: diagnostics already in progress
+
+In this case, the request is not queued and must be retried after the current request completes. This restriction is per
+process and applies only to on-demand requests. Initialization-triggered requests and requests from other NCCL processes
+can run concurrently.
+
 .. highlight:: shell

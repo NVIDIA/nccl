@@ -175,6 +175,11 @@ ncclResult_t wrap_ibv_query_gid(struct ibv_context* context, uint8_t port_num, i
                           "ibv_query_gid");
 }
 
+ncclResult_t wrap_ibv_query_pkey(struct ibv_context* context, uint8_t port_num, int index, uint16_t* pkey) {
+  IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_pkey, ibv_internal_query_pkey(context, port_num, index, pkey),
+                          0, "ibv_query_pkey");
+}
+
 ncclResult_t wrap_ibv_query_qp(struct ibv_qp* qp, struct ibv_qp_attr* attr, int attr_mask,
                                struct ibv_qp_init_attr* init_attr) {
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_qp, ibv_internal_query_qp(qp, attr, attr_mask, init_attr), 0,
@@ -336,17 +341,16 @@ print:
 static void printIbModifyQpHint(int status) {
   switch (status) {
   case ETIMEDOUT:
-    INFO(NCCL_NET, "HINT: In many cases this error occurs when NICs are not cross-rail connected.");
-    INFO(NCCL_NET, "HINT: To confirm, you can set NCCL_CROSS_NIC=0 to disable cross-rail communication.");
-    INFO(NCCL_NET, "HINT: See https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-cross-nic for "
-                   "more information.");
+    INFO(NCCL_NET, "HINT: In many cases this error indicates that the NICs are not cross-rail connected.");
+    INFO(NCCL_NET, "HINT: To confirm, set NCCL_CROSS_NIC=0 to disable cross-rail communication (see "
+                   "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-cross-nic).");
     return;
   case EINVAL:
-    INFO(NCCL_NET, "HINT: In many cases this error occurs when the incorrect GID index is forced by NCCL_IB_GID_INDEX");
-    INFO(NCCL_NET,
-         "HINT: To confirm and fix the problem, you can set NCCL_IB_GID_INDEX=-1 to enable automatic detection.");
-    INFO(NCCL_NET, "HINT: See https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-gid-index for "
-                   "more information.");
+    INFO(NCCL_NET, "HINT: In many cases this error indicates that an incorrect GID index is forced by "
+                   "NCCL_IB_GID_INDEX, or that a NIC's GID changed mid-run.");
+    INFO(NCCL_NET, "HINT: To confirm, set NCCL_IB_GID_INDEX=-1 to enable automatic detection and check "
+                   "'dmesg | grep -i gid' for GID changes (see "
+                   "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-gid-index).");
     return;
   default:
     break;

@@ -14,7 +14,7 @@
 #include <cassert>
 #include <type_traits>
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 
 namespace nccl {
 namespace utility {
@@ -752,6 +752,6 @@ NCCL_DEVICE_INLINE void store(Pack* addr, const Pack& val) {
 } // namespace utility
 } // namespace nccl
 
-#endif // NCCL_CHECK_CUDACC
+#endif // __CUDACC__
 
 #endif // _NCCL_DEVICE_MULTIMEM__FUNCS_H_

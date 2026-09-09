@@ -12,6 +12,12 @@
 #include "group.h"
 #include "collectives.h"
 #include "utils.h"
+#include "enqueue/raw_task.h"
+#include "enqueue/task_pretuning.h"
+#include "enqueue/task_classify.h"
+#include "enqueue/task_posttuning.h"
+#include "enqueue/task_sched.h"
+#include "enqueue/mgmt_task_enq.h"
 
 #define NCCL_LL_ALIGNMENT_PER_THREAD sizeof(uint64_t)
 #define NCCL_LL128_ALIGNMENT_PER_WARP 480
@@ -19,9 +25,22 @@
 #define NCCL_BYTES_ALIGNMENT 16
 
 int64_t ncclParamGraphStreamOrdering();
+int64_t ncclParamEnqueueRearchEnable();
+int64_t ncclParamAllgathervEnable();
+int64_t ncclParamP2pLLThreshold();
+int64_t ncclParamChunkSize();
+int64_t ncclParamLaunchOrderImplicit();
+
+ncclResult_t ncclGroupJobLaunch(struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsMain,
+                                volatile bool* groupAbortFlag);
+
+ncclResult_t ncclTaskPreTuning(struct ncclComm* comm, struct ncclRawTaskQueue* rtq,
+                               struct ncclTaskTuningInfoQueue* tiq);
+ncclResult_t ncclTaskPrepare(struct ncclComm* comm, ncclSimInfo_t* simInfo);
 
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* maxStackSize);
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info);
+ncclResult_t ncclPlannerSetCapturingGraph(struct ncclComm* comm, struct ncclInfo* info);
 ncclResult_t ncclLaunchPrepare(struct ncclComm* comm);
 ncclResult_t ncclLaunchKernelBefore_NoUncapturedCuda(struct ncclComm* comm, struct ncclKernelPlan* plan);
 ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan);
@@ -51,6 +70,6 @@ void ncclAddWorkBatchToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan, 
 
 ncclResult_t ncclAddProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op);
 
-ncclResult_t ncclAddProfilerProxyOpIfNeeded(struct ncclComm* comm, struct ncclKernelPlan* plan, struct ncclProxyOp* op);
+ncclResult_t ncclGetRegBuff(struct ncclComm* comm, struct ncclTaskColl* info, int* regBuff);
 
 #endif // End include guard

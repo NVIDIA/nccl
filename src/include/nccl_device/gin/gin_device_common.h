@@ -37,6 +37,14 @@
 #endif
 #endif
 
+#ifndef NCCL_GIN_EFA_GDA_ENABLE
+#if CUDA_VERSION >= 12020 && __CUDA_ARCH__ >= 700
+#define NCCL_GIN_EFA_GDA_ENABLE 1
+#else
+#define NCCL_GIN_EFA_GDA_ENABLE 0
+#endif
+#endif
+
 enum ncclGinOptFlags {
   ncclGinOptFlagsDefault = 0,
   ncclGinOptFlagsMaySkipCreditCheck = (1 << 0),
@@ -46,8 +54,10 @@ enum ncclGinOptFlags {
 #define NCCL_GIN_BACKEND_MASK_ALL \
   (((NCCL_GIN_PROXY_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_PROXY | \
    ((NCCL_GIN_GDAKI_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_GDAKI | \
-   ((NCCL_GIN_GPI_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_GPI)
+   ((NCCL_GIN_GPI_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_GPI | \
+   ((NCCL_GIN_EFA_GDA_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_EFA_GDA)
 
+#ifdef __CUDACC__
 // Resource sharing mode for a given ncclGin/ncclGin_C *instance*.
 // This mode is selected at construction time and is carried by the ncclGin
 // object, then copied into ncclGinCtx for each call. It is not stored as
@@ -96,13 +106,17 @@ struct ncclGinSignalDescriptor {
   };
   bool isStrong;
 };
+#endif // __CUDACC__
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 
 template <ncclNetDeviceType backend>
 struct ncclGinApi_Wait {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx, ncclGinRequest_t& outRequest, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor, cuda::memory_order ord, uint32_t* abortFlag);
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx, ncclGinRequest_t& outRequest, bool hasDescriptor,
+                                              ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles);
 };
 
 template <ncclNetDeviceType backend>
@@ -170,10 +184,20 @@ struct ncclGinApi_Flush {
   template <typename Coop>
   NCCL_DEVICE_INLINE static void call(ncclGinCtx, Coop, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       cuda::memory_order ord, uint32_t* abortFlag);
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx, Coop, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                                              cuda::memory_order ord, uint32_t* abortFlag, uint64_t timeoutCycles);
+};
+
+// Whether the backend supports strong signals. If false, flush+weakSignal must have the same guarantees
+// as strong signals (required by the barrier implementation)
+template <ncclNetDeviceType backend>
+struct ncclGinApi_SupportsStrongSignal {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx);
 };
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <template <ncclNetDeviceType> typename ApiFn, typename... Arg>
 NCCL_DEVICE_INLINE static decltype(auto) ncclGinCallImpl(unsigned beMask, ncclGinCtx ctx, Arg&&... arg) {
   bool singleton = (beMask & (beMask - 1)) == 0;  // Only one bit set
@@ -192,6 +216,11 @@ NCCL_DEVICE_INLINE static decltype(auto) ncclGinCallImpl(unsigned beMask, ncclGi
   case (int)NCCL_NET_DEVICE_GIN_GPI:
     if (!(1 & (beMask >> (int)NCCL_NET_DEVICE_GIN_GPI))) __builtin_unreachable();
     return ApiFn<NCCL_NET_DEVICE_GIN_GPI>::call(ctx, static_cast<Arg&&>(arg)...);
+#endif
+#if NCCL_GIN_EFA_GDA_ENABLE
+  case (int)NCCL_NET_DEVICE_GIN_EFA_GDA:
+    if (!(1 & (beMask >> (int)NCCL_NET_DEVICE_GIN_EFA_GDA))) __builtin_unreachable();
+    return ApiFn<NCCL_NET_DEVICE_GIN_EFA_GDA>::call(ctx, static_cast<Arg&&>(arg)...);
 #endif
   default:
     __builtin_unreachable();

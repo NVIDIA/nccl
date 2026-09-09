@@ -29,7 +29,7 @@ NVCUFLAGS_SYM += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
 # So that nccl_device.h includes gin__funcs.h and common.cu / symmetric GIN kernels get ncclGin_BackendMask<12> definition
 ifeq ($(NCCL_OS_LINUX), 1)
 NVCUFLAGS += -DNCCL_OS_LINUX
-NVCUFLAGS_SYM += -DNCCL_OS_LINUX -DDOCA_VERBS_USE_CUDA_WRAPPER -DDOCA_VERBS_USE_NET_WRAPPER
+NVCUFLAGS_SYM += -DNCCL_OS_LINUX -DDOCA_GPUNETIO_USE_CUDA_WRAPPER -DDOCA_VERBS_USE_NET_WRAPPER
 endif
 #NVCUFLAGS_SYM += --ptx
 
@@ -83,7 +83,7 @@ $(OBJDIR)/gensrc: generate.py
 	  (bar='!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'; \
 	   printf "\n$${bar}\nERROR: Building NCCL requires a Python 3 installation invokable as 'python3'.\n$${bar}\n\n" 1>&2; \
 	   exit 1)) \
-	&& ./generate.py $@ "$(ONLY_FUNCS)"
+	&& NCCL_EXACT_KERNEL_NAMES="$(NCCL_EXACT_KERNEL_NAMES)" ./generate.py $@ "$(ONLY_FUNCS)"
 
 $(OBJDIR)/gensrc/symmetric: $(OBJDIR)/gensrc symmetric/generate.py
 	@mkdir -p $@

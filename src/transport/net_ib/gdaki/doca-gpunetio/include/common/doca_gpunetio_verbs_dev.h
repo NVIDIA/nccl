@@ -160,7 +160,8 @@ struct doca_gpu_dev_verbs_cq {
     uint64_t cqe_ci;                           /**< CQE Consumer Index */
     uint32_t cqe_mask;                         /**< Mask of total number of CQEs in CQ */
     uint8_t cqe_size;                          /**< Single CQE size (64B default) */
-    uint8_t reserved1[3];                      /**< Reserved */
+    enum doca_gpu_dev_verbs_cq_type cq_type;   /**< Type of the completion queue */
+    uint8_t reserved1[2];                      /**< Reserved */
     uint64_t cqe_rsvd;                         /**< All previous CQEs are polled */
     enum doca_gpu_dev_verbs_mem_type mem_type; /**< Memory type of the completion queue */
     uint8_t reserved2[12];                     /**< Reserved */

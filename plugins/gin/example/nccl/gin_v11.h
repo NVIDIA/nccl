@@ -36,7 +36,7 @@ typedef struct {
   ncclResult_t (*closeColl)(void* collComm);
   ncclResult_t (*closeListen)(void* listenComm);
 
-  // Put operations
+  // Data operations
   ncclResult_t (*iput)(void* collComm, uint64_t srcOff, void* srcMhandle, size_t size,
       uint64_t dstOff, void* dstMhandle, uint32_t rank, void** request);
   ncclResult_t (*iputSignal)(void* collComm, uint64_t srcOff, void* srcMhandle,

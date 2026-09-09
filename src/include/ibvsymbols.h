@@ -29,6 +29,7 @@ struct ncclIbvSymbols {
   int (*ibv_internal_query_device)(struct ibv_context* context, struct ibv_device_attr* device_attr);
   int (*ibv_internal_query_port)(struct ibv_context* context, uint8_t port_num, struct ibv_port_attr* port_attr);
   int (*ibv_internal_query_gid)(struct ibv_context* context, uint8_t port_num, int index, union ibv_gid* gid);
+  int (*ibv_internal_query_pkey)(struct ibv_context* context, uint8_t port_num, int index, uint16_t* pkey);
   int (*ibv_internal_query_qp)(struct ibv_qp* qp, struct ibv_qp_attr* attr, int attr_mask,
                                struct ibv_qp_init_attr* init_attr);
   struct ibv_pd* (*ibv_internal_alloc_pd)(struct ibv_context* context);

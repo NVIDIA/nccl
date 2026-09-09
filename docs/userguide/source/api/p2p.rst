@@ -58,9 +58,15 @@ ncclPutSignal
 
  The target memory window ``peerWin`` must be registered using :c:func:`ncclCommWindowRegister`.
 
- The ``sigIdx`` is the signal index identifier for the operation. It must be set to 0 for now.
+ .. note::
+    ``localbuff`` must currently also be registered with :c:func:`ncclCommWindowRegister`.
+    This requirement may be relaxed in a future release.
 
- The ``ctx`` is the context identifier for the operation. It must be set to 0 for now.
+ The ``sigIdx`` is the signal index identifier for the operation. Prior to NCCL 2.31, it must be set to 0.
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:macro:`numRmaSig`).
+
+ The ``ctx`` selects the communication context. Prior to NCCL 2.31, it must be set to 0.
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:macro:`numRmaCtx`).
 
  The ``flags`` parameter is reserved for future use. It must be set to 0 for now.
 
@@ -78,9 +84,11 @@ ncclSignal
 
  Send a signal to rank ``peer`` without transferring data.
 
- The ``sigIdx`` is the signal index identifier for the operation. It must be set to 0 for now.
+ The ``sigIdx`` is the signal index identifier for the operation. Prior to NCCL 2.31, it must be set to 0.
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:macro:`numRmaSig`).
 
- The ``ctx`` is the context identifier for the operation. It must be set to 0 for now.
+ The ``ctx`` selects the communication context. Prior to NCCL 2.31, it must be set to 0.
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:macro:`numRmaCtx`).
 
  The ``flags`` parameter is reserved for future use. It must be set to 0 for now.
 
@@ -107,11 +115,13 @@ ncclWaitSignal
 
  .. c:member:: int sigIdx
 
-  Signal index identifier. Must be set to 0 for now.
+  Signal index identifier. Prior to NCCL 2.31, it must be set to 0.
+  Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:macro:`numRmaSig`).
 
  .. c:member:: int ctx
 
-  Context identifier. Must be set to 0 for now.
+  Communication context. Prior to NCCL 2.31, it must be set to 0.
+  Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:macro:`numRmaCtx`).
 
 .. c:function:: ncclResult_t ncclWaitSignal(int nDesc, ncclWaitSignalDesc_t* signalDescs, ncclComm_t comm, cudaStream_t stream)
 

@@ -11,6 +11,8 @@
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <cuda_fp16.h>
+
+#ifdef __CUDACC__
 #include <algorithm>
 
 // Forward declaration for sum reduction operator (defined in reduce_copy__types.h)
@@ -37,14 +39,17 @@ struct EltPack {
   static constexpr int Bytes = n * static_cast<int>(sizeof(T));
   // Impose most generous alignment possible (greatest pow2 factor)
   static constexpr int Alignment = (Bytes & -Bytes);
-  alignas(Alignment) char bytes[Bytes];
+  union {
+    alignas(Alignment) char bytes[Bytes];
+    T values[n];
+  };
 
   // Element access via reinterpret_cast
   NCCL_DEVICE_INLINE T* elts() {
-    return reinterpret_cast<T*>(bytes);
+    return values;
   }
   NCCL_DEVICE_INLINE const T* elts() const {
-    return reinterpret_cast<const T*>(bytes);
+    return values;
   }
 };
 
@@ -153,5 +158,6 @@ struct MinMultimemType<__nv_fp8_e5m2> {
 
 } // namespace utility
 } // namespace nccl
+#endif // __CUDACC__
 
 #endif // _NCCL_DEVICE_VECTOR__TYPES_H_

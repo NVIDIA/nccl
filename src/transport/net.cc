@@ -17,7 +17,6 @@
 #include "transport.h"
 #include "shm.h"
 #include "compiler.h"
-#include <assert.h>
 #include "register_inline.h"
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
@@ -65,7 +64,7 @@ static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too 
 struct connectMapMem {
   char* gpuPtr;
   char* cpuPtr;
-  int size;
+  ssize_t size;
   ncclIpcDesc ipcDesc;
   ncclShmIpcDesc_t attachDesc;
   ncclShmIpcDesc_t createDesc;
@@ -106,7 +105,7 @@ struct sendNetResources {
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
   char* buffers[NCCL_NUM_PROTOCOLS];
-  int buffSizes[NCCL_NUM_PROTOCOLS];
+  ssize_t buffSizes[NCCL_NUM_PROTOCOLS];
   void* mhandles[NCCL_NUM_PROTOCOLS];
   uint64_t step;
   uint64_t llLastCleaning;
@@ -140,7 +139,7 @@ struct recvNetResources {
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
   char* buffers[NCCL_NUM_PROTOCOLS];
-  int buffSizes[NCCL_NUM_PROTOCOLS];
+  ssize_t buffSizes[NCCL_NUM_PROTOCOLS];
   void* mhandles[NCCL_NUM_PROTOCOLS];
   uint64_t step;
   uint64_t llLastCleaning;
@@ -340,6 +339,19 @@ NCCL_PARAM(GdrCopySyncEnable, "GDRCOPY_SYNC_ENABLE", 1);
 // GDRCOPY support: FLUSH_ENABLE When enabled uses a PCI-E read to flush GDRDMA buffers
 NCCL_PARAM(GdrCopyFlushEnable, "GDRCOPY_FLUSH_ENABLE", 0);
 
+static const char* ncclTopoFlushTypeStr(enum ncclTopoFlushType flush) {
+  switch (flush) {
+  case ncclTopoFlushNone:
+    return "None";
+  case ncclTopoFlushAlways:
+    return "Always";
+  case ncclTopoFlushC2c:
+    return "C2c";
+  default:
+    return "Unknown";
+  }
+}
+
 /* Setup recv connector */
 static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* myInfo,
                               struct ncclPeerInfo* peerInfo, struct ncclConnect* connectInfo,
@@ -374,9 +386,16 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   NCCLCHECK(ncclProxyCallBlocking(comm, &recv->proxyConn, ncclProxyMsgSetup, &req, sizeof(req), connectInfo,
                                   sizeof(ncclNetHandle_t)));
   memcpy((uint8_t*)connectInfo + sizeof(ncclNetHandle_t), &req.useGdr, sizeof(int));
-  INFO(NCCL_INIT | NCCL_NET, "Channel %02d/%d : %d[%d] -> %d[%d] [receive] via NET/%s/%d%s%s%s", channelId, connIndex,
-       peerInfo->rank, peerInfo->nvmlDev, myInfo->rank, myInfo->nvmlDev, comm->ncclNet->name, req.netDev,
-       req.useGdr ? "/GDRDMA" : "", req.useGdr == ncclTopoGdrModePci ? "(PCI)" : "", req.shared ? "/Shared" : "");
+  enum ncclTopoFlushType logFlush = req.needFlush;
+  // recvProxyConnect() later clears needFlush when FORCE_PCIE maps the GDRCopy sync word on PCIe.
+  if (req.useGdr && ncclGdrCopy && recv->proxyConn.sameProcess && req.sameDevice && ncclParamGdrCopySyncEnable() &&
+      ncclGdcPinFlag(req.needFlush) == GDR_PIN_FLAG_FORCE_PCIE) {
+    logFlush = ncclTopoFlushNone;
+  }
+  INFO(NCCL_INIT | NCCL_NET, "Channel %02d/%d : %d[%d] -> %d[%d] [receive] via NET/%s/%d%s%s%s%s%s", channelId,
+       connIndex, peerInfo->rank, peerInfo->nvmlDev, myInfo->rank, myInfo->nvmlDev, comm->ncclNet->name, req.netDev,
+       req.useGdr ? "/GDRDMA" : "", req.useGdr == ncclTopoGdrModePci ? "(PCI)" : "", req.shared ? "/Shared" : "",
+       req.useGdr ? "/flush=" : "", req.useGdr ? ncclTopoFlushTypeStr(logFlush) : "");
   return ncclSuccess;
 }
 
@@ -395,13 +414,13 @@ static ncclResult_t netCreateShm(struct ncclProxyState* proxyState, struct conne
 static ncclResult_t netDumpMap(struct connectMap* map) {
   printf("Dump map same process %d shared %d\n", map->sameProcess, map->shared);
   struct connectMapMem* mem = map->mems + NCCL_NET_MAP_HOSTMEM;
-  printf("Mem 0: Host mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 0: Host mem (%zx B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems + NCCL_NET_MAP_DEVMEM;
-  printf("Mem 1: Vid  mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 1: Vid  mem (%zx B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems + NCCL_NET_MAP_SHARED_HOSTMEM;
-  printf("Mem 2: Shared Host mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 2: Shared Host mem (%zx B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   mem = map->mems + NCCL_NET_MAP_SHARED_DEVMEM;
-  printf("Mem 3: Shared Vid mem (%x B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
+  printf("Mem 3: Shared Vid mem (%zx B) CPU %p GPU %p\n", mem->size, mem->cpuPtr, mem->gpuPtr);
   printf("SendMem -> Used %d Bank %d Offset %x, cpu %p gpu %p\n", map->offsets.sendMem & NCCL_NET_MAP_MASK_USED ? 1 : 0,
          NCCL_NET_MAP_OFFSET_BANK(map, sendMem), map->offsets.sendMem & NCCL_NET_MAP_MASK_OFFSET,
          NCCL_NET_MAP_GET_POINTER(map, cpu, sendMem), NCCL_NET_MAP_GET_POINTER(map, gpu, sendMem));
@@ -645,7 +664,7 @@ static ncclResult_t recvFree(struct ncclComm* comm, struct ncclConnector* recv) 
 
 #define NCCL_SHARED_STEPS 16
 static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int cuda, int tpLocalRank, int type,
-                                         int sameProcess, int nChannels, char** gpuPtr, char** cpuPtr, int* size,
+                                         int sameProcess, int nChannels, char** gpuPtr, char** cpuPtr, ssize_t* size,
                                          ncclIpcDesc* ipcDesc) {
   if (cuda == 0 && sameProcess == 0) {
     WARN("PXN should not use host buffers for data");
@@ -663,7 +682,7 @@ static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int 
   struct ncclProxySharedP2p* state = type == 0 ? &peer->send : &peer->recv;
   state->refcount++;
   if (state->size == 0) {
-    state->size = nChannels * NCCL_SHARED_STEPS * proxyState->p2pChunkSize;
+    state->size = (ssize_t)nChannels * NCCL_SHARED_STEPS * proxyState->p2pChunkSize;
   }
 
   if (size) *size = state->size;
@@ -684,11 +703,11 @@ static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int 
   return ncclSuccess;
 }
 
-static ncclResult_t sharedBuffersGet(struct ncclProxyState* proxyState, int channel, int slot, int* offset,
+static ncclResult_t sharedBuffersGet(struct ncclProxyState* proxyState, int channel, int slot, ssize_t* offset,
                                      size_t* size) {
   // Use different pools for different channels and also separate send/recv.
   int globalSlot = (channel * NCCL_SHARED_STEPS) + slot;
-  *offset = proxyState->p2pChunkSize * globalSlot;
+  *offset = (ssize_t)proxyState->p2pChunkSize * globalSlot;
   if (size) *size = proxyState->p2pChunkSize;
   return ncclSuccess;
 }
@@ -758,10 +777,10 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
 
   /* point-to-point size limits*/
   resources->maxP2pBytes = props.maxP2pBytes;
-  if ((resources->maxP2pBytes <= 0) || (resources->maxP2pBytes > NCCL_MAX_NET_SIZE_BYTES)) {
-    WARN("sendProxySetup: net plugin returned invalid value for maxP2pBytes %ld \
-      [allowed range: %ld - %ld] \n",
-         resources->maxP2pBytes, 0L, NCCL_MAX_NET_SIZE_BYTES);
+  if ((resources->maxP2pBytes == 0) || (resources->maxP2pBytes > NCCL_MAX_NET_SIZE_BYTES)) {
+    WARN("sendProxySetup: net plugin returned invalid value for maxP2pBytes %zu \
+      [allowed range: %zu - %zu] \n",
+         resources->maxP2pBytes, (size_t)0, (size_t)NCCL_MAX_NET_SIZE_BYTES);
     return ncclInternalError;
   }
 
@@ -799,10 +818,10 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   resources->netDeviceType = props.netDeviceType;
   /* point-to-point size limits*/
   resources->maxP2pBytes = props.maxP2pBytes;
-  if ((resources->maxP2pBytes <= 0) || (resources->maxP2pBytes > NCCL_MAX_NET_SIZE_BYTES)) {
-    WARN("recvProxySetup: net plugin returned invalid value for maxP2pBytes %ld \
-      [allowed range: %ld - %ld] \n",
-         resources->maxP2pBytes, 0L, NCCL_MAX_NET_SIZE_BYTES);
+  if ((resources->maxP2pBytes == 0) || (resources->maxP2pBytes > NCCL_MAX_NET_SIZE_BYTES)) {
+    WARN("recvProxySetup: net plugin returned invalid value for maxP2pBytes %zu \
+      [allowed range: %zu - %zu] \n",
+         resources->maxP2pBytes, (size_t)0, (size_t)NCCL_MAX_NET_SIZE_BYTES);
     return ncclInternalError;
   }
 
@@ -979,6 +998,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
 
   // Don't give credits yet in shared mode.
   (resources->gdcSync ? *resources->gdcSync : resources->sendMem->head) = (map->shared ? -NCCL_STEPS : 0);
+  if (resources->gdcSync) wc_store_fence(); // Flush out WC write
   for (int i = 0; i < NCCL_STEPS; i++) resources->recvMem->connFifo[i].size = -1;
 
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
@@ -1338,7 +1358,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         if (resources->shared) {
           if (!sub->reg) {
             int sharedBuffSlot = sub->posted % maxDepth;
-            int offset;
+            ssize_t offset;
             NCCLCHECK(sharedBuffersGet(proxyState, sub->channelId, sharedBuffSlot * args->nsubs + s, &offset, NULL));
             resources->recvMem->connFifo[buffSlot].offset = offset;
             std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -1400,7 +1420,10 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             } else if (sub->reg) {
               size_t sendSize;
               sub->ringAlgo->getNextSendAddr(sub->transmitted, (uint8_t**)&buff, &sendSize, &sub->sendMhandle);
-              assert(sendSize == size);
+              if (sendSize != (size_t)size) {
+                WARN("NET send buffer size %zu does not match FIFO size %d", sendSize, size);
+                return ncclInternalError;
+              }
             }
           }
           if (ready) {
@@ -1550,7 +1573,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
                   std::min((ssize_t)NCCL_MAX_NET_SIZE, (ssize_t)(sub->nbytes - sub->posted * NCCL_MAX_NET_SIZE));
               } else {
                 int sharedBuffSlot = sub->posted % maxDepth;
-                int offset;
+                ssize_t offset;
                 NCCLCHECK(sharedBuffersGet(proxyState, sub->channelId, sharedBuffSlot * args->nsubs + s + i, &offset,
                                            sizes + subCount));
                 connFifo[buffSlot].offset = offset;
@@ -1922,14 +1945,20 @@ static ncclResult_t sendProxyRegBuffer(struct ncclProxyConnection* connection, s
                                        void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   void* handle = NULL;
   struct netRegInfo* info = (struct netRegInfo*)reqBuff;
-  int numSegments = info->numSegments;
   struct sendNetResources* resources = (struct sendNetResources*)(connection->transportResources);
   // The value of ret is ignored
   ncclResult_t ret;
   bool needReg = true;
 
-  assert(reqSize == sizeof(struct netRegInfo));
-  assert(respSize == sizeof(void*));
+  if (reqSize != sizeof(struct netRegInfo)) {
+    WARN("Invalid NET register request size %d, expected %zu", reqSize, sizeof(struct netRegInfo));
+    return ncclInternalError;
+  }
+  if (respSize != sizeof(void*)) {
+    WARN("Invalid NET register response size %d, expected %zu", respSize, sizeof(void*));
+    return ncclInternalError;
+  }
+  int numSegments = info->numSegments;
 
 #if CUDART_VERSION >= 11070
   /* DMA-BUF support */
@@ -1983,14 +2012,20 @@ static ncclResult_t recvProxyRegBuffer(struct ncclProxyConnection* connection, s
                                        void* reqBuff, int reqSize, void* respBuff, int respSize, int* done) {
   void* handle = NULL;
   struct netRegInfo* info = (struct netRegInfo*)reqBuff;
-  int numSegments = info->numSegments;
   struct recvNetResources* resources = (struct recvNetResources*)(connection->transportResources);
   // The value of ret is ignored
   ncclResult_t ret;
   bool needReg = true;
 
-  assert(reqSize == sizeof(struct netRegInfo));
-  assert(respSize == sizeof(void*));
+  if (reqSize != sizeof(struct netRegInfo)) {
+    WARN("Invalid NET register request size %d, expected %zu", reqSize, sizeof(struct netRegInfo));
+    return ncclInternalError;
+  }
+  if (respSize != sizeof(void*)) {
+    WARN("Invalid NET register response size %d, expected %zu", respSize, sizeof(void*));
+    return ncclInternalError;
+  }
+  int numSegments = info->numSegments;
 
 #if CUDART_VERSION >= 11070
   /* DMA-BUF support */
@@ -2049,7 +2084,10 @@ static ncclResult_t sendProxyDeregBuffer(struct ncclProxyConnection* connection,
   void* handle;
   struct sendNetResources* resources = (struct sendNetResources*)(connection->transportResources);
 
-  assert(reqSize == sizeof(void*));
+  if (reqSize != sizeof(void*)) {
+    WARN("Invalid NET deregister request size %d, expected %zu", reqSize, sizeof(void*));
+    return ncclInternalError;
+  }
   memcpy(&handle, reqBuff, sizeof(void*));
   if (handle) {
     struct proxyMemHandle memHandle = {};
@@ -2068,7 +2106,10 @@ static ncclResult_t recvProxyDeregBuffer(struct ncclProxyConnection* connection,
   void* handle;
   struct recvNetResources* resources = (struct recvNetResources*)(connection->transportResources);
 
-  assert(reqSize == sizeof(void*));
+  if (reqSize != sizeof(void*)) {
+    WARN("Invalid NET deregister request size %d, expected %zu", reqSize, sizeof(void*));
+    return ncclInternalError;
+  }
   memcpy(&handle, reqBuff, sizeof(void*));
   if (handle) {
     struct proxyMemHandle memHandle = {};

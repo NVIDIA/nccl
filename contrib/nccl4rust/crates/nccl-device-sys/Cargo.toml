@@ -1,0 +1,20 @@
+[package]
+name = "nccl-device-sys"
+description = "Raw CUDA-Oxide bindings to the nccl4rust NCCL device shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+exclude = [".oxide-artifacts/", "*.cubin", "*.ll", "*.ltoir", "*.ptx"]
+
+[features]
+default = []
+cuda-oxide = ["dep:cuda-device"]
+
+[dependencies]
+cuda-device = { workspace = true, optional = true }
+
+[lints]
+workspace = true

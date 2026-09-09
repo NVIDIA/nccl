@@ -17,6 +17,7 @@
 #include "nvtx.h"
 #include "param.h"
 #include "group.h"
+#include "enqueue.h"
 #include "compiler.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -226,8 +227,14 @@ ncclResult_t ncclMemTrackImportFromPeer(struct ncclMemManager* manager, void* pt
   return ncclMemTrackInternal(manager, ptr, size, handle, handleType, memType, true, ownerRank, ownerDev, ownerPtr);
 }
 
-// Untrack allocation
-ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t size) {
+// Untrack a dynamic (scratch/offload) allocation
+ncclResult_t ncclMemUntrackDynamic(struct ncclMemManager* manager, void* ptr, struct ncclMemUntrackInfo* info) {
+  if (info != nullptr) {
+    info->memType = ncclMemPersist;
+    info->dynMemState = ncclDynMemStateActive;
+    info->dynMemSize = 0;
+  }
+
   if (ncclParamMemManagerDisable()) return ncclSuccess;
   if (manager == nullptr || ptr == nullptr) return ncclInternalError;
 
@@ -238,6 +245,7 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
   }
 
   // Variables to save values before releasing lock
+  bool found = false;
   size_t entrySize = 0;
   int numEntries COMPILER_ATTRIBUTE_UNUSED = 0;  // May be unused if TRACE compiled out
   bool isImportedFromPeer = false;
@@ -280,14 +288,15 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
         }
 
         // Save values before unlock for logging (may be unused if TRACE is compiled out)
+        found = true;
         entrySize = entry->size;
         numEntries = manager->numEntries;
         isImportedFromPeer = entry->isImportedFromPeer;
         memType = entry->memType;
-
-        // Safety check: log if tracked size doesn't match passed size
-        if (entrySize != size) {
-          INFO(NCCL_ALLOC, "MemManager: Untrack size mismatch ptr=%p tracked=%zu passed=%zu", ptr, entrySize, size);
+        if (info != nullptr) {
+          info->memType = entry->memType;
+          info->dynMemState = entry->state;
+          info->dynMemSize = entry->size;
         }
 
         free(entry);
@@ -298,9 +307,8 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
     }
   } // lock_guard automatically releases mutex
 
-  // Update statistics
-  if (entrySize > 0) {
-    // Entry found in linked list
+  // Update statistics for the dynamic entry we just removed (if any)
+  if (found) {
     if (isImportedFromPeer) {
       if (memType == ncclMemScratch) {
         (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalScratchImported, entrySize, std::memory_order_relaxed);
@@ -316,8 +324,23 @@ ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t si
     }
 
     TRACE(NCCL_ALLOC, "MemManager: Untrack ptr=%p size=%zu entries=%d", ptr, entrySize, numEntries);
-  } else {
-    // Entry not found in linked list - must be persistent memory
+  }
+
+  return ncclSuccess;
+}
+
+// Decrement the persistent-memory counter. No linked-list traversal.
+ncclResult_t ncclMemUntrackPersist(struct ncclMemManager* manager, void* ptr, size_t size) {
+  if (ncclParamMemManagerDisable()) return ncclSuccess;
+  if (manager == nullptr || ptr == nullptr) return ncclInternalError;
+
+  // Atomic check to avoid touching a destroyed manager
+  if (!COMPILER_ATOMIC_LOAD(&manager->initialized, std::memory_order_acquire)) {
+    WARN("MemManager: Cannot untrack persistent allocation ptr=%p, manager not initialized", ptr);
+    return ncclInternalError;
+  }
+
+  if (size > 0) {
     (void)COMPILER_ATOMIC_SUB_FETCH(&manager->totalPersist, size, std::memory_order_relaxed);
     TRACE(NCCL_ALLOC, "MemManager: Untrack Persistent ptr=%p size=%zu", ptr, size);
   }
@@ -922,6 +945,50 @@ fail:
  * Public Communicator Suspend/Resume APIs
  */
 
+struct ncclMemManagerSuspendAsyncJob {
+  struct ncclAsyncJob base;
+  struct ncclComm* comm;
+};
+
+static void ncclMemManagerSuspendAsyncJobFree(void* _job) {
+  delete (struct ncclMemManagerSuspendAsyncJob*)_job;
+}
+
+static ncclResult_t ncclCommMemSuspendJob(struct ncclAsyncJob* job_) {
+  struct ncclMemManagerSuspendAsyncJob* job = (struct ncclMemManagerSuspendAsyncJob*)job_;
+  ncclResult_t ret = ncclSuccess;
+
+  CUDACHECKGOTO(cudaSetDevice(job->comm->cudaDev), ret, fail);
+  NCCLCHECKGOTO(ncclCommMemSuspend(job->comm), ret, fail);
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+struct ncclMemManagerResumeAsyncJob {
+  struct ncclAsyncJob base;
+  struct ncclComm* comm;
+};
+
+static void ncclMemManagerResumeAsyncJobFree(void* _job) {
+  delete (struct ncclMemManagerResumeAsyncJob*)_job;
+}
+
+static ncclResult_t ncclCommMemResumeJob(struct ncclAsyncJob* job_) {
+  struct ncclMemManagerResumeAsyncJob* job = (struct ncclMemManagerResumeAsyncJob*)job_;
+  ncclResult_t ret = ncclSuccess;
+
+  CUDACHECKGOTO(cudaSetDevice(job->comm->cudaDev), ret, fail);
+  NCCLCHECKGOTO(ncclCommMemResume(job->comm), ret, fail);
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
 NCCL_API(ncclResult_t, ncclCommSuspend, ncclComm_t comm, int flags);
 ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags) {
   NCCL_NVTX3_FUNC_RANGE;
@@ -931,6 +998,8 @@ ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags) {
 
   ncclResult_t ret = ncclSuccess;
   int saveDev;
+  struct ncclMemManagerSuspendAsyncJob* suspendJob = nullptr;
+  struct ncclMemManagerTask* task = nullptr;
   CUDACHECK(cudaGetDevice(&saveDev));
   NCCLCHECK(ncclGroupStartInternal());
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
@@ -948,11 +1017,18 @@ ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags) {
       goto fail;
     }
     INFO(NCCL_INIT, "ncclCommSuspend: rank %d suspending memory", comm->rank);
-    struct ncclMemManagerTask* task;
-    NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
-    task->comm = comm;
-    ncclIntruQueueEnqueue(&comm->suspendTaskQueue, task);
-    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister); // Reuse to avoid creating a new task type
+    if (ncclParamEnqueueRearchEnable()) {
+      NEW_NOTHROW_GOTO(suspendJob, ncclMemManagerSuspendAsyncJob, ret, fail);
+      suspendJob->comm = comm;
+      NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)suspendJob, ncclCommMemSuspendJob,
+                                        ncclMemManagerSuspendAsyncJobFree, comm),
+                    ret, fail);
+    } else {
+      NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
+      task->comm = comm;
+      ncclIntruQueueEnqueue(&comm->suspendTaskQueue, task);
+      ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister); // Reuse to avoid creating a new task type
+    }
   }
 
 exit:
@@ -962,6 +1038,8 @@ exit:
   CUDACHECK(cudaSetDevice(saveDev));
   return ret;
 fail:
+  ncclMemManagerSuspendAsyncJobFree(suspendJob);
+  free(task);
   goto exit;
 }
 
@@ -990,11 +1068,20 @@ ncclResult_t ncclCommResume(ncclComm_t comm) {
     goto fail;
   }
   INFO(NCCL_INIT, "ncclCommResume: rank %d resuming all resources", comm->rank);
-  struct ncclMemManagerTask* task;
-  NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
-  task->comm = comm;
-  ncclIntruQueueEnqueue(&comm->resumeTaskQueue, task);
-  ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister); // Reuse to avoid creating a new task type
+  if (ncclParamEnqueueRearchEnable()) {
+    struct ncclMemManagerResumeAsyncJob* resumeJob;
+    NEW_NOTHROW_GOTO(resumeJob, ncclMemManagerResumeAsyncJob, ret, fail);
+    resumeJob->comm = comm;
+    NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)resumeJob, ncclCommMemResumeJob,
+                                      ncclMemManagerResumeAsyncJobFree, comm),
+                  ret, fail);
+  } else {
+    struct ncclMemManagerTask* task;
+    NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
+    task->comm = comm;
+    ncclIntruQueueEnqueue(&comm->resumeTaskQueue, task);
+    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister); // Reuse to avoid creating a new task type
+  }
 
 exit:
   ncclGroupErrCheck(ret);

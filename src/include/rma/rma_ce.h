@@ -23,26 +23,27 @@ struct ncclRmaCeInitTask {
 struct ncclRmaCeCtx {
   struct ncclComm* comm;
 
-  // Host per-rank sequence numbers for non-graph signal operations.
+  // CE only targets intra-node (LSA) peers, so all CE signal state is indexed by LSA-local rank.
+  // Host lsaSize * numRmaSig sequence numbers for non-graph signal operations.
   uint64_t* signalOpSeqs;
+  // Host buffer lsaSize * numRmaSig to track the expected values of the non-graph signals
+  uint64_t* signalsHost;
   // Device staging slots for non-graph signal values. Indexed by signal op
   // within the current CE batch chunk, with capacity comm->nRanks.
   uint64_t* signalOpSeqsDev;
-  // Host buffer to track the expected values of the non-graph signals
-  uint64_t* signalsHost;
 
   // Single symmetric window for all signal and ack memory.
+  // signalSlots = lsaSize * numRmaSig
+  // Slot within each region is sigIdx * lsaSize + lsaRank.
   // Layout (all uint64_t slots):
-  //   [0 .. nRanks-1]              non-graph per-rank signals
-  //   [nRanks]                     non-graph aggregate signal
-  //   [nRanks+1 .. 2*nRanks]       graph per-rank signals
-  //   [2*nRanks+1]                 graph aggregate signal
-  //   [2*nRanks+2 .. 3*nRanks+1]   graph per-rank ack flags
-  // Total: (3*nRanks + 2) * sizeof(uint64_t)
+  //   [0 .. signalSlots-1]                 non-graph per-(sigIdx, rank) signals
+  //   [signalSlots .. 2*signalSlots-1]     graph per-(sigIdx, rank) signals
+  //   [2*signalSlots .. 3*signalSlots-1]   graph per-(sigIdx, rank) ack flags
+  // Total: 3 * signalSlots * sizeof(uint64_t)
   struct ncclDevrWindow* signalsWin;
-  uint64_t* signalsDev;       // non-graph per-rank signals
-  uint64_t* graphSignalsDev;  // graph per-rank signals
-  uint64_t* graphAckDev;      // graph per-rank ack flags
+  uint64_t* signalsDev;       // non-graph per-(sigIdx, rank) signals
+  uint64_t* graphSignalsDev;  // graph per-(sigIdx, rank) signals
+  uint64_t* graphAckDev;      // graph per-(sigIdx, rank) ack flags
   size_t signalOffset;        // byte offset of non-graph signals
   size_t graphSignalOffset;   // byte offset of graph signals
   size_t graphAckOffset;      // byte offset of graph ack flags

@@ -86,6 +86,22 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=500
   Enables verbose output including event trace information.
 - `NCCL_INSPECTOR_PROM_DUMP=<0|1>` (default: `0`)
   Enables Prometheus format for textfile node exporter output instead of custom JSON.
+- `NCCL_INSPECTOR_OTEL_EXPORT=<0|1>` (default: `0`)
+  Enables OTLP HTTP metrics export. Accepted values are `0` (disabled) and `1` (enabled). Default OTLP export emits aggregated bucket metrics.
+- `NCCL_INSPECTOR_OTEL_VERBOSE=<0|1>` (default: `0`)
+  Enables high-cardinality per-operation OTLP data points for temporary investigations. Accepted values are `0` (aggregated) and `1` (per operation).
+- `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=<http-url>` (default: `http://localhost:4318/v1/metrics`)
+  Sets the OTLP HTTP metrics endpoint. Only `http://` endpoints are supported (`https://` is not). This does not need to be set when the collector uses the default OTLP HTTP metrics endpoint (`http://localhost:4318/v1/metrics`). Set it only when the collector listens on a different host, port, or path. `OTEL_EXPORTER_OTLP_ENDPOINT` is used as a fallback. If the endpoint has no path, `/v1/metrics` is appended. An unsupported endpoint disables OTLP export at init (no drain/export).
+- `OTEL_EXPORTER_OTLP_METRICS_TIMEOUT=<milliseconds>` (default: `2000`)
+  Sets the OTLP HTTP export timeout. `OTEL_EXPORTER_OTLP_TIMEOUT` is used as a fallback. Values must be positive milliseconds.
+- `OTEL_EXPORTER_OTLP_METRICS_HEADERS=<key=value,...>`
+  Optional comma-separated OTLP HTTP headers. `OTEL_EXPORTER_OTLP_HEADERS` is used as a fallback.
+  Example: `export OTEL_EXPORTER_OTLP_METRICS_HEADERS='Authorization=Bearer <token>,X-Scope-OrgID=nccl'`
+- `OTEL_SERVICE_NAME=<name>` (default: `nccl-inspector`)
+  Sets the OTLP `service.name` resource attribute.
+- `OTEL_RESOURCE_ATTRIBUTES=<key=value,...>`
+  Adds OTLP resource attributes. Explicit `OTEL_SERVICE_NAME` overrides `service.name` from this list.
+  Example: `export OTEL_RESOURCE_ATTRIBUTES='deployment.environment=test,cluster=example-gpu-cluster,team=example-team'`
 - `NCCL_INSPECTOR_DUMP_MIN_SIZE_BYTES=<bytes>` (default: `8192`)
   Minimum message size (bytes) to be tracked by inspector.
 - `NCCL_INSPECTOR_DUMP_COLL_RING_SIZE=<entries>` (default: `1024`)
@@ -174,7 +190,91 @@ When P2P tracking is enabled (`NCCL_INSPECTOR_ENABLE_P2P=1`), Prometheus output 
 
 `message_size` is a bucketed range string (for example `4-5GB`).
 
-**Current Metric Format Examples:**
+**OTLP HTTP Output Mode**
+
+By default, the Inspector sends **aggregated OTLP bucket metrics** from the same aggregation state used by Prometheus textfile mode. This keeps the default OTLP footprint suitable for fleet dashboards and alerting, with low-cardinality series per node.
+
+The Inspector emits OTLP over HTTP using JSON encoding; this is not user-configurable.
+
+Set `NCCL_INSPECTOR_OTEL_VERBOSE=1` only for temporary investigations that need per-completed-collective and per-P2P OTLP data. Verbose mode emits exact operation attributes such as `coll_sn`, `p2p_sn`, exact message size, and peer, and can increase series cardinality by roughly 100x for the duration of the investigation.
+
+OTLP export speaks plaintext HTTP only. Point `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` at a local collector `http://` receiver (for example `http://127.0.0.1:44318/v1/metrics`). `https://` endpoints are rejected at init and OTLP export is disabled.
+
+For a GPU-node collector with:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:44318
+```
+
+use:
+
+```bash
+export NCCL_PROFILER_PLUGIN=/path/to/nccl/plugins/profiler/inspector/libnccl-profiler-inspector.so
+export NCCL_INSPECTOR_ENABLE=1
+export NCCL_INSPECTOR_OTEL_EXPORT=1
+
+# Optional when the collector listens on the default http://localhost:4318/v1/metrics.
+# Required for this example because the collector listens on port 44318.
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:44318/v1/metrics
+
+# Optional: service.name defaults to nccl-inspector.
+# export OTEL_SERVICE_NAME=nccl-inspector
+
+# Optional: add deployment-specific resource attributes when the collector or
+# backend does not already enrich metrics with this metadata.
+# export OTEL_RESOURCE_ATTRIBUTES='deployment.environment=test,cluster=example-gpu-cluster'
+
+# Optional: headers for collectors that require auth or tenant routing
+# export OTEL_EXPORTER_OTLP_METRICS_HEADERS='Authorization=Bearer <token>,X-Scope-OrgID=nccl'
+export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=30000000
+
+# Optional: enable high-cardinality per-operation OTLP temporarily
+# export NCCL_INSPECTOR_OTEL_VERBOSE=1
+```
+
+Recommended default OTLP settings for fleet dashboards are `NCCL_INSPECTOR_OTEL_VERBOSE=0` and `NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=30000000` or larger. Verbose mode should be enabled only for a short investigation window because it emits per-operation series.
+
+`NCCL_INSPECTOR_PROM_DUMP=1` is not required for OTLP export. If both `NCCL_INSPECTOR_OTEL_EXPORT=1` and `NCCL_INSPECTOR_PROM_DUMP=1` are set, OTLP export takes precedence and Prometheus textfile output is skipped.
+
+**OTLP resource attributes (constant per process, sent once per export):**
+
+- `service.name` defaults to `nccl-inspector`, or `OTEL_SERVICE_NAME` if set.
+- `slurm.job.id` is filled only if `SLURM_JOB_ID` is set in the NCCL process environment.
+- Anything passed via `OTEL_RESOURCE_ATTRIBUTES`. This is optional and is intended for deployment-specific metadata such as environment, cluster, namespace, or tenant when that metadata is not already added by the collector/backend.
+
+**Default OTLP data-point attributes (aggregated):**
+
+- Collectives: `version` (`v5.1`), `node`, `collective`, `message_size`, `algo_proto`
+- P2P: `version` (`v5.1`), `node`, `p2p_operation`, `message_size`
+- Per-(comm, device) common attributes: `gpu` (for example `GPU0`), `comm_name`, `n_nodes`, `nranks`
+
+**Default OTLP metrics (aggregated):**
+
+- `nccl_bus_bandwidth_gbs`
+- `nccl_collective_exec_time_microseconds`
+- `nccl_p2p_bus_bandwidth_gbs`
+- `nccl_p2p_exec_time_microseconds`
+
+**Verbose OTLP collective data-point attributes (per operation):**
+
+- `version` (`v5.2`), `node`, `collective`, `coll_sn`, `coll_msg_size_bytes`, `algo_proto`
+- Per-(comm, device) common attributes: `gpu`, `comm_name`, `comm_id`, `n_nodes`, `nranks`
+
+**Verbose OTLP collective metrics (per operation):**
+
+- `nccl_bus_bandwidth_gbs`
+- `nccl_collective_exec_time_microseconds`
+- `nccl_collective_algobw_gbs`
+
+**Verbose OTLP P2P attributes/metrics** follow the same per-operation pattern (`version` (`v5.2`), `node`, `p2p_sn`, `p2p_peer`, exact message size, etc.) when P2P tracking is enabled.
+
+OTLP data points include `timeUnixNano`. Verbose mode uses the completed operation timestamp for each per-operation point. Default aggregated mode uses the latest completed operation timestamp in each bucket, so timestamp granularity improves without adding labels or increasing series cardinality.
+
+**Current Metric Format Examples (Prometheus aggregated mode):**
 ```
 nccl_bus_bandwidth_gbs{version="v5.1",slurm_job_id="unknown",node="nvl72004-T01",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",collective="AllReduce",message_size="4-5GB",algo_proto="Ring_ll"} 678.263
 nccl_collective_exec_time_microseconds{version="v5.1",slurm_job_id="unknown",node="nvl72004-T01",gpu="GPU0",comm_name="DP Group 0",n_nodes="1",nranks="4",collective="AllReduce",message_size="4-5GB",algo_proto="Ring_ll"} 9498.47
@@ -311,4 +411,3 @@ The size of output files depends on the output format and usage patterns:
 
 - The plugin is compatible with standard NCCL workflows and can be used in both single-node and multi-node (SLURM) environments.
 - For more details, see the source code and comments in `plugins/profiler/inspector/`.
-

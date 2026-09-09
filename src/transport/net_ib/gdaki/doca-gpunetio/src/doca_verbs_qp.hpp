@@ -38,7 +38,18 @@
 #include "host/doca_verbs.h"
 #include "doca_verbs_uar.hpp"
 
-struct doca_verbs_ah_attr {
+struct doca_verbs_ah_attr_open {
+   public:
+    /**
+     * @brief constructor
+     */
+    doca_verbs_ah_attr_open() {}
+
+    /**
+     * @brief destructor
+     */
+    ~doca_verbs_ah_attr_open() {}
+
     struct doca_verbs_gid gid {};
     enum doca_verbs_addr_type addr_type { DOCA_VERBS_ADDR_TYPE_IPv4 };
     uint32_t dlid{};
@@ -48,16 +59,30 @@ struct doca_verbs_ah_attr {
     uint8_t hop_limit{};
     uint8_t traffic_class{};
     uint8_t is_global{};
+
+    doca_verbs_ah_attr_open(doca_verbs_ah_attr_open const &) = delete;
+    doca_verbs_ah_attr_open &operator=(doca_verbs_ah_attr_open const &) = delete;
 };
 
-struct doca_verbs_qp_init_attr {
+struct doca_verbs_qp_init_attr_open {
+   public:
+    /**
+     * @brief constructor
+     */
+    doca_verbs_qp_init_attr_open() {}
+
+    /**
+     * @brief destructor
+     */
+    ~doca_verbs_qp_init_attr_open() {}
+
     struct ibv_pd *pd{};
-    struct doca_verbs_cq *send_cq{};
-    struct doca_verbs_cq *receive_cq{};
+    doca_verbs_cq_t *send_cq{};
+    doca_verbs_cq_t *receive_cq{};
     struct doca_verbs_srq *srq{};
-    struct doca_verbs_umem *external_umem{};
-    struct doca_verbs_umem *external_umem_dbr{};
-    struct doca_verbs_uar *external_uar{};
+    doca_verbs_umem_t *external_umem{};
+    doca_verbs_umem_t *external_umem_dbr{};
+    doca_verbs_uar_t *external_uar{};
     uint64_t external_umem_offset{};
     uint64_t external_umem_dbr_offset{};
     int sq_sig_all{};
@@ -74,9 +99,23 @@ struct doca_verbs_qp_init_attr {
     uint8_t core_direct_master{};
     uint8_t send_dbr_mode{};
     bool emulate_no_dbr_ext{};
+
+    doca_verbs_qp_init_attr_open(doca_verbs_qp_init_attr_open const &) = delete;
+    doca_verbs_qp_init_attr_open &operator=(doca_verbs_qp_init_attr_open const &) = delete;
 };
 
-struct doca_verbs_qp_attr {
+struct doca_verbs_qp_attr_open {
+   public:
+    /**
+     * @brief constructor
+     */
+    doca_verbs_qp_attr_open() {}
+
+    /**
+     * @brief destructor
+     */
+    ~doca_verbs_qp_attr_open() {}
+
     enum doca_verbs_qp_state next_state { DOCA_VERBS_QP_STATE_RST };
     enum doca_verbs_qp_state current_state { DOCA_VERBS_QP_STATE_RST };
     enum doca_verbs_mtu_size path_mtu { DOCA_VERBS_MTU_SIZE_256_BYTES };
@@ -85,8 +124,9 @@ struct doca_verbs_qp_attr {
     uint32_t dest_qp_num{};
     int allow_remote_write{};
     int allow_remote_read{};
-    enum doca_verbs_qp_atomic_type allow_remote_atomic {};
-    doca_verbs_ah_attr *ah_attr{};
+    enum doca_verbs_qp_atomic_mode atomic_mode {};
+    struct doca_verbs_ah_attr_open ah_attr;
+    bool ah_attr_enabled = false;
     uint16_t pkey_index{};
     uint16_t port_num{};
     uint8_t ack_timeout{};
@@ -96,12 +136,16 @@ struct doca_verbs_qp_attr {
     uint8_t core_direct_master{};
     uint8_t max_rd_atomic{};
     uint8_t max_dest_rd_atomic{};
+    uint32_t counter_set_id{};
+
+    doca_verbs_qp_attr_open(doca_verbs_qp_attr_open const &) = delete;
+    doca_verbs_qp_attr_open &operator=(doca_verbs_qp_attr_open const &) = delete;
 };
 
 /**
  *  @brief This struct implements the doca_verbs_qp
  */
-struct doca_verbs_qp {
+struct doca_verbs_qp_open {
    public:
     /**
      * @brief constructor
@@ -112,14 +156,15 @@ struct doca_verbs_qp {
      * The DOCA IB Verbs QP attributes
      *
      */
-    doca_verbs_qp(struct ibv_context *ibv_ctx, struct doca_verbs_qp_init_attr &verbs_qp_init_attr);
+    doca_verbs_qp_open(struct ibv_context *ibv_ctx,
+                       struct doca_verbs_qp_init_attr_open *verbs_qp_init_attr);
 
     /**
      * @brief destructor
      */
-    ~doca_verbs_qp();
+    ~doca_verbs_qp_open();
 
-    void create(struct ibv_context *ibv_ctx);
+    void create();
 
     doca_error_t destroy() noexcept;
 
@@ -147,25 +192,25 @@ struct doca_verbs_qp {
 
     doca_error_t create_qp_obj(uint32_t uar_id, uint32_t log_rq_size, uint32_t log_sq_size,
                                uint32_t log_stride, uint64_t dbr_umem_offset, uint32_t dbr_umem_id,
-                               uint32_t wq_umem_id,
-                               struct doca_verbs_qp_init_attr &verbs_qp_init_attr) noexcept;
+                               uint64_t wq_umem_offset, uint32_t wq_umem_id,
+                               struct doca_verbs_qp_init_attr_open *verbs_qp_init_attr) noexcept;
 
-    doca_error_t rst2init(struct doca_verbs_qp_attr &verbs_qp_attr, int param_mask) noexcept;
+    doca_error_t rst2init(struct doca_verbs_qp_attr_open *verbs_qp_attr, int param_mask) noexcept;
 
-    doca_error_t init2init(struct doca_verbs_qp_attr &verbs_qp_attr, int param_mask) noexcept;
+    doca_error_t init2init(struct doca_verbs_qp_attr_open *verbs_qp_attr, int param_mask) noexcept;
 
-    doca_error_t init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr, int param_mask) noexcept;
+    doca_error_t init2rtr(struct doca_verbs_qp_attr_open *verbs_qp_attr, int param_mask) noexcept;
 
-    doca_error_t rtr2rts(struct doca_verbs_qp_attr &verbs_qp_attr, int param_mask) noexcept;
+    doca_error_t rtr2rts(struct doca_verbs_qp_attr_open *verbs_qp_attr, int param_mask) noexcept;
 
-    doca_error_t rts2rts(struct doca_verbs_qp_attr &verbs_qp_attr, int param_mask) noexcept;
+    doca_error_t rts2rts(struct doca_verbs_qp_attr_open *verbs_qp_attr, int param_mask) noexcept;
 
-    doca_error_t qp2err(struct doca_verbs_qp_attr &verbs_qp_attr, int param_mask) noexcept;
+    doca_error_t qp2err(struct doca_verbs_qp_attr_open *verbs_qp_attr, int param_mask) noexcept;
 
-    doca_error_t qp2rst(struct doca_verbs_qp_attr &verbs_qp_attr, int param_mask) noexcept;
+    doca_error_t qp2rst(struct doca_verbs_qp_attr_open *verbs_qp_attr, int param_mask) noexcept;
 
-    doca_error_t query_qp(struct doca_verbs_qp_attr &verbs_qp_attr,
-                          struct doca_verbs_qp_init_attr &verbs_qp_init_attr) noexcept;
+    doca_error_t query_qp(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                          struct doca_verbs_qp_init_attr_open *verbs_qp_init_attr) noexcept;
 
     bool is_qp_attr_state_valid(enum doca_verbs_qp_state state) noexcept;
 
@@ -181,7 +226,7 @@ struct doca_verbs_qp {
 
     bool is_qp_attr_port_num_valid(uint16_t port_num) noexcept;
 
-    bool is_qp_attr_valid(struct doca_verbs_qp_attr *verbs_qp_attr, int attr_mask) noexcept;
+    bool is_qp_attr_valid(struct doca_verbs_qp_attr_open *qp_attr, int attr_mask) noexcept;
 
     doca_verbs_qp_state get_current_state() const noexcept;
 
@@ -198,7 +243,7 @@ struct doca_verbs_qp {
     doca_verbs_qp_state m_current_state{DOCA_VERBS_QP_STATE_RST};
     uint32_t m_rcv_wqe_size{};
     uint32_t m_send_wqe_size{};
-    doca_verbs_qp_init_attr m_init_attr{};
+    struct doca_verbs_qp_init_attr_open m_init_attr;
     struct doca_verbs_device_attr *m_verbs_device_attr{};
     uint32_t m_rcv_max_sges{};
     uint8_t m_log_rcv_wqe_size{};
@@ -214,6 +259,6 @@ struct doca_verbs_qp {
     uint32_t *m_db_buffer{};
     struct doca_verbs_srq *m_srq{};
 
-    doca_verbs_qp(doca_verbs_qp const &) = delete;
-    doca_verbs_qp &operator=(doca_verbs_qp const &) = delete;
+    doca_verbs_qp_open(doca_verbs_qp_open const &) = delete;
+    doca_verbs_qp_open &operator=(doca_verbs_qp_open const &) = delete;
 };

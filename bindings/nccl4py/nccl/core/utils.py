@@ -11,101 +11,69 @@ initialization, and error string utilities for NCCL operations.
 
 from __future__ import annotations
 
-from pathlib import Path as _Path
+import mmap
+import re
+from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 
 import numpy as _np
-from packaging.version import Version as _Version
+from packaging.version import Version
 
-try:
-    from warnings import deprecated
-except ImportError:
-    try:
-        from typing_extensions import deprecated
-    except ImportError:
-
-        def deprecated(*_args, **_kwargs):  # type: ignore[no-redef]
-            def _decorator(obj):
-                return obj
-
-            return _decorator
-
-
-from nccl._version import __version__
 from nccl.bindings import nccl as _nccl_bindings
+from nccl.core._version import __version__
 
 __all__ = [
-    "Version",
-    "get_version",
-    "get_lib_version",
-    "get_lib_path",
+    "LibraryInfo",
     "UniqueId",
-    "get_unique_id",
+    "VersionInfo",
     "get_error_string",
+    "get_unique_id",
+    "get_version",
+    "show_versions",
 ]
 
-
-_version_cache = None
-
-
-class Version:
-    """Version information for NCCL4Py and the NCCL library.
-
-    For the full stack version (including ``libnccl_ep.so``), use
-    :py:func:`nccl.get_version` / :py:func:`nccl.show_versions`.
-
-    Attributes:
-        nccl_version: NCCL library version.
-        nccl4py_version: NCCL4Py package version.
-    """
-
-    def __init__(self, nccl_version: int) -> None:
-        """Initializes a Version object from an NCCL version integer.
-
-        Args:
-            nccl_version: NCCL version as an integer (per ncclGetVersion).
-        """
-        v = nccl_version
-        if v >= 10000:
-            major = v // 10000
-            minor = (v % 10000) // 100
-            patch = v % 100
-        else:
-            major = v // 1000
-            minor = (v % 1000) // 100
-            patch = v % 100
-
-        self.nccl_version = _Version(f"{major}.{minor}.{patch}")
-        self.nccl4py_version = _Version(__version__)
-
-    def __repr__(self) -> str:
-        return f"""
-Versions:
-    NCCL4Py version: {self.nccl4py_version}
-    NCCL Library version: {self.nccl_version}
-"""
+# VERSION_STRING in src/init.cc embeds the CUDA toolkit version in libnccl.so.
+_NCCL_BANNER = re.compile(rb"NCCL version [^\+\s\x00]+\+cuda(\d+)\.(\d+)")
 
 
-@deprecated(
-    "nccl.core.get_version is deprecated; use nccl.get_version "
-    "(full-stack including libnccl_ep) or nccl.show_versions "
-    "(human-readable) instead."
-)
-def get_version() -> Version:
-    """Returns the version information for NCCL and NCCL4Py.
+@dataclass(frozen=True)
+class LibraryInfo:
+    """Version, CUDA build variant, and loaded path for libnccl."""
 
-    The result is cached after the first call.
+    version: Version
+    """Loaded libnccl release version."""
 
-    Returns:
-        :py:class:`Version` object containing NCCL and NCCL4Py version
-        information.
-    """
-    global _version_cache
-    if _version_cache is None:
-        _version_cache = Version(_nccl_bindings.get_version())
-    return _version_cache
+    cuda_variant: Version | None
+    """CUDA toolkit major.minor used to build libnccl, when discoverable."""
+
+    path: Path | None
+    """Path of the loaded libnccl, when discoverable."""
+
+    def __str__(self) -> str:
+        result = str(self.version)
+        if self.cuda_variant is not None:
+            result += f"+cuda{self.cuda_variant}"
+        if self.path is not None:
+            result += f" @ {self.path}"
+        return result
 
 
-def _decode_version(v: int) -> _Version:
+@dataclass(frozen=True)
+class VersionInfo:
+    """Version snapshot of nccl4py, its bindings, and loaded libnccl."""
+
+    nccl4py: Version
+    """nccl4py distribution version."""
+
+    nccl_bindings: Version
+    """NCCL header version from which the bindings were generated."""
+
+    libnccl: LibraryInfo | None
+    """Loaded libnccl information, or None when the library is unavailable."""
+
+
+def _decode_version(v: int) -> Version:
     """Decode an NCCL packed version integer (X*10000 + Y*100 + Z, or legacy
     X*1000 + Y*100 + Z) into a packaging Version."""
     if v >= 10000:
@@ -116,18 +84,69 @@ def _decode_version(v: int) -> _Version:
         major = v // 1000
         minor = (v % 1000) // 100
         patch = v % 100
-    return _Version(f"{major}.{minor}.{patch}")
+    return Version(f"{major}.{minor}.{patch}")
 
 
-def get_lib_version() -> _Version:
+def _get_lib_version() -> Version:
     """Release version of the loaded ``libnccl.so`` (e.g. ``2.30.0``)."""
     return _decode_version(_nccl_bindings.get_version())
 
 
-def get_lib_path() -> _Path | None:
+def _get_lib_path() -> Path | None:
     """Path of the loaded ``libnccl.so``, or None if it cannot be determined."""
     raw = _nccl_bindings.get_library_path()
-    return _Path(raw) if raw else None
+    return Path(raw) if raw else None
+
+
+@cache
+def _extract_cuda_variant(path: Path | None) -> Version | None:
+    """Recover ``+cudaA.B`` from libnccl's embedded version banner."""
+    if path is None:
+        return None
+    try:
+        with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            match = _NCCL_BANNER.search(mm)
+            if match is not None:
+                return Version(f"{int(match.group(1))}.{int(match.group(2))}")
+    except (OSError, ValueError):
+        # mmap raises ValueError on a zero-length file.
+        pass
+    return None
+
+
+def get_version() -> VersionInfo:
+    """Return structured nccl4py, binding, and loaded-libnccl versions."""
+    libnccl = None
+    try:
+        path = _get_lib_path()
+        libnccl = LibraryInfo(_get_lib_version(), _extract_cuda_variant(path), path)
+    except (ImportError, RuntimeError, _nccl_bindings.NCCLError):
+        pass
+
+    return VersionInfo(
+        nccl4py=Version(__version__),
+        nccl_bindings=Version(_nccl_bindings.__version__),
+        libnccl=libnccl,
+    )
+
+
+def show_versions() -> None:
+    """Print nccl4py, binding, and loaded-libnccl version information."""
+    versions = get_version()
+
+    if versions.libnccl is None:
+        libnccl = "not available"
+    else:
+        libnccl = str(versions.libnccl)
+
+    header = "NCCL4Py versions"
+
+    print()
+    print(header)
+    print("-" * len(header))
+    print(f"nccl4py  : {versions.nccl4py}")
+    print(f"bindings : {versions.nccl_bindings}")
+    print(f"libnccl  : {libnccl}")
 
 
 class UniqueId:

@@ -1,86 +1,90 @@
 """Hand-written internal utilities for the CuTeDSL bindings.
 
-Holds the bitcode resolver, the module-level ``BitCode`` cache, the
-``_ffi`` factory that injects ``source=_BC`` into every prototype, and
-the ``_to_ptr`` / ``_to_coop_value`` coercion helpers used by
-:mod:`_bindings`.
+Holds the ``_alloca_*`` stack-storage helpers, ``_load_cft_le_info``, and the
+``_to_ptr`` / ``_to_coop_value`` / ``_to_value`` coercion helpers.
+Device bitcode discovery lives in :mod:`_bindings`, next to the
+``@cute.extern`` stubs that link against it.
 """
 
-import os
-from pathlib import Path
-
 import cutlass
-from cutlass.cute import BitCode
-import cutlass.cute as cute
-from cutlass._mlir import ir
+from cutlass.cutlass_dsl import ir
 from cutlass._mlir.dialects import llvm
-from cutlass.base_dsl._mlir_helpers.op import dsl_user_op
-
-from cuda.pathfinder import find_bitcode_lib
+from cutlass.cutlass_dsl import dsl_user_op
 
 from ._structs import ncclCoopAny
+from .types import CftLeInfo
 
 
-# === Device bitcode discovery ===
-
-def device_bitcode_path() -> str:
-    """Locate ``libnccl_device.bc`` for FFI linking.
-
-    Resolution order:
-
-        1. ``$NCCL_HOME/lib/libnccl_device.bc`` (in-repo source builds).
-        2. ``cuda.pathfinder.find_bitcode_lib("nccl_device")`` for the
-           installed ``nvidia-nccl-cuXX`` wheel (requires
-           ``cuda-pathfinder >= 1.5.4``).
-
-    Returns:
-        Absolute path to ``libnccl_device.bc``.
-
-    Raises:
-        cuda.pathfinder.BitcodeLibNotFoundError: bitcode not found.
-    """
-    env = os.environ.get("NCCL_HOME")
-    if env:
-        p = Path(env) / "lib" / "libnccl_device.bc"
-        if p.is_file():
-            return str(p)
-    return find_bitcode_lib("nccl_device")
-
-
-_BC = BitCode(device_bitcode_path())
-
-
-def _ffi(**kw):
-    """``cute.ffi`` with ``source=_BC`` injected on every prototype.
-
-    The DSL pipeline merges the bitcode into each module's
-    ``link-libraries`` attribute automatically, so users never pass
-    ``options="--link-libraries=..."`` to ``cute.compile``.
+@dsl_user_op
+def _alloca_struct(struct_cls, *, alignment=None, loc=None, ip=None) -> ir.Value:
+    """Alloca uninitialized storage for a native struct on the kernel stack.
 
     Args:
-        **kw: forwarded to ``cute.ffi``.
+        struct_cls: ``@cute.native_struct`` class supplying ``_struct_type``.
+        alignment: explicit alignment in bytes; natural if ``None``.
 
     Returns:
-        ``cute.ffi`` prototype object.
+        ``!llvm.ptr`` ir.Value to the storage.
     """
-    return cute.ffi(source=_BC, **kw)
+    return llvm.alloca(
+        res=ir.Type.parse("!llvm.ptr"),
+        array_size=cutlass.Int32(1).ir_value(),
+        elem_type=struct_cls._struct_type,
+        alignment=alignment,
+        loc=loc,
+        ip=ip,
+    )
+
+
+@dsl_user_op
+def _alloca_cft_le_info(*, loc=None, ip=None) -> tuple[ir.Value, ir.Value]:
+    """Alloca the ``(ncclCftLeId, size_t)`` out-params of ``ncclGet*LeInfo``.
+
+    Returns:
+        ``(le_id_ptr, le_offset_ptr)``, both ``!llvm.ptr`` ir.Values.
+    """
+    ptr_type = ir.Type.parse("!llvm.ptr")
+    one = cutlass.Int32(1).ir_value()
+    return (
+        llvm.alloca(res=ptr_type, array_size=one,
+                    elem_type=ir.IntegerType.get_signless(32), loc=loc, ip=ip),
+        llvm.alloca(res=ptr_type, array_size=one,
+                    elem_type=ir.IntegerType.get_signless(64), loc=loc, ip=ip),
+    )
+
+
+@dsl_user_op
+def _load_cft_le_info(le_id_ptr, le_offset_ptr, *, loc=None, ip=None) -> CftLeInfo:
+    """Load the out-params filled by ``ncclGet*LeInfo``.
+
+    Returns:
+        Logical endpoint information containing ``cutlass.Uint32`` and
+        ``cutlass.Uint64`` values.
+    """
+    return CftLeInfo(
+        le_id=cutlass.Uint32(
+            llvm.load(ir.IntegerType.get_signless(32), le_id_ptr, loc=loc, ip=ip)
+        ),
+        le_offset=cutlass.Uint64(
+            llvm.load(ir.IntegerType.get_signless(64), le_offset_ptr, loc=loc, ip=ip)
+        ),
+    )
 
 
 # === Coercion helpers ===
 
 @dsl_user_op
 def _to_ptr(x, *, loc=None, ip=None):
-    """Coerce ``x`` to an ``!llvm.ptr`` ir.Value.
+    """Coerce an address ``x`` to an ``!llvm.ptr`` ir.Value.
 
-    Args:
-        x: accepted forms —
+    Callers pass materialized pointers (``.ptr``) to the bindings directly;
+    this only handles the arguments given as an address — a null
+    ``descriptor_ptr=0`` or an explicit descriptor pointer:
 
-            * ``!llvm.ptr`` ir.Value — passthrough.
-            * ``@cute.native_struct`` with a ``!llvm.ptr`` ``.ptr`` field
-              (``DevComm``, ``Window``, ``Gin``, ``Coop``) — extract.
-            * cutlass numeric (has ``.ir_value()``) — ``inttoptr``.
-            * integer ``ir.Value`` — ``inttoptr``.
-            * Python int — wrap in ``cutlass.Int64``, then ``inttoptr``.
+        * ``!llvm.ptr`` ir.Value — passthrough.
+        * cutlass numeric (has ``.ir_value()``) — ``inttoptr``.
+        * integer ``ir.Value`` — ``inttoptr``.
+        * Python int — wrap in ``cutlass.Int64``, then ``inttoptr``.
 
     Returns:
         ``!llvm.ptr`` ir.Value.
@@ -88,11 +92,6 @@ def _to_ptr(x, *, loc=None, ip=None):
     ptr_type = ir.Type.parse("!llvm.ptr")
     if isinstance(x, ir.Value) and x.type == ptr_type:
         return x
-    # @cute.native_struct wrapper around a ptr field.
-    if hasattr(x, "ptr"):
-        inner = x.ptr
-        if isinstance(inner, ir.Value) and inner.type == ptr_type:
-            return inner
     if hasattr(x, "ir_value"):
         int_value = x.ir_value()
     elif isinstance(x, ir.Value):
@@ -104,25 +103,47 @@ def _to_ptr(x, *, loc=None, ip=None):
 
 @dsl_user_op
 def _to_coop_value(x, *, loc=None, ip=None):
-    """Coerce ``x`` to an ``ncclCoopAny`` value for by-value FFI calls.
+    """Coerce a :class:`Coop` to a bare ``ncclCoopAny`` struct ir.Value.
 
     :class:`Coop` only carries a pointer to alloca'd storage (cheap
-    property access); by-value FFIs need the full struct loaded here.
+    property access); by-value externs need the full struct loaded here.
+    The result is a bare struct ir.Value (not a wrapper) so the
+    ``@cute.extern`` matcher recognizes it against an ``ncclCoopAny``
+    annotation.
 
     Args:
         x: accepted forms —
 
-            * ``ncclCoopAny`` value — passthrough.
+            * ``ncclCoopAny`` struct ir.Value — passthrough.
             * ``@cute.native_struct`` pointer-wrapper around alloca'd
               ``ncclCoopAny`` storage (e.g. :class:`Coop`) — load it.
 
     Returns:
-        ``ncclCoopAny`` struct value.
+        ``ncclCoopAny`` struct ir.Value.
     """
-    if isinstance(x, ncclCoopAny):
+    if isinstance(x, ir.Value):
         return x
     if hasattr(x, "ptr"):
-        return ncclCoopAny(
-            llvm.load(res=ncclCoopAny._struct_type, addr=x.ptr, loc=loc, ip=ip)
-        )
+        return llvm.load(ncclCoopAny._struct_type, x.ptr, loc=loc, ip=ip)
+    return _to_value(x)
+
+
+def _to_value(x):
+    """Unwrap a by-value ``@cute.native_struct`` argument to its bare ir.Value.
+
+    ``@cute.extern`` matches a native struct only as a bare struct ir.Value
+    (a value-mode wrapper is rejected), so teams and barrier handles passed
+    by value — which ``cute.ffi`` accepted as wrappers — are unwrapped here.
+
+    Args:
+        x: a struct ir.Value (passthrough) or a value-mode native-struct
+            wrapper exposing ``__extract_mlir_values__``.
+
+    Returns:
+        The underlying struct ir.Value.
+    """
+    if isinstance(x, ir.Value):
+        return x
+    if hasattr(x, "__extract_mlir_values__"):
+        return x.__extract_mlir_values__()[0]
     return x

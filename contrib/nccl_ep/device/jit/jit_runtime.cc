@@ -58,10 +58,9 @@ struct FastCacheKey {
 struct FastCacheKeyHash {
     size_t operator()(const FastCacheKey& key) const {
         size_t seed = std::hash<const void*>{}(key.identity);
-        seed ^= std::hash<std::uint64_t>{}(key.runtime_key) +
-                0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
-        seed ^= std::hash<const void*>{}(static_cast<const void*>(key.context)) +
-                0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<std::uint64_t>{}(key.runtime_key) + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<const void*>{}(static_cast<const void*>(key.context)) + 0x9e3779b97f4a7c15ull + (seed << 6) +
+                (seed >> 2);
         seed ^= std::hash<int>{}(key.device) + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
         return seed;
     }
@@ -69,9 +68,7 @@ struct FastCacheKeyHash {
 
 struct FastCacheKeyEqual {
     bool operator()(const FastCacheKey& lhs, const FastCacheKey& rhs) const {
-        return lhs.identity == rhs.identity &&
-               lhs.runtime_key == rhs.runtime_key &&
-               lhs.context == rhs.context &&
+        return lhs.identity == rhs.identity && lhs.runtime_key == rhs.runtime_key && lhs.context == rhs.context &&
                lhs.device == rhs.device;
     }
 };
@@ -165,13 +162,10 @@ std::filesystem::path configured_cuda_include_dir() {
 
 bool is_header_file(const std::filesystem::path& path) {
     const std::string ext = path.extension().string();
-    return ext == ".h" || ext == ".hh" || ext == ".hpp" ||
-           ext == ".cuh" || ext == ".inc" || ext == ".inl";
+    return ext == ".h" || ext == ".hh" || ext == ".hpp" || ext == ".cuh" || ext == ".inc" || ext == ".inl";
 }
 
-void append_file_fingerprint(
-    std::vector<std::string>* parts,
-    const std::filesystem::path& path) {
+void append_file_fingerprint(std::vector<std::string>* parts, const std::filesystem::path& path) {
     if (parts == nullptr) return;
 
     std::error_code ec;
@@ -184,9 +178,7 @@ void append_file_fingerprint(
     parts->push_back(read_file_or_empty(path));
 }
 
-void append_header_tree_fingerprint(
-    std::vector<std::string>* parts,
-    const std::filesystem::path& root) {
+void append_header_tree_fingerprint(std::vector<std::string>* parts, const std::filesystem::path& root) {
     if (parts == nullptr) return;
 
     std::error_code ec;
@@ -277,10 +269,7 @@ std::string kernel_log_prefix(const JitKernelVariant& variant) {
 }
 
 // Per-variant fingerprint. No file I/O here; env_hash covers header inputs.
-std::string source_fingerprint(
-    const JitKernelVariant& variant,
-    int sm,
-    const std::string& env_hash) {
+std::string source_fingerprint(const JitKernelVariant& variant, int sm, const std::string& env_hash) {
     const std::vector<std::string> parts = {
         kernel_family(variant),
         std::string(variant.variant_name),
@@ -325,8 +314,7 @@ std::string metadata_json(
 
 std::filesystem::path temporary_cubin_path(const std::filesystem::path& cubin_path) {
     std::ostringstream suffix;
-    suffix << ".tmp." << static_cast<long>(getpid()) << "."
-           << std::hash<std::thread::id>{}(std::this_thread::get_id());
+    suffix << ".tmp." << static_cast<long>(getpid()) << "." << std::hash<std::thread::id>{}(std::this_thread::get_id());
     return cubin_path.parent_path() / (cubin_path.filename().string() + suffix.str());
 }
 
@@ -354,10 +342,8 @@ void log_memory_cache_event(
     const char* scope) {
     log_jit_event(
         variant,
-        kernel_log_prefix(variant) + " memory_cache=" + state +
-        " scope=" + scope +
-        " variant=" + std::string(variant.variant_name) +
-        " device=" + std::to_string(fast_key.device));
+        kernel_log_prefix(variant) + " memory_cache=" + state + " scope=" + scope +
+            " variant=" + std::string(variant.variant_name) + " device=" + std::to_string(fast_key.device));
 }
 
 JitKernelStatus load_function(
@@ -400,14 +386,8 @@ JitKernelStatus load_function(
     return JitKernelStatus::kLaunched;
 }
 
-JitKernelStatus configure_smem(
-    CUfunction function,
-    int dynamic_smem_bytes,
-    std::string* error) {
-    CUresult rc = cuFuncSetAttribute(
-        function,
-        CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
-        dynamic_smem_bytes);
+JitKernelStatus configure_smem(CUfunction function, int dynamic_smem_bytes, std::string* error) {
+    CUresult rc = cuFuncSetAttribute(function, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, dynamic_smem_bytes);
     if (rc != CUDA_SUCCESS) {
         if (error != nullptr) *error = cu_error_string(rc);
         return JitKernelStatus::kAttributeFailed;
@@ -415,10 +395,7 @@ JitKernelStatus configure_smem(
     return JitKernelStatus::kLaunched;
 }
 
-void update_thread_fast_cache(
-    const FastCacheKey& fast_key,
-    CUfunction function,
-    int configured_smem_bytes) {
+void update_thread_fast_cache(const FastCacheKey& fast_key, CUfunction function, int configured_smem_bytes) {
     if (fast_key.identity == nullptr) return;
 
     // Update an existing slot if the key is already present (preserves max smem).
@@ -481,33 +458,65 @@ CUresult launch_function(
     cudaStream_t stream) {
     // A zero size means kernel_param points to one fixed-size kernel argument.
     // Non-zero size means kernel_param points to a byte buffer with all kernel arguments.
-    if (kernel_param_size == 0) {
-        void* kernel_args[] = {kernel_param};
-        return cuLaunchKernel(
-            function,
-            variant.num_blocks, 1, 1,
-            variant.block_dim, 1, 1,
-            static_cast<unsigned int>(variant.dynamic_smem_bytes),
-            reinterpret_cast<CUstream>(stream),
-            kernel_args,
-            nullptr);
-    }
-
-    // This buffer already has the arguments laid out in the order the JIT kernel
-    // expects, so pass CUDA the buffer pointer and its size.
+    const bool single_arg = (kernel_param_size == 0);
+    void* single_arg_array[] = {kernel_param};
     void* extra[] = {
-        CU_LAUNCH_PARAM_BUFFER_POINTER, kernel_param,
-        CU_LAUNCH_PARAM_BUFFER_SIZE, &kernel_param_size,
+        CU_LAUNCH_PARAM_BUFFER_POINTER,
+        kernel_param,
+        CU_LAUNCH_PARAM_BUFFER_SIZE,
+        &kernel_param_size,
         CU_LAUNCH_PARAM_END
     };
-    return cuLaunchKernel(
-        function,
-        variant.num_blocks, 1, 1,
-        variant.block_dim, 1, 1,
-        static_cast<unsigned int>(variant.dynamic_smem_bytes),
-        reinterpret_cast<CUstream>(stream),
-        nullptr,
-        extra);
+
+    // Default path: plain cuLaunchKernel (no cooperative / cluster attributes).
+    const bool needs_cluster = (variant.cluster_dim_x > 1 || variant.cluster_dim_y > 1 || variant.cluster_dim_z > 1);
+    if (!variant.cooperative && !needs_cluster) {
+        return cuLaunchKernel(
+            function,
+            variant.num_blocks,
+            1,
+            1,
+            variant.block_dim,
+            1,
+            1,
+            static_cast<unsigned int>(variant.dynamic_smem_bytes),
+            reinterpret_cast<CUstream>(stream),
+            single_arg ? single_arg_array : nullptr,
+            single_arg ? nullptr : extra);
+    }
+
+    // Attributes path: use cuLaunchKernelEx with cooperative and/or cluster dim.
+    // LL kernels need cooperative for cg::this_grid().sync() and use a cluster
+    // dim of 2 when num_blocks is even.
+    // Value-initialize attrs[] so the union/pad bytes are well-defined.
+    CUlaunchAttribute attrs[2]{};
+    unsigned int num_attrs = 0;
+    if (variant.cooperative) {
+        attrs[num_attrs].id = CU_LAUNCH_ATTRIBUTE_COOPERATIVE;
+        attrs[num_attrs].value.cooperative = 1;
+        ++num_attrs;
+    }
+    if (needs_cluster) {
+        attrs[num_attrs].id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
+        attrs[num_attrs].value.clusterDim.x = static_cast<unsigned int>(variant.cluster_dim_x);
+        attrs[num_attrs].value.clusterDim.y = static_cast<unsigned int>(variant.cluster_dim_y);
+        attrs[num_attrs].value.clusterDim.z = static_cast<unsigned int>(variant.cluster_dim_z);
+        ++num_attrs;
+    }
+
+    CUlaunchConfig config{};
+    config.gridDimX = static_cast<unsigned int>(variant.num_blocks);
+    config.gridDimY = 1;
+    config.gridDimZ = 1;
+    config.blockDimX = static_cast<unsigned int>(variant.block_dim);
+    config.blockDimY = 1;
+    config.blockDimZ = 1;
+    config.sharedMemBytes = static_cast<unsigned int>(variant.dynamic_smem_bytes);
+    config.hStream = reinterpret_cast<CUstream>(stream);
+    config.attrs = attrs;
+    config.numAttrs = num_attrs;
+
+    return cuLaunchKernelEx(&config, function, single_arg ? single_arg_array : nullptr, single_arg ? nullptr : extra);
 }
 
 JitKernelStatus try_fast_launch(
@@ -610,8 +619,7 @@ JitKernelStatus ensure_cubin(
             if (error != nullptr) *error = cached_failure;
             log_jit_event(
                 variant,
-                log_prefix + " disk_cache=failed_marker key=" + key +
-                    " variant=" + std::string(variant.variant_name) +
+                log_prefix + " disk_cache=failed_marker key=" + key + " variant=" + std::string(variant.variant_name) +
                     " marker=" + paths.failed_path.string() +
                     " jit_overhead_sec=" + std::to_string(elapsed_sec(jit_begin)));
             return JitKernelStatus::kCompileFailed;
@@ -620,17 +628,14 @@ JitKernelStatus ensure_cubin(
     if (!cubin->empty()) {
         log_jit_event(
             variant,
-            log_prefix + " disk_cache=hit key=" + key +
-                " variant=" + std::string(variant.variant_name) +
-                " cubin=" + paths.cubin_path.string() +
-                " jit_overhead_sec=" + std::to_string(elapsed_sec(jit_begin)));
+            log_prefix + " disk_cache=hit key=" + key + " variant=" + std::string(variant.variant_name) +
+                " cubin=" + paths.cubin_path.string() + " jit_overhead_sec=" + std::to_string(elapsed_sec(jit_begin)));
         return JitKernelStatus::kLaunched;
     }
 
     log_jit_event(
         variant,
-        log_prefix + " disk_cache=miss key=" + key +
-            " variant=" + std::string(variant.variant_name) +
+        log_prefix + " disk_cache=miss key=" + key + " variant=" + std::string(variant.variant_name) +
             " cubin=" + paths.cubin_path.string());
 
     ScopedFileLock file_lock;
@@ -643,8 +648,7 @@ JitKernelStatus ensure_cubin(
             cache,
             key,
             variant,
-            log_prefix + " compile_lock=failed key=" + key +
-                " variant=" + std::string(variant.variant_name) +
+            log_prefix + " compile_lock=failed key=" + key + " variant=" + std::string(variant.variant_name) +
                 "; using static path");
         return JitKernelStatus::kCompileFailed;
     }
@@ -655,10 +659,8 @@ JitKernelStatus ensure_cubin(
     if (!cubin->empty()) {
         log_jit_event(
             variant,
-            log_prefix + " disk_cache=hit_after_lock key=" + key +
-                " variant=" + std::string(variant.variant_name) +
-                " cubin=" + paths.cubin_path.string() +
-                " jit_overhead_sec=" + std::to_string(elapsed_sec(jit_begin)));
+            log_prefix + " disk_cache=hit_after_lock key=" + key + " variant=" + std::string(variant.variant_name) +
+                " cubin=" + paths.cubin_path.string() + " jit_overhead_sec=" + std::to_string(elapsed_sec(jit_begin)));
         return JitKernelStatus::kLaunched;
     }
 
@@ -669,8 +671,7 @@ JitKernelStatus ensure_cubin(
         log_jit_event(
             variant,
             log_prefix + " disk_cache=failed_marker_after_lock key=" + key +
-                " variant=" + std::string(variant.variant_name) +
-                " marker=" + paths.failed_path.string() +
+                " variant=" + std::string(variant.variant_name) + " marker=" + paths.failed_path.string() +
                 " jit_overhead_sec=" + std::to_string(elapsed_sec(jit_begin)));
         return JitKernelStatus::kCompileFailed;
     }
@@ -694,18 +695,17 @@ JitKernelStatus ensure_cubin(
             log_jit_event(variant, log_prefix + " artifact=compile_log write=failed path=" + paths.log_path.string());
         }
         if (!write_file_atomic(paths.failed_path, compile_output.log, false)) {
-            log_jit_event(variant, log_prefix + " artifact=failed_marker write=failed path=" + paths.failed_path.string());
+            log_jit_event(
+                variant,
+                log_prefix + " artifact=failed_marker write=failed path=" + paths.failed_path.string());
         }
         warn_once_jit_event(
             cache,
             key,
             variant,
-            log_prefix + " compile=failed key=" + key +
-                " variant=" + std::string(variant.variant_name) +
-                " log=" + paths.log_path.string() +
-                " jit_overhead_sec=" + std::to_string(jit_overhead_sec) +
-                " nvcc_process_sec=" + std::to_string(compile_output.compiler_sec) +
-                "; using static path");
+            log_prefix + " compile=failed key=" + key + " variant=" + std::string(variant.variant_name) +
+                " log=" + paths.log_path.string() + " jit_overhead_sec=" + std::to_string(jit_overhead_sec) +
+                " nvcc_process_sec=" + std::to_string(compile_output.compiler_sec) + "; using static path");
         if (error != nullptr) *error = compile_output.log;
         return JitKernelStatus::kCompileFailed;
     }
@@ -716,8 +716,7 @@ JitKernelStatus ensure_cubin(
     if (write_file_atomic(paths.cubin_path, *cubin, true)) {
         log_jit_event(
             variant,
-            log_prefix + " disk_cache=write artifact=cubin key=" + key +
-                " path=" + paths.cubin_path.string() +
+            log_prefix + " disk_cache=write artifact=cubin key=" + key + " path=" + paths.cubin_path.string() +
                 " bytes=" + std::to_string(cubin->size()));
     } else {
         log_jit_event(variant, log_prefix + " artifact=cubin write=failed path=" + paths.cubin_path.string());
@@ -730,16 +729,21 @@ JitKernelStatus ensure_cubin(
     std::filesystem::remove(paths.failed_path, remove_ec);
     if (!write_file_atomic(
             paths.metadata_path,
-            metadata_json(variant, key, sm, env_info.options, env_info.compiler_id, jit_overhead_sec, compile_output.compiler_sec),
+            metadata_json(
+                variant,
+                key,
+                sm,
+                env_info.options,
+                env_info.compiler_id,
+                jit_overhead_sec,
+                compile_output.compiler_sec),
             false)) {
         log_jit_event(variant, log_prefix + " artifact=metadata write=failed path=" + paths.metadata_path.string());
     }
     log_jit_event(
         variant,
-        log_prefix + " compile=succeeded key=" + key +
-            " variant=" + std::string(variant.variant_name) +
-            " cubin=" + paths.cubin_path.string() +
-            " jit_overhead_sec=" + std::to_string(jit_overhead_sec) +
+        log_prefix + " compile=succeeded key=" + key + " variant=" + std::string(variant.variant_name) +
+            " cubin=" + paths.cubin_path.string() + " jit_overhead_sec=" + std::to_string(jit_overhead_sec) +
             " nvcc_process_sec=" + std::to_string(compile_output.compiler_sec));
     return JitKernelStatus::kLaunched;
 }
@@ -767,8 +771,7 @@ JitKernelStatus load_and_launch_kernel(
             cache,
             key,
             variant,
-            log_prefix + " module_load=failed key=" + key +
-                " variant=" + std::string(variant.variant_name) +
+            log_prefix + " module_load=failed key=" + key + " variant=" + std::string(variant.variant_name) +
                 "; using static path");
         return status;
     }
@@ -780,8 +783,7 @@ JitKernelStatus load_and_launch_kernel(
             cache,
             key,
             variant,
-            log_prefix + " smem_attribute=failed key=" + key +
-                " variant=" + std::string(variant.variant_name) +
+            log_prefix + " smem_attribute=failed key=" + key + " variant=" + std::string(variant.variant_name) +
                 "; using static path");
         return status;
     }
@@ -795,15 +797,13 @@ JitKernelStatus load_and_launch_kernel(
             cache,
             key,
             variant,
-            log_prefix + " launch=failed key=" + key +
-                " variant=" + std::string(variant.variant_name));
+            log_prefix + " launch=failed key=" + key + " variant=" + std::string(variant.variant_name));
         return JitKernelStatus::kLaunchFailed;
     }
 
     log_jit_event(
         variant,
-        log_prefix + " launch=succeeded key=" + key +
-            " variant=" + std::string(variant.variant_name) +
+        log_prefix + " launch=succeeded key=" + key + " variant=" + std::string(variant.variant_name) +
             " module_cache=ready cubin=" + paths.cubin_path.string());
     return JitKernelStatus::kLaunched;
 }
@@ -812,13 +812,20 @@ JitKernelStatus load_and_launch_kernel(
 
 const char* jit_kernel_status_name(JitKernelStatus status) {
     switch (status) {
-    case JitKernelStatus::kLaunched: return "launched";
-    case JitKernelStatus::kDisabled: return "disabled";
-    case JitKernelStatus::kUnsupportedDevice: return "unsupported device";
-    case JitKernelStatus::kCompileFailed: return "compile failed";
-    case JitKernelStatus::kLoadFailed: return "load failed";
-    case JitKernelStatus::kAttributeFailed: return "attribute failed";
-    case JitKernelStatus::kLaunchFailed: return "launch failed";
+    case JitKernelStatus::kLaunched:
+        return "launched";
+    case JitKernelStatus::kDisabled:
+        return "disabled";
+    case JitKernelStatus::kUnsupportedDevice:
+        return "unsupported device";
+    case JitKernelStatus::kCompileFailed:
+        return "compile failed";
+    case JitKernelStatus::kLoadFailed:
+        return "load failed";
+    case JitKernelStatus::kAttributeFailed:
+        return "attribute failed";
+    case JitKernelStatus::kLaunchFailed:
+        return "launch failed";
     }
     return "unknown";
 }
@@ -849,8 +856,7 @@ JitKernelStatus launch_jit_kernel(
     const FastCacheKey fast_key{variant.identity, variant.runtime_key, context, device};
     const JitKernelStatus fast_status =
         try_fast_launch(fast_key, variant, kernel_param, kernel_param_size, stream, error);
-    if (fast_status == JitKernelStatus::kLaunched ||
-        fast_status == JitKernelStatus::kLaunchFailed) {
+    if (fast_status == JitKernelStatus::kLaunched || fast_status == JitKernelStatus::kLaunchFailed) {
         return fast_status;
     }
 
@@ -879,28 +885,30 @@ JitKernelStatus launch_jit_kernel(
 
     log_jit_event(
         variant,
-        log_prefix + " request variant=" + std::string(variant.variant_name) +
-        " key=" + key +
-        " device=" + std::to_string(device) +
-        " sm=" + std::to_string(sm) +
-        " cache_root=" + cache.root_dir().string() +
-        " source_dir=" + env_info.source_dir.string());
+        log_prefix + " request variant=" + std::string(variant.variant_name) + " key=" + key +
+            " device=" + std::to_string(device) + " sm=" + std::to_string(sm) +
+            " cache_root=" + cache.root_dir().string() + " source_dir=" + env_info.source_dir.string());
 
     std::string cubin;
-    JitKernelStatus status =
-        ensure_cubin(variant, env_info, paths, key, log_prefix, sm, jit_begin, &cubin, error);
+    JitKernelStatus status = ensure_cubin(variant, env_info, paths, key, log_prefix, sm, jit_begin, &cubin, error);
     if (status != JitKernelStatus::kLaunched) return status;
 
     return load_and_launch_kernel(
-        variant, fast_key, paths, key, cubin, log_prefix, kernel_param, kernel_param_size, stream, error);
+        variant,
+        fast_key,
+        paths,
+        key,
+        cubin,
+        log_prefix,
+        kernel_param,
+        kernel_param_size,
+        stream,
+        error);
 }
 
 // This overload is for kernels that don't need to pass kernel arguments.
-JitKernelStatus launch_jit_kernel(
-    const JitKernelVariant& variant,
-    void* kernel_param,
-    cudaStream_t stream,
-    std::string* error) {
+JitKernelStatus
+launch_jit_kernel(const JitKernelVariant& variant, void* kernel_param, cudaStream_t stream, std::string* error) {
     return launch_jit_kernel(variant, kernel_param, 0, stream, error);
 }
 

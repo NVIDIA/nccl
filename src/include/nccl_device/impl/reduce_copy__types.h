@@ -11,6 +11,8 @@
 #include "vector__types.h"
 #include "../utility.h"
 #include "../coop.h"
+
+#ifdef __CUDACC__
 #include <cassert>
 #include <type_traits>
 
@@ -48,7 +50,7 @@ struct CoopStride {
   static constexpr int value = 0;
 };
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 // Specialization for warp: always 32
 template <>
 struct CoopStride<ncclCoopWarp> {
@@ -101,5 +103,6 @@ struct OpSum<__nv_fp8_e5m2> {
 
 } // namespace utility
 } // namespace nccl
+#endif // __CUDACC__
 
 #endif // _NCCL_DEVICE_REDUCE_COPY__TYPES_H_

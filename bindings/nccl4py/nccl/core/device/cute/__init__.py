@@ -1,25 +1,20 @@
-"""User-facing CuTeDSL bindings for the NCCL device API.
+"""Experimental CuTeDSL bindings for the NCCL device API.
 
-Typical usage::
+.. warning::
 
-    import cutlass
-    import cutlass.cute as cute
-    import nccl.core.device.cute as nccl_cute
+    Experimental and unstable. This subpackage carries no semantic-versioning
+    guarantee: symbols may change or be removed in any release before nccl4py
+    1.0.
 
-    @cute.kernel
-    def my_kernel(dev_comm: cutlass.Int64, win: cutlass.Int64):
-        dev_comm = nccl_cute.DevComm(dev_comm)
-        win = nccl_cute.Window(win)
-        team = dev_comm.team_world
-        coop = nccl_cute.cta()
-        gin = dev_comm.gin(nccl_cute.GinBackendMask.ALL, 0)
+    The selected ``libnccl_device.bc`` must match exactly the NCCL version
+    nccl4py was built against -- the ``bindings`` version reported by
+    ``nccl.core.show_versions()``. Resolution prefers
+    ``$NCCL_HOME/lib/libnccl_device.bc`` and otherwise uses the copy from the
+    installed ``nvidia-nccl-cu12`` / ``nvidia-nccl-cu13`` wheel. No version
+    check is performed; a mismatch can cause link errors or incorrect kernel
+    behavior.
 
-        src = win.tensor(cutlass.Int64, cute.make_layout(1))
-        dst = win.tensor(cutlass.Int64, cute.make_layout(1))
-        src[0] = 1234
-        gin.put(team, peer, win, dst, win, src, coop,
-                is_signal=True, signal_id=1)
-        ...
+See ``examples/cute/00_basic.py`` for a complete, runnable example.
 """
 
 try:
@@ -32,24 +27,29 @@ except ImportError as e:
         "    pip install 'nccl4py[cu13]'   # for CUDA 13"
     ) from e
 
-from . import types, coop, comm, gin, barrier
-from .types import *    # MemoryOrder, GinFenceLevel, GinBackendMask
+from . import types, coop, handles, comm, window, gin, barrier, runtime
+from .types import *    # MemoryOrder, ThreadScope, GinFenceLevel, GinBackendMask, GinResourceSharingMode
 from .coop import *     # Coop, cta, warp, thread, lanes, warp_span
-from .comm import *     # Team, DevComm, Window
+from .handles import *  # MultimemHandle, LsaBarrierHandle, GinBarrierHandle
+from .comm import *     # Team, DevComm
+from .window import *   # Window
 from .gin import *      # Gin
 from .barrier import *  # session classes + factories
-from ._helpers import device_bitcode_path
 
 __all__ = [
     "types",
     "coop",
+    "handles",
     "comm",
+    "window",
     "gin",
     "barrier",
+    "runtime",
     *types.__all__,
     *coop.__all__,
+    *handles.__all__,
     *comm.__all__,
+    *window.__all__,
     *gin.__all__,
     *barrier.__all__,
-    "device_bitcode_path",
 ]

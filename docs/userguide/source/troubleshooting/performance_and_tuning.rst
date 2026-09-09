@@ -121,7 +121,53 @@ RoCE considerations
 
 On RoCE fabric, using multiple QPs per connection is often necessary to achieve optimal performance.
 
-Process/thread affinity
+.. _cpu_memory_affinity:
+
+CPU and memory affinity
 =======================
-Incorrect process and thread placement can have a serious performance impact. The NCCL_IGNORE_CPU_AFFINITY environment variable will let NCCL assign CPU affinity of the threads it creates based on GPU affinity.
-However, process placement is in the hands of the user and depending on the node architecture the requirements may vary. Users can set the CPU affinity via ``numactl``, OpenMPI's ``--bind-to``, the ``--cpu-bind`` option of ``srun`` or machine file options. A general rule is to rely on the information provided by ``nvidia-smi topo -m`` and spread out processes based on GPU-CPU affinity reported by the tool.
+
+Incorrect process placement with respect to the CPU and memory can have a serious performance impact.
+On NUMA systems, each rank should generally use CPU cores and host memory close to its GPU and, for multi-node jobs, its NIC.
+
+How NCCL handles affinity
+-------------------------
+
+By default, NCCL uses the intersection of the CPU affinity inherited from the launcher or parent process and the CPU affinity associated with the GPU.
+If the intersection is empty, NCCL leaves the inherited CPU affinity unchanged.
+Setting ``NCCL_IGNORE_CPU_AFFINITY=1`` makes NCCL ignore the inherited affinity and use the GPU affinity only.
+NCCL still cannot use CPUs excluded by cpuset, cgroup, or container restrictions.
+Set CPU, GPU, and memory placement before NCCL communicators are created.
+
+To inspect the affinity used by NCCL, run with:
+
+.. code:: shell
+
+  NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=INIT,GRAPH,ENV ./my_nccl_app
+
+Look for ``ncclTopoGetCpuAffinity: Affinity for GPU ...`` in the log.
+Use ``nvidia-smi topo -m`` and ``lscpu --extended=CPU,NODE,SOCKET,CORE`` to inspect GPU, NIC, CPU, and NUMA locality.
+
+Controlling affinity with Slurm
+-------------------------------
+
+Slurm controls CPU and memory placement with ``--cpu-bind`` and ``--mem-bind`` when the required task affinity support is configured by the site.
+GPU assignment and binding use Slurm's GRES/TRES support, for example ``--gpu-bind`` or ``--tres-bind=gres/gpu:...``.
+``CUDA_VISIBLE_DEVICES`` can also be used to control which GPUs are visible to each process.
+
+Controlling affinity with Open MPI ``mpirun``
+---------------------------------------------
+
+Open MPI provides ``--map-by`` and ``--bind-to`` for rank and CPU placement.
+Use ``--report-bindings`` to verify the resulting CPU binding, for example:
+
+.. code:: shell
+
+  mpirun -np <nranks> \
+         --map-by ppr:1:numa:PE=<cores_per_rank> \
+         --bind-to core \
+         --report-bindings \
+         ./my_nccl_app
+
+GPU assignment remains application- or launcher-specific; select the intended GPU per local rank or set ``CUDA_VISIBLE_DEVICES`` appropriately.
+
+As an alternative for direct launches or wrapper scripts, ``numactl`` can bind a process to specific CPU cores or NUMA memory nodes.

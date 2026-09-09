@@ -7,6 +7,13 @@
 CXXSTD := -std=c++17
 include ../../makefiles/common.mk
 
+# NVCC_CXX_COMPILER: nvcc -ccbin; from CXX if one token, else g++
+ifeq ($(words $(CXX)),1)
+NVCC_CXX_COMPILER ?= $(CXX)
+else
+NVCC_CXX_COMPILER ?= g++
+endif
+
 # NCCL_EP requires sm_90+. If the caller supplied NVCC_GENCODE (env or command
 # line) use it as-is and let nvcc fail if it's below sm_90. Otherwise override
 # with the following values.
@@ -50,14 +57,16 @@ DST_DIR := $(NCCL_EP_BUILDDIR)/test/nccl_ep
 JIT_DIR := $(INCDIR)/nccl_ep
 JIT_CONFIG_HEADER := $(JIT_DIR)/config.h
 
-# NVCC JIT support is required for HT mode.
+# NVCC JIT support is required for HT and LL modes.
 NCCL_EP_JIT_HEADERS := \
     device/hybrid_ep.cuh \
     device/device_primitives.cuh \
     device/hybridep_configs.cuh \
     device/cuda_compat_shims.cuh \
     device/scan_kernel.cuh \
-    device/macros.cuh
+    device/macros.cuh \
+    device/ll_ep.cuh \
+    device/ll_ep_adapter.cuh
 NCCL_EP_JIT_STAGED_HEADERS := include/common.hpp include/ep_enums.h
 NCCL_EP_JIT_STAGED_TARGETS := $(NCCL_EP_JIT_STAGED_HEADERS:include/%=$(JIT_DIR)/%)
 NCCL_EP_JIT_HEADER_TARGETS := $(NCCL_EP_JIT_HEADERS:%=$(JIT_DIR)/%) $(NCCL_EP_JIT_STAGED_TARGETS)
@@ -80,7 +89,7 @@ NCCL_EP_DEVICE_INCFLAGS = $(NCCL_EP_BASE_INCFLAGS) -I.
 # Add --expt-relaxed-constexpr for std::max, std::min, etc. in device code
 # CUDA code MUST use -fvisibility=hidden for kernel registration to work correctly.
 # The ncclEp* API is in nccl_ep.cc (compiled with CXXFLAGS), so it still gets exported.
-NVCUFLAGS := $(NVCC_GENCODE) --extended-lambda $(NCCL_EP_DEVICE_INCFLAGS) --expt-relaxed-constexpr --compiler-options "-fPIC -fvisibility=hidden" -ccbin $(CXX) $(CXXSTD)
+NVCUFLAGS := $(NVCC_GENCODE) --extended-lambda $(NCCL_EP_DEVICE_INCFLAGS) --expt-relaxed-constexpr --compiler-options "-fPIC -fvisibility=hidden" -ccbin $(NVCC_CXX_COMPILER) $(CXXSTD)
 CXXFLAGS += $(INCFLAGS) $(NCCL_EP_JIT_DEFS) -I$(CUDA_INC) -I$(CUDA_INC)/cccl -fPIC -fvisibility=default
 
 # Optional warp-level timing instrumentation (adds cudaMalloc + cudaMemcpy per kernel launch).
@@ -96,8 +105,8 @@ endif
 DEPFLAGS = -MMD -MP
 
 # Source files for library
-HOST_SRC := nccl_ep.cc
-DEVICE_SRC := device/low_latency.cu \
+HOST_SRC := nccl_ep.cc nccl_ep_env.cc
+DEVICE_SRC := device/ll_ep_adapter.cu \
               device/hybridep_adapter.cu
 HOST_SRC += device/jit/jit_utils.cc \
             device/jit/jit_cache.cc \
@@ -210,7 +219,7 @@ $(JIT_DIR)/%: %
 -include $(ALL_OBJ:.o=.d)
 
 # Detect CUPTI headers at compile time (optional; enables kernel-level GPU timing)
-CUPTI_AVAILABLE := $(shell echo '\#include <cupti.h>' | $(CXX) -x c++ -E - >/dev/null 2>&1 && echo 1)
+CUPTI_AVAILABLE := $(shell echo '\#include <cupti.h>' | $(NVCC_CXX_COMPILER) -x c++ -E - >/dev/null 2>&1 && echo 1)
 ifeq ($(CUPTI_AVAILABLE),1)
   CUPTI_CFLAGS  := -DHAVE_CUPTI
   CUPTI_LDFLAGS := -lcupti
@@ -226,11 +235,11 @@ ifeq ($(MPI), 1)
 MPI_CFLAGS := -DMPI_SUPPORT -I$(MPI_HOME)/include
 MPI_LDFLAGS := -L$(MPI_HOME)/lib -lmpi
 
-EP_TEST_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
+EP_TEST_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) --compiler-options "-fPIC" -ccbin $(NVCC_CXX_COMPILER) $(CXXSTD)
 EP_TEST_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda
 
 # ep_bench: performance benchmark (NVTX for profiling, optional CUPTI for kernel timing)
-EP_BENCH_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) $(CUPTI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
+EP_BENCH_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) $(CUPTI_CFLAGS) --compiler-options "-fPIC" -ccbin $(NVCC_CXX_COMPILER) $(CXXSTD)
 EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda $(CUPTI_LDFLAGS)
 ep_test: lib $(DST_DIR)/ep_test
 ep_bench: lib $(DST_DIR)/ep_bench
@@ -259,9 +268,9 @@ ifeq ($(MPI_IBM),1)
 MPI_CFLAGS := -DMPI_SUPPORT
 MPI_LDFLAGS := -lmpi_ibm
 
-EP_TEST_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
+EP_TEST_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) --compiler-options "-fPIC" -ccbin $(NVCC_CXX_COMPILER) $(CXXSTD)
 EP_TEST_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda
-EP_BENCH_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) $(CUPTI_CFLAGS) --compiler-options "-fPIC" -ccbin $(CXX) $(CXXSTD)
+EP_BENCH_NVCUFLAGS := $(NVCC_GENCODE) -I$(INCDIR) $(MPI_CFLAGS) $(CUPTI_CFLAGS) --compiler-options "-fPIC" -ccbin $(NVCC_CXX_COMPILER) $(CXXSTD)
 EP_BENCH_NVLDFLAGS := -L$(LIBDIR) -lnccl_ep -L$(NCCL_LIBDIR) -lnccl $(MPI_LDFLAGS) -lpthread -lrt -ldl -lcuda $(CUPTI_LDFLAGS)
 ep_test: lib $(DST_DIR)/ep_test
 ep_bench: lib $(DST_DIR)/ep_bench

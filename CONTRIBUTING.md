@@ -9,6 +9,7 @@ To help ensure your contribution can be accepted smoothly:
 - **Open an issue first** for significant changes or new features. This allows us to discuss the approach before you invest significant time.
 - **Check existing issues** to see if someone else is already working on something similar.
 - **Ask questions** if you're unsure about anything. We're happy to help!
+- **License**: All contributions will only be accepted under the Apache-2.0 license.
 
 ## Getting Started
 

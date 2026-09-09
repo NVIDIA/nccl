@@ -369,12 +369,14 @@ inline void ncclMemoryPoolTakeAll(struct ncclMemoryPool* me, struct ncclMemoryPo
 template <typename T, T* T::* next>
 struct ncclIntruQueue {
   T *head, *tail;
+  int nElems;
 };
 
 template <typename T, T* T::* next>
 inline void ncclIntruQueueConstruct(ncclIntruQueue<T, next>* me) {
   me->head = nullptr;
   me->tail = nullptr;
+  me->nElems = 0;
 }
 
 template <typename T, T* T::* next>
@@ -397,6 +399,7 @@ inline void ncclIntruQueueEnqueue(ncclIntruQueue<T, next>* me, T* x) {
   x->*next = nullptr;
   (me->head ? me->tail->*next : me->head) = x;
   me->tail = x;
+  me->nElems += 1;
 }
 
 template <typename T, T* T::* next>
@@ -404,6 +407,7 @@ inline void ncclIntruQueueEnqueueFront(ncclIntruQueue<T, next>* me, T* x) {
   if (me->head == nullptr) me->tail = x;
   x->*next = me->head;
   me->head = x;
+  me->nElems += 1;
 }
 
 template <typename T, T* T::* next>
@@ -411,6 +415,7 @@ inline T* ncclIntruQueueDequeue(ncclIntruQueue<T, next>* me) {
   T* ans = me->head;
   me->head = ans->*next;
   if (me->head == nullptr) me->tail = nullptr;
+  me->nElems -= 1;
   return ans;
 }
 
@@ -433,6 +438,7 @@ inline T* ncclIntruQueueDelete(ncclIntruQueue<T, next>* me, T* x, bool (*cmp)(T*
     if (prev == nullptr) me->head = cur->*next;
     else prev->*next = cur->*next;
     if (cur == me->tail) me->tail = prev;
+    me->nElems -= 1;
   }
   return cur;
 }
@@ -443,6 +449,7 @@ inline T* ncclIntruQueueTryDequeue(ncclIntruQueue<T, next>* me) {
   if (ans != nullptr) {
     me->head = ans->*next;
     if (me->head == nullptr) me->tail = nullptr;
+    me->nElems -= 1;
   }
   return ans;
 }
@@ -451,8 +458,10 @@ template <typename T, T* T::* next>
 void ncclIntruQueueTransfer(ncclIntruQueue<T, next>* dst, ncclIntruQueue<T, next>* src) {
   (dst->tail ? dst->tail->next : dst->head) = src->head;
   if (src->tail) dst->tail = src->tail;
+  dst->nElems += src->nElems;
   src->head = nullptr;
   src->tail = nullptr;
+  src->nElems = 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

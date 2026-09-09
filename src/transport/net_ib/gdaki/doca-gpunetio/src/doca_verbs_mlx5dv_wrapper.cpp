@@ -75,6 +75,15 @@ typedef struct mlx5dv_devx_uar *(*mlx5dv_devx_alloc_uar_func_t)(struct ibv_conte
 typedef void (*mlx5dv_devx_free_uar_func_t)(struct mlx5dv_devx_uar *uar);
 typedef int (*mlx5dv_query_device_func_t)(struct ibv_context *context,
                                           struct mlx5dv_context *attrs_out);
+typedef struct mlx5dv_devx_event_channel *(*mlx5dv_devx_create_event_channel_func_t)(
+    struct ibv_context *ctx, enum mlx5dv_devx_create_event_channel_flags flags);
+typedef void (*mlx5dv_devx_destroy_event_channel_func_t)(struct mlx5dv_devx_event_channel *channel);
+typedef int (*mlx5dv_devx_subscribe_devx_event_func_t)(struct mlx5dv_devx_event_channel *channel,
+                                                       struct mlx5dv_devx_obj *obj,
+                                                       uint16_t events_sz, uint16_t *events_num,
+                                                       uint64_t cookie);
+typedef ssize_t (*mlx5dv_devx_get_event_func_t)(struct mlx5dv_devx_event_channel *channel,
+                                                void *event_data, size_t event_resp_len);
 
 /* Function pointers */
 static mlx5dv_init_obj_func_t mlx5dv_init_obj_func = NULL;
@@ -90,6 +99,10 @@ static mlx5dv_devx_umem_dereg_func_t mlx5dv_devx_umem_dereg_func = NULL;
 static mlx5dv_devx_alloc_uar_func_t mlx5dv_devx_alloc_uar_func = NULL;
 static mlx5dv_devx_free_uar_func_t mlx5dv_devx_free_uar_func = NULL;
 static mlx5dv_query_device_func_t mlx5dv_query_device_func = NULL;
+static mlx5dv_devx_create_event_channel_func_t mlx5dv_devx_create_event_channel_func = NULL;
+static mlx5dv_devx_destroy_event_channel_func_t mlx5dv_devx_destroy_event_channel_func = NULL;
+static mlx5dv_devx_subscribe_devx_event_func_t mlx5dv_devx_subscribe_devx_event_func = NULL;
+static mlx5dv_devx_get_event_func_t mlx5dv_devx_get_event_func = NULL;
 
 /* *********** dlopen Initialization *********** */
 
@@ -130,6 +143,14 @@ static void doca_verbs_wrapper_init_once(int *ret) {
         (mlx5dv_devx_free_uar_func_t)dlsym(mlx5dv_handle, "mlx5dv_devx_free_uar");
     mlx5dv_query_device_func =
         (mlx5dv_query_device_func_t)dlsym(mlx5dv_handle, "mlx5dv_query_device");
+    mlx5dv_devx_create_event_channel_func = (mlx5dv_devx_create_event_channel_func_t)dlsym(
+        mlx5dv_handle, "mlx5dv_devx_create_event_channel");
+    mlx5dv_devx_destroy_event_channel_func = (mlx5dv_devx_destroy_event_channel_func_t)dlsym(
+        mlx5dv_handle, "mlx5dv_devx_destroy_event_channel");
+    mlx5dv_devx_subscribe_devx_event_func = (mlx5dv_devx_subscribe_devx_event_func_t)dlsym(
+        mlx5dv_handle, "mlx5dv_devx_subscribe_devx_event");
+    mlx5dv_devx_get_event_func =
+        (mlx5dv_devx_get_event_func_t)dlsym(mlx5dv_handle, "mlx5dv_devx_get_event");
 
     /* Check if all functions were loaded successfully */
     if (!mlx5dv_init_obj_func || !mlx5dv_devx_obj_create_func || !mlx5dv_devx_obj_destroy_func ||
@@ -137,7 +158,9 @@ static void doca_verbs_wrapper_init_once(int *ret) {
         !mlx5dv_devx_general_cmd_func || !mlx5dv_devx_query_eqn_func ||
         !mlx5dv_devx_umem_reg_func || !mlx5dv_devx_umem_reg_ex_func ||
         !mlx5dv_devx_umem_dereg_func || !mlx5dv_devx_alloc_uar_func || !mlx5dv_devx_free_uar_func ||
-        !mlx5dv_query_device_func) {
+        !mlx5dv_query_device_func || !mlx5dv_devx_create_event_channel_func ||
+        !mlx5dv_devx_destroy_event_channel_func || !mlx5dv_devx_subscribe_devx_event_func ||
+        !mlx5dv_devx_get_event_func) {
         dlclose(mlx5dv_handle);
         mlx5dv_handle = NULL;
         *ret = -1; /* Failed to load some functions */
@@ -288,4 +311,48 @@ doca_error_t doca_verbs_wrapper_mlx5dv_query_device(struct ibv_context *context,
     }
     int ret = mlx5dv_query_device_func(context, attrs_out);
     return (ret == 0) ? DOCA_SUCCESS : DOCA_ERROR_DRIVER;
+}
+
+doca_error_t doca_verbs_wrapper_mlx5dv_devx_create_event_channel(
+    struct ibv_context *ctx, enum mlx5dv_devx_create_event_channel_flags flags,
+    struct mlx5dv_devx_event_channel **out_channel) {
+    if (doca_verbs_wrapper_init_dlopen() != 0) {
+        return DOCA_ERROR_NOT_FOUND;
+    }
+    if (out_channel == NULL) return DOCA_ERROR_INVALID_VALUE;
+    struct mlx5dv_devx_event_channel *channel = mlx5dv_devx_create_event_channel_func(ctx, flags);
+    if (channel == NULL) return DOCA_ERROR_DRIVER;
+    *out_channel = channel;
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_wrapper_mlx5dv_devx_destroy_event_channel(
+    struct mlx5dv_devx_event_channel *channel) {
+    if (doca_verbs_wrapper_init_dlopen() != 0) {
+        return DOCA_ERROR_NOT_FOUND;
+    }
+    mlx5dv_devx_destroy_event_channel_func(channel);
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_wrapper_mlx5dv_devx_subscribe_devx_event(
+    struct mlx5dv_devx_event_channel *channel, struct mlx5dv_devx_obj *obj, uint16_t events_sz,
+    uint16_t *events_num, uint64_t cookie) {
+    if (doca_verbs_wrapper_init_dlopen() != 0) {
+        return DOCA_ERROR_NOT_FOUND;
+    }
+    int ret = mlx5dv_devx_subscribe_devx_event_func(channel, obj, events_sz, events_num, cookie);
+    return (ret == 0) ? DOCA_SUCCESS : DOCA_ERROR_DRIVER;
+}
+
+doca_error_t doca_verbs_wrapper_mlx5dv_devx_get_event(
+    struct mlx5dv_devx_event_channel *channel, struct mlx5dv_devx_async_event_hdr *event_data,
+    size_t event_resp_len, ssize_t *bytes_read) {
+    if (doca_verbs_wrapper_init_dlopen() != 0) {
+        return DOCA_ERROR_NOT_FOUND;
+    }
+    if (bytes_read == NULL) return DOCA_ERROR_INVALID_VALUE;
+    ssize_t ret = mlx5dv_devx_get_event_func(channel, event_data, event_resp_len);
+    *bytes_read = ret;
+    return DOCA_SUCCESS;
 }

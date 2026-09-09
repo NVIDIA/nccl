@@ -27,6 +27,7 @@ typedef enum {
 #define MAX_STEPS                        32
 #define MAX_OPS                          16 // Up to 64K ranks for PAT
 #define MAX_EVENTS_PER_REQ               (8)
+#define MAX_KERNEL_PHASES                3  // initial_sync, compute, final_sync (v7)
 
 struct proxyOp;
 struct proxyStep;
@@ -55,6 +56,21 @@ struct netPlugin {
   struct proxyStep* parent;
 };
 
+struct kernelCh;
+
+// v7 kernel barrier phase sub-event (child of a kernelCh)
+struct kernelPhase {
+  uint64_t type;                    // ncclProfileKernelPhase; must be first (handle dispatch reads *(uint64_t*))
+  uint8_t channelId;
+  uint8_t phaseId;                  // 0=initial_sync, 1=compute, 2=final_sync
+  const char* phaseName;
+  uint64_t startGpuClk;
+  uint64_t stopGpuClk;
+  double startTs;
+  double stopTs;
+  struct kernelCh* parent;
+};
+
 struct kernelCh {
   uint8_t type;
   uint8_t channelId;
@@ -63,6 +79,7 @@ struct kernelCh {
   double stopTs;
   uint64_t startGpuClk;
   uint64_t stopGpuClk;
+  struct kernelPhase phases[MAX_KERNEL_PHASES]; // v7: per-phase timing, indexed by phaseId
 };
 
 #define PROXY_STEP_SEND_GPU_WAIT 0
@@ -140,6 +157,8 @@ struct collective {
   const char* algo;
   const char* proto;
   int nWarps;
+  const char* kernelVariant;        // v7: symmetric-kernel variant (NULL for non-sym)
+  bool isSymColl;                   // v7: symmetric collective flag
   struct proxyOp op[MAX_CHANNELS][2*MAX_OPS];
   int nProxyOps[MAX_CHANNELS];
   struct kernelCh kernel[MAX_CHANNELS];
@@ -209,6 +228,7 @@ struct p2pApi {
 struct kernelLaunch {
   uint64_t type;
   struct groupApi* parent;
+  struct context* ctx;              // profiler context
   cudaStream_t stream;
   int kernelLaunchId;
   double startTs;

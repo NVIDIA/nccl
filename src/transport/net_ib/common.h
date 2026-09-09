@@ -17,7 +17,6 @@
 #include "param.h"
 #include "profiler/net_ib.h"
 
-#include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +30,7 @@
 
 #include "ibvwrap.h"
 #include "mlx5/mlx5dvwrap.h"
+#include "wqe_lat_mon.h"
 
 #define MAXSUFFIXSIZE 16
 #define MAXNAMESIZE (64 + MAXSUFFIXSIZE)
@@ -75,6 +75,12 @@ enum ncclIbProvider {
   IB_PROVIDER_MAX = 2,
 };
 
+struct ncclIbGidInfo {
+  uint8_t link_layer;
+  union ibv_gid localGid;
+  int32_t localGidIndex;
+};
+
 extern int ncclNIbDevs;
 struct alignas(64) ncclIbDev {
   std::mutex mutex;
@@ -83,6 +89,7 @@ struct alignas(64) ncclIbDev {
   uint8_t portNum;
   uint8_t link;
   int speed;
+  uint64_t currSpeed;
   ibv_context* context;
   int pdRefs;
   ibv_pd* pd;
@@ -107,6 +114,7 @@ struct alignas(64) ncclIbDev {
       int dataDirect;
     } mlx5;
   } capsProvider;
+  struct ncclIbGidInfo gidInfo;
 };
 
 #define MAX_IB_DEVS 32
@@ -114,9 +122,18 @@ struct alignas(64) ncclIbDev {
 extern struct ncclIbMergedDev ncclIbMergedDevs[MAX_IB_VDEVS];
 extern struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];
 extern int ncclIbRelaxedOrderingEnabled;
+extern uint64_t ncclIbSpeedChangeCounter;
+extern int64_t ncclParamIbEventBasedLb();
+extern int64_t ncclParamIbEventBasedLbRemote();
 
 #define NCCL_IB_LLSTR(ll) \
   (((ll) == IBV_LINK_LAYER_INFINIBAND) ? "IB" : (((ll) == IBV_LINK_LAYER_ETHERNET) ? "RoCE" : "UNSPECIFIED"))
+
+struct alignas(32) ncclIbRemoteSpeedBuf {
+  volatile uint64_t counter;
+  uint16_t speedGbps[NCCL_IB_MAX_DEVS_PER_NIC];
+};
+static_assert(sizeof(ncclIbRemoteSpeedBuf) == 32);
 
 // Per-Dev connection metadata
 struct ncclIbDevInfo {
@@ -140,13 +157,9 @@ struct ncclIbDevInfo {
 
   // remote dev info
   union ibv_gid remoteGid;
-};
 
-// Retain local RoCE address for error logging
-struct ncclIbGidInfo {
-  uint8_t link_layer;
-  union ibv_gid localGid;
-  int32_t localGidIndex;
+  uint64_t currSpeed;
+  uint32_t remSpeedBufRkey;
 };
 
 #define MAX_QPS_PER_REQ 8
@@ -217,6 +230,8 @@ struct ncclIbRequest {
       uint32_t lkeys[NCCL_IB_MAX_DEVS_PER_NIC];
       // Tracks whether data was transmitted on a QP for this request.
       bool sentData[NCCL_IB_MAX_QPS];
+      // Per-device LB weights used for chunk computation.
+      uint8_t weights[NCCL_IB_MAX_DEVS_PER_NIC];
     } send;
     struct {
       struct ncclIbRequestCompletionRecord* cmplsRecords;
@@ -240,7 +255,15 @@ struct ncclIbNetCommDevBase {
   struct ibv_cq* cq;
   uint64_t pad[2];
   struct ncclIbGidInfo gidInfo;
+  // Resolved once at device init and reused by every QP (like the GID index above).
+  int pkeyIndex;
 };
+
+// Snapshot the device-wide GID info into a comm's per-device base under a mutex.
+static inline void ncclIbGidInfoSnapshot(struct ncclIbNetCommDevBase* base, struct ncclIbDev* ibDev) {
+  std::lock_guard<std::mutex> lock(ibDev->mutex);
+  base->gidInfo = ibDev->gidInfo;
+}
 
 struct ncclIbSendFifo {
   uint64_t addr;
@@ -298,6 +321,7 @@ struct ncclIbQp {
   // The index of the device on the remote side to which this QP is connected
   // to.
   int remDevIdx;
+  struct ncclIbWqeLatMon latMon;
 };
 
 // We need to support NCCL_NET_MAX_REQUESTS for each concurrent receive
@@ -360,15 +384,51 @@ struct alignas(32) ncclIbNetCommBase {
   // statistics about the comm
   struct ncclIbStats stats;
   struct ncclIbResiliency* resiliency;
+  uint64_t speedChangeCounter;
+  uint64_t totalSpeed;
+  uint8_t weights[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint64_t devSpeeds[NCCL_IB_MAX_DEVS_PER_NIC];
 };
 
+// Compute per-device LB weights (1-100); weight is never 0 since it is not considered a speed update but rather a port down.
+static inline void ncclIbComputeLbWeights(struct ncclIbNetCommBase* base) {
+  int ndevs = base->vProps.ndevs;
+  // totalSpeed can not be 0: devices with inactive ports (speed 0) are
+  // skipped at init, and speed-to-zero events are skipped in
+  // ncclIbUpdateDeviceSpeed (port-failover handles those).
+  uint8_t totalWeight = 0;
+  for (int d = 0; d < ndevs; d++) {
+    base->weights[d] = ncclParamIbEventBasedLb() ? (base->devSpeeds[d] * 100 / base->totalSpeed) : (100 / ndevs);
+    totalWeight += base->weights[d];
+  }
+  if (totalWeight < 100) {
+    base->weights[ndevs - 1] += (100 - totalWeight);
+  }
+}
+
 struct ncclIbNetCommDevBase* ncclIbGetNetCommDevBase(ncclIbNetCommBase* base, int devIndex);
+
+static inline void ncclIbComputeDevSpeeds(struct ncclIbNetCommBase* base) {
+  uint64_t totalSpeed = 0;
+  for (int d = 0; d < base->vProps.ndevs; d++) {
+    int ibDevN = ncclIbGetNetCommDevBase(base, d)->ibDevN;
+    int remDevIdx = base->qps[d].remDevIdx;
+    uint64_t localSpeed = COMPILER_ATOMIC_LOAD(&ncclIbDevs[ibDevN].currSpeed, std::memory_order_relaxed);
+    uint64_t remoteSpeed = (base->remDevs[remDevIdx].currSpeed > 0) ? base->remDevs[remDevIdx].currSpeed : localSpeed;
+    base->devSpeeds[d] = std::min(localSpeed, remoteSpeed);
+    totalSpeed += base->devSpeeds[d];
+  }
+  base->totalSpeed = totalSpeed;
+}
 
 // qpIndex is the index relative to a device.
 // For example, if a device has 2 QPs, qpIndex can be 0 or 1.
 static inline ncclResult_t ncclIbCommBaseGetQpByIndex(struct ncclIbNetCommBase* commBase, int devIndex, int qpIndex,
                                                       ncclIbQp** qp) {
-  assert(devIndex >= 0 && devIndex < commBase->vProps.ndevs);
+  if (devIndex < 0 || devIndex >= commBase->vProps.ndevs) {
+    WARN("NET/IB: Invalid device index %d, expected [0, %d)", devIndex, commBase->vProps.ndevs);
+    return ncclInternalError;
+  }
   *qp = commBase->activeQps[commBase->vProps.ndevs * qpIndex + devIndex];
   return ncclSuccess;
 }
@@ -376,10 +436,21 @@ static inline ncclResult_t ncclIbCommBaseGetQpByIndex(struct ncclIbNetCommBase* 
 // Each request is transferred over all devices, and depending on the
 // "splitDataOnQps" configuration parameter, a request may be transferred over
 // a single QP per device or on all QPs of each device.
-static inline int ncclIbCommBaseGetNqpsPerRequest(struct ncclIbNetCommBase* baseComm) {
-  assert(baseComm->nDataQps != -1);
-  assert(baseComm->nqps != -1);
-  return (baseComm->splitDataOnQps == 1) ? baseComm->nqps : baseComm->nDataQps;
+static inline ncclResult_t ncclIbCommBaseGetNqpsPerRequest(struct ncclIbNetCommBase* baseComm, int* nQps) {
+  if (nQps == NULL) {
+    WARN("NET/IB: nQps output parameter is NULL");
+    return ncclInternalError;
+  }
+  if (baseComm->nDataQps == -1) {
+    WARN("NET/IB: nDataQps is not initialized");
+    return ncclInternalError;
+  }
+  if (baseComm->nqps == -1) {
+    WARN("NET/IB: nqps is not initialized");
+    return ncclInternalError;
+  }
+  *nQps = (baseComm->splitDataOnQps == 1) ? baseComm->nqps : baseComm->nDataQps;
+  return ncclSuccess;
 }
 
 // The function selects the QP to be used for the request. The QP selected
@@ -392,10 +463,14 @@ static inline int ncclIbCommBaseGetNqpsPerRequest(struct ncclIbNetCommBase* base
 // outQpIndex is the index of the QP in the base::qps[] array.
 static inline ncclResult_t ncclIbCommBaseGetQpForRequest(struct ncclIbNetCommBase* baseComm, const uint64_t id,
                                                          const uint8_t qpIndex, ncclIbQp** outQp, int* outQpIndex) {
-  int nQps = ncclIbCommBaseGetNqpsPerRequest(baseComm);
+  int nQps = 0;
+  NCCLCHECK(ncclIbCommBaseGetNqpsPerRequest(baseComm, &nQps));
   *outQpIndex = (id * nQps + qpIndex) % baseComm->nqps;
   *outQp = baseComm->activeQps[*outQpIndex];
-  assert(*outQp != NULL);
+  if (*outQp == NULL) {
+    WARN("NET/IB: QP is NULL for request id %lu, QP index %d", id, *outQpIndex);
+    return ncclInternalError;
+  }
   return ncclSuccess;
 }
 
@@ -403,8 +478,14 @@ static inline ncclResult_t ncclIbCommBaseGetQpForRequest(struct ncclIbNetCommBas
 // index of the QP in the ncclIbNetCommBase::qps[] array.
 static inline ncclResult_t ncclIbCommBaseGetQpByQpNum(struct ncclIbNetCommBase* commBase, int devIndex, uint32_t qpNum,
                                                       ncclIbQp** qp, int* qpIndex) {
-  assert(devIndex >= 0 && devIndex < commBase->vProps.ndevs);
-  assert(qp != NULL);
+  if (devIndex < 0 || devIndex >= commBase->vProps.ndevs) {
+    WARN("NET/IB: Invalid device index %d, expected [0, %d)", devIndex, commBase->vProps.ndevs);
+    return ncclInternalError;
+  }
+  if (qp == NULL) {
+    WARN("NET/IB: QP output pointer is NULL");
+    return ncclInternalError;
+  }
   TRACE(NCCL_NET, "NET/IB: %s: Looking for QP num %u on devIndex %d among %d QPs", __func__, qpNum, devIndex,
         commBase->nqps / commBase->vProps.ndevs);
   for (int qpIndexInDev = 0; qpIndexInDev < (commBase->nqps / commBase->vProps.ndevs); qpIndexInDev++) {
@@ -451,6 +532,10 @@ struct ncclIbSendComm {
   struct ncclIbRemCompletionsRecords remCmplsRecords;
   int ar; // Use adaptive routing when all merged devices have it enabled
   uint64_t putSignalScratchpad;
+
+  struct ncclIbRemoteSpeedBuf remoteSpeedBuf;
+  struct ibv_mr* remoteSpeedMr;
+  uint64_t remoteSpeedCounter;
 };
 // The SendFifo needs to be 32-byte aligned and each element needs
 // to be a 32-byte multiple, so that an entry does not get split and
@@ -501,9 +586,11 @@ struct alignas(16) ncclIbRecvCommDev {
   // posts RDMA operations. The SGE is populated by the address of the memory
   // in which the CTS message formatted on the receiver is placed.
   struct ibv_sge sge;
+  struct ibv_mr* speedUpdateMr;
 };
 
 #define NCCL_IB_RECV_WR_ID_DUMMY UINT64_MAX
+#define NCCL_IB_SPEED_UPDATE_WR_ID (UINT64_MAX - 1)
 
 struct ncclIbRecvComm {
   struct ncclIbNetCommBase base;
@@ -521,10 +608,19 @@ struct ncclIbRecvComm {
   struct ncclIbRequestCompletionRecord cmplsRecords[NET_IB_MAX_REQUESTS];
   int gpuFlushHostMem;
   int flushEnabled;
+  int flushQpSl;
+  int flushQpTc;
+  bool flushQpsCreated;
   bool prepostReceiveWorkRequests;
   // To avoid allocation and memset on the data-path a single structure is used
   // and only the wr_id is updated before posting a receive work request.
   struct ibv_recv_wr ibRecvWorkRequest;
+
+  uint64_t remSpeedBufAddr;
+  struct ncclIbRemoteSpeedBuf speedUpdateBuf;
+  uint16_t lastSentSpeeds[NCCL_IB_MAX_DEVS_PER_NIC];
+  uint64_t lastSentCounter;
+  bool postedSpeedUpdate;
 };
 static_assert((offsetof(struct ncclIbRecvComm, remCtsFifo) % 32) == 0,
               "ncclIbRecvComm ctsFifo must be 32-byte aligned");
@@ -538,6 +634,28 @@ struct ncclIbListenComm {
   struct ncclSocket sock;
   struct ncclIbCommStage* stage;
 };
+
+static inline void ncclIbCheckSpeedChanges(struct ncclIbSendComm* sendComm, struct ncclIbNetCommBase* base) {
+  bool speedChanged = false;
+  // Local speed change detection
+  if (base->speedChangeCounter != COMPILER_ATOMIC_LOAD(&ncclIbSpeedChangeCounter, std::memory_order_acquire)) {
+    base->speedChangeCounter = COMPILER_ATOMIC_LOAD(&ncclIbSpeedChangeCounter, std::memory_order_acquire);
+    speedChanged = true;
+  }
+  // Remote speed change detection
+  if (sendComm->remoteSpeedCounter !=
+      COMPILER_ATOMIC_LOAD(&sendComm->remoteSpeedBuf.counter, std::memory_order_acquire)) {
+    sendComm->remoteSpeedCounter = COMPILER_ATOMIC_LOAD(&sendComm->remoteSpeedBuf.counter, std::memory_order_acquire);
+    for (int i = 0; i < base->nRemDevs; i++) {
+      base->remDevs[i].currSpeed = (uint64_t)sendComm->remoteSpeedBuf.speedGbps[i] * 1000;
+    }
+    speedChanged = true;
+  }
+  if (speedChanged) {
+    ncclIbComputeDevSpeeds(base);
+    ncclIbComputeLbWeights(base);
+  }
+}
 
 static ncclResult_t ncclIbStatsInit(struct ncclIbStats* stat) {
   COMPILER_ATOMIC_STORE(&stat->fatalErrorCount, 0, std::memory_order_relaxed);
@@ -569,6 +687,10 @@ ncclResult_t ncclIbDmaBufSupport(int dev);
 void ncclIbAddEvent(struct ncclIbRequest* req, int devIndex);
 ncclResult_t ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
                                int* gidIndex);
+ncclResult_t ncclIbGetPkeyIndex(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
+                                int* pkeyIndex);
+ncclResult_t ncclIbGidInfoQuery(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
+                                struct ncclIbGidInfo* gidInfo);
 ncclResult_t ncclIbGetRequest(struct ncclIbNetCommBase* base, struct ncclIbRequest** req);
 ncclResult_t ncclIbFreeRequest(struct ncclIbRequest* r);
 
@@ -600,6 +722,7 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
 ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int* tags, void** mhandles, void** phandles,
                          void** request);
 ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request);
+ncclResult_t ncclIbCreateFlushQp(struct ncclIbRecvComm* comm);
 ncclResult_t ncclIbTest(void* request, int* done, int* sizes);
 ncclResult_t ncclIbCloseSend(void* sendComm);
 ncclResult_t ncclIbCloseRecv(void* recvComm);
@@ -613,20 +736,35 @@ static inline void printIbWcStatusHint(int status) {
   switch (status) {
   case IBV_WC_LOC_PROT_ERR:
     INFO(NCCL_NET,
-         "HINT: In many cases this error occurs when ACS is enabled which would break GPU Direct RDMA protocol.");
-    INFO(NCCL_NET, "HINT: To confirm and fix the problem, you can set NCCL_NET_GDR_LEVEL=0 to disable ACS following "
-                   "vendor documentation.");
+         "HINT: In many cases this error indicates that ACS is enabled, which breaks the GPU Direct RDMA protocol.");
+    INFO(NCCL_NET, "HINT: To confirm, set NCCL_NET_GDR_LEVEL=0; if that resolves it, "
+                   "disable ACS following your vendor documentation.");
+    return;
   case IBV_WC_WR_FLUSH_ERR:
-    INFO(NCCL_NET, "HINT: In many cases this error occurs when NIC on the same instance cannot talk to each other.");
+    INFO(NCCL_NET, "HINT: In many cases this error indicates that NICs on the same node cannot talk to each other.");
+    INFO(NCCL_NET, "HINT: To confirm, use a lower level tool like ib_write_bw to communicate across NICs on the same "
+                   "node.");
+    return;
   case IBV_WC_RETRY_EXC_ERR:
-    INFO(NCCL_NET, "HINT: In many cases this error occurs when the NCCL_IB_TIMEOUT is set too short.");
-    INFO(NCCL_NET, "HINT: Default value is 20, which is ~30 seconds before error.");
-    INFO(NCCL_NET, "HINT: To confirm, try increasing the value of NCCL_IB_TIMEOUT and see if the error persists.");
-    INFO(NCCL_NET, "HINT: See https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-timeout for "
-                   "more information.");
+    INFO(NCCL_NET, "HINT: In many cases this error indicates that NCCL_IB_TIMEOUT is set too short (the default value "
+                   "is 20, which is ~30 seconds before timing out).");
+    INFO(NCCL_NET, "HINT: To confirm, increase NCCL_IB_TIMEOUT (see "
+                   "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-timeout).");
+    return;
   default:
     break;
   }
+}
+
+// GID Format
+// global:  |              64b  - subnet-prefix                |                 64b - EUI                          |
+// raw   :  | 10b fixed | 22b 0 | 16b FLID | 16b subnet-prefix |                 64b - EUI                          |
+static uint16_t ncclIbExtractLocalSubnetPrefix(uint64_t subnet_prefix) {
+  return (be64toh(subnet_prefix) & 0xffff);
+}
+
+static int ncclIbExtractFlid(union ibv_gid* gid) {
+  return ntohs(*((uint16_t*)((uintptr_t)(gid->raw) + 4)));
 }
 
 #endif

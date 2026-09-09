@@ -10,6 +10,8 @@
 
 #include "nccl_device/coop.h"
 #include "nccl_device/impl/barrier__funcs.h"
+#include "nccl_device/impl/cft__funcs.h"
+#include "nccl_device/impl/cft_barrier__funcs.h"
 #include "nccl_device/impl/comm__funcs.h"
 #include "nccl_device/impl/core__funcs.h"
 #include "nccl_device/impl/ll_a2a__funcs.h"

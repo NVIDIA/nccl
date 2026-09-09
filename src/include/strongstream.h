@@ -20,7 +20,7 @@
 struct ncclCudaContext;
 
 // Get a ncclCudaContext to track the currently active CUDA context.
-ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out);
+ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out, int launchOrderImplicit, uint64_t commHash);
 // Drop reference.
 void ncclCudaContextDrop(struct ncclCudaContext* cxt);
 
@@ -132,6 +132,8 @@ struct ncclCudaContext {
   struct ncclCudaContext* next;
   CUcontext hcontext;
   int refCount;
+  bool launchOrderImplicitEverEnabled;
+  bool launchOrderImplicitEverDisabled;
   struct ncclStrongStream launchOrder;
 };
 

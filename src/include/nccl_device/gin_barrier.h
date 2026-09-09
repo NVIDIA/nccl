@@ -20,7 +20,7 @@ NCCL_EXTERN_C __host__ ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t c
                                                                     ncclGinBarrierHandle_t* outHandle,
                                                                     ncclDevResourceRequirements_t* outReq);
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 // Bit-flag enum: Put and Get (and any future flags) are independent bits that compose via
 // bitwise OR.
 enum ncclGinFenceLevel : uint32_t {

@@ -23,8 +23,11 @@ static inline ncclResult_t ncclIbRecvCommGetQpForCts(struct ncclIbRecvComm* recv
   int devIndex = id % recvComm->base.vProps.ndevs;
   // CTS message is always posted the first QP on the device
   int qpIndex = 0;
-  ncclIbCommBaseGetQpByIndex(&recvComm->base, devIndex, qpIndex, qp);
-  assert(*qp != NULL);
+  NCCLCHECK(ncclIbCommBaseGetQpByIndex(&recvComm->base, devIndex, qpIndex, qp));
+  if (*qp == NULL) {
+    WARN("NET/IB: CTS QP is NULL for request id %u", id);
+    return ncclInternalError;
+  }
   return ncclSuccess;
 }
 

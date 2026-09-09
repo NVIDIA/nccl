@@ -46,13 +46,20 @@ set(DOCA_SOURCES
     ${DOCA_HOME}/src/doca_verbs_umem.cpp
     ${DOCA_HOME}/src/doca_verbs_srq.cpp
     ${DOCA_HOME}/src/doca_verbs_uar.cpp
+    ${DOCA_HOME}/src/doca_verbs_dev.cpp
     ${DOCA_HOME}/src/doca_gpunetio.cpp
     ${DOCA_HOME}/src/doca_gpunetio_log.cpp
     ${DOCA_HOME}/src/doca_gpunetio_high_level.cpp
-    ${DOCA_HOME}/src/doca_verbs_cuda_wrapper.cpp
+    ${DOCA_HOME}/src/doca_gpunetio_cuda_wrapper.cpp
     ${DOCA_HOME}/src/doca_verbs_mlx5dv_wrapper.cpp
     ${DOCA_HOME}/src/doca_verbs_ibv_wrapper.cpp
     ${DOCA_HOME}/src/doca_gpunetio_gdrcopy.cpp
+    ${DOCA_HOME}/src/doca_gpunetio_sdk_wrapper.cpp
+    ${DOCA_HOME}/src/doca_verbs_dev_sdk_wrapper.cpp
+    ${DOCA_HOME}/src/doca_verbs_umem_sdk_wrapper.cpp
+    ${DOCA_HOME}/src/doca_verbs_uar_sdk_wrapper.cpp
+    ${DOCA_HOME}/src/doca_verbs_cq_sdk_wrapper.cpp
+    ${DOCA_HOME}/src/doca_verbs_qp_sdk_wrapper.cpp
 )
 
 # Add DOCA sources to parent scope
@@ -61,5 +68,10 @@ set(DOCA_SOURCES ${DOCA_SOURCES} PARENT_SCOPE)
 # Add DOCA_HOME to parent scope
 set(DOCA_HOME ${DOCA_HOME} PARENT_SCOPE)
 
-# Add gin_host_gdaki.cc to TRANSPORT_SOURCES in parent scope
-set(TRANSPORT_SOURCES ${TRANSPORT_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/gin_host_gdaki.cc PARENT_SCOPE)
+# Add gin_host_gdaki.cc to TRANSPORT_SOURCES
+set(TRANSPORT_SOURCES ${TRANSPORT_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/gin_host_gdaki.cc)
+
+add_subdirectory(gpucontext)
+
+# Propagate TRANSPORT_SOURCES to parent scope
+set(TRANSPORT_SOURCES ${TRANSPORT_SOURCES} PARENT_SCOPE)

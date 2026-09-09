@@ -34,23 +34,20 @@ classifiers = [
 dependencies = [
     "packaging",
     "numpy",
-    "cuda.core~=1.0",
+    "cuda-core~=1.0",
     "cuda-pathfinder>=1.5.4,<2.0.0",
-    # typing_extensions provides @deprecated (PEP 702) below Python 3.13, and
-    # dataclass_transform below 3.11 (for nccl.ep's @binding_dataclass).
-    'typing_extensions; python_version < "3.13"',
 ]
 
 [project.optional-dependencies]
 cu12 = [
     "nvidia-nccl-cu12",
     "cuda-bindings~=12.0",
-    "nvidia-cutlass-dsl>=4.5.2,<5.0",
+    "nvidia-cutlass-dsl~=4.6",
 ]
 cu13 = [
     "nvidia-nccl-cu13",
     "cuda-bindings~=13.0",
-    "nvidia-cutlass-dsl[cu13]>=4.5.2,<5.0",
+    "nvidia-cutlass-dsl[cu13]~=4.6",
 ]
 
 [dependency-groups]
@@ -81,19 +78,17 @@ include-package-data = false
 
 [tool.setuptools.packages.find]
 include = ["nccl*"]
+# nccl/ is a PEP 420 namespace so NCCL extension distributions (e.g. NCCL EP)
+# can add their own nccl.<ext> subpackage. Required: nccl/ has no __init__.py,
+# so without it no Python module is packaged at all. Only nccl/ is a namespace;
+# nccl/bindings/ and nccl/core/ stay owned by this distribution.
+namespaces = true
 
 [tool.setuptools.package-data]
-"nccl.bindings" = ["cynccl.pxd", "cynccl_ep.pxd"]
-"nccl.ep" = [
-    "lib/libnccl_ep.so",
-    "include/*.h",
-    "include/nccl_ep/*.h",
-    "include/nccl_ep/*.hpp",
-    "include/nccl_ep/device/*.cuh",
-]
+"nccl.bindings" = ["cynccl.pxd"]
 
 [tool.setuptools.dynamic]
-version = { attr = "nccl._version.__version__" }
+version = { attr = "nccl.core._version.__version__" }
 
 [tool.ruff]
 line-length = 100

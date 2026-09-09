@@ -10,7 +10,26 @@
 #include "alloc.h"
 #include "checks.h"
 #include "comm.h"
+#include "param.h"
+#include "dev_runtime.h"
 #include "rma/rma.h"
+
+NCCL_PARAM(RMADisable, "RMA_DISABLE", 0);
+
+bool ncclRmaProxyEnabled(struct ncclComm* comm) {
+  return !ncclDevrIsOneLsaTeam(comm) && comm->config.numRmaCtx > 0 && comm->globalRmaProxySupport &&
+         !ncclParamRMADisable();
+}
+
+bool ncclRmaInitialized(struct ncclComm* comm) {
+  // Host RMA not supported -> not initialized.
+  if (!comm->hostRmaSupport) return false;
+  // CE is set up for every RMA-capable comm at the first window registration -> not initialized.
+  if (!comm->rmaState.rmaCeState.initialized) return false;
+  // The proxy must be connected only when ncclRmaProxyEnabled -> not initialized.
+  if (ncclRmaProxyEnabled(comm) && !comm->rmaState.rmaProxyState.connected) return false;
+  return true;
+}
 
 static bool isLsaAccessible(struct ncclComm* comm, int rank) {
   for (int i = 0; i < comm->devrState.lsaSize; i++) {
@@ -115,22 +134,6 @@ static inline bool isRmaPutOrSignal(ncclFunc_t func) {
   return (func == ncclFuncPutSignal || func == ncclFuncSignal);
 }
 
-// Check if two RMA tasks can be batched together
-static inline bool canBatchRmaTasks(struct ncclTaskRma* task1, struct ncclTaskRma* task2) {
-  // Check if the tasks are in the same context
-  if (task1->ctx != task2->ctx) return false;
-
-  // Check if the tasks are the same function
-  if (task1->func == task2->func) return true;
-
-  // Put/Signal tasks can be batched together
-  if (isRmaPutOrSignal(task1->func) && isRmaPutOrSignal(task2->func)) {
-    return true;
-  }
-
-  return false;
-}
-
 // Schedule comm->planner RMA tasks to the plan and split the RMA tasks into CE and Proxy tasks
 // Then seek opportunities to batch tasks, batching checked for consecutive operations targeting the same context
 // - ncclFuncWaitSignal does not perform further batching as the API can already batch waitSignal from multiple peers
@@ -139,6 +142,7 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
   ncclResult_t ret = ncclSuccess;
   int* peersProxy = nullptr;
   int* nsignalsProxy = nullptr;
+  int* signalIdxsProxy = nullptr;
   struct ncclKernelPlanner* planner = &comm->planner;
 
   // Find the first non-empty context queue
@@ -161,7 +165,6 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
   // Initialize plan
   plan->isRma = true;
   plan->rmaArgs = ncclMemoryStackAlloc<struct ncclRmaArgs>(&comm->memScoped);
-  plan->rmaArgs->ctx = ctx;
   plan->rmaArgs->func = firstTask->func;
   plan->rmaArgs->nRmaTasks = 0;
   plan->rmaArgs->nRmaTasksProxy = 0;
@@ -172,8 +175,10 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
     // Allocate temporary arrays to hold peers and nsignals for both proxy and CE paths
     int* peersCe = ncclMemoryStackAlloc<int>(&comm->memScoped, firstTask->npeers);
     int* nsignalsCe = ncclMemoryStackAlloc<int>(&comm->memScoped, firstTask->npeers);
+    int* signalIdxsCe = ncclMemoryStackAlloc<int>(&comm->memScoped, firstTask->npeers);
     NCCLCHECKGOTO(ncclCalloc(&peersProxy, firstTask->npeers), ret, fail);
     NCCLCHECKGOTO(ncclCalloc(&nsignalsProxy, firstTask->npeers), ret, fail);
+    NCCLCHECKGOTO(ncclCalloc(&signalIdxsProxy, firstTask->npeers), ret, fail);
 
     int npeersCe = 0;
     int npeersProxy = 0;
@@ -187,11 +192,13 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
         // Add to CE list
         peersCe[npeersCe] = peerRank;
         nsignalsCe[npeersCe] = firstTask->nsignals[i];
+        signalIdxsCe[npeersCe] = firstTask->signalIdxs[i];
         npeersCe++;
       } else {
         // Add to Proxy list
         peersProxy[npeersProxy] = peerRank;
         nsignalsProxy[npeersProxy] = firstTask->nsignals[i];
+        signalIdxsProxy[npeersProxy] = firstTask->signalIdxs[i];
         npeersProxy++;
       }
     }
@@ -203,8 +210,10 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
       waitSignalTaskCe->func = ncclFuncWaitSignal;
       waitSignalTaskCe->ctx = firstTask->ctx;
       waitSignalTaskCe->signalMode = firstTask->signalMode;
+      waitSignalTaskCe->signalIdx = 0; // This is irrelevant for waitSignal operations
       waitSignalTaskCe->peers = peersCe;
       waitSignalTaskCe->nsignals = nsignalsCe;
+      waitSignalTaskCe->signalIdxs = signalIdxsCe;
       waitSignalTaskCe->npeers = npeersCe;
       ncclIntruQueueEnqueue(&plan->rmaTaskQueueCe, waitSignalTaskCe);
       plan->rmaArgs->nRmaTasksCe = 1;
@@ -219,8 +228,10 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
       waitSignalTaskProxy->func = ncclFuncWaitSignal;
       waitSignalTaskProxy->ctx = firstTask->ctx;
       waitSignalTaskProxy->signalMode = firstTask->signalMode;
+      waitSignalTaskProxy->signalIdx = 0; // This is irrelevant for waitSignal operations
       waitSignalTaskProxy->peers = peersProxy;
       waitSignalTaskProxy->nsignals = nsignalsProxy;
+      waitSignalTaskProxy->signalIdxs = signalIdxsProxy;
       waitSignalTaskProxy->npeers = npeersProxy;
       ncclIntruQueueEnqueue(&plan->rmaTaskQueueProxy, waitSignalTaskProxy);
       plan->rmaArgs->nRmaTasksProxy = 1;
@@ -229,6 +240,8 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
       peersProxy = nullptr;
       free(nsignalsProxy);
       nsignalsProxy = nullptr;
+      free(signalIdxsProxy);
+      signalIdxsProxy = nullptr;
       plan->rmaArgs->nRmaTasksProxy = 0;
     }
 
@@ -254,28 +267,31 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
 
     planner->nTasksRma -= 1;
 
-    // Batch consecutive tasks from the same context that match operation category
-    while (!ncclIntruQueueEmpty(ctxQueue)) {
-      struct ncclTaskRma* task = ncclIntruQueueHead(ctxQueue);
-
-      // Check if this task can be batched with the first task
-      if (!canBatchRmaTasks(firstTask, task)) {
-        break;
+    // Pull put/signal tasks from every context into this single plan so one launch
+    // covers all contexts: the proxy fires all async starts before any blocking done,
+    // and the CE path batches all contexts' copies/signals into one launch (each launch
+    // selects the per-task context) rather than one plan per context. Each context's
+    // queue is drained in order, only up to its first WaitSignal task, so per-context
+    // FIFO is preserved and WaitSignal stays one-context-per-plan. firstTask is a
+    // put/signal here, so a task is batchable exactly when it is also a put/signal.
+    // firstTask's own context (ctx) was partially consumed above; its residual run is
+    // drained naturally below.
+    for (int c = 0; c < comm->config.numRmaCtx; c++) {
+      struct ncclIntruQueue<struct ncclTaskRma, &ncclTaskRma::next>* q = &planner->rmaTaskQueues[c];
+      while (!ncclIntruQueueEmpty(q)) {
+        struct ncclTaskRma* task = ncclIntruQueueHead(q);
+        if (!isRmaPutOrSignal(task->func)) break;        // stop at WaitSignal
+        ncclIntruQueueDequeue(q);
+        if (isLsaAccessible(comm, task->peer)) {
+          ncclIntruQueueEnqueue(&plan->rmaTaskQueueCe, task);
+          plan->rmaArgs->nRmaTasksCe++;
+        } else {
+          ncclIntruQueueEnqueue(&plan->rmaTaskQueueProxy, task);
+          plan->rmaArgs->nRmaTasksProxy++;
+        }
+        plan->rmaArgs->nRmaTasks++;
+        planner->nTasksRma -= 1;
       }
-
-      bool lsaAccessible = isLsaAccessible(comm, task->peer);
-
-      // If the task can be batched, remove from context queue and add to plan
-      ncclIntruQueueDequeue(ctxQueue);
-      if (lsaAccessible) {
-        ncclIntruQueueEnqueue(&plan->rmaTaskQueueCe, task);
-        plan->rmaArgs->nRmaTasksCe++;
-      } else {
-        ncclIntruQueueEnqueue(&plan->rmaTaskQueueProxy, task);
-        plan->rmaArgs->nRmaTasksProxy++;
-      }
-      plan->rmaArgs->nRmaTasks++;
-      planner->nTasksRma -= 1;
     }
   }
 
@@ -288,5 +304,6 @@ exit:
 fail:
   free(peersProxy);
   free(nsignalsProxy);
+  free(signalIdxsProxy);
   goto exit;
 }

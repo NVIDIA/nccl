@@ -29,10 +29,10 @@
 
 // Only provide shims for CUDA versions that need them
 #if !defined(__CUDACC_VER_MAJOR__) || (__CUDACC_VER_MAJOR__ < 13) || \
-  ((__CUDACC_VER_MAJOR__ == 13) &&                                   \
-   (!defined(__CUDACC_VER_MINOR__) || (__CUDACC_VER_MINOR__ < 1)))
+    ((__CUDACC_VER_MAJOR__ == 13) && (!defined(__CUDACC_VER_MINOR__) || (__CUDACC_VER_MINOR__ < 1)))
 
-namespace cuda { namespace ptx {
+namespace cuda {
+namespace ptx {
 
   // ============================================================================
   // elect_sync - Warp Leader Election
@@ -45,19 +45,17 @@ namespace cuda { namespace ptx {
   //
   // PTX instruction: elect.sync (PTX ISA 7.1+)
   // ============================================================================
-  __device__ __forceinline__ bool elect_sync(unsigned mask) {
+__device__ __forceinline__ bool elect_sync(unsigned mask) {
     int result;
-    asm volatile(
-        "{\n\t"
-        "  .reg .pred p;\n\t"
-        "  elect.sync _|p, %1;\n\t"  // Sets predicate p=1 for elected thread
-        "  selp.b32 %0, 1, 0, p;\n\t" // Convert predicate to integer
-        "}\n\t"
-        : "=r"(result)
-        : "r"(mask)
-    );
+    asm volatile("{\n\t"
+                 "  .reg .pred p;\n\t"
+                 "  elect.sync _|p, %1;\n\t"  // Sets predicate p=1 for elected thread
+                 "  selp.b32 %0, 1, 0, p;\n\t" // Convert predicate to integer
+                 "}\n\t"
+                 : "=r"(result)
+                 : "r"(mask));
     return result != 0;
-  }
+}
 
   // ============================================================================
   // cp_async_bulk - Async Bulk Copy (shared→global overload)
@@ -77,23 +75,24 @@ namespace cuda { namespace ptx {
   //
   // PTX instruction: cp.async.bulk (PTX ISA 8.1+, SM_90+)
   // ============================================================================
-  __device__ __forceinline__ void cp_async_bulk(
-      space_shared_t, space_global_t,
-      void* __dst, const void* __src,
-      const uint32_t& __size, uint64_t* __mbar)
-  {
-    asm volatile(
-        "cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes"
-        " [%0], [%1], %2, [%3];"
-        :
-        : "r"(static_cast<unsigned>(__cvta_generic_to_shared(__dst))),
-          "l"(__src),
-          "r"(__size),
-          "r"(static_cast<unsigned>(__cvta_generic_to_shared(__mbar)))
-        : "memory"
-    );
-  }
+__device__ __forceinline__ void cp_async_bulk(
+    space_shared_t,
+    space_global_t,
+    void* __dst,
+    const void* __src,
+    const uint32_t& __size,
+    uint64_t* __mbar) {
+    asm volatile("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes"
+                 " [%0], [%1], %2, [%3];"
+                 :
+                 : "r"(static_cast<unsigned>(__cvta_generic_to_shared(__dst))),
+                   "l"(__src),
+                   "r"(__size),
+                   "r"(static_cast<unsigned>(__cvta_generic_to_shared(__mbar)))
+                 : "memory");
+}
 
-}} // namespace cuda::ptx
+} // namespace ptx
+} // namespace cuda
 
 #endif // CUDA < 13

@@ -37,6 +37,13 @@ struct JitKernelVariant {
     int block_dim = 0;
     int dynamic_smem_bytes = 0;
     int min_sm = 90;
+    // Optional launch attributes (default = off).
+    // Cooperative launch enables cg::this_grid().sync() inside the kernel.
+    // Cluster dim > 1 enables distributed shared memory across the cluster.
+    bool cooperative = false;
+    int cluster_dim_x = 1;
+    int cluster_dim_y = 1;
+    int cluster_dim_z = 1;
 };
 
 JitKernelStatus launch_jit_kernel(
@@ -46,11 +53,8 @@ JitKernelStatus launch_jit_kernel(
     cudaStream_t stream,
     std::string* error);
 
-JitKernelStatus launch_jit_kernel(
-    const JitKernelVariant& variant,
-    void* kernel_param,
-    cudaStream_t stream,
-    std::string* error);
+JitKernelStatus
+launch_jit_kernel(const JitKernelVariant& variant, void* kernel_param, cudaStream_t stream, std::string* error);
 
 const char* jit_kernel_status_name(JitKernelStatus status);
 

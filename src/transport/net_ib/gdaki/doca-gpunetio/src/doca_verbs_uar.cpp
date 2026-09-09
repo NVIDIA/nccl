@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <mutex>
 #include <time.h>
+#include <string.h>
 
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
@@ -41,6 +42,7 @@
 #include "doca_internal.hpp"
 #include "doca_verbs_device_attr.hpp"
 #include "doca_verbs_uar.hpp"
+#include "doca_verbs_uar_sdk_wrapper.h"
 
 /*********************************************************************************************************************
  * Helper functions
@@ -79,8 +81,8 @@ doca_error_t convert_doca_verbs_uar_type_to_mlx5_uar_type(doca_verbs_uar_allocat
  * doca_verbs_uar Member Functions
  *********************************************************************************************************************/
 
-doca_verbs_uar::doca_verbs_uar(struct ibv_context *context,
-                               enum doca_verbs_uar_allocation_type allocation_type)
+doca_verbs_uar_open::doca_verbs_uar_open(struct ibv_context *context,
+                                         enum doca_verbs_uar_allocation_type allocation_type)
     : m_ibv_ctx(context), m_allocation_type(allocation_type) {
     try {
         create();
@@ -91,11 +93,11 @@ doca_verbs_uar::doca_verbs_uar(struct ibv_context *context,
     }
 }
 
-doca_verbs_uar::~doca_verbs_uar() { static_cast<void>(destroy()); }
+doca_verbs_uar_open::~doca_verbs_uar_open() { static_cast<void>(destroy()); }
 
 static const off64_t DOCA_VERBS_UAR_DBR_LESS_DB_OFFSET = 0x600LLU;
 
-void doca_verbs_uar::create() {
+void doca_verbs_uar_open::create() {
     uint32_t mlx5_uar_type{};
     auto status = convert_doca_verbs_uar_type_to_mlx5_uar_type(m_allocation_type, mlx5_uar_type);
     if (status != DOCA_SUCCESS) {
@@ -103,27 +105,27 @@ void doca_verbs_uar::create() {
         throw DOCA_ERROR_DRIVER;
     }
 
-    auto uar_status =
-        doca_verbs_wrapper_mlx5dv_devx_alloc_uar(m_ibv_ctx, mlx5_uar_type, &m_uar_obj);
+    auto uar_status = doca_verbs_wrapper_mlx5dv_devx_alloc_uar(m_ibv_ctx, mlx5_uar_type, &m_uar);
     if (uar_status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to alloc UAR");
         throw uar_status;
     }
 
-    m_uar_id = m_uar_obj->page_id;
-    m_reg_addr = m_uar_obj->reg_addr;
-    m_dbr_less_addr = reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(m_uar_obj->base_addr) +
+    m_uar_id = m_uar->page_id;
+    m_reg_addr = m_uar->reg_addr;
+    m_base_addr = m_uar->base_addr;
+    m_dbr_less_addr = reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(m_uar->base_addr) +
                                                DOCA_VERBS_UAR_DBR_LESS_DB_OFFSET);
 }
 
-doca_error_t doca_verbs_uar::destroy() noexcept {
-    if (m_uar_obj) {
-        auto free_uar_status = doca_verbs_wrapper_mlx5dv_devx_free_uar(m_uar_obj);
+doca_error_t doca_verbs_uar_open::destroy() noexcept {
+    if (m_uar) {
+        auto free_uar_status = doca_verbs_wrapper_mlx5dv_devx_free_uar(m_uar);
         if (free_uar_status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to free UAR");
             return free_uar_status;
         }
-        m_uar_obj = nullptr;
+        m_uar = nullptr;
     }
 
     return DOCA_SUCCESS;
@@ -133,85 +135,193 @@ doca_error_t doca_verbs_uar::destroy() noexcept {
  * Public API functions
  *********************************************************************************************************************/
 
-doca_error_t doca_verbs_uar_create(struct ibv_context *context,
+doca_error_t doca_verbs_uar_create(doca_dev_t *net_dev,
                                    enum doca_verbs_uar_allocation_type allocation_type,
-                                   struct doca_verbs_uar **uar_obj) {
-    if (context == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create uar: parameter context=NULL");
+                                   doca_verbs_uar_t **uar) {
+    doca_verbs_uar_t *uar_ = nullptr;
+
+    if (uar == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create uar: parameter uar=NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
-    if (uar_obj == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create uar: parameter uar_obj=NULL");
+
+    if (net_dev == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create uar: parameter net_dev=NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
+
+    uar_ = (doca_verbs_uar_t *)calloc(1, sizeof(doca_verbs_uar_t));
+    if (uar_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_verbs_uar_t", __func__);
+        return DOCA_ERROR_NO_MEMORY;
+    }
+
+    /* Valid for both SDK and open */
+    uar_->allocation_type = allocation_type;
+
+    /* Try with DOCA SDK first */
+    auto err = doca_verbs_sdk_wrapper_uar_create(net_dev, allocation_type, &(uar_->sdk));
+    if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Use DOCA Verbs UAR SDK", __func__);
+        uar_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
+        (*uar) = uar_;
+        return DOCA_SUCCESS;
+    } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+        goto exit_error;
+    }
+
+    /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
+     * version */
+    DOCA_LOG(LOG_INFO, "Use DOCA Verbs UAR open", __func__);
+
+    uar_->type = DOCA_VERBS_SDK_LIB_TYPE_OPEN;
 
     try {
-        *uar_obj = new doca_verbs_uar(context, allocation_type);
-        DOCA_LOG(LOG_INFO, "doca_verbs_uar=%p was created", *uar_obj);
+        uar_->open = new doca_verbs_uar_open(net_dev->open->get_ctx(), allocation_type);
+        DOCA_LOG(LOG_INFO, "doca_verbs_uar_open=%p was created", uar_);
+        (*uar) = uar_;
         return DOCA_SUCCESS;
-    } catch (doca_error_t err) {
-        return err;
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "doca_verbs_uar_open allocation failed");
+        goto exit_error;
     }
+
+exit_error:
+    if (uar_ != nullptr) {
+        if (uar_->open) delete uar_->open;
+        free(uar_);
+    }
+
+    return DOCA_ERROR_INITIALIZATION;
 }
 
-doca_error_t doca_verbs_uar_destroy(struct doca_verbs_uar *uar_obj) {
-    if (uar_obj == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to destroy uar: parameter uar_obj is NULL");
+doca_error_t doca_verbs_uar_destroy(doca_verbs_uar_t *uar) {
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (uar == nullptr) {
+        DOCA_LOG(LOG_INFO, "Failed to destroy uar: parameter uar is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    auto status = uar_obj->destroy();
-    if (status != DOCA_SUCCESS) {
-        DOCA_LOG(LOG_ERR, "Failed to destroy uar.");
-        return status;
+    if (uar->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_uar_destroy(uar->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            uar->sdk = nullptr;
+            goto exit;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            status = DOCA_ERROR_UNEXPECTED;
+            goto exit;
+        }
     }
 
-    delete (uar_obj);
-    return DOCA_SUCCESS;
+    if (uar->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto exit;
+    }
+
+    status = uar->open->destroy();
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Failed to destroy uar.");
+        goto exit;
+    }
+
+exit:
+    if (uar->open) delete uar->open;
+    memset(uar, 0, sizeof(doca_verbs_uar_t));
+    free(uar);
+
+    return status;
 }
 
-doca_error_t doca_verbs_uar_id_get(const struct doca_verbs_uar *uar_obj, uint32_t *uar_id) {
-    if (uar_obj == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get uar id: parameter uar_obj is NULL");
+doca_error_t doca_verbs_uar_id_get(const doca_verbs_uar_t *uar, uint32_t *uar_id) {
+    if (uar == nullptr) {
+        DOCA_LOG(LOG_INFO, "Failed to get uar id: parameter uar is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
     if (uar_id == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get uar id: parameter uar_id is NULL");
+        DOCA_LOG(LOG_INFO, "Failed to get uar id: parameter uar_id is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *uar_id = uar_obj->get_uar_id();
+    if (uar->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_uar_get_id(uar->sdk, uar_id);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (uar->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs UAR open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *uar_id = uar->open->get_uar_id();
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_uar_reg_addr_get(const struct doca_verbs_uar *uar_obj, void **reg_addr) {
-    if (uar_obj == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get uar reg_addr: parameter uar_obj is NULL");
+doca_error_t doca_verbs_uar_reg_addr_get(const doca_verbs_uar_t *uar, void **reg_addr) {
+    if (uar == nullptr) {
+        DOCA_LOG(LOG_INFO, "Failed to get uar address: parameter uar is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
     if (reg_addr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get uar reg_addr: parameter reg_addr is NULL");
+        DOCA_LOG(LOG_INFO, "Failed to get uar address: parameter reg_addr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *reg_addr = uar_obj->get_reg_addr();
+    if (uar->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_uar_reg_addr_get(uar->sdk, reg_addr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (uar->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs UAR open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *reg_addr = uar->open->get_reg_addr();
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_uar_dbr_less_addr_get(const struct doca_verbs_uar *uar_obj,
-                                              void **reg_addr) {
-    if (uar_obj == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get uar reg_addr: parameter uar_obj is NULL");
+doca_error_t doca_verbs_uar_dbr_less_addr_get(const doca_verbs_uar_t *uar, void **reg_addr) {
+    if (uar == nullptr) {
+        DOCA_LOG(LOG_INFO, "Failed to get uar address: parameter uar is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
     if (reg_addr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get uar reg_addr: parameter reg_addr is NULL");
+        DOCA_LOG(LOG_INFO, "Failed to get uar address: parameter reg_addr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *reg_addr = uar_obj->get_dbr_less_addr();
+    if (uar->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_uar_reg_addr_get(uar->sdk, reg_addr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (uar->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs UAR open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *reg_addr = uar->open->get_dbr_less_addr();
 
     return DOCA_SUCCESS;
 }

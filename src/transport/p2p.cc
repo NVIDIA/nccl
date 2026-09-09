@@ -13,7 +13,6 @@
 #include "p2p.h"
 #include "transport.h"
 #include "mem_manager.h"
-#include <assert.h>
 #include "shm.h"
 #include "register_inline.h"
 
@@ -133,19 +132,23 @@ ncclResult_t p2pCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph
 
   // Check topology / p2p level.
   int intermediateRank;
-  NCCLCHECK(ncclTopoCheckP2p(comm, comm->topo, info1->rank, info2->rank, ret, NULL, &intermediateRank, NULL));
+  int isCrossClique;
+  NCCLCHECK(ncclTopoCheckP2p(comm, comm->topo, info1->rank, info2->rank, ret, NULL, &intermediateRank, NULL,
+                             &isCrossClique));
   if (*ret == 0) return ncclSuccess;
   if (intermediateRank != -1) {
     if (useMemcpy) *ret = 0;
     return ncclSuccess;
   }
 
-  // Check if NET would work better
-  int useNet = 0;
-  NCCLCHECK(ncclTopoCheckNet(comm->topo, info1->rank, info2->rank, &useNet));
-  if (useNet) {
-    *ret = 0;
-    return ncclSuccess;
+  // Cross-clique MNNVL is preferred because its peer is absent from this rank's topology.
+  if (!isCrossClique) {
+    int useNet = 0;
+    NCCLCHECK(ncclTopoCheckNet(comm->topo, info1->rank, info2->rank, &useNet));
+    if (useNet) {
+      *ret = 0;
+      return ncclSuccess;
+    }
   }
 
   if (info1->hostHash != comm->peerInfo[comm->rank].hostHash || info1->hostHash != info2->hostHash) {
@@ -912,15 +915,16 @@ ncclResult_t ipcHandleMultiSegmentRegistration(CUdeviceptr userBuff, size_t user
   int* expFds = nullptr;
   int* impFds = nullptr;
   int capacity = 2;
+  *ipcInfos = nullptr;
   // Minimum of two segments in this codepath
   NCCLCHECK(ncclCalloc(ipcInfos, capacity));
   if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
-    NCCLCHECK(ncclCalloc(&expFds, capacity));
+    NCCLCHECKGOTO(ncclCalloc(&expFds, capacity), ret, fail);
     for (int idx = 0; idx < capacity; idx++) {
       expFds[idx] = -1;
     }
   }
-  NCCLCHECK(ncclCalloc(&segmentHandles, capacity));
+  NCCLCHECKGOTO(ncclCalloc(&segmentHandles, capacity), ret, fail);
 
   while (mappedPtrEnd < userBuffEnd) {
     int segment = *numSegments;
@@ -1026,6 +1030,11 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
   *offsetOut = 0;
   *peerRmtAddrsOut = NULL;
   if (isLegacyIpc) *isLegacyIpc = false;
+  if (regRecord && type != NCCL_IPC_COLLECTIVE && nPeers != 1) {
+    WARN("P2P IPC registration expected 1 peer, got %d", nPeers);
+    ret = ncclInternalError;
+    goto fail;
+  }
   if (regRecord) {
     // buffer was registered by users, we need to start to register or reuse it
     int peerIndex = -1;
@@ -1153,7 +1162,11 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
         }
         if (rmtRegAddr) {
           NCCLCHECKGOTO(ncclCalloc(&newInfo, 1), ret, fail);
-          assert(regRecord->ipcInfos[peerIndex] == NULL);
+          if (regRecord->ipcInfos[peerIndex] != NULL) {
+            WARN("IPC registration already exists for peerRank %d peerIndex %d", peerRank, peerIndex);
+            ret = ncclInternalError;
+            goto fail;
+          }
           regRecord->state |= IPC_REG_COMPLETE;
           newInfo->peerRank = peerRank;
           newInfo->baseAddr = baseAddr;
@@ -1207,7 +1220,6 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
         // for collective, registered remote buffers are copied to dev memory for future reference
         peerRmtAddrs = regRecord->regIpcAddrs.devPeerRmtAddrs;
       } else {
-        assert(nPeers == 1);
         // p2p always returns remote addr here since remote buffer addr is passed in ncclDevWorkP2p struct
         peerRmtAddrs = (uintptr_t*)regRecord->regIpcAddrs.hostPeerRmtAddrs[peerIndex];
       }
@@ -1331,7 +1343,14 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
   struct p2pIpcExpInfo* ipcExpInfo = (struct p2pIpcExpInfo*)reqBuff;
   void* regAddr = NULL;
   ncclResult_t ret = ncclSuccess;
-  assert(reqSize % sizeof(struct p2pIpcExpInfo) == 0);
+  if (reqSize % sizeof(struct p2pIpcExpInfo) != 0) {
+    WARN("Invalid P2P IPC register request size %d, expected multiple of %zu", reqSize, sizeof(struct p2pIpcExpInfo));
+    return ncclInternalError;
+  }
+  if (respSize != sizeof(void*)) {
+    WARN("Invalid P2P IPC register response size %d, expected %zu", respSize, sizeof(void*));
+    return ncclInternalError;
+  }
   int numSegments = reqSize / sizeof(struct p2pIpcExpInfo);
   bool* mapped = nullptr;
   bool* imported = nullptr;
@@ -1343,7 +1362,6 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
   for (int segment = 0; segment < numSegments; segment++) {
     totalSize += ipcExpInfo[segment].size;
   }
-  assert(sizeof(void*) == respSize);
 
   INFO(NCCL_REG,
        "Proxy rank %d register reqBuff %p size %zu offset %ld legacyIpcCap %d sameProcess %d, totalSize : %zu",
@@ -1445,7 +1463,10 @@ static ncclResult_t p2pProxyDeregister(struct ncclProxyConnection* connection, s
                                        void* reqBuff, int reqSize, int* done) {
   ncclResult_t ret = ncclSuccess;
   struct ncclIpcImpInfo* ipcInfo = (struct ncclIpcImpInfo*)reqBuff;
-  assert(sizeof(struct ncclIpcImpInfo) == reqSize);
+  if (reqSize != sizeof(struct ncclIpcImpInfo)) {
+    WARN("Invalid P2P IPC deregister request size %d, expected %zu", reqSize, sizeof(struct ncclIpcImpInfo));
+    return ncclInternalError;
+  }
 
   struct proxyMemHandle memHandle = {};
   struct proxyMemHandle* deletedHandle;

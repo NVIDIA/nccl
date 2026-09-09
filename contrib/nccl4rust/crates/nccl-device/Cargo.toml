@@ -1,0 +1,20 @@
+[package]
+name = "nccl-device"
+description = "Rust-style CUDA-Oxide wrappers for the NCCL device API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+exclude = [".oxide-artifacts/", "*.cubin", "*.ll", "*.ltoir", "*.ptx"]
+
+[features]
+default = []
+cuda-oxide = ["nccl-device-sys/cuda-oxide"]
+
+[dependencies]
+nccl-device-sys = { workspace = true }
+
+[lints]
+workspace = true

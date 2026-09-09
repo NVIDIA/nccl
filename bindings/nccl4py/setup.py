@@ -4,23 +4,10 @@
 # See LICENSE.txt for more license information
 
 import os
-import sys
 from pathlib import Path
 
 from Cython.Build import cythonize
-from setuptools import setup, Extension
-
-
-_NCCL_EP_SO = Path(__file__).parent / "nccl" / "ep" / "lib" / "libnccl_ep.so"
-if not _NCCL_EP_SO.exists():
-    print(
-        f"WARNING: {_NCCL_EP_SO} not found. The built nccl4py wheel will not "
-        "include the NCCL EP shared library, and `import nccl.ep` will fail at "
-        "runtime. Drop a CUDA 13 build of libnccl_ep.so at that path before "
-        "building the wheel.",
-        file=sys.stderr,
-    )
-
+from setuptools import Extension, setup
 
 # Check CUDA_HOME is set and is a valid directory
 CUDA_HOME = os.environ.get("CUDA_HOME")
@@ -33,7 +20,7 @@ if not cuda_path.exists() or not cuda_path.is_dir():
 CUDA_INC = str(cuda_path / "include")
 
 PACKAGE = "nccl.bindings"
-LIBNAMES = ["nccl", "nccl_ep"]
+LIBNAMES = ["nccl"]
 
 
 def _ext(module: str, source: str) -> Extension:

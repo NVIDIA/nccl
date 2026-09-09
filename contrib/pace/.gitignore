@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+*.so
+*.o
+
+# Runtime artifacts
+*.h5
+*.json
+kineto_*.json
+ag_*.h5
+rs_*.h5
+sg_*.h5

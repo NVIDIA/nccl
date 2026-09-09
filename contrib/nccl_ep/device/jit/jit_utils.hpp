@@ -18,6 +18,9 @@ std::string env_value(const char* name);
 bool env_flag_enabled(const char* name, bool default_value = false);
 void jit_log(std::string_view message);
 
+// Returns true the first time each distinct `key` is seen. Thread-safe.
+bool announce_once(const std::string& key);
+
 class ScopedFileLock {
 public:
     ScopedFileLock() = default;

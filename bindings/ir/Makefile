@@ -19,6 +19,7 @@ UNOPTIMIZED_BC := $(OBJDIR)/libnccl_device.bc.unoptimized
 OPTIMIZED_BC := $(OBJDIR)/libnccl_device.bc.optimized
 LLVM_IR_FILE := $(OBJDIR)/libnccl_device.ll
 FINAL_BC := $(LIBDIR)/libnccl_device.bc
+FINAL_LTO_IR := $(LIBDIR)/libnccl_device.ltoir
 
 # Build configuration
 ifeq ($(shell test "0$(CUDA_MAJOR)" -lt 12; echo $$?),0)
@@ -27,10 +28,13 @@ else
 	BITCODE_LIB_ARCH ?= sm_90
 endif
 
+LTO_IR_ARCH ?= $(BITCODE_LIB_ARCH)
+
 # Notes:
 # Device API code follows C++17
 # Error in GIN code while compiling with c++17
 BITCODE_CXX_STD ?= gnu++17
+LTO_IR_CXX_STD ?= c++17
 
 CLANG ?= clang
 OPT ?= opt
@@ -107,9 +111,33 @@ llvm_ir: $(FINAL_BC) $(OPTIMIZED_BC) $(WRAPPER_HEADER)
 	@echo "  Final BC: $(FINAL_BC)"
 	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
 
-build: llvm_ir
+# LTO IR generation
+$(FINAL_LTO_IR): $(LLVM_SRC) $(WRAPPER_HEADER)
+	@mkdir -p $(LIBDIR)
+	@echo "Generating LTO IR..."
+	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) -dlto --ltoir -x cu \
+		$(NCCL_INCLUDES) $(CUDA_INCLUDES) \
+		-DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
+		-D__NCCL_DEVICE_LTOIR_LIB__ \
+		-o $@ $(LLVM_SRC)
+
+ltoir: $(FINAL_LTO_IR) $(WRAPPER_HEADER)
+	@echo "LTO IR generated successfully:"
+	@echo "  C++ Standard: $(LTO_IR_CXX_STD)"
+	@echo "  GPU Architecture: $(LTO_IR_ARCH)"
+	@echo "  Final LTO IR: $(FINAL_LTO_IR)"
+	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
+
+build: llvm_ir ltoir
 
 clean:
-	rm -rf $(OBJDIR) $(FINAL_BC) $(WRAPPER_HEADER)
+	rm -rf $(OBJDIR) $(FINAL_BC) $(FINAL_LTO_IR) $(WRAPPER_HEADER)
 
-.PHONY: llvm_ir build clean
+.PHONY: llvm_ir ltoir build clean
+
+# Serialize IR-gen to avoid race
+ifneq ($(EMIT_LLVM_IR), 0)
+ifneq ($(NCCL_EMIT_LTO_IR), 0)
+$(FINAL_LTO_IR): | $(FINAL_BC)
+endif
+endif

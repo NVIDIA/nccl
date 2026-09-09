@@ -1,0 +1,4 @@
+# CUDA 12. nccl4py[cu12] brings in cuda.core and nvidia-cutlass-dsl.
+nccl4py[cu12]
+cupy-cuda12x
+mpi4py

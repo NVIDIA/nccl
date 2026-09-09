@@ -1,6 +1,6 @@
 # Run the scripts once during configuration to get the file lists
 execute_process(
-    COMMAND ${CMAKE_COMMAND} -E env NCCL_USE_CMAKE=1 ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env NCCL_USE_CMAKE=1 NCCL_EXACT_KERNEL_NAMES=${NCCL_EXACT_KERNEL_NAMES} ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
     OUTPUT_VARIABLE files
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -26,7 +26,7 @@ endif()
 # Create custom commands to generate source files with proper dependencies
 add_custom_command(
     OUTPUT  ${files}
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env NCCL_EXACT_KERNEL_NAMES=${NCCL_EXACT_KERNEL_NAMES} ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc "${ONLY_FUNCS}"
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/generate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating device source files"

@@ -10,7 +10,7 @@
 #include "core.h"
 #include "gin/gin_device_common.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 struct ncclGinCtx; // Definition in nccl_device/gin/gin_device_host_common.h
 template <unsigned>
 struct ncclGinCtx_M; // ...
@@ -121,7 +121,7 @@ using ncclGin = ncclGin_BackendMask<NCCL_GIN_BACKEND_MASK_ALL>;
 
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 struct ncclGin_C {
   ncclDevComm const& comm;
   uint32_t nConnections:8, connectionId:8, _ginBackend:8;
@@ -152,6 +152,11 @@ NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinPut(
   size_t bytes, bool isSignal, ncclGinSignal_t signalId, ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
   bool isCounter, ncclGinCounter_t counterId, ncclCoopAny coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
   cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease);
+
+NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinGet(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t remoteWnd,
+                                                    size_t remoteOffset, ncclWindow_t localWnd, size_t localOffset,
+                                                    size_t bytes, ncclCoopAny coop, bool isDescriptor,
+                                                    ncclGinDescriptorSmem* descriptor, uint32_t optFlags);
 
 NCCL_IR_EXTERN_C NCCL_DEVICE_INLINE void ncclGinSignal(
   ncclGin_C* net, ncclTeam team, int peer, bool isSignal, ncclGinSignal_t signalId, ncclGinSignalOp_t signalOp,
@@ -214,6 +219,8 @@ struct ncclGin_BackendMask {
     ncclDevComm const&, int contextIndex,
     ncclGinResourceSharingMode resourceSharingMode_ = NCCL_GIN_RESOURCE_SHARING_GPU);
 
+  NCCL_DEVICE_INLINE bool _supportsStrongSignal() const;
+
   template <typename Coop = ncclCoopThread, typename DescriptorSmem = ncclGin_None>
   NCCL_DEVICE_INLINE void flushAsync(ncclTeam team, uint32_t peer, ncclGinRequest_t* outRequest,
                                      Coop coop = ncclCoopThread{}, uint32_t optFlags = ncclGinOptFlagsDefault,
@@ -223,6 +230,10 @@ struct ncclGin_BackendMask {
   NCCL_DEVICE_INLINE void wait(ncclGinRequest_t& outRequest, Coop coop = ncclCoopThread{},
                                DescriptorSmem descriptor = ncclGin_None{},
                                cuda::memory_order ord = cuda::memory_order_acquire) const;
+
+  template <typename Coop = ncclCoopThread, typename DescriptorSmem = ncclGin_None>
+  NCCL_DEVICE_INLINE ncclResult_t wait(ncclGinRequest_t& outRequest, Coop coop, DescriptorSmem descriptor,
+                                       cuda::memory_order ord, uint64_t timeoutCycles) const;
 
   template <typename Coop = ncclCoopThread, typename DescriptorSmem = ncclGin_None,
             typename SegmentType = ncclGin_SegmentDevice>
@@ -313,6 +324,10 @@ struct ncclGin_BackendMask {
   NCCL_DEVICE_INLINE void flush(Coop coop, cuda::memory_order ord = cuda::memory_order_acquire,
                                 DescriptorSmem descriptor = ncclGin_None{}) const;
 
+  template <typename Coop, typename DescriptorSmem = ncclGin_None>
+  NCCL_DEVICE_INLINE ncclResult_t flush(Coop coop, cuda::memory_order ord, DescriptorSmem descriptor,
+                                        uint64_t timeoutCycles) const;
+
   // Counter and signal wait use "rolling" comparison logic of a given bit-width
   // such that unsigned overflow does not disturb the property that: x < x+1.
   //
@@ -334,6 +349,10 @@ struct ncclGin_BackendMask {
   NCCL_DEVICE_INLINE void waitCounter(Coop, ncclGinCounter_t counter, uint64_t least, int bits = 56,
                                       cuda::memory_order ord = cuda::memory_order_acquire) const;
 
+  template <typename Coop>
+  NCCL_DEVICE_INLINE ncclResult_t waitCounter(Coop, ncclGinCounter_t counter, uint64_t least, int bits,
+                                              cuda::memory_order ord, uint64_t timeoutCycles) const;
+
   // Each signal has a dedicated "shadow" which the user is free to manipulate for
   // any reason. The only calls which manipulate the shadow are `increaseSignalShadow`
   // and `resetSignal`.
@@ -353,10 +372,18 @@ struct ncclGin_BackendMask {
   NCCL_DEVICE_INLINE void waitSignal(Coop, ncclGinSignal_t signal, uint64_t least, int bits = 64,
                                      cuda::memory_order ord = cuda::memory_order_acquire) const;
 
+  template <typename Coop>
+  NCCL_DEVICE_INLINE ncclResult_t waitSignal(Coop, ncclGinSignal_t signal, uint64_t least, int bits,
+                                             cuda::memory_order ord, uint64_t timeoutCycles) const;
+
   // Wait for VA signal at given window and offset to meet or exceed value.
   template <typename Coop>
   NCCL_DEVICE_INLINE void waitSignal(Coop, ncclWindow_t signalWindow, size_t signalOffset, uint64_t least,
                                      int bits = 64, cuda::memory_order ord = cuda::memory_order_acquire) const;
+
+  template <typename Coop>
+  NCCL_DEVICE_INLINE ncclResult_t waitSignal(Coop, ncclWindow_t signalWindow, size_t signalOffset, uint64_t least,
+                                             int bits, cuda::memory_order ord, uint64_t timeoutCycles) const;
 
   // Wait for signal to meet or exceed shadow value.
   template <typename Coop>

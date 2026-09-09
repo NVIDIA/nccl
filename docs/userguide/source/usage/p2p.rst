@@ -118,6 +118,23 @@ all operations in the group have achieved completion.
 Operations to the same peer and context are executed in order: both data delivery and signal
 updates on the remote peer follow the program order.
 
+The communication context is selected by the ``ctx`` argument and must be in ``[0, numRmaCtx)``, where
+``numRmaCtx`` is fixed at communicator creation (default 1). Multiple communication contexts are supported
+starting with NCCL 2.31; earlier versions support only ``ctx`` 0.
+
+For best performance, provision multiple contexts and distribute traffic across them -- for example, split a
+large message into chunks and put each chunk on a different context. The number of contexts that best
+saturates the network is platform-dependent; provisioning at least one per local NIC is a reasonable
+starting point. Distributing traffic pays off only for large transfers: each additional context adds launch
+and progress overhead, which dominates for small messages. Keep small transfers on a single context and
+distribute only large ones; the crossover size is platform-dependent.
+
+.. note::
+
+ :c:func:`ncclSignal` and :c:func:`ncclWaitSignal` used without any prior
+ :c:func:`ncclCommWindowRegister` require :c:macro:`rmaEagerInit` (or :ref:`NCCL_RMA_EAGER_INIT`)
+ set to ``1``; otherwise they return ``ncclInvalidUsage``.
+
 Below are a few examples of classic one-sided communication patterns used by parallel applications.
 
 PutSignal and WaitSignal

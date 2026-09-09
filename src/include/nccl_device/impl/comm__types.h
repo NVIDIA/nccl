@@ -12,6 +12,7 @@
 #include "ll_a2a__types.h"
 #include "lsa_barrier__types.h"
 #include "gin_barrier__types.h"
+#include "cft_barrier__types.h"
 
 #if __cplusplus
 struct ncclDevCommWindowTable {
@@ -39,22 +40,23 @@ struct ncclDevComm {
   ncclWindow_t resourceWindow;
   ncclResourceWindow_vidmem_t resourceWindow_inlined;
 
-  ncclGinBarrierHandle_t hybridWorldGinBarrier;
+  ncclGinBarrierHandle_t hybridDenseGinBarrier;
 
   ncclMultimemHandle_t lsaMultimem;
   ncclLsaBarrierHandle_t lsaBarrier;
   ncclGinBarrierHandle_t railGinBarrier;
 
   uint8_t ginConnectionCount;
+  uint8_t backendIndex;
   uint8_t ginNetDeviceTypes[NCCL_GIN_MAX_CONNECTIONS];
   void* ginHandles[NCCL_GIN_MAX_CONNECTIONS];
   int ginSignalCount;
   int ginCounterCount;
   uint64_t* ginSignalShadows;
   uint32_t ginContextCount;
-  bool ginConnectionsRailed;
+  int ginConnectionStride;
+  int ginContextStride; // Stride according to world team, not according to connected ranks
   bool ginStrongLegacySignals;
-  bool ginContextsRailed;
 
   // FT related
   uint32_t* abortFlag;
@@ -63,6 +65,16 @@ struct ncclDevComm {
   ncclGinBarrierHandle_t hybridRailGinBarrier;
 
   ncclGinBarrierHandle_t worldGinBarrier;
+  uint32_t ginConnectionStride_rcp32;
+
+  // CFT
+  int cftRank, cftSize;
+  int cftMultimemRank, cftMultimemSize;
+  uint32_t cftMultimemSize_rcp32;
+  ncclCftLeId ucLeId;
+  ncclCftLeId mcLeId;
+  ncclCftBarrierHandle_t cftBarrier;
+  ncclCftBarrierHandle_t cftMultimemBarrier;
 };
 
 #endif // _NCCL_DEVICE_COMM__TYPES_H_

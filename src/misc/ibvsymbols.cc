@@ -35,6 +35,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   ASSIGN_SYM(ibvSymbols, ibv_ack_async_event, ibv_internal_ack_async_event);
   ASSIGN_SYM(ibvSymbols, ibv_query_device, ibv_internal_query_device);
   ASSIGN_SYM(ibvSymbols, ibv_query_gid, ibv_internal_query_gid);
+  ASSIGN_SYM(ibvSymbols, ibv_query_pkey, ibv_internal_query_pkey);
   ASSIGN_SYM(ibvSymbols, ibv_query_qp, ibv_internal_query_qp);
   ASSIGN_SYM(ibvSymbols, ibv_alloc_pd, ibv_internal_alloc_pd);
   ASSIGN_SYM(ibvSymbols, ibv_dealloc_pd, ibv_internal_dealloc_pd);
@@ -115,6 +116,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
   LOAD_SYM(ibvhandle, "ibv_query_device", ibvSymbols->ibv_internal_query_device);
   LOAD_SYM(ibvhandle, "ibv_query_port", ibvSymbols->ibv_internal_query_port);
   LOAD_SYM(ibvhandle, "ibv_query_gid", ibvSymbols->ibv_internal_query_gid);
+  LOAD_SYM(ibvhandle, "ibv_query_pkey", ibvSymbols->ibv_internal_query_pkey);
   LOAD_SYM(ibvhandle, "ibv_query_qp", ibvSymbols->ibv_internal_query_qp);
   LOAD_SYM(ibvhandle, "ibv_alloc_pd", ibvSymbols->ibv_internal_alloc_pd);
   LOAD_SYM(ibvhandle, "ibv_dealloc_pd", ibvSymbols->ibv_internal_dealloc_pd);
@@ -149,6 +151,7 @@ teardown:
   ibvSymbols->ibv_internal_query_device = NULL;
   ibvSymbols->ibv_internal_query_port = NULL;
   ibvSymbols->ibv_internal_query_gid = NULL;
+  ibvSymbols->ibv_internal_query_pkey = NULL;
   ibvSymbols->ibv_internal_query_qp = NULL;
   ibvSymbols->ibv_internal_alloc_pd = NULL;
   ibvSymbols->ibv_internal_dealloc_pd = NULL;

@@ -10,7 +10,7 @@
 
 #include "../reduce_copy.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 #if defined(__CUDACC_EXTENDED_LAMBDA__)
 
 #include "reduce_copy__impl.h"
@@ -917,6 +917,6 @@ NCCL_DEVICE_INLINE void ncclLocalReduceSumCopy(Coop, int, T*, size_t, int, T*, s
 }
 
 #endif // __CUDACC_EXTENDED_LAMBDA__
-#endif // NCCL_CHECK_CUDACC
+#endif // __CUDACC__
 
 #endif // _NCCL_DEVICE_REDUCE_COPY__FUNCS_H_

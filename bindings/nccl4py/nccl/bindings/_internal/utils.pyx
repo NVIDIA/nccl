@@ -19,39 +19,6 @@ cdef bint is_nested_sequence(data):
             return True
 
 
-cdef void* get_buffer_pointer(buf, Py_ssize_t size, readonly=True) except*:
-    """The caller must ensure ``buf`` is alive when the returned pointer is in use."""
-    cdef void* bufPtr
-    cdef int flags = cpython.PyBUF_ANY_CONTIGUOUS
-    if not readonly:
-        flags |= cpython.PyBUF_WRITABLE
-    cdef int status = -1
-    cdef cpython.Py_buffer view
-
-    if isinstance(buf, int):
-        bufPtr = <void*><intptr_t>buf
-    else:  # try buffer protocol
-        try:
-            status = cpython.PyObject_GetBuffer(buf, &view, flags)
-            # when the caller does not provide a size, it is set to -1 at generate-time by cybind
-            if size != -1:
-                assert view.len == size
-            assert view.ndim == 1
-        except Exception as e:
-            adj = "writable " if not readonly else ""
-            raise ValueError(
-                 "buf must be either a Python int representing the pointer "
-                f"address to a valid buffer, or a 1D contiguous {adj}"
-                 "buffer, of size bytes") from e
-        else:
-            bufPtr = view.buf
-        finally:
-            if status == 0:
-                cpython.PyBuffer_Release(&view)
-
-    return bufPtr
-
-
 # Cython can't infer the ResT overload when it is wrapped in nullable_unique_ptr,
 # so we need a dummy (__unused) input argument to help it
 cdef int get_resource_ptr(nullable_unique_ptr[vector[ResT]] &in_out_ptr, object obj, ResT* __unused) except 1:

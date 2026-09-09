@@ -39,34 +39,150 @@
 #include <errno.h>
 
 #include "doca_error.h"
+#include "doca_gpunetio.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/**
+ * @brief DOCA Verbs library type: SDK or open
+ *
+ */
+enum doca_verbs_lib_type {
+    /* Use DOCA Verbs open source. */
+    DOCA_VERBS_SDK_LIB_TYPE_OPEN = 0,
+    /* Use DOCA Verbs SDK. */
+    DOCA_VERBS_SDK_LIB_TYPE_SDK = 1
+};
+
+/**
+ * @brief DOCA Verbs UAR allocation type.
+ * Same for SDK and open.
+ */
+enum doca_verbs_uar_allocation_type {
+    DOCA_VERBS_UAR_ALLOCATION_TYPE_BLUEFLAME = 0,
+    DOCA_VERBS_UAR_ALLOCATION_TYPE_NONCACHE = 1,
+    DOCA_VERBS_UAR_ALLOCATION_TYPE_NONCACHE_DEDICATED = 2,
+};
+
+/**
+ * @brief Verbs QP ordering semantic.
+ */
+enum doca_verbs_qp_ordering_semantic {
+    DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA = 0x0,
+    DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_RW = 0x1,
+    DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL = 0x2,
+};
+
 /**********************************************************************************************************************
  * DOCA Verbs opaque types
  *********************************************************************************************************************/
 /**
- * Opaque structure representing a DOCA Verbs QP Init Attributes instance.
+ * Opaque structure representing a DOCA DEV open instance.
  */
-struct doca_verbs_qp_init_attr;
+struct doca_dev_open;
 /**
- * Opaque structure representing a DOCA Verbs QP Attributes instance.
+ * Opaque structure representing a DOCA Verbs DEV handler open and SDK.
  */
-struct doca_verbs_qp_attr;
+typedef struct doca_dev {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_dev_open *open;
+    };
+    void *sdk_pd;
+    void *sdk_context;
+} doca_dev_t;
+
 /**
- * Opaque structure representing a DOCA Verbs Queue Pair instance.
+ * Opaque structure representing a DOCA Verbs QP Init Attributes open instance.
  */
-struct doca_verbs_qp;
+struct doca_verbs_qp_init_attr_open;
 /**
- * Opaque structure representing a DOCA Verbs CQ Attributes instance.
+ * Opaque structure representing a DOCA Verbs QP Init Attributes handler open or SDK.
  */
-struct doca_verbs_cq_attr;
+typedef struct {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_qp_init_attr_open *open;
+    };
+} doca_verbs_qp_init_attr_t;
 /**
- * Opaque structure representing a DOCA Verbs Completion Queue instance.
+ * Opaque structure representing a DOCA Verbs QP Attributes open instance.
  */
-struct doca_verbs_cq;
+struct doca_verbs_qp_attr_open;
+/**
+ * Opaque structure representing a DOCA Verbs QP Attributes handler open or SDK.
+ */
+typedef struct {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_qp_attr_open *open;
+    };
+} doca_verbs_qp_attr_t;
+/**
+ * Opaque structure representing a DOCA Completion Queue open instance.
+ */
+struct doca_verbs_qp_open;
+/**
+ * Opaque structure representing a DOCA Verbs Queue Pair handler open and SDK.
+ */
+struct doca_verbs_qp_t {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_qp_open *open;
+    };
+};
+
+/**
+ * Opaque structure representing a DOCA Verbs CQ Attributes open instance.
+ */
+struct doca_verbs_cq_attr_open;
+/**
+ * Opaque structure representing a DOCA Verbs CQ Attributes handler open or SDK.
+ */
+typedef struct {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_cq_attr_open *open;
+    };
+} doca_verbs_cq_attr_t;
+/**
+ * Opaque structure representing a DOCA Completion Queue open instance.
+ */
+struct doca_verbs_cq_open;
+struct mlx5dv_devx_obj;
+/**
+ * Opaque structure representing a DOCA Verbs Completion Queue handler open and SDK.
+ */
+struct doca_verbs_cq_t {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_cq_open *open;
+    };
+};
+
+/**
+ * Opaque structure representing a DOCA Comp Channel open instance.
+ */
+struct doca_verbs_comp_channel_open;
+/**
+ * Opaque structure representing a DOCA Verbs Comp Channel handler open and SDK.
+ */
+typedef struct doca_verbs_comp_channel {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_comp_channel_open *open;
+    };
+} doca_verbs_comp_channel_t;
+
 /**
  * Opaque structure representing a DOCA Verbs Shared Receive Queue instance.
  */
@@ -76,17 +192,62 @@ struct doca_verbs_srq;
  */
 struct doca_verbs_srq_init_attr;
 /**
- * Opaque structure representing a DOCA Verbs AH instance.
+ * Opaque structure representing a DOCA AH attr open instance.
  */
-struct doca_verbs_ah_attr;
+struct doca_verbs_ah_attr_open;
 /**
- * Opaque structure representing a DOCA UMEM instance.
+ * Opaque structure representing a DOCA Verbs AH Attr handler open and SDK.
  */
-struct doca_verbs_umem;
+struct doca_verbs_ah_attr_t {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_ah_attr_open *open;
+    };
+};
+
 /**
- * Opaque structure representing a DOCA UAR instance.
+ * Opaque structure representing a DOCA Verbs CC group handle open instance.
  */
-struct doca_verbs_uar;
+struct doca_verbs_cc_group_open;
+/**
+ * Opaque structure representing a DOCA Verbs CC group handler open and SDK.
+ */
+struct doca_verbs_cc_group_t {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_cc_group_open *open;
+    };
+};
+
+/**
+ * Opaque structure representing a DOCA UMEM open instance.
+ */
+struct doca_verbs_umem_open;
+/**
+ * Opaque structure representing a DOCA Verbs UMEM handler open and SDK.
+ */
+typedef struct {
+    enum doca_verbs_lib_type type;
+    union {
+        void *sdk;
+        struct doca_verbs_umem_open *open;
+    };
+} doca_verbs_umem_t;
+
+/**
+ * Opaque structure representing a DOCA Verbs UAR handler open and SDK.
+ */
+typedef struct {
+    enum doca_verbs_lib_type type;
+    enum doca_verbs_uar_allocation_type allocation_type;
+    union {
+        void *sdk;
+        struct doca_verbs_uar_open *open;
+    };
+} doca_verbs_uar_t;
+
 /**
  * Opaque structure representing a DOCA Device Attributes instance.
  */
@@ -131,15 +292,6 @@ enum doca_verbs_mtu_size {
 };
 
 /**
- * @brief DOCA Verbs UAR allocation type.
- */
-enum doca_verbs_uar_allocation_type {
-    DOCA_VERBS_UAR_ALLOCATION_TYPE_BLUEFLAME = 0,
-    DOCA_VERBS_UAR_ALLOCATION_TYPE_NONCACHE = 1,
-    DOCA_VERBS_UAR_ALLOCATION_TYPE_NONCACHE_DEDICATED = 2,
-};
-
-/**
  * @brief CQ overrun
  */
 enum doca_verbs_cq_overrun {
@@ -156,12 +308,18 @@ enum doca_verbs_srq_type {
 };
 
 /**
- * @brief DOCA Verbs Atomic Type.
+ * @brief DOCA Verbs Atomic Mode.
  */
-enum doca_verbs_qp_atomic_type {
+enum doca_verbs_qp_atomic_mode {
     DOCA_VERBS_QP_ATOMIC_MODE_NONE = 0x0,
     DOCA_VERBS_QP_ATOMIC_MODE_IB_SPEC = 0x1,
-    DOCA_VERBS_QP_ATOMIC_MODE_UP_TO_8BYTES = 0x3
+    DOCA_VERBS_QP_ATOMIC_MODE_ONLY_8BYTES = 0x2,
+    DOCA_VERBS_QP_ATOMIC_MODE_UP_TO_8BYTES = 0x3,
+    DOCA_VERBS_QP_ATOMIC_MODE_UP_TO_16BYTES = 0x4,
+    DOCA_VERBS_QP_ATOMIC_MODE_UP_TO_32BYTES = 0x5,
+    DOCA_VERBS_QP_ATOMIC_MODE_UP_TO_64BYTES = 0x6,
+    DOCA_VERBS_QP_ATOMIC_MODE_UP_TO_128BYTES = 0x7,
+    DOCA_VERBS_QP_ATOMIC_MODE_UP_TO_256BYTES = 0x8
 };
 
 /**
@@ -284,6 +442,10 @@ enum doca_verbs_qp_send_dbr_mode {
  * @brief AH attribute.
  */
 #define DOCA_VERBS_QP_ATTR_AH_ATTR (1 << 14)
+/**
+ * @brief Atomic Mode attribute.
+ */
+#define DOCA_VERBS_QP_ATTR_ATOMIC_MODE (1 << 15)
 
 /**
  * @brief The maximum number of outstanding RDMA Read/Atomic requests that a single QP is allowed to
@@ -295,6 +457,11 @@ enum doca_verbs_qp_send_dbr_mode {
  * concurrently as a responder.
  */
 #define DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC (1 << 17)
+
+/**
+ * @brief CC group (congestion control) attribute (experimental SDK).
+ */
+#define DOCA_VERBS_QP_ATTR_CC_GROUP (1 << 18)
 
 /**
  * @brief Specifies the length of a GID (Global ID) in bytes.
@@ -317,6 +484,38 @@ struct doca_verbs_gid {
  *********************************************************************************************************************/
 
 /**
+ * @brief Create a DOCA Verbs Device instance.
+ *
+ * @param [in] verbs_context
+ * ibv_context
+ * @param [in] verbs_pd
+ * ibv_pd
+ * @param [out] net_dev
+ * network device handler
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
+ */
+doca_error_t doca_verbs_dev_open(struct ibv_pd *verbs_pd, doca_dev_t **net_dev);
+
+/**
+ * @brief Close a DOCA Verbs Device instance.
+ *
+ * @param [out] net_dev
+ * network device handler
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
+ */
+doca_error_t doca_verbs_dev_close(doca_dev_t *net_dev);
+
+/**
  * @brief Create a DOCA Verbs QP Init Attributes instance.
  *
  * @param [out] verbs_qp_init_attr
@@ -328,7 +527,7 @@ struct doca_verbs_gid {
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_qp_init_attr_create(struct doca_verbs_qp_init_attr **verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_create(doca_verbs_qp_init_attr_t **verbs_qp_init_attr);
 
 /**
  * @brief Destroy a DOCA Verbs QP Init Attributes instance.
@@ -341,35 +540,23 @@ doca_error_t doca_verbs_qp_init_attr_create(struct doca_verbs_qp_init_attr **ver
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_destroy(struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_destroy(doca_verbs_qp_init_attr_t *qp_init_attr);
 
 /**
  * @brief Set pd attribute for verbs_qp_init_attr
  *
  * @param [in] verbs_qp_init_attr
  * Pointer to verbs_qp_init_attr instance.
- * @param [in] pd
- * pd attribute.
+ * @param [in] net_dev
+ * net_dev handler with pd attribute.
  *
  * @return
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_pd(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-                                            struct ibv_pd *pd);
-
-/**
- * @brief Get pd attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * pd attribute.
- */
-struct ibv_pd *doca_verbs_qp_init_attr_get_pd(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_pd(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                            doca_dev_t *net_dev);
 
 /**
  * @brief Set send_cq attribute for verbs_qp_init_attr
@@ -384,20 +571,8 @@ struct ibv_pd *doca_verbs_qp_init_attr_get_pd(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_send_cq(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-                                                 struct doca_verbs_cq *send_cq);
-
-/**
- * @brief Get send_cq attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * send_cq attribute.
- */
-struct doca_verbs_cq *doca_verbs_qp_init_attr_get_send_cq(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_send_cq(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                 doca_verbs_cq_t *send_cq);
 
 /**
  * @brief Set receive_cq attribute for verbs_qp_init_attr
@@ -412,20 +587,8 @@ struct doca_verbs_cq *doca_verbs_qp_init_attr_get_send_cq(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_receive_cq(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_cq *receive_cq);
-
-/**
- * @brief Get receive_cq attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * receive_cq attribute.
- */
-struct doca_verbs_cq *doca_verbs_qp_init_attr_get_receive_cq(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_receive_cq(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    doca_verbs_cq_t *receive_cq);
 
 /**
  * @brief Set sq_sig_all attribute for verbs_qp_init_attr
@@ -440,20 +603,8 @@ struct doca_verbs_cq *doca_verbs_qp_init_attr_get_receive_cq(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_sq_sig_all(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, int sq_sig_all);
-
-/**
- * @brief Get sq_sig_all attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * sq_sig_all attribute.
- */
-int doca_verbs_qp_init_attr_get_sq_sig_all(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_sq_sig_all(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    int sq_sig_all);
 
 /**
  * @brief Set sq_wr attribute for verbs_qp_init_attr
@@ -468,20 +619,8 @@ int doca_verbs_qp_init_attr_get_sq_sig_all(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_sq_wr(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_init_attr_set_sq_wr(doca_verbs_qp_init_attr_t *qp_init_attr,
                                                uint32_t sq_wr);
-
-/**
- * @brief Get sq_wr attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * sq_wr attribute.
- */
-uint32_t doca_verbs_qp_init_attr_get_sq_wr(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
 
 /**
  * @brief Set rq_wr attribute for verbs_qp_init_attr
@@ -496,20 +635,8 @@ uint32_t doca_verbs_qp_init_attr_get_sq_wr(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_rq_wr(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_init_attr_set_rq_wr(doca_verbs_qp_init_attr_t *qp_init_attr,
                                                uint32_t rq_wr);
-
-/**
- * @brief Get rq_wr attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * rq_wr attribute.
- */
-uint32_t doca_verbs_qp_init_attr_get_rq_wr(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
 
 /**
  * @brief Set send_max_sges attribute for verbs_qp_init_attr
@@ -524,20 +651,8 @@ uint32_t doca_verbs_qp_init_attr_get_rq_wr(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_send_max_sges(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t send_max_sges);
-
-/**
- * @brief Get send_max_sges attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * send_max_sges attribute.
- */
-uint32_t doca_verbs_qp_init_attr_get_send_max_sges(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_send_max_sges(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                       uint32_t send_max_sges);
 
 /**
  * @brief Set receive_max_sges attribute for verbs_qp_init_attr
@@ -552,20 +667,8 @@ uint32_t doca_verbs_qp_init_attr_get_send_max_sges(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_receive_max_sges(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t receive_max_sges);
-
-/**
- * @brief Get receive_max_sges attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * receive_max_sges attribute.
- */
-uint32_t doca_verbs_qp_init_attr_get_receive_max_sges(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_receive_max_sges(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                          uint32_t receive_max_sges);
 
 /**
  * @brief Set max_inline_data attribute for verbs_qp_init_attr
@@ -580,20 +683,8 @@ uint32_t doca_verbs_qp_init_attr_get_receive_max_sges(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_max_inline_data(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t max_inline_data);
-
-/**
- * @brief Get max_inline_data attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * max_inline_data attribute.
- */
-uint32_t doca_verbs_qp_init_attr_get_max_inline_data(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_max_inline_data(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                         uint32_t max_inline_data);
 
 /**
  * @brief Set user_index attribute for verbs_qp_init_attr
@@ -608,20 +699,8 @@ uint32_t doca_verbs_qp_init_attr_get_max_inline_data(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_user_index(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t user_index);
-
-/**
- * @brief Get user_index attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * user_index attribute.
- */
-uint32_t doca_verbs_qp_init_attr_get_user_index(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_user_index(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    uint32_t user_index);
 
 /**
  * @brief Set qp_type attribute for verbs_qp_init_attr
@@ -636,20 +715,8 @@ uint32_t doca_verbs_qp_init_attr_get_user_index(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_qp_type(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_init_attr_set_qp_type(doca_verbs_qp_init_attr_t *qp_init_attr,
                                                  uint32_t qp_type);
-
-/**
- * @brief Get qp_type attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * qp_type attribute.
- */
-uint32_t doca_verbs_qp_init_attr_get_qp_type(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
 
 /**
  * @brief Set external umem attributes for verbs_qp_init_attr.
@@ -670,9 +737,9 @@ uint32_t doca_verbs_qp_init_attr_get_qp_type(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_external_umem(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_umem *external_umem,
-    uint64_t external_umem_offset);
+doca_error_t doca_verbs_qp_init_attr_set_external_umem(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                       doca_verbs_umem_t *external_umem,
+                                                       uint64_t external_umem_offset);
 
 /**
  * @brief Set external DBR umem attributes for verbs_qp_init_attr.
@@ -683,9 +750,9 @@ doca_error_t doca_verbs_qp_init_attr_set_external_umem(
  *
  * @param [in] verbs_qp_init_attr
  * Pointer to verbs_qp_init_attr instance.
- * @param [in] external_dbr_umem
+ * @param [in] external_umem_dbr
  * External dbr umem instance.
- * @param [in] external_dbr_umem_offset
+ * @param [in] external_umem_dbr_offset
  * The offset in the external dbr umem buffer to set the DBR
  *
  * @return
@@ -693,28 +760,9 @@ doca_error_t doca_verbs_qp_init_attr_set_external_umem(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_external_dbr_umem(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_umem *external_umem,
-    uint64_t external_umem_offset);
-
-/**
- * @brief Get external umem attributes from verbs_qp_init_attr.
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- * @param [out] external_umem
- * External umem instance.
- * @param [out] external_umem_offset
- * The offset in the external umem buffer to set the Work Queue
- *
- * @return
- * DOCA_SUCCESS - in case of success.
- * doca_error code - in case of failure:
- * - DOCA_ERROR_INVALID_VALUE - received invalid input.
- */
-doca_error_t doca_verbs_qp_init_attr_get_external_umem(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-    struct doca_verbs_umem **external_umem, uint64_t *external_umem_offset);
+doca_error_t doca_verbs_qp_init_attr_set_external_umem_dbr(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                           doca_verbs_umem_t *external_umem,
+                                                           uint64_t external_umem_offset);
 
 /**
  * @brief Set external uar attribute for verbs_qp_init_attr.
@@ -732,24 +780,8 @@ doca_error_t doca_verbs_qp_init_attr_get_external_umem(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_external_uar(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_uar *external_uar);
-
-/**
- * @brief Get external uar attribute from verbs_qp_init_attr.
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- * @param [out] external_uar
- * External uar instance.
- *
- * @return
- * DOCA_SUCCESS - in case of success.
- * doca_error code - in case of failure:
- * - DOCA_ERROR_INVALID_VALUE - received invalid input.
- */
-doca_error_t doca_verbs_qp_init_attr_get_external_uar(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_uar **external_uar);
+doca_error_t doca_verbs_qp_init_attr_set_external_uar(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                      doca_verbs_uar_t *external_uar);
 
 /**
  * @brief Set qp_context attribute for verbs_qp_init_attr
@@ -764,20 +796,8 @@ doca_error_t doca_verbs_qp_init_attr_get_external_uar(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_qp_context(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, void *qp_context);
-
-/**
- * @brief Get qp_context attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * qp_context attribute.
- */
-void *doca_verbs_qp_init_attr_get_qp_context(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_qp_context(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    void *qp_context);
 
 /**
  * @brief Set srq attribute for verbs_qp_init_attr
@@ -792,20 +812,8 @@ void *doca_verbs_qp_init_attr_get_qp_context(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_srq(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_init_attr_set_srq(doca_verbs_qp_init_attr_t *qp_init_attr,
                                              struct doca_verbs_srq *srq);
-
-/**
- * @brief Get srq attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * srq attribute.
- */
-struct doca_verbs_srq *doca_verbs_qp_init_attr_get_srq(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
 
 /**
  * @brief Set CORE direct for verbs_qp_init_attr
@@ -820,20 +828,8 @@ struct doca_verbs_srq *doca_verbs_qp_init_attr_get_srq(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_core_direct_master(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint8_t core_direct_master);
-
-/**
- * @brief Get CORE Direct attribute from verbs_qp_init_attr
- *
- * @param [in] verbs_qp_init_attr
- * Pointer to verbs_qp_init_attr instance.
- *
- * @return
- * min_rnr_timer attribute.
- */
-uint8_t doca_verbs_qp_init_attr_get_core_direct_master(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_set_core_direct_master(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                            uint8_t core_direct_master);
 
 /**
  * @brief Set Send DBR Mode for verbs_qp_init_attr
@@ -842,22 +838,30 @@ uint8_t doca_verbs_qp_init_attr_get_core_direct_master(
  * Pointer to verbs_qp_init_attr instance.
  * @param [in] send_dbr_mode
  * Send DBR Mode attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
 doca_error_t doca_verbs_qp_init_attr_set_send_dbr_mode(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-    enum doca_verbs_qp_send_dbr_mode send_dbr_mode);
+    doca_verbs_qp_init_attr_t *qp_init_attr, enum doca_verbs_qp_send_dbr_mode send_dbr_mode);
 
 /**
  * @brief Get Send DBR Mode attribute from verbs_qp_init_attr
  *
  * @param [in] verbs_qp_init_attr
  * Pointer to verbs_qp_init_attr instance.
+ * @param [out] send_dbr_mode
+ * Send DBR Mode attribute.
  *
  * @return
- * Send DBR Mode attribute.
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_init_attr_get_send_dbr_mode(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_get_send_dbr_mode(
+    const doca_verbs_qp_init_attr_t *qp_init_attr, enum doca_verbs_qp_send_dbr_mode *send_dbr_mode);
 
 /**
  * @brief Set the emulate no dbr ext flag for verbs_qp_init_attr
@@ -866,21 +870,69 @@ enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_init_attr_get_send_dbr_mode(
  * Pointer to verbs_qp_init_attr instance.
  * @param [in] emulate_no_dbr_ext
  * The emulate no dbr ext flag.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_init_attr_set_emulate_no_dbr_ext(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, bool emulate_no_dbr_ext);
+doca_error_t doca_verbs_qp_init_attr_set_emulate_no_dbr_ext(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                            bool emulate_no_dbr_ext);
 
 /**
  * @brief Get the emulate no dbr ext flag from verbs_qp_init_attr
  *
  * @param [in] verbs_qp_init_attr
  * Pointer to verbs_qp_init_attr instance.
+ * @param [out] emulate_no_dbr_ext
+ * The emulate no dbr ext value.
  *
  * @return
- * The emulate no dbr ext flag.
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-bool doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
+    const doca_verbs_qp_init_attr_t *qp_init_attr, bool *emulate_no_dbr_ext);
+
+/**
+ * @brief Set ordering semantic attribute for verbs_qp_init_attr
+ * @note Not setting ordering semantic doesn't guarantee ordering semantic didn't change (setting
+ * ECE may change it) Supported only by SDK mode.
+ *
+ * @param [in] verbs_qp_init_attr
+ * Pointer to verbs_qp_init_attr instance.
+ * @param [in] ordering_semantic
+ * ordering semantic attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - if qp_init_attr is called in open mode.
+ */
+doca_error_t doca_verbs_qp_init_attr_set_ordering_semantic(
+    doca_verbs_qp_init_attr_t *verbs_qp_init_attr,
+    enum doca_verbs_qp_ordering_semantic ordering_semantic);
+
+/**
+ * @brief Get ordering semantic attribute from verbs_qp_init_attr
+ * Supported only by SDK mode.
+ *
+ * @param [in] verbs_qp_init_attr
+ * Pointer to verbs_qp_init_attr instance.
+ * @param [out] ordering_semantic
+ * ordering semantic attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - if qp_init_attr is called in open mode.
+ */
+doca_error_t doca_verbs_qp_init_attr_get_ordering_semantic(
+    doca_verbs_qp_init_attr_t *verbs_qp_init_attr,
+    enum doca_verbs_qp_ordering_semantic *ordering_semantic);
 
 /**
  * @brief Create a DOCA Verbs QP Attributes instance.
@@ -894,7 +946,7 @@ bool doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_qp_attr_create(struct doca_verbs_qp_attr **verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_create(doca_verbs_qp_attr_t **verbs_qp_attr);
 
 /**
  * @brief Destroy a DOCA Verbs QP Attributes instance.
@@ -907,7 +959,7 @@ doca_error_t doca_verbs_qp_attr_create(struct doca_verbs_qp_attr **verbs_qp_attr
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_destroy(struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_destroy(doca_verbs_qp_attr_t *qp_attr);
 
 /**
  * @brief Set next_state attribute for verbs_qp_attr
@@ -922,7 +974,7 @@ doca_error_t doca_verbs_qp_attr_destroy(struct doca_verbs_qp_attr *verbs_qp_attr
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_next_state(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_next_state(doca_verbs_qp_attr_t *qp_attr,
                                                enum doca_verbs_qp_state next_state);
 
 /**
@@ -934,8 +986,7 @@ doca_error_t doca_verbs_qp_attr_set_next_state(struct doca_verbs_qp_attr *verbs_
  * @return
  * next_state attribute.
  */
-enum doca_verbs_qp_state doca_verbs_qp_attr_get_next_state(
-    const struct doca_verbs_qp_attr *verbs_qp_attr);
+enum doca_verbs_qp_state doca_verbs_qp_attr_get_next_state(const doca_verbs_qp_attr_t *qp_attr);
 
 /**
  * @brief Set current_state attribute for verbs_qp_attr
@@ -950,20 +1001,24 @@ enum doca_verbs_qp_state doca_verbs_qp_attr_get_next_state(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_current_state(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_current_state(doca_verbs_qp_attr_t *qp_attr,
                                                   enum doca_verbs_qp_state current_state);
 
 /**
- * @brief Get current_state attribute from verbs_qp_attr
+ * @brief Get current_state attribute for verbs_qp_attr
  *
  * @param [in] verbs_qp_attr
  * Pointer to verbs_qp_attr instance.
+ * @param [out] current_state
+ * current_state attribute.
  *
  * @return
- * current_state attribute.
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-enum doca_verbs_qp_state doca_verbs_qp_attr_get_current_state(
-    const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_get_current_state(doca_verbs_qp_attr_t *qp_attr,
+                                                  enum doca_verbs_qp_state *current_state);
 
 /**
  * @brief Set path_mtu attribute for verbs_qp_attr
@@ -978,20 +1033,8 @@ enum doca_verbs_qp_state doca_verbs_qp_attr_get_current_state(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_path_mtu(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_path_mtu(doca_verbs_qp_attr_t *qp_attr,
                                              enum doca_verbs_mtu_size path_mtu);
-
-/**
- * @brief Get path_mtu attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * path_mtu attribute.
- */
-enum doca_verbs_mtu_size doca_verbs_qp_attr_get_path_mtu(
-    const struct doca_verbs_qp_attr *verbs_qp_attr);
 
 /**
  * @brief Set rq_psn attribute for verbs_qp_attr
@@ -1006,19 +1049,7 @@ enum doca_verbs_mtu_size doca_verbs_qp_attr_get_path_mtu(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_rq_psn(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                           uint32_t rq_psn);
-
-/**
- * @brief Get rq_psn attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * rq_psn attribute.
- */
-uint32_t doca_verbs_qp_attr_get_rq_psn(const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_rq_psn(doca_verbs_qp_attr_t *qp_attr, uint32_t rq_psn);
 
 /**
  * @brief Set sq_psn attribute for verbs_qp_attr
@@ -1033,19 +1064,7 @@ uint32_t doca_verbs_qp_attr_get_rq_psn(const struct doca_verbs_qp_attr *verbs_qp
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_sq_psn(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                           uint32_t sq_psn);
-
-/**
- * @brief Get sq_psn attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * sq_psn attribute.
- */
-uint32_t doca_verbs_qp_attr_get_sq_psn(const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_sq_psn(doca_verbs_qp_attr_t *qp_attr, uint32_t sq_psn);
 
 /**
  * @brief Set dest_qp_num attribute for verbs_qp_attr
@@ -1062,19 +1081,8 @@ uint32_t doca_verbs_qp_attr_get_sq_psn(const struct doca_verbs_qp_attr *verbs_qp
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_dest_qp_num(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_dest_qp_num(doca_verbs_qp_attr_t *qp_attr,
                                                 uint32_t dest_qp_num);
-
-/**
- * @brief Get dest_qp_num attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * dest_qp_num attribute.
- */
-uint32_t doca_verbs_qp_attr_get_dest_qp_num(const struct doca_verbs_qp_attr *verbs_qp_attr);
 
 /**
  * @brief Set allow_remote_write attribute for verbs_qp_attr
@@ -1089,19 +1097,8 @@ uint32_t doca_verbs_qp_attr_get_dest_qp_num(const struct doca_verbs_qp_attr *ver
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_allow_remote_write(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_allow_remote_write(doca_verbs_qp_attr_t *qp_attr,
                                                        int allow_remote_write);
-
-/**
- * @brief Get allow_remote_write attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * allow_remote_write attribute.
- */
-int doca_verbs_qp_attr_get_allow_remote_write(const struct doca_verbs_qp_attr *verbs_qp_attr);
 
 /**
  * @brief Set allow_remote_read attribute for verbs_qp_attr
@@ -1116,19 +1113,8 @@ int doca_verbs_qp_attr_get_allow_remote_write(const struct doca_verbs_qp_attr *v
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_allow_remote_read(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_allow_remote_read(doca_verbs_qp_attr_t *qp_attr,
                                                       int allow_remote_read);
-
-/**
- * @brief Get allow_remote_read attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * allow_remote_read attribute.
- */
-int doca_verbs_qp_attr_get_allow_remote_read(const struct doca_verbs_qp_attr *verbs_qp_attr);
 
 /**
  * @brief Set allow_atomic attribute for verbs_qp_attr
@@ -1143,20 +1129,8 @@ int doca_verbs_qp_attr_get_allow_remote_read(const struct doca_verbs_qp_attr *ve
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_allow_remote_atomic(
-    struct doca_verbs_qp_attr *verbs_qp_attr, enum doca_verbs_qp_atomic_type allow_atomic_type);
-
-/**
- * @brief Get allow_atomic attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * allow_atomic attribute.
- */
-enum doca_verbs_qp_atomic_type doca_verbs_qp_attr_get_allow_remote_atomic(
-    const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_atomic_mode(doca_verbs_qp_attr_t *qp_attr,
+                                                enum doca_verbs_qp_atomic_mode allow_atomic_type);
 
 /**
  * @brief Set ah_attr attribute for verbs_qp_attr
@@ -1171,20 +1145,8 @@ enum doca_verbs_qp_atomic_type doca_verbs_qp_attr_get_allow_remote_atomic(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_ah_attr(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                            struct doca_verbs_ah_attr *ah_attr);
-
-/**
- * @brief Get ah_attr attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * ah_attr attribute.
- */
-struct doca_verbs_ah_attr *doca_verbs_qp_attr_get_ah_attr(
-    const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_ah_attr(doca_verbs_qp_attr_t *qp_attr,
+                                            doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set pkey_index attribute for verbs_qp_attr
@@ -1199,19 +1161,7 @@ struct doca_verbs_ah_attr *doca_verbs_qp_attr_get_ah_attr(
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_pkey_index(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                               uint16_t pkey_index);
-
-/**
- * @brief Get pkey_index attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * pkey_index attribute.
- */
-uint16_t doca_verbs_qp_attr_get_pkey_index(const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_pkey_index(doca_verbs_qp_attr_t *qp_attr, uint16_t pkey_index);
 
 /**
  * @brief Set port_num attribute for verbs_qp_attr
@@ -1226,19 +1176,7 @@ uint16_t doca_verbs_qp_attr_get_pkey_index(const struct doca_verbs_qp_attr *verb
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_port_num(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                             uint16_t port_num);
-
-/**
- * @brief Get port_num attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * port_num attribute.
- */
-uint16_t doca_verbs_qp_attr_get_port_num(const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_port_num(doca_verbs_qp_attr_t *qp_attr, uint16_t port_num);
 
 /**
  * @brief Set ack_timeout attribute for verbs_qp_attr
@@ -1253,19 +1191,8 @@ uint16_t doca_verbs_qp_attr_get_port_num(const struct doca_verbs_qp_attr *verbs_
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_ack_timeout(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_ack_timeout(doca_verbs_qp_attr_t *qp_attr,
                                                 uint16_t ack_timeout);
-
-/**
- * @brief Get ack_timeout attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * ack_timeout attribute.
- */
-uint16_t doca_verbs_qp_attr_get_ack_timeout(const struct doca_verbs_qp_attr *verbs_qp_attr);
 
 /**
  * @brief Set retry_cnt attribute for verbs_qp_attr
@@ -1280,19 +1207,7 @@ uint16_t doca_verbs_qp_attr_get_ack_timeout(const struct doca_verbs_qp_attr *ver
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_retry_cnt(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                              uint16_t retry_cnt);
-
-/**
- * @brief Get retry_cnt attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * retry_cnt attribute.
- */
-uint16_t doca_verbs_qp_attr_get_retry_cnt(const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_retry_cnt(doca_verbs_qp_attr_t *qp_attr, uint16_t retry_cnt);
 
 /**
  * @brief Set rnr_retry attribute for verbs_qp_attr
@@ -1307,19 +1222,7 @@ uint16_t doca_verbs_qp_attr_get_retry_cnt(const struct doca_verbs_qp_attr *verbs
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_rnr_retry(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                              uint16_t rnr_retry);
-
-/**
- * @brief Get rnr_retry attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * rnr_retry attribute.
- */
-uint16_t doca_verbs_qp_attr_get_rnr_retry(const struct doca_verbs_qp_attr *verbs_qp_attr);
+doca_error_t doca_verbs_qp_attr_set_rnr_retry(doca_verbs_qp_attr_t *qp_attr, uint16_t rnr_retry);
 
 /**
  * @brief Set min_rnr_timer attribute for verbs_qp_attr
@@ -1334,19 +1237,8 @@ uint16_t doca_verbs_qp_attr_get_rnr_retry(const struct doca_verbs_qp_attr *verbs
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_min_rnr_timer(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_min_rnr_timer(doca_verbs_qp_attr_t *qp_attr,
                                                   uint16_t min_rnr_timer);
-
-/**
- * @brief Get min_rnr_timer attribute from verbs_qp_attr
- *
- * @param [in] verbs_qp_attr
- * Pointer to verbs_qp_attr instance.
- *
- * @return
- * min_rnr_timer attribute.
- */
-uint16_t doca_verbs_qp_attr_get_min_rnr_timer(const struct doca_verbs_qp_attr *verbs_qp_attr);
 
 /**
  * @brief Set max_rd_atomic attribute for verbs_qp_attr
@@ -1361,7 +1253,7 @@ uint16_t doca_verbs_qp_attr_get_min_rnr_timer(const struct doca_verbs_qp_attr *v
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(doca_verbs_qp_attr_t *qp_attr,
                                                   uint8_t max_rd_atomic);
 
 /**
@@ -1377,13 +1269,47 @@ doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *ver
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(doca_verbs_qp_attr_t *qp_attr,
                                                        uint8_t max_dest_rd_atomic);
+
+/**
+ * @brief Associate an experimental CC group with QP attribute state (DOCA SDK / runtime dlopen
+ * path).
+ *
+ * @param[in] verbs_qp_attr QP attributes.
+ * @param[in] cc_group CC group handle from doca_verbs_cc_group_* (or NULL to clear when supported).
+ *
+ * @return DOCA_SUCCESS on success, doca_error code on failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - called in open-source mode without SDK.
+ * - DOCA_SDK_WRAPPER_NOT_SUPPORTED - SDK wrapper path is enabled but CC-group symbols are
+ * unavailable.
+ */
+doca_error_t doca_verbs_qp_attr_set_cc_group(doca_verbs_qp_attr_t *verbs_qp_attr,
+                                             doca_verbs_cc_group_t *cc_group);
+
+/**
+ * @brief Set counter_set_id attribute for verbs_qp_attr
+ *
+ * @param [in] verbs_qp_attr
+ * Pointer to verbs_qp_attr instance.
+ * @param [in] counter_set_id
+ * counter_set_id attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NOT_SUPPORTED - if called in SDK mode.
+ */
+doca_error_t doca_verbs_qp_attr_set_counter_set_id(doca_verbs_qp_attr_t *qp_attr,
+                                                   uint32_t counter_set_id);
+
 /**
  * @brief Create a DOCA Verbs AH instance.
  *
- * @param [in] context
- * Pointer to context instance.
+ * @param [in] net_dev
+ * Pointer to net_dev with the ibv_context instance.
  * @param [out] verbs_ah
  * Pointer to pointer to be set to point to the created verbs_ah instance.
  *
@@ -1393,8 +1319,7 @@ doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_ah_attr_create(struct ibv_context *context,
-                                       struct doca_verbs_ah_attr **verbs_ah);
+doca_error_t doca_verbs_ah_attr_create(doca_dev_t *net_dev, doca_verbs_ah_attr_t **ah_attr);
 
 /**
  * @brief Destroy a DOCA Verbs AH instance.
@@ -1407,7 +1332,7 @@ doca_error_t doca_verbs_ah_attr_create(struct ibv_context *context,
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_destroy(struct doca_verbs_ah_attr *verbs_ah);
+doca_error_t doca_verbs_ah_attr_destroy(doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set gid attribute for verbs_ah.
@@ -1422,8 +1347,7 @@ doca_error_t doca_verbs_ah_attr_destroy(struct doca_verbs_ah_attr *verbs_ah);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_gid(struct doca_verbs_ah_attr *verbs_ah,
-                                        struct doca_verbs_gid gid);
+doca_error_t doca_verbs_ah_attr_set_gid(doca_verbs_ah_attr_t *ah_attr, struct doca_verbs_gid gid);
 
 /**
  * @brief Get gid attribute from verbs_ah.
@@ -1434,7 +1358,7 @@ doca_error_t doca_verbs_ah_attr_set_gid(struct doca_verbs_ah_attr *verbs_ah,
  * @return
  * gid attribute.
  */
-struct doca_verbs_gid doca_verbs_ah_get_gid(const struct doca_verbs_ah_attr *verbs_ah);
+struct doca_verbs_gid doca_verbs_ah_get_gid(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set addr_type attribute for verbs_ah.
@@ -1449,7 +1373,7 @@ struct doca_verbs_gid doca_verbs_ah_get_gid(const struct doca_verbs_ah_attr *ver
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_addr_type(struct doca_verbs_ah_attr *verbs_ah,
+doca_error_t doca_verbs_ah_attr_set_addr_type(doca_verbs_ah_attr_t *ah_attr,
                                               enum doca_verbs_addr_type addr_type);
 
 /**
@@ -1461,7 +1385,7 @@ doca_error_t doca_verbs_ah_attr_set_addr_type(struct doca_verbs_ah_attr *verbs_a
  * @return
  * addr_type attribute.
  */
-enum doca_verbs_addr_type doca_verbs_ah_get_addr_type(const struct doca_verbs_ah_attr *verbs_ah);
+enum doca_verbs_addr_type doca_verbs_ah_get_addr_type(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set dlid attribute for verbs_ah.
@@ -1476,7 +1400,7 @@ enum doca_verbs_addr_type doca_verbs_ah_get_addr_type(const struct doca_verbs_ah
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_dlid(struct doca_verbs_ah_attr *verbs_ah, uint32_t dlid);
+doca_error_t doca_verbs_ah_attr_set_dlid(doca_verbs_ah_attr_t *ah_attr, uint32_t dlid);
 
 /**
  * @brief Get dlid attribute from verbs_ah.
@@ -1487,7 +1411,7 @@ doca_error_t doca_verbs_ah_attr_set_dlid(struct doca_verbs_ah_attr *verbs_ah, ui
  * @return
  * dlid attribute.
  */
-uint32_t doca_verbs_ah_get_dlid(const struct doca_verbs_ah_attr *verbs_ah);
+uint32_t doca_verbs_ah_get_dlid(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set sl attribute for verbs_ah.
@@ -1502,7 +1426,7 @@ uint32_t doca_verbs_ah_get_dlid(const struct doca_verbs_ah_attr *verbs_ah);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_sl(struct doca_verbs_ah_attr *verbs_ah, uint8_t sl);
+doca_error_t doca_verbs_ah_attr_set_sl(doca_verbs_ah_attr_t *ah_attr, uint8_t sl);
 
 /**
  * @brief Get sl attribute from verbs_ah.
@@ -1513,7 +1437,7 @@ doca_error_t doca_verbs_ah_attr_set_sl(struct doca_verbs_ah_attr *verbs_ah, uint
  * @return
  * sl attribute.
  */
-uint8_t doca_verbs_ah_get_sl(const struct doca_verbs_ah_attr *verbs_ah);
+uint8_t doca_verbs_ah_get_sl(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set sgid_index attribute for verbs_ah.
@@ -1528,8 +1452,7 @@ uint8_t doca_verbs_ah_get_sl(const struct doca_verbs_ah_attr *verbs_ah);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_sgid_index(struct doca_verbs_ah_attr *verbs_ah,
-                                               uint8_t sgid_index);
+doca_error_t doca_verbs_ah_attr_set_sgid_index(doca_verbs_ah_attr_t *ah_attr, uint8_t sgid_index);
 
 /**
  * @brief Get sgid_index attribute from verbs_ah.
@@ -1540,7 +1463,7 @@ doca_error_t doca_verbs_ah_attr_set_sgid_index(struct doca_verbs_ah_attr *verbs_
  * @return
  * sgid_index attribute.
  */
-uint8_t doca_verbs_ah_get_sgid_index(const struct doca_verbs_ah_attr *verbs_ah);
+uint8_t doca_verbs_ah_get_sgid_index(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set static_rate attribute for verbs_ah.
@@ -1555,8 +1478,7 @@ uint8_t doca_verbs_ah_get_sgid_index(const struct doca_verbs_ah_attr *verbs_ah);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_static_rate(struct doca_verbs_ah_attr *verbs_ah,
-                                                uint8_t static_rate);
+doca_error_t doca_verbs_ah_attr_set_static_rate(doca_verbs_ah_attr_t *ah_attr, uint8_t static_rate);
 
 /**
  * @brief Get static_rate attribute from verbs_ah.
@@ -1567,7 +1489,7 @@ doca_error_t doca_verbs_ah_attr_set_static_rate(struct doca_verbs_ah_attr *verbs
  * @return
  * static_rate attribute.
  */
-uint8_t doca_verbs_ah_get_static_rate(const struct doca_verbs_ah_attr *verbs_ah);
+uint8_t doca_verbs_ah_get_static_rate(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set hop_limit attribute for verbs_ah.
@@ -1582,8 +1504,7 @@ uint8_t doca_verbs_ah_get_static_rate(const struct doca_verbs_ah_attr *verbs_ah)
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_hop_limit(struct doca_verbs_ah_attr *verbs_ah,
-                                              uint8_t hop_limit);
+doca_error_t doca_verbs_ah_attr_set_hop_limit(doca_verbs_ah_attr_t *ah_attr, uint8_t hop_limit);
 
 /**
  * @brief Get hop_limit attribute from verbs_ah.
@@ -1594,7 +1515,7 @@ doca_error_t doca_verbs_ah_attr_set_hop_limit(struct doca_verbs_ah_attr *verbs_a
  * @return
  * hop_limit attribute.
  */
-uint8_t doca_verbs_ah_get_hop_limit(const struct doca_verbs_ah_attr *verbs_ah);
+uint8_t doca_verbs_ah_get_hop_limit(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Set traffic_class attribute for verbs_ah.
@@ -1609,7 +1530,7 @@ uint8_t doca_verbs_ah_get_hop_limit(const struct doca_verbs_ah_attr *verbs_ah);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_ah_attr_set_traffic_class(struct doca_verbs_ah_attr *verbs_ah,
+doca_error_t doca_verbs_ah_attr_set_traffic_class(doca_verbs_ah_attr_t *ah_attr,
                                                   uint8_t traffic_class);
 
 /**
@@ -1621,14 +1542,14 @@ doca_error_t doca_verbs_ah_attr_set_traffic_class(struct doca_verbs_ah_attr *ver
  * @return
  * traffic_class attribute.
  */
-uint8_t doca_verbs_ah_get_traffic_class(const struct doca_verbs_ah_attr *verbs_ah);
+uint8_t doca_verbs_ah_get_traffic_class(const doca_verbs_ah_attr_t *ah_attr);
 
 /**
  * @brief Create a DOCA Verbs Queue Pair instance.
  *
- * @param [in] context
- * Pointer to ibv_context instance.
- * @param [in] verbs_qp_init_attr
+ * @param [in] net_dev
+ * Pointer to net_dev with the ibv_context instance.
+ * @param [in] qp_init_attr
  * Pointer to qp_init_attr instance.
  * @param [out] verbs_qp
  * Pointer to pointer to be set to point to the created verbs_qp instance.
@@ -1639,9 +1560,8 @@ uint8_t doca_verbs_ah_get_traffic_class(const struct doca_verbs_ah_attr *verbs_a
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_qp_create(struct ibv_context *context,
-                                  struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-                                  struct doca_verbs_qp **verbs_qp);
+doca_error_t doca_verbs_qp_create(doca_dev_t *net_dev, doca_verbs_qp_init_attr_t *qp_init_attr,
+                                  doca_verbs_qp_t **verbs_qp);
 
 /**
  * @brief Destroy a DOCA Verbs Queue Pair instance.
@@ -1654,7 +1574,7 @@ doca_error_t doca_verbs_qp_create(struct ibv_context *context,
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_qp_destroy(struct doca_verbs_qp *verbs_qp);
+doca_error_t doca_verbs_qp_destroy(doca_verbs_qp_t *verbs_qp);
 
 /**
  * @brief Modify a DOCA Verbs Queue Pair instance.
@@ -1672,8 +1592,8 @@ doca_error_t doca_verbs_qp_destroy(struct doca_verbs_qp *verbs_qp);
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_qp_modify(struct doca_verbs_qp *verbs_qp,
-                                  struct doca_verbs_qp_attr *verbs_qp_attr, int attr_mask);
+doca_error_t doca_verbs_qp_modify(doca_verbs_qp_t *verbs_qp, doca_verbs_qp_attr_t *qp_attr,
+                                  int attr_mask);
 
 /**
  * @brief Query the attributes of a DOCA Verbs Queue Pair instance.
@@ -1684,6 +1604,8 @@ doca_error_t doca_verbs_qp_modify(struct doca_verbs_qp *verbs_qp,
  * Pointer to verbs_qp_attr instance.
  * @param [out] verbs_qp_init_attr
  * Pointer to verbs_qp_init_attr instance.
+ * @param [out] attr_mask
+ * Pointer to attr_mask. Used only in case of DOCA SDK.
  *
  * @return
  * DOCA_SUCCESS - in case of success.
@@ -1691,9 +1613,8 @@ doca_error_t doca_verbs_qp_modify(struct doca_verbs_qp *verbs_qp,
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_qp_query(struct doca_verbs_qp *verbs_qp,
-                                 struct doca_verbs_qp_attr *verbs_qp_attr,
-                                 struct doca_verbs_qp_init_attr *verbs_qp_init_attr);
+doca_error_t doca_verbs_qp_query(doca_verbs_qp_t *verbs_qp, doca_verbs_qp_attr_t *qp_attr,
+                                 doca_verbs_qp_init_attr_t *qp_init_attr, int *attr_mask = nullptr);
 
 /**
  * @brief Get the Work Queue attributes of a DOCA Verbs Queue Pair instance.
@@ -1711,58 +1632,63 @@ doca_error_t doca_verbs_qp_query(struct doca_verbs_qp *verbs_qp,
  * @param [out] rwqe_size_bytes
  * Receive WQE size in bytes.
  *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-void doca_verbs_qp_get_wq(const struct doca_verbs_qp *verbs_qp, void **sq_buf,
-                          uint32_t *sq_num_entries, void **rq_buf, uint32_t *rq_num_entries,
-                          uint32_t *rwqe_size_bytes);
+doca_error_t doca_verbs_qp_get_wq(const doca_verbs_qp_t *verbs_qp, void **sq_buf,
+                                  uint32_t *sq_num_entries, void **rq_buf, uint32_t *rq_num_entries,
+                                  uint32_t *rwqe_size_bytes);
 
 /**
  * @brief Get the DBR address of a DOCA Verbs Queue Pair instance.
  *
  * @param [in] verbs_qp
  * Pointer to verbs_qp instance.
+ * @param [out] dbr_addr
+ * Pointer to the DBR address.
  *
  * @return
- * The DBR address.
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-void *doca_verbs_qp_get_dbr_addr(const struct doca_verbs_qp *verbs_qp);
+doca_error_t doca_verbs_qp_get_dbr_addr(const doca_verbs_qp_t *verbs_qp, void **dbr_addr);
 
 /**
  * @brief Get the UAR address of a DOCA Verbs Queue Pair instance.
  *
  * @param [in] verbs_qp
  * Pointer to verbs_qp instance.
+ * @param [out] uar_addr
+ * Pointer to the UAR address.
  *
  * @return
- * The UAR register address.
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-void *doca_verbs_qp_get_uar_addr(const struct doca_verbs_qp *verbs_qp);
+doca_error_t doca_verbs_qp_get_uar_addr(const doca_verbs_qp_t *verbs_qp, void **uar_addr);
 
 /**
  * @brief Get the QP number of a DOCA Verbs Queue Pair instance.
  *
  * @param [in] verbs_qp
  * Pointer to verbs_qp instance.
+ * @param [out] qpn
+ * Pointer to the QP number.
  *
  * @return
- * The QP number.
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-uint32_t doca_verbs_qp_get_qpn(const struct doca_verbs_qp *verbs_qp);
-
-/**
- * @brief Get the send dbr mode of a DOCA Verbs Queue Pair instance.
- *
- * @param [in] verbs_qp
- * Pointer to verbs_qp instance.
- *
- * @return
- * The send dbr mode.
- */
-enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_get_send_dbr_mode(
-    const struct doca_verbs_qp *verbs_qp);
+doca_error_t doca_verbs_qp_get_qpn(const doca_verbs_qp_t *verbs_qp, uint32_t *qpn);
 
 /**
  * @brief Get the emulate no dbr ext flag of a DOCA Verbs Queue Pair instance.
+ * Emulated no dbr ext is not supported by DOCA SDK.
  *
  * @param [in] verbs_qp
  * Pointer to verbs_qp instance.
@@ -1770,7 +1696,7 @@ enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_get_send_dbr_mode(
  * @return
  * The emulate no dbr ext flag.
  */
-bool doca_verbs_qp_get_emulate_no_dbr_ext(const struct doca_verbs_qp *verbs_qp);
+bool doca_verbs_qp_get_emulate_no_dbr_ext(const doca_verbs_qp_t *verbs_qp);
 
 /**
  * @brief Create a DOCA Verbs CQ Attributes instance.
@@ -1784,7 +1710,7 @@ bool doca_verbs_qp_get_emulate_no_dbr_ext(const struct doca_verbs_qp *verbs_qp);
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_cq_attr_create(struct doca_verbs_cq_attr **verbs_cq_attr);
+doca_error_t doca_verbs_cq_attr_create(doca_verbs_cq_attr_t **verbs_cq_attr);
 
 /**
  * @brief Destroy a DOCA Verbs CQ Attributes instance.
@@ -1797,7 +1723,7 @@ doca_error_t doca_verbs_cq_attr_create(struct doca_verbs_cq_attr **verbs_cq_attr
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_destroy(struct doca_verbs_cq_attr *verbs_cq_attr);
+doca_error_t doca_verbs_cq_attr_destroy(doca_verbs_cq_attr_t *verbs_cq_attr);
 
 /**
  * @brief Set cq_size attribute for doca_verbs_cq_attr.
@@ -1812,7 +1738,7 @@ doca_error_t doca_verbs_cq_attr_destroy(struct doca_verbs_cq_attr *verbs_cq_attr
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_set_cq_size(struct doca_verbs_cq_attr *cq_attr, uint32_t cq_size);
+doca_error_t doca_verbs_cq_attr_set_cq_size(doca_verbs_cq_attr_t *cq_attr, uint32_t cq_size);
 
 /**
  * @brief Set cq_context attribute for doca_verbs_cq_attr.
@@ -1827,8 +1753,7 @@ doca_error_t doca_verbs_cq_attr_set_cq_size(struct doca_verbs_cq_attr *cq_attr, 
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_set_cq_context(struct doca_verbs_cq_attr *cq_attr,
-                                               void *cq_context);
+doca_error_t doca_verbs_cq_attr_set_cq_context(doca_verbs_cq_attr_t *cq_attr, void *cq_context);
 
 /**
  * @brief Set external umem attribute for doca_verbs_cq_attr.
@@ -1849,32 +1774,33 @@ doca_error_t doca_verbs_cq_attr_set_cq_context(struct doca_verbs_cq_attr *cq_att
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_set_external_umem(struct doca_verbs_cq_attr *cq_attr,
-                                                  struct doca_verbs_umem *external_umem,
+doca_error_t doca_verbs_cq_attr_set_external_umem(doca_verbs_cq_attr_t *cq_attr,
+                                                  doca_verbs_umem_t *external_umem,
                                                   uint64_t external_umem_offset);
 
 /**
- * @brief Set external dbr umem attribute for doca_verbs_cq_attr.
+ * @brief Set external DBR umem attribute for doca_verbs_cq_attr.
  *
- * Setting this attribute means that the user wants to create and provide the dbr umem by himself,
- * in compare with the default mode where the umem is created internally.
- * In that case it is the user responsibility to allocate enough memory for the umem and to free it.
+ * Setting this attribute provides a separate umem for the CQ doorbell record,
+ * instead of packing the DBR inside the CQ ring umem.
+ * This is used when CQ ring and CQ DBR live in different umem slabs
+ * (e.g., for control buffer suballocation).
  *
  * @param [in] cq_attr
  * Pointer to doca_verbs_cq_attr instance.
- * @param [in] external_umem
- * External umem instance.
- * @param [in] external_umem_offset
- * The offset in the external umem buffer to set the Completion Queue.
+ * @param [in] external_dbr_umem
+ * External umem instance for the CQ doorbell record.
+ * @param [in] external_dbr_umem_offset
+ * The offset in the external DBR umem buffer for the CQ doorbell record.
  *
  * @return
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_set_external_dbr_umem(struct doca_verbs_cq_attr *cq_attr,
-                                                      struct doca_verbs_umem *external_umem,
-                                                      uint64_t external_umem_offset);
+doca_error_t doca_verbs_cq_attr_set_external_dbr_umem(doca_verbs_cq_attr_t *cq_attr,
+                                                      doca_verbs_umem_t *external_dbr_umem,
+                                                      uint64_t external_dbr_umem_offset);
 
 /**
  * @brief Set external uar attribute for doca_verbs_cq_attr.
@@ -1892,8 +1818,8 @@ doca_error_t doca_verbs_cq_attr_set_external_dbr_umem(struct doca_verbs_cq_attr 
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_set_external_uar(struct doca_verbs_cq_attr *cq_attr,
-                                                 struct doca_verbs_uar *external_uar);
+doca_error_t doca_verbs_cq_attr_set_external_uar(doca_verbs_cq_attr_t *cq_attr,
+                                                 doca_verbs_uar_t *external_uar);
 
 /**
  * @brief Enable cq_overrun attribute for doca_verbs_cq_attr.
@@ -1908,7 +1834,7 @@ doca_error_t doca_verbs_cq_attr_set_external_uar(struct doca_verbs_cq_attr *cq_a
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_set_cq_overrun(struct doca_verbs_cq_attr *cq_attr,
+doca_error_t doca_verbs_cq_attr_set_cq_overrun(doca_verbs_cq_attr_t *cq_attr,
                                                enum doca_verbs_cq_overrun overrun);
 
 /**
@@ -1924,16 +1850,60 @@ doca_error_t doca_verbs_cq_attr_set_cq_overrun(struct doca_verbs_cq_attr *cq_att
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_attr_set_cq_collapsed(struct doca_verbs_cq_attr *cq_attr, uint8_t cc);
+doca_error_t doca_verbs_cq_attr_set_cq_collapsed(doca_verbs_cq_attr_t *cq_attr, uint8_t cc);
+
+/**
+ * @brief Set comp_channel attribute for doca_verbs_cq_attr.
+ *
+ * @param [in] cq_attr
+ * Pointer to doca_verbs_cq_attr instance.
+ * @param [in] comp_channel
+ * Pointer to completion channel to bind the CQ to. comp_channel may be null in case the application
+ * regrets setting a completion channel.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_cq_attr_set_comp_channel(doca_verbs_cq_attr_t *cq_attr,
+                                                 doca_verbs_comp_channel_t *comp_channel);
+
+/**
+ * @brief CQ doorbell create state
+ */
+enum doca_verbs_cq_state {
+    DOCA_VERBS_CQ_ST_NO_ACTION,
+    DOCA_VERBS_CQ_ST_SOLICITED_NOTIFICATION_REQUEST_ARMED,
+    DOCA_VERBS_CQ_ST_NOTIFICATION_REQUEST_ARMED,
+    DOCA_VERBS_CQ_ST_FIRED,
+};
+
+/**
+ * @brief Set CQ doorbell create state attribute for doca_verbs_cq_attr.
+ *
+ * @param [in] cq_attr
+ * Pointer to doca_verbs_cq_attr instance.
+ * @param [in] cq_state
+ * Create state (@see doca_verbs_cq_state).
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_cq_attr_set_st(doca_verbs_cq_attr_t *cq_attr,
+                                       enum doca_verbs_cq_state cq_state);
+
 /**
  * @brief Create a DOCA Verbs Completion Queue instance.
  *
- * @param [in] context
- * Pointer to ibv_context instance.
- * @param [in] verbs_cq_attr
- * Pointer to verbs_cq_attr instance.
- * @param [out] verbs_cq
- * Pointer to pointer to be set to point to the created doca_verbs_cq instance.
+ * @param [in] net_dev
+ * DOCA network device
+ * @param [in] cq_attr
+ * Pointer to cq_attr instance.
+ * @param [out] cq
+ * Pointer to pointer to be set to point to the created doca_verbs_cq_t instance.
  *
  * @return
  * DOCA_SUCCESS - in case of success.
@@ -1941,9 +1911,8 @@ doca_error_t doca_verbs_cq_attr_set_cq_collapsed(struct doca_verbs_cq_attr *cq_a
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
  */
-doca_error_t doca_verbs_cq_create(struct ibv_context *context,
-                                  struct doca_verbs_cq_attr *verbs_cq_attr,
-                                  struct doca_verbs_cq **verbs_cq);
+doca_error_t doca_verbs_cq_create(doca_dev_t *net_dev, doca_verbs_cq_attr_t *cq_attr,
+                                  doca_verbs_cq_t **cq);
 
 /**
  * @brief Destroy a DOCA Verbs Completion Queue instance.
@@ -1956,7 +1925,7 @@ doca_error_t doca_verbs_cq_create(struct ibv_context *context,
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_cq_destroy(struct doca_verbs_cq *verbs_cq);
+doca_error_t doca_verbs_cq_destroy(doca_verbs_cq_t *verbs_cq);
 
 /**
  * @brief Get the Completion Queue attributes of a DOCA Verbs Completion Queue instance.
@@ -1971,8 +1940,8 @@ doca_error_t doca_verbs_cq_destroy(struct doca_verbs_cq *verbs_cq);
  * The size of each entry in Completion Queue buffer.
  *
  */
-void doca_verbs_cq_get_wq(struct doca_verbs_cq *verbs_cq, void **cq_buf, uint32_t *cq_num_entries,
-                          uint8_t *cq_entry_size);
+doca_error_t doca_verbs_cq_get_wq(doca_verbs_cq_t *verbs_cq, void **cq_buf,
+                                  uint32_t *cq_num_entries, uint8_t *cq_entry_size);
 
 /**
  * @brief Get the DBR address of a DOCA Verbs Completion Queue instance.
@@ -1986,19 +1955,96 @@ void doca_verbs_cq_get_wq(struct doca_verbs_cq *verbs_cq, void **cq_buf, uint32_
  * @param [out] arm_dbr
  * Pointer to the arm doorbell record
  */
-void doca_verbs_cq_get_dbr_addr(struct doca_verbs_cq *verbs_cq, uint64_t **uar_db_reg,
-                                uint32_t **ci_dbr, uint32_t **arm_dbr);
+doca_error_t doca_verbs_cq_get_dbr_db_addr(doca_verbs_cq_t *verbs_cq, uint64_t **uar_db_reg,
+                                           uint32_t **ci_dbr, uint32_t **arm_dbr);
 
 /**
  * @brief Get the CQ number of a DOCA Verbs CQ instance.
  *
  * @param [in] verbs_cq
  * Pointer to verbs_cq instance.
+ * @param [out] cqn
+ * Pointer to the CQ number
  *
  * @return
  * The CQ number.
  */
-uint32_t doca_verbs_cq_get_cqn(const struct doca_verbs_cq *verbs_cq);
+doca_error_t doca_verbs_cq_get_cq_num(const doca_verbs_cq_t *verbs_cq, uint32_t *cqn);
+
+/**
+ * @brief Set cq_context attribute for verbs_cq. This function allows to set cq_context if the
+ * desired user data is not available at CQ creation time.
+ *
+ * @param [in] verbs_cq
+ * Pointer to verbs_cq instance.
+ * @param [in] cq_context
+ * User data. cq_context may be null in case the application regrets setting a user data.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_cq_set_cq_context(doca_verbs_cq_t *verbs_cq, void *cq_context);
+
+/**
+ * @brief Create a DOCA Verbs Completion Channel instance.
+ *
+ * @param [in] net_dev
+ * Pointer to net_dev instance.
+ * @param [out] verbs_comp_channel
+ * Pointer to pointer to be set to point to the created verbs_comp_channel instance.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_NO_MEMORY - failed to allocate resources.
+ */
+doca_error_t doca_verbs_comp_channel_create(const doca_dev_t *net_dev,
+                                            doca_verbs_comp_channel_t **verbs_comp_channel);
+
+/**
+ * @brief Destroy a DOCA Verbs Completion Channel instance.
+ *
+ * @param [in] verbs_comp_channel
+ * Pointer to verbs_comp_channel instance.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_comp_channel_destroy(doca_verbs_comp_channel_t *verbs_comp_channel);
+
+/**
+ * @brief Get the next event from a DOCA Verbs Completion Channel.
+ *
+ * @param [in] verbs_comp_channel
+ * Pointer to verbs_comp_channel instance to get the next event from.
+ * @param [out] cq_context
+ * Pointer to the user-data associated with the event.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_get_cq_comp_channel_event(doca_verbs_comp_channel_t *verbs_comp_channel,
+                                                  void **cq_context);
+
+/**
+ * Acknowledge completion events
+ *
+ * Every event received from doca_verbs_get_cq_event() must be acknowledged using this API.
+ * To prevent races, the CQ destroy will wait until all events are acknowledged.
+ *
+ * @param [in] verbs_cq
+ * Pointer to the verbs_cq instance.
+ * @param [in] nevents
+ * The number of events to acknowledge.
+ */
+doca_error_t doca_verbs_ack_cq_events(doca_verbs_cq_t *verbs_cq, unsigned int nevents);
 
 /**
  * @brief Create a DOCA Verbs SRQ Init Attributes instance.
@@ -2158,7 +2204,7 @@ struct ibv_pd *doca_verbs_srq_init_attr_get_pd(
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
 doca_error_t doca_verbs_srq_init_attr_set_external_umem(
-    struct doca_verbs_srq_init_attr *verbs_srq_init_attr, struct doca_verbs_umem *external_umem,
+    struct doca_verbs_srq_init_attr *verbs_srq_init_attr, doca_verbs_umem_t *external_umem,
     uint64_t external_umem_offset);
 
 /**
@@ -2177,8 +2223,8 @@ doca_error_t doca_verbs_srq_init_attr_set_external_umem(
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
 doca_error_t doca_verbs_srq_init_attr_get_external_umem(
-    const struct doca_verbs_srq_init_attr *verbs_srq_init_attr,
-    struct doca_verbs_umem **external_umem, uint64_t *external_umem_offset);
+    const struct doca_verbs_srq_init_attr *verbs_srq_init_attr, doca_verbs_umem_t **external_umem,
+    uint64_t *external_umem_offset);
 
 /**
  * @brief Create a DOCA Verbs Shared Receive Queue instance.
@@ -2485,8 +2531,10 @@ uint8_t doca_verbs_device_attr_get_max_qp_init_rd_atom(
 /**
  * @brief Create an instance of DOCA Verbs UMEM.
  *
- * @param [in] context
- * Pointer to ibv_context instance.
+ * @param [in] net_dev
+ * Network device handler.
+ * @param [in] gpu
+ * GPU device handler.
  * @param [in] address
  * The umem address.
  * @param [in] size
@@ -2506,9 +2554,9 @@ uint8_t doca_verbs_device_attr_get_max_qp_init_rd_atom(
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  * - DOCA_ERROR_DRIVER - in case of error in a DOCA driver call.
  */
-doca_error_t doca_verbs_umem_create(struct ibv_context *context, void *address, size_t size,
-                                    uint32_t access_flags, int dmabuf_id, size_t dmabuf_offset,
-                                    struct doca_verbs_umem **umem_obj);
+doca_error_t doca_verbs_umem_create(doca_dev_t *net_dev, doca_gpu_t *gpu, void *address,
+                                    size_t size, uint32_t access_flags, int dmabuf_id,
+                                    size_t dmabuf_offset, doca_verbs_umem_t **umem_obj);
 
 /**
  * @brief Destroy an instance of DOCA Verbs UMEM.
@@ -2522,7 +2570,7 @@ doca_error_t doca_verbs_umem_create(struct ibv_context *context, void *address, 
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  * - DOCA_ERROR_DRIVER - in case of error in a DOCA driver call.
  */
-doca_error_t doca_verbs_umem_destroy(struct doca_verbs_umem *umem_obj);
+doca_error_t doca_verbs_umem_destroy(doca_verbs_umem_t *umem_obj);
 
 /**
  * @brief This method retrieves the umem id
@@ -2537,7 +2585,7 @@ doca_error_t doca_verbs_umem_destroy(struct doca_verbs_umem *umem_obj);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  */
-doca_error_t doca_verbs_umem_get_id(const struct doca_verbs_umem *umem_obj, uint32_t *umem_id);
+doca_error_t doca_verbs_umem_get_id(const doca_verbs_umem_t *umem_obj, uint32_t *umem_id);
 
 /**
  * @brief This method retrieves the umem size
@@ -2552,7 +2600,7 @@ doca_error_t doca_verbs_umem_get_id(const struct doca_verbs_umem *umem_obj, uint
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  */
-doca_error_t doca_verbs_umem_get_size(const struct doca_verbs_umem *umem_obj, size_t *umem_size);
+doca_error_t doca_verbs_umem_get_size(const doca_verbs_umem_t *umem_obj, size_t *umem_size);
 
 /**
  * @brief This method retrieves the umem address
@@ -2567,14 +2615,13 @@ doca_error_t doca_verbs_umem_get_size(const struct doca_verbs_umem *umem_obj, si
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  */
-doca_error_t doca_verbs_umem_get_address(const struct doca_verbs_umem *umem_obj,
-                                         void **umem_address);
+doca_error_t doca_verbs_umem_get_address(const doca_verbs_umem_t *umem_obj, void **umem_address);
 
 /**
  * @brief Create a UAR object
  *
- * @param [in] context
- * Pointer to ibv_context
+ * @param [in] net_dev
+ * Pointer to doca_dev_t
  * @param [in] allocation_type
  * doca_uar_allocation_type
  * @param [out] uar
@@ -2586,9 +2633,9 @@ doca_error_t doca_verbs_umem_get_address(const struct doca_verbs_umem *umem_obj,
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  * - DOCA_ERROR_DRIVER - in case of error in a DOCA driver call.
  */
-doca_error_t doca_verbs_uar_create(struct ibv_context *context,
+doca_error_t doca_verbs_uar_create(doca_dev_t *net_dev,
                                    enum doca_verbs_uar_allocation_type allocation_type,
-                                   struct doca_verbs_uar **uar_obj);
+                                   doca_verbs_uar_t **uar_obj);
 
 /**
  * @brief Destroy a UAR object
@@ -2601,7 +2648,7 @@ doca_error_t doca_verbs_uar_create(struct ibv_context *context,
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_uar_destroy(struct doca_verbs_uar *uar_obj);
+doca_error_t doca_verbs_uar_destroy(doca_verbs_uar_t *uar_obj);
 
 /**
  * @brief This method retrieves the UAR ID
@@ -2616,7 +2663,7 @@ doca_error_t doca_verbs_uar_destroy(struct doca_verbs_uar *uar_obj);
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_uar_id_get(const struct doca_verbs_uar *uar, uint32_t *id);
+doca_error_t doca_verbs_uar_id_get(const doca_verbs_uar_t *uar, uint32_t *id);
 
 /**
  * @brief This method retrieves the uar register address
@@ -2631,7 +2678,7 @@ doca_error_t doca_verbs_uar_id_get(const struct doca_verbs_uar *uar, uint32_t *i
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
  */
-doca_error_t doca_verbs_uar_reg_addr_get(const struct doca_verbs_uar *uar_obj, void **reg_addr);
+doca_error_t doca_verbs_uar_reg_addr_get(const doca_verbs_uar_t *uar_obj, void **reg_addr);
 
 /**
  * @brief This method retrieves the dbr less address
@@ -2641,7 +2688,7 @@ doca_error_t doca_verbs_uar_reg_addr_get(const struct doca_verbs_uar *uar_obj, v
  * @param [out] dbr_less_addr
  * The dbr less address
  */
-doca_error_t doca_verbs_uar_dbr_less_addr_get(const struct doca_verbs_uar *uar_obj,
+doca_error_t doca_verbs_uar_dbr_less_addr_get(const doca_verbs_uar_t *uar_obj,
                                               void **dbr_less_addr);
 
 #ifdef __cplusplus

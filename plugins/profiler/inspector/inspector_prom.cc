@@ -546,7 +546,7 @@ static inspectorResult_t inspectorPromWriteP2pBucket(FILE* file,
  *   inspectorResult_t - success or error code.
  */
 static inspectorResult_t inspectorPromCommInfoDumpColl(struct inspectorCommInfo* commInfo,
-                                                       inspectorPromCollBucketMap& buckets,
+                                                       inspectorPromDevice& device,
                                                        bool* needs_writing) {
   if (commInfo == nullptr) {
     return inspectorSuccess;
@@ -586,7 +586,7 @@ static inspectorResult_t inspectorPromCommInfoDumpColl(struct inspectorCommInfo*
         commName,
         algoProto
       };
-      inspectorPromAggUpdate(buckets[key],
+      inspectorPromAggUpdate(device.collBuckets[key],
                              collInfo.algoBwGbs,
                              collInfo.busBwGbs,
                              collInfo.execTimeUsecs);
@@ -597,7 +597,7 @@ static inspectorResult_t inspectorPromCommInfoDumpColl(struct inspectorCommInfo*
 }
 
 static inspectorResult_t inspectorPromCommInfoDumpP2p(struct inspectorCommInfo* commInfo,
-                                                      inspectorPromP2pBucketMap& buckets,
+                                                      inspectorPromDevice& device,
                                                       bool* needs_writing) {
   if (commInfo == nullptr) {
     return inspectorSuccess;
@@ -633,7 +633,7 @@ static inspectorResult_t inspectorPromCommInfoDumpP2p(struct inspectorCommInfo* 
         msgSizeRangeBytes,
         commName
       };
-      inspectorPromAggUpdate(buckets[key],
+      inspectorPromAggUpdate(device.p2pBuckets[key],
                              p2pInfo.algoBwGbs,
                              p2pInfo.busBwGbs,
                              p2pInfo.execTimeUsecs);
@@ -644,13 +644,16 @@ static inspectorResult_t inspectorPromCommInfoDumpP2p(struct inspectorCommInfo* 
 }
 
 static inspectorResult_t inspectorPromCommInfoDump(struct inspectorCommInfo* commInfo,
-                                                   inspectorPromCollBucketMap& collBuckets,
-                                                   inspectorPromP2pBucketMap& p2pBuckets,
+                                                   inspectorPromDevice& device,
                                                    bool* needs_writing) {
   *needs_writing = false;
 
-  INS_CHK(inspectorPromCommInfoDumpColl(commInfo, collBuckets, needs_writing));
-  INS_CHK(inspectorPromCommInfoDumpP2p(commInfo, p2pBuckets, needs_writing));
+  INS_CHK(inspectorPromCommInfoDumpColl(commInfo,
+                                        device,
+                                        needs_writing));
+  INS_CHK(inspectorPromCommInfoDumpP2p(commInfo,
+                                       device,
+                                       needs_writing));
 
   return inspectorSuccess;
 }
@@ -692,8 +695,7 @@ static inspectorResult_t inspectorPromFillDeviceBuckets(struct inspectorCommInfo
     }
 
     INS_CHK(inspectorPromCommInfoDump(itr,
-                                      device.collBuckets,
-                                      device.p2pBuckets,
+                                      device,
                                       &needs_writing));
 
     if (needs_writing) {
@@ -749,7 +751,6 @@ static inspectorResult_t inspectorPromWriteDeviceBuckets(std::map<std::string,
   }
   return inspectorSuccess;
 }
-
 
 /*
  * Description:

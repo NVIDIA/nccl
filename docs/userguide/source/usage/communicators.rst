@@ -45,6 +45,37 @@ Related links:
  * :c:func:`ncclGetUniqueId`
  * :c:func:`ncclCommInitRank`
 
+.. _using_nccl_with_mig:
+
+Using MIG instances
+-------------------
+(since 2.31) (experimental)
+
+Starting with NCCL 2.31, a communicator can use multiple Multi-Instance GPU
+(MIG) instances. Each rank must select a distinct MIG instance as its CUDA
+device; multiple ranks using the same MIG instance are not supported. Because
+each MIG instance is a distinct CUDA device, this configuration does not
+require ``NCCL_MULTI_RANK_GPU_ENABLE``.
+
+Since MIG does not support NVLink P2P from CUDA driver, Multi-Node NVLink
+(MNNVL) needs to be disabled when using NCCL with MIG: ``NCCL_MNNVL_ENABLE=0``.
+
+NCCL will not use NVLink SHARP because NVLS is not supported with MIG.
+
+Requires CUDA driver version 13.0 or greater.
+
+.. warning::
+
+   Note that MIG support in NCCL is experimental and not thoroughly tested with
+   large scale deployment. In the 2.31 release, we have validated up to 8 GPUs with
+   7 MIG instances on each GPU and running the typical ``nccl-tests`` collectives.
+   Given the massive validation combinations possible with this feature, we will
+   keep expanding test coverage in future releases.
+
+For information about configuring MIG instances and selecting them as CUDA
+devices, see the `NVIDIA Multi-Instance GPU User
+Guide <https://docs.nvidia.com/datacenter/tesla/mig-user-guide/getting-started-with-mig.html>`_.
+
 .. _init-rank-config:
 
 Creating a communicator with options
@@ -338,6 +369,9 @@ ncclCommFinalize.
 Once all NCCL operations are complete, the communicator will transition to the *ncclSuccess* state. Users can
 query that state with ncclCommGetAsyncError.
 If a communicator is marked as nonblocking, this operation is nonblocking; otherwise, it is blocking.
+
+ncclCommFinalize is an intra-node collective call. When a single thread finalizes multiple ranks
+(multiple GPUs per thread), the calls must be grouped with ncclGroupStart/ncclGroupEnd to avoid a hang.
 
 Related link: :c:func:`ncclCommFinalize`
 

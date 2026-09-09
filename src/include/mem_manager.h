@@ -150,8 +150,20 @@ ncclResult_t ncclMemTrackImportFromPeer(struct ncclMemManager* manager, void* pt
                                         CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
                                         ncclMemType_t memType, int ownerRank, int ownerDev, void* ownerPtr);
 
-// Untrack allocation
-ncclResult_t ncclMemUntrack(struct ncclMemManager* manager, void* ptr, size_t size);
+// Result of untracking a dynamic allocation.
+struct ncclMemUntrackInfo {
+  ncclMemType_t memType;          // ncclMemPersist if no dynamic entry existed
+  ncclDynMemState_t dynMemState;  // only meaningful when memType != ncclMemPersist
+  size_t dynMemSize;              // only meaningful when memType != ncclMemPersist
+};
+
+// Untrack a dynamic (scratch/offload) allocation: removes its linked-list entry if present,
+// updates the dynamic counters, and reports what was found in info. Persistent memory has no
+// entry, so it reports memType == ncclMemPersist and leaves the persistent counter untouched.
+ncclResult_t ncclMemUntrackDynamic(struct ncclMemManager* manager, void* ptr, struct ncclMemUntrackInfo* info);
+
+// Decrement the persistent-memory counter. No linked-list traversal.
+ncclResult_t ncclMemUntrackPersist(struct ncclMemManager* manager, void* ptr, size_t size);
 
 // Add peer info for buffers in the linked list entries (only for dynamic memory: scratch/offload)
 ncclResult_t ncclDynMemMarkExportToPeer(struct ncclMemManager* manager, void* ptr, int peerRank);

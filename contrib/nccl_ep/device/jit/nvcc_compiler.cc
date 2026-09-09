@@ -211,9 +211,7 @@ std::vector<std::string> NvccCompiler::compile_options(const JitCompileConfig& c
     return options;
 }
 
-bool NvccCompiler::compile_to_cubin(
-    const JitCompileInput& input,
-    JitCompileOutput* output) const {
+bool NvccCompiler::compile_to_cubin(const JitCompileInput& input, JitCompileOutput* output) const {
     if (output == nullptr) return false;
     output->cubin.clear();
     output->log.clear();
@@ -275,7 +273,9 @@ bool NvccCompiler::compile_to_cubin(
     output->cubin = read_file_or_empty(input.cubin_path);
     if (output->cubin.empty()) {
         output->log += "NVCC compile failed: cubin was not produced at " + input.cubin_path.string() + "\n";
-        compiler_log(input, "compiler=nvcc action=compile_failed reason=missing_cubin path=" + input.cubin_path.string());
+        compiler_log(
+            input,
+            "compiler=nvcc action=compile_failed reason=missing_cubin path=" + input.cubin_path.string());
         return false;
     }
 

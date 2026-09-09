@@ -4,13 +4,23 @@
 #
 # See LICENSE.txt for more license information
 #
-.PHONY: all clean
+.PHONY: all clean ir-emit
 
 EMIT_LLVM_IR ?= 0
+NCCL_EMIT_LTO_IR ?= 0
+
+# Set up one make target to avoid race
+IR_GOALS :=
+ifneq ($(EMIT_LLVM_IR), 0)
+IR_GOALS += llvm_ir
+endif
+ifneq ($(NCCL_EMIT_LTO_IR), 0)
+IR_GOALS += ltoir
+endif
 
 default: src.build
-ifneq ($(EMIT_LLVM_IR), 0)
-default: ir.build
+ifneq ($(IR_GOALS),)
+default: ir-emit
 endif
 
 install: src.install
@@ -20,6 +30,8 @@ TARGETS := src pkg nccl4py ir
 clean: ${TARGETS:%=%.clean}
 examples.build: src.build
 ir.build: src.build
+ir.llvm_ir: src.build
+ir.ltoir: src.build
 LICENSE_FILES := LICENSE.txt
 LICENSE_TARGETS := $(LICENSE_FILES:%=$(BUILDDIR)/%)
 lic: $(LICENSE_TARGETS)
@@ -44,6 +56,9 @@ nccl4py.%:
 # IR generation requires src.build first
 ir.%:
 	${MAKE} -C bindings/ir $* BUILDDIR=${ABSBUILDDIR}
+
+ir-emit: src.build
+	${MAKE} -C bindings/ir $(IR_GOALS) BUILDDIR=${ABSBUILDDIR}
 
 pkg.debian.prep: lic
 pkg.txz.prep: lic

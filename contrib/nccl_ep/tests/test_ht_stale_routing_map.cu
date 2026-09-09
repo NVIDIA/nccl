@@ -71,8 +71,7 @@ TEST_F(HtStaleRoutingMapTest, StaleTailTriggersIllegalAddress) {
     CUDA_ASSERT(cudaMemcpy(d_topk_iter1, h_iter1, sizeof(h_iter1), cudaMemcpyHostToDevice));
 
     ncclEpTensor_t* t_topk_iter1 = nullptr;
-    NCCL_ASSERT(epTensorCreate(&t_topk_iter1, 2, ncclInt64,
-                               d_topk_iter1, kNumTokens, kTopK));
+    NCCL_ASSERT(epTensorCreate(&t_topk_iter1, 2, ncclInt64, d_topk_iter1, kNumTokens, kTopK));
 
     // ── iter-2 topk_idx [1, kTopK] ───────────────────────────────────────────
     // Single token; routed to expert 0 only. Forward-pass routing for this
@@ -80,18 +79,21 @@ TEST_F(HtStaleRoutingMapTest, StaleTailTriggersIllegalAddress) {
     constexpr int kIter2NumTokens = 1;
     int64_t* d_topk_iter2 = nullptr;
     CUDA_ASSERT(cudaMalloc(&d_topk_iter2, kIter2NumTokens * kTopK * sizeof(int64_t)));
-    int64_t h_iter2[kIter2NumTokens * kTopK] = { kIter2Expert };
+    int64_t h_iter2[kIter2NumTokens * kTopK] = {kIter2Expert};
     CUDA_ASSERT(cudaMemcpy(d_topk_iter2, h_iter2, sizeof(h_iter2), cudaMemcpyHostToDevice));
 
     ncclEpTensor_t* t_topk_iter2 = nullptr;
-    NCCL_ASSERT(epTensorCreate(&t_topk_iter2, 2, ncclInt64,
-                               d_topk_iter2, kIter2NumTokens, kTopK));
+    NCCL_ASSERT(epTensorCreate(&t_topk_iter2, 2, ncclInt64, d_topk_iter2, kIter2NumTokens, kTopK));
 
     // ── init the HT handle (FLAT layout) ─────────────────────────────────────
     ncclEpHandle_t h = nullptr;
-    NCCL_ASSERT(ncclEpInitHandle(&h, g_ep_group, NCCL_EP_LAYOUT_FLAT,
-                                 /*config=*/nullptr, kTopK,
-                                 /*handle_mem=*/nullptr));
+    NCCL_ASSERT(ncclEpInitHandle(
+        &h,
+        g_ep_group,
+        NCCL_EP_LAYOUT_FLAT,
+        /*config=*/nullptr,
+        kTopK,
+        /*handle_mem=*/nullptr));
     ASSERT_NE(h, nullptr);
 
     // ── Iteration 1: full num_tokens, dirty the routing map ──────────────────
@@ -105,44 +107,38 @@ TEST_F(HtStaleRoutingMapTest, StaleTailTriggersIllegalAddress) {
         std::vector<nv_bfloat16> h_tok(kNumTokens * kHidden);
         for (int i = 0; i < kNumTokens; ++i) {
             float v = static_cast<float>(g_rank * kNumTokens + i + 1);
-            for (int hh = 0; hh < kHidden; ++hh)
-                h_tok[i * kHidden + hh] = __float2bfloat16(v);
+            for (int hh = 0; hh < kHidden; ++hh) h_tok[i * kHidden + hh] = __float2bfloat16(v);
         }
         std::vector<float> h_w(kNumTokens * kTopK, 1.0f);
 
         nv_bfloat16 *d_tok = nullptr, *d_recv = nullptr;
-        float       *d_w   = nullptr, *d_recv_w = nullptr;
-        int64_t     *d_recv_idx = nullptr;
-        CUDA_ASSERT(cudaMalloc(&d_tok,      kNumTokens    * kHidden * sizeof(nv_bfloat16)));
-        CUDA_ASSERT(cudaMalloc(&d_recv,     kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
-        CUDA_ASSERT(cudaMemset(d_recv, 0,   kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
-        CUDA_ASSERT(cudaMalloc(&d_w,        kNumTokens    * kTopK   * sizeof(float)));
-        CUDA_ASSERT(cudaMalloc(&d_recv_w,   kMaxRecvSlots * kTopK   * sizeof(float)));
-        CUDA_ASSERT(cudaMemset(d_recv_w, 0, kMaxRecvSlots * kTopK   * sizeof(float)));
-        CUDA_ASSERT(cudaMalloc(&d_recv_idx, kMaxRecvSlots * kTopK   * sizeof(int64_t)));
-        CUDA_ASSERT(cudaMemcpy(d_tok, h_tok.data(),
-                               kNumTokens * kHidden * sizeof(nv_bfloat16),
-                               cudaMemcpyHostToDevice));
-        CUDA_ASSERT(cudaMemcpy(d_w, h_w.data(),
-                               kNumTokens * kTopK * sizeof(float),
-                               cudaMemcpyHostToDevice));
+        float *d_w = nullptr, *d_recv_w = nullptr;
+        int64_t* d_recv_idx = nullptr;
+        CUDA_ASSERT(cudaMalloc(&d_tok, kNumTokens * kHidden * sizeof(nv_bfloat16)));
+        CUDA_ASSERT(cudaMalloc(&d_recv, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
+        CUDA_ASSERT(cudaMemset(d_recv, 0, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
+        CUDA_ASSERT(cudaMalloc(&d_w, kNumTokens * kTopK * sizeof(float)));
+        CUDA_ASSERT(cudaMalloc(&d_recv_w, kMaxRecvSlots * kTopK * sizeof(float)));
+        CUDA_ASSERT(cudaMemset(d_recv_w, 0, kMaxRecvSlots * kTopK * sizeof(float)));
+        CUDA_ASSERT(cudaMalloc(&d_recv_idx, kMaxRecvSlots * kTopK * sizeof(int64_t)));
+        CUDA_ASSERT(
+            cudaMemcpy(d_tok, h_tok.data(), kNumTokens * kHidden * sizeof(nv_bfloat16), cudaMemcpyHostToDevice));
+        CUDA_ASSERT(cudaMemcpy(d_w, h_w.data(), kNumTokens * kTopK * sizeof(float), cudaMemcpyHostToDevice));
 
-        ncclEpTensor_t *t_tok = nullptr, *t_recv = nullptr,
-                       *t_w   = nullptr, *t_recv_w = nullptr,
-                       *t_recv_idx = nullptr;
-        NCCL_ASSERT(epTensorCreate(&t_tok,      2, ncclBfloat16, d_tok,      kNumTokens,    kHidden));
-        NCCL_ASSERT(epTensorCreate(&t_recv,     2, ncclBfloat16, d_recv,     kMaxRecvSlots, kHidden));
-        NCCL_ASSERT(epTensorCreate(&t_w,        2, ncclFloat32,  d_w,        kNumTokens,    kTopK));
-        NCCL_ASSERT(epTensorCreate(&t_recv_w,   2, ncclFloat32,  d_recv_w,   kMaxRecvSlots, kTopK));
-        NCCL_ASSERT(epTensorCreate(&t_recv_idx, 2, ncclInt64,    d_recv_idx, kMaxRecvSlots, kTopK));
+        ncclEpTensor_t *t_tok = nullptr, *t_recv = nullptr, *t_w = nullptr, *t_recv_w = nullptr, *t_recv_idx = nullptr;
+        NCCL_ASSERT(epTensorCreate(&t_tok, 2, ncclBfloat16, d_tok, kNumTokens, kHidden));
+        NCCL_ASSERT(epTensorCreate(&t_recv, 2, ncclBfloat16, d_recv, kMaxRecvSlots, kHidden));
+        NCCL_ASSERT(epTensorCreate(&t_w, 2, ncclFloat32, d_w, kNumTokens, kTopK));
+        NCCL_ASSERT(epTensorCreate(&t_recv_w, 2, ncclFloat32, d_recv_w, kMaxRecvSlots, kTopK));
+        NCCL_ASSERT(epTensorCreate(&t_recv_idx, 2, ncclInt64, d_recv_idx, kMaxRecvSlots, kTopK));
 
-        ncclEpDispatchInputs_t  d_in  = NCCL_EP_DISPATCH_INPUTS_INIT;
+        ncclEpDispatchInputs_t d_in = NCCL_EP_DISPATCH_INPUTS_INIT;
         ncclEpDispatchOutputs_t d_out = NCCL_EP_DISPATCH_OUTPUTS_INIT;
-        d_in.tokens        = t_tok;
-        d_in.topk_weights  = t_w;
-        d_out.tokens       = t_recv;
+        d_in.tokens = t_tok;
+        d_in.topk_weights = t_w;
+        d_out.tokens = t_recv;
         d_out.topk_weights = t_recv_w;
-        d_out.topk_idx     = t_recv_idx;
+        d_out.topk_idx = t_recv_idx;
         ncclEpDispatchConfig_t dcfg = NCCL_EP_DISPATCH_CONFIG_INIT;
         NCCL_ASSERT(ncclEpDispatch(h, &d_in, &d_out, nullptr, &dcfg, g_stream));
         NCCL_ASSERT(ncclEpComplete(h, nullptr, g_stream));
@@ -177,9 +173,7 @@ TEST_F(HtStaleRoutingMapTest, StaleTailTriggersIllegalAddress) {
     unsigned int num_recv = 0;
     NCCL_ASSERT(ncclEpHandle_test_getNumRecvTokens(h, &num_recv));
     EXPECT_EQ(num_recv, kExpectedRecvWithFix[g_rank])
-        << "Rank " << g_rank
-        << ": iter-2 num_recv_tokens=" << num_recv
-        << ", expected " << kExpectedRecvWithFix[g_rank]
+        << "Rank " << g_rank << ": iter-2 num_recv_tokens=" << num_recv << ", expected " << kExpectedRecvWithFix[g_rank]
         << ". A mismatch on rank g indicates stale routing-map tail bits "
            "from iter-1 were shipped to peers via AllGather — the fix at "
            "nccl_ep.cc:2082 (cudaMemsetAsync of the local routing send slot) "
@@ -190,43 +184,37 @@ TEST_F(HtStaleRoutingMapTest, StaleTailTriggersIllegalAddress) {
     // an OOB device access; on the receive side, stale bits inflate the slot
     // count past kMaxRecvSlots * kHidden, also OOB.
     std::vector<nv_bfloat16> h_tok2(kIter2NumTokens * kHidden);
-    for (int hh = 0; hh < kHidden; ++hh)
-        h_tok2[hh] = __float2bfloat16(static_cast<float>(g_rank + 1));
+    for (int hh = 0; hh < kHidden; ++hh) h_tok2[hh] = __float2bfloat16(static_cast<float>(g_rank + 1));
     std::vector<float> h_w2(kIter2NumTokens * kTopK, 1.0f);
 
     nv_bfloat16 *d_tok2 = nullptr, *d_recv2 = nullptr;
-    float       *d_w2   = nullptr, *d_recv_w2 = nullptr;
-    int64_t     *d_recv_idx2 = nullptr;
-    CUDA_ASSERT(cudaMalloc(&d_tok2,      kIter2NumTokens * kHidden * sizeof(nv_bfloat16)));
-    CUDA_ASSERT(cudaMalloc(&d_recv2,     kMaxRecvSlots   * kHidden * sizeof(nv_bfloat16)));
-    CUDA_ASSERT(cudaMemset(d_recv2, 0,   kMaxRecvSlots   * kHidden * sizeof(nv_bfloat16)));
-    CUDA_ASSERT(cudaMalloc(&d_w2,        kIter2NumTokens * kTopK   * sizeof(float)));
-    CUDA_ASSERT(cudaMalloc(&d_recv_w2,   kMaxRecvSlots   * kTopK   * sizeof(float)));
-    CUDA_ASSERT(cudaMemset(d_recv_w2, 0, kMaxRecvSlots   * kTopK   * sizeof(float)));
-    CUDA_ASSERT(cudaMalloc(&d_recv_idx2, kMaxRecvSlots   * kTopK   * sizeof(int64_t)));
-    CUDA_ASSERT(cudaMemcpy(d_tok2, h_tok2.data(),
-                           kIter2NumTokens * kHidden * sizeof(nv_bfloat16),
-                           cudaMemcpyHostToDevice));
-    CUDA_ASSERT(cudaMemcpy(d_w2, h_w2.data(),
-                           kIter2NumTokens * kTopK * sizeof(float),
-                           cudaMemcpyHostToDevice));
+    float *d_w2 = nullptr, *d_recv_w2 = nullptr;
+    int64_t* d_recv_idx2 = nullptr;
+    CUDA_ASSERT(cudaMalloc(&d_tok2, kIter2NumTokens * kHidden * sizeof(nv_bfloat16)));
+    CUDA_ASSERT(cudaMalloc(&d_recv2, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
+    CUDA_ASSERT(cudaMemset(d_recv2, 0, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)));
+    CUDA_ASSERT(cudaMalloc(&d_w2, kIter2NumTokens * kTopK * sizeof(float)));
+    CUDA_ASSERT(cudaMalloc(&d_recv_w2, kMaxRecvSlots * kTopK * sizeof(float)));
+    CUDA_ASSERT(cudaMemset(d_recv_w2, 0, kMaxRecvSlots * kTopK * sizeof(float)));
+    CUDA_ASSERT(cudaMalloc(&d_recv_idx2, kMaxRecvSlots * kTopK * sizeof(int64_t)));
+    CUDA_ASSERT(
+        cudaMemcpy(d_tok2, h_tok2.data(), kIter2NumTokens * kHidden * sizeof(nv_bfloat16), cudaMemcpyHostToDevice));
+    CUDA_ASSERT(cudaMemcpy(d_w2, h_w2.data(), kIter2NumTokens * kTopK * sizeof(float), cudaMemcpyHostToDevice));
 
-    ncclEpTensor_t *t_tok2 = nullptr, *t_recv2 = nullptr,
-                   *t_w2   = nullptr, *t_recv_w2 = nullptr,
-                   *t_recv_idx2 = nullptr;
-    NCCL_ASSERT(epTensorCreate(&t_tok2,      2, ncclBfloat16, d_tok2,      kIter2NumTokens, kHidden));
-    NCCL_ASSERT(epTensorCreate(&t_recv2,     2, ncclBfloat16, d_recv2,     kMaxRecvSlots,   kHidden));
-    NCCL_ASSERT(epTensorCreate(&t_w2,        2, ncclFloat32,  d_w2,        kIter2NumTokens, kTopK));
-    NCCL_ASSERT(epTensorCreate(&t_recv_w2,   2, ncclFloat32,  d_recv_w2,   kMaxRecvSlots,   kTopK));
-    NCCL_ASSERT(epTensorCreate(&t_recv_idx2, 2, ncclInt64,    d_recv_idx2, kMaxRecvSlots,   kTopK));
+    ncclEpTensor_t *t_tok2 = nullptr, *t_recv2 = nullptr, *t_w2 = nullptr, *t_recv_w2 = nullptr, *t_recv_idx2 = nullptr;
+    NCCL_ASSERT(epTensorCreate(&t_tok2, 2, ncclBfloat16, d_tok2, kIter2NumTokens, kHidden));
+    NCCL_ASSERT(epTensorCreate(&t_recv2, 2, ncclBfloat16, d_recv2, kMaxRecvSlots, kHidden));
+    NCCL_ASSERT(epTensorCreate(&t_w2, 2, ncclFloat32, d_w2, kIter2NumTokens, kTopK));
+    NCCL_ASSERT(epTensorCreate(&t_recv_w2, 2, ncclFloat32, d_recv_w2, kMaxRecvSlots, kTopK));
+    NCCL_ASSERT(epTensorCreate(&t_recv_idx2, 2, ncclInt64, d_recv_idx2, kMaxRecvSlots, kTopK));
 
-    ncclEpDispatchInputs_t  d_in2  = NCCL_EP_DISPATCH_INPUTS_INIT;
+    ncclEpDispatchInputs_t d_in2 = NCCL_EP_DISPATCH_INPUTS_INIT;
     ncclEpDispatchOutputs_t d_out2 = NCCL_EP_DISPATCH_OUTPUTS_INIT;
-    d_in2.tokens        = t_tok2;
-    d_in2.topk_weights  = t_w2;
-    d_out2.tokens       = t_recv2;
+    d_in2.tokens = t_tok2;
+    d_in2.topk_weights = t_w2;
+    d_out2.tokens = t_recv2;
     d_out2.topk_weights = t_recv_w2;
-    d_out2.topk_idx     = t_recv_idx2;
+    d_out2.topk_idx = t_recv_idx2;
     ncclEpDispatchConfig_t dcfg2 = NCCL_EP_DISPATCH_CONFIG_INIT;
 
     // Capture both the API return code and the post-kernel CUDA error.
@@ -234,33 +222,25 @@ TEST_F(HtStaleRoutingMapTest, StaleTailTriggersIllegalAddress) {
     //   cudaErrorIllegalAddress (or similar OOB-class error).
     // With the fix: both return success.
     const ncclResult_t disp_ret = ncclEpDispatch(h, &d_in2, &d_out2, nullptr, &dcfg2, g_stream);
-    const ncclResult_t comp_ret = (disp_ret == ncclSuccess)
-                                    ? ncclEpComplete(h, nullptr, g_stream)
-                                    : ncclSuccess;
-    const cudaError_t  sync_err = cudaStreamSynchronize(g_stream);
+    const ncclResult_t comp_ret = (disp_ret == ncclSuccess) ? ncclEpComplete(h, nullptr, g_stream) : ncclSuccess;
+    const cudaError_t sync_err = cudaStreamSynchronize(g_stream);
 
     // Clear any sticky CUDA error so teardown of subsequent state doesn't
     // cascade-fail. (cudaGetLastError clears the last error.)
-    const cudaError_t  last_err = (sync_err == cudaSuccess) ? cudaSuccess : cudaGetLastError();
+    const cudaError_t last_err = (sync_err == cudaSuccess) ? cudaSuccess : cudaGetLastError();
     (void)last_err;
 
-    EXPECT_EQ(disp_ret, ncclSuccess)
-        << "Rank " << g_rank
-        << ": iter-2 ncclEpDispatch returned error " << disp_ret
-        << ". Stale tail rows of global_routing_map shipped via AllGather "
-           "drove the HT dispatch kernel to an out-of-range slot. "
-           "Apply the cudaMemsetAsync fix in ncclEpUpdateHandle.";
-    EXPECT_EQ(comp_ret, ncclSuccess)
-        << "Rank " << g_rank
-        << ": iter-2 ncclEpComplete returned error " << comp_ret;
-    EXPECT_EQ(sync_err, cudaSuccess)
-        << "Rank " << g_rank
-        << ": cudaStreamSynchronize after iter-2 dispatch returned CUDA error "
-        << sync_err << " (" << cudaGetErrorName(sync_err) << "): "
-        << cudaGetErrorString(sync_err)
-        << ". Expected cudaSuccess — without the fix this is typically "
-           "cudaErrorIllegalAddress, produced by the HT dispatch kernel "
-           "following stale-tail routing bits to an OOB token slot.";
+    EXPECT_EQ(disp_ret, ncclSuccess) << "Rank " << g_rank << ": iter-2 ncclEpDispatch returned error " << disp_ret
+                                     << ". Stale tail rows of global_routing_map shipped via AllGather "
+                                        "drove the HT dispatch kernel to an out-of-range slot. "
+                                        "Apply the cudaMemsetAsync fix in ncclEpUpdateHandle.";
+    EXPECT_EQ(comp_ret, ncclSuccess) << "Rank " << g_rank << ": iter-2 ncclEpComplete returned error " << comp_ret;
+    EXPECT_EQ(sync_err, cudaSuccess) << "Rank " << g_rank
+                                     << ": cudaStreamSynchronize after iter-2 dispatch returned CUDA error " << sync_err
+                                     << " (" << cudaGetErrorName(sync_err) << "): " << cudaGetErrorString(sync_err)
+                                     << ". Expected cudaSuccess — without the fix this is typically "
+                                        "cudaErrorIllegalAddress, produced by the HT dispatch kernel "
+                                        "following stale-tail routing bits to an OOB token slot.";
 
     // ── Cleanup ──────────────────────────────────────────────────────────────
     ncclEpTensorDestroy(t_recv_idx2);

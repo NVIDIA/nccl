@@ -23,4 +23,11 @@ struct ncclWindow_vidmem_v22902 {
 
 static_assert(sizeof(struct ncclWindow_vidmem_v22902) == 72);
 
+template <typename Dst, typename Src>
+static void ncclDevCommCopyResourceWindow_v22902(Dst* dst, Src const& src) {
+  dst->lsaFlatBase = src.lsaFlatBase;
+  dst->stride4G = src.stride4G;
+  dst->mcOffset4K = src.mcOffset4K;
+}
+
 #endif // NCCL_DEVCOMM_V22902_H_

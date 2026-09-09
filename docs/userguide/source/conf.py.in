@@ -13,6 +13,8 @@
 # documentation root, resolve it to an absolute path as shown here.
 import sphinx_rtd_theme
 import sphinx
+import importlib
+import os
 import re
 import subprocess
 import sys
@@ -50,7 +52,20 @@ extensions = [
     'sphinx.ext.ifconfig',
     'sphinx.ext.extlinks',
     'sphinx_rtd_theme',
+    'sphinx_llm.txt',
 ]
+
+llms_txt_extension = 'sphinx_llm.txt'
+try:
+    importlib.import_module(llms_txt_extension)
+except ImportError as exc:
+    if os.environ.get('SKIP_LLMSTXT') == '1':
+        extensions.pop(extensions.index(llms_txt_extension))
+    else:
+        raise RuntimeError(
+            'sphinx-llm is required to generate llms.txt. Install it using docs/userguide/requirements.txt'
+            ' or set SKIP_LLMSTXT=1 to build without generating llms.txt.'
+        ) from exc
 
 # Intersphinx mapping. cuda.core symbols (Buffer, Device, Stream,
 # cuda.core.typing.IsStreamType) appear in nccl4py type annotations but

@@ -7,9 +7,6 @@ dist/
 nccl/**/*.cpp
 nccl/**/*.so
 
-nccl/ep/lib/
-nccl/ep/include/
-
 __pycache__
 
 # Tool caches

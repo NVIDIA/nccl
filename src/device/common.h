@@ -279,6 +279,27 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
 template <typename T, typename RedOp, int Proto>
 struct RunWorkBatch<ncclFuncAllGatherV, T, RedOp, NCCL_ALGO_RING, Proto>;
 
+#define START 0
+#define STOP 1
+#define FINI 2
+
+__device__ __forceinline__ bool profilerEnabled(int workItemIdx) {
+  return (ncclShmem.workType == ncclDevWorkTypeP2p) ?
+           ((struct ncclDevWorkP2p*)ncclShmem.workStorage)[workItemIdx].profilerEnabled :
+           ((struct ncclDevWorkColl*)ncclShmem.workStorage)[workItemIdx].profilerEnabled;
+}
+
+__device__ __forceinline__ void profilerPhase(int phaseId) {
+  uint64_t ts = globaltimer();
+  int idx = 0;
+  uint64_t wc = ncclShmem.channel.workCounter + 1;
+  for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
+    if (!profilerEnabled(idx++)) continue;
+    int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
+    ncclShmem.comm.workPhases[ncclShmem.channelId].data[slot].timestamps[phaseId] = ts;
+  }
+}
+
 // Specialized here for non-P2p (Coll and CollReg)
 template <ncclFunc_t Fn, typename T, typename RedOp, int Algo, int Proto>
 struct RunWorkBatch {
@@ -299,6 +320,11 @@ struct RunWorkBatch {
       __syncthreads();
     }
 
+    // Block-uniform gate so a profiler-off launch keeps the baseline cost (no extra
+    // sync/stamps). profilerEnabled(0) is uniform; nWorks>0 guards workStorage[0].
+    bool profOn = (ncclShmem.nWorks > 0) && profilerEnabled(0);
+    if (profOn && threadIdx.x == 0) profilerPhase(NCCL_KERNEL_PHASE_AFTER_OPEN);  // end of initial sync
+
     NVCC_PRAGMA_UNROLL_DISABLED
     for (int w = 0; w < ncclShmem.nWorks; w++) {
       struct ncclDevWorkColl* work = (struct ncclDevWorkColl*)(ncclShmem.workStorage + w * ncclShmem.workSize);
@@ -313,36 +339,51 @@ struct RunWorkBatch {
       // coverity[device_thread_diverged:FALSE]
       if (tid < subtn) RunWorkColl<Fn, T, RedOp, Algo, Proto>().run(tid, subtn, work);
     }
+    // End of compute. Sync so thread 0's stamp reflects the last worker finishing.
+    if (profOn) {
+      __syncthreads();
+      if (threadIdx.x == 0) profilerPhase(NCCL_KERNEL_PHASE_BEFORE_CLOSE);
+    }
   }
 };
-
-#define START 0
-#define STOP 1
-#define FINI 2
-
-__device__ __forceinline__ bool profilerEnabled(int workItemIdx) {
-  return (ncclShmem.workType == ncclDevWorkTypeP2p) ?
-           ((struct ncclDevWorkP2p*)ncclShmem.workStorage)[workItemIdx].profilerEnabled :
-           ((struct ncclDevWorkColl*)ncclShmem.workStorage)[workItemIdx].profilerEnabled;
-}
 
 __device__ __forceinline__ void profiler(int action) {
   if (threadIdx.x == 0) {
     int idx = 0;
     uint64_t wc = ncclShmem.channel.workCounter + 1;
     if (action == START) {
+      // workStarted timestamp+counter share one 16B slot (single cache line), so no
+      // fence is needed; the BEGIN phase stamp is ordered by STOP's fence below.
       for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
         if (!profilerEnabled(idx++)) continue;
-        ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
-          globaltimer();
-        ncclShmem.comm.workStarted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
+        uint64_t ts = globaltimer();
+        int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
+        ncclShmem.comm.workPhases[ncclShmem.channelId].data[slot].timestamps[NCCL_KERNEL_PHASE_BEGIN] = ts;
+        ncclShmem.comm.workStarted[ncclShmem.channelId].data[slot].timestamp = ts;
+        ncclShmem.comm.workStarted[ncclShmem.channelId].data[slot].counter = wc;
       }
     } else {
+      bool fenceNeeded = false;
       for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
         if (!profilerEnabled(idx++)) continue;
-        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].timestamp =
-          globaltimer();
-        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[wc % MAX_PROFILER_EVENTS_PER_CHANNEL].counter = wc;
+        uint64_t ts = globaltimer();
+        int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
+        ncclShmem.comm.workCompleted[ncclShmem.channelId].data[slot].timestamp = ts;
+        ncclShmem.comm.workPhases[ncclShmem.channelId].data[slot].timestamps[NCCL_KERNEL_PHASE_END] = ts;
+        fenceNeeded = true;
+      }
+      // workPhases stamps span the kernel and straddle cache lines, so fence once
+      // before publishing the counters to order all phase stamps ahead of them.
+      if (fenceNeeded) {
+        __threadfence_system();
+        idx = 0;
+        for (uint64_t wc2 = ncclShmem.channel.workCounter + 1; wc2 <= ncclShmem.channel.workCounter + ncclShmem.nWorks;
+             wc2++) {
+          if (!profilerEnabled(idx++)) continue;
+          int slot = wc2 % MAX_PROFILER_EVENTS_PER_CHANNEL;
+          ncclShmem.comm.workPhases[ncclShmem.channelId].data[slot].counter = wc2;
+          ncclShmem.comm.workCompleted[ncclShmem.channelId].data[slot].counter = wc2;
+        }
       }
       ncclShmem.channel.workCounter += ncclShmem.nWorks;
       if (action == FINI)

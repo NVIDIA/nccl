@@ -64,7 +64,7 @@ typedef enum {
      *   * In HT mode, the user is expected to apply topk weights before passing the post-expert
      *     activations to ncclEpCombine.
      *   * In LL mode, the Combine kernel is applying the weights on the fly.
-     * For all modes, the Combine kernel performs accumulation of up to num_topk 
+     * For all modes, the Combine kernel performs accumulation of up to num_topk
      * expert contributions, returning a single output token per input slot.
      */
     NCCL_EP_LAYOUT_EXPERT_MAJOR,
@@ -141,3 +141,46 @@ typedef enum {
     NCCL_EP_FWD_PASS = 0,
     NCCL_EP_BWD_PASS = 1,
 } ncclEpPassDir_t;
+
+// Zero-copy mode for dispatch / combine staging.
+//   AUTO -- library picks (today: OFF).
+//   OFF  -- always stage through library-owned buffers.
+//   ON   -- skip staging; caller's tensors must be window-backed.
+typedef enum {
+    NCCL_EP_ZERO_COPY_AUTO = NCCL_EP_AUTO,
+    NCCL_EP_ZERO_COPY_OFF,
+    NCCL_EP_ZERO_COPY_ON
+} ncclEpZeroCopyMode_t;
+
+/**
+ * Numbering convention for the recv_topk_idx output of dispatch.
+ *
+ * Applies to layouts that populate recv_topk_idx (LL rank-major, HT flat).
+ * Selects whether per-slot expert ids are written in this rank's local
+ * numbering or in the global numbering used on the wire.
+ *
+ *   AUTO   (zero-init default): library picks the historical default, which
+ *          today resolves to LOCAL. Existing callers that leave the field
+ *          zero-initialized stay on whatever the library currently considers
+ *          the default; the resolved value may change in a future release
+ *          without an ABI break. Callers that need a stable contract should
+ *          pin LOCAL or GLOBAL explicitly.
+ *   LOCAL: expert id in [0, num_local_experts), i.e.
+ *          global_id - rank * num_local_experts. Slots not routed to this
+ *          rank are -1.
+ *   GLOBAL: unmodified wire-format global expert id in
+ *          [rank*num_local_experts, (rank+1)*num_local_experts) for the
+ *          local experts on this rank. Slots not routed to this rank are -1.
+ *
+ * The zero-init AUTO default keeps source/binary backward compatibility for
+ * callers built against the pre-flag headers (the field reads as 0 and the
+ * library treats it as today's behavior). Downstream consumers that prefer
+ * the global id (e.g. fused MoE routers that want to skip the per-element
+ * +rank*num_local_experts fold-back) opt in by setting GLOBAL on the layout
+ * info struct.
+ */
+typedef enum {
+    NCCL_EP_EXPERT_ID_AUTO = NCCL_EP_AUTO,
+    NCCL_EP_EXPERT_ID_LOCAL = 1,
+    NCCL_EP_EXPERT_ID_GLOBAL = 2,
+} ncclEpExpertIdKind_t;

@@ -1,0 +1,18 @@
+[package]
+name = "nccl4rust-runtime-smoke"
+description = "One-process, multi-GPU runtime smoke for nccl4rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+publish = false
+build = "build.rs"
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+nccl = { path = "../../crates/nccl" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"

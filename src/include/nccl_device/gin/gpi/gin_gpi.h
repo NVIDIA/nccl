@@ -7,8 +7,8 @@
 #ifndef _NCCL_DEVICE_GIN_GPI_H_
 #define _NCCL_DEVICE_GIN_GPI_H_
 
-#ifndef DOCA_VERBS_USE_CUDA_WRAPPER
-#define DOCA_VERBS_USE_CUDA_WRAPPER
+#ifndef DOCA_GPUNETIO_USE_CUDA_WRAPPER
+#define DOCA_GPUNETIO_USE_CUDA_WRAPPER
 #endif
 
 #ifndef DOCA_VERBS_USE_NET_WRAPPER
@@ -451,12 +451,13 @@ NCCL_DEVICE_INLINE static void putValueImplMode(ncclGinCtx ctx, Coop coop, int p
   coop.sync();
 }
 
-template <enum gpi_resource_sharing_mode resource_sharing_mode, typename Coop>
-NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop, bool hasDescriptor,
-                                             ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
-                                             uint32_t* abortFlag) {
+template <bool HasTimeout, enum gpi_resource_sharing_mode resource_sharing_mode, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop coop, bool hasDescriptor,
+                                                         ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                                         uint32_t* abortFlag, uint64_t timeoutCycles) {
   using nccl::utility::loadConst;
   using nccl::utility::testAbort;
+  (void)timeoutCycles; // referenced only when HasTimeout is true
   uint64_t gfd_local[GPI_GFD_SEG_MAX];
   gpi_gfd_t* gfd = (gpi_gfd_t*)gfd_local;
   gpi_gpu_channel_t* gpi_ctx = gpi_gpu_channel_get_ptr(ctx);
@@ -465,35 +466,81 @@ NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop, bool has
     (int16_t)(((uint64_t*)loadConst(&gpi_ctx->gpu_signal_ptr_) - (uint64_t*)loadConst(&gpi_ctx->gpu_counter_ptr_)) /
               sizeof(uint64_t)) -
     ctx.nRanks;
-  if (abortFlag) {
-    uint32_t steps = 0;
+  uint32_t steps = 0;
+  uint64_t startCycle = 0;
+  (void)startCycle; // referenced only when HasTimeout is true
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  NVCC_PRAGMA_UNROLL_DISABLED
+  for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
+    uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
+    uint64_t* ticket_peer = &flush_tickets_ctx[peer];
+    uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
+    gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK, peer,
+                               flush_counter_peer_idx);
+    gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, 0);
     NVCC_PRAGMA_UNROLL_DISABLED
-    for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
-      uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
-      uint64_t* ticket_peer = &flush_tickets_ctx[peer];
-      // GPI_READ_ONCE(ticket_peer);
-      uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
-      gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK,
-                                 peer, flush_counter_peer_idx);
-      gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, 0);
-      while ((GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) <= ticket_value) &&
-             !testAbort(abortFlag, steps)) {
+    while (true) {
+      if (GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) > ticket_value) break;
+      if NCCL_IF_CONSTEXPR (HasTimeout) {
+        if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
       }
-    }
-  } else {
-    NVCC_PRAGMA_UNROLL_DISABLED
-    for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
-      uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
-      uint64_t* ticket_peer = &flush_tickets_ctx[peer];
-      // GPI_READ_ONCE(ticket_peer);
-      uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
-      gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK,
-                                 peer, flush_counter_peer_idx);
-      gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, 0);
-      while (GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) <= ticket_value) continue;
+      if (testAbort(abortFlag, steps)) {
+        if NCCL_IF_CONSTEXPR (HasTimeout) {
+          cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+          return ncclSuccess;
+        } else {
+          break; // Original non-timeout path advances to the next peer on abort.
+        }
+      }
     }
   }
   cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+  return ncclSuccess;
+}
+
+template <enum gpi_resource_sharing_mode resource_sharing_mode, typename Coop>
+NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop, bool hasDescriptor,
+                                             ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                             uint32_t* abortFlag) {
+  (void)flushImplModeCore</*HasTimeout=*/false, resource_sharing_mode>(ctx, coop, hasDescriptor, descriptor, ord,
+                                                                       abortFlag, 0);
+}
+
+template <enum gpi_resource_sharing_mode resource_sharing_mode, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t flushImplMode(ncclGinCtx ctx, Coop coop, bool hasDescriptor,
+                                                     ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                                     uint32_t* abortFlag, uint64_t timeoutCycles) {
+  return flushImplModeCore</*HasTimeout=*/true, resource_sharing_mode>(ctx, coop, hasDescriptor, descriptor, ord,
+                                                                       abortFlag, timeoutCycles);
+}
+
+template <bool HasTimeout>
+NCCL_DEVICE_INLINE static ncclResult_t waitImplCore(ncclGinRequest_t& request, cuda::memory_order ord,
+                                                    uint32_t* abortFlag, uint64_t timeoutCycles) {
+  using nccl::utility::testAbort;
+  (void)timeoutCycles; // referenced only when HasTimeout is true
+  ncclGinGpiRequest& req = reinterpret_cast<ncclGinGpiRequest&>(request);
+  uint32_t steps = 0;
+  uint64_t startCycle = 0;
+  (void)startCycle; // referenced only when HasTimeout is true
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  NVCC_PRAGMA_UNROLL_DISABLED
+  while (true) {
+    if (GPI_READ_ONCE(req.flushCounterPtr[0]) > req.waitValue) break;
+    if NCCL_IF_CONSTEXPR (HasTimeout) {
+      if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
+    }
+    if (testAbort(abortFlag, steps)) {
+      if NCCL_IF_CONSTEXPR (HasTimeout) {
+        cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+        return ncclSuccess;
+      } else {
+        break; // Original non-timeout path falls through to the trailing fence.
+      }
+    }
+  }
+  cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+  return ncclSuccess;
 }
 
 } // namespace gpi
@@ -558,6 +605,13 @@ struct ncclGinApi_PutValue<NCCL_NET_DEVICE_GIN_GPI> {
                                                                       required, given, optFlags);
       break;
     }
+  }
+};
+
+template <>
+struct ncclGinApi_SupportsStrongSignal<NCCL_NET_DEVICE_GIN_GPI> {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx) {
+    return true;
   }
 };
 
@@ -657,6 +711,23 @@ struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GPI> {
       break;
     }
   }
+
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, bool hasDescriptor,
+                                              ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
+    case NCCL_GIN_RESOURCE_SHARING_THREAD:
+      return nccl::gin::gpi::flushImplMode<GPI_RESOURCE_SHARING_MODE_EXCLUSIVE>(ctx, coop, hasDescriptor, descriptor,
+                                                                                ord, abortFlag, timeoutCycles);
+    case NCCL_GIN_RESOURCE_SHARING_CTA:
+      return nccl::gin::gpi::flushImplMode<GPI_RESOURCE_SHARING_MODE_CTA>(ctx, coop, hasDescriptor, descriptor, ord,
+                                                                          abortFlag, timeoutCycles);
+    default:
+      return nccl::gin::gpi::flushImplMode<GPI_RESOURCE_SHARING_MODE_GPU>(ctx, coop, hasDescriptor, descriptor, ord,
+                                                                          abortFlag, timeoutCycles);
+    }
+  }
 };
 
 template <>
@@ -738,21 +809,13 @@ template <>
 struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_GPI> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinRequest_t& request, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor, cuda::memory_order ord, uint32_t* abortFlag) {
-    using nccl::utility::loadConst;
-    using nccl::utility::testAbort;
+    (void)nccl::gin::gpi::waitImplCore</*HasTimeout=*/false>(request, ord, abortFlag, 0);
+  }
 
-    ncclGinGpiRequest& req = reinterpret_cast<ncclGinGpiRequest&>(request);
-    if (abortFlag) {
-      uint32_t steps = 0;
-      while ((GPI_READ_ONCE(req.flushCounterPtr[0]) <= req.waitValue) && !testAbort(abortFlag, steps)) {
-      }
-
-    } else {
-      while (GPI_READ_ONCE(req.flushCounterPtr[0]) <= req.waitValue) {
-      }
-    }
-
-    cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, ncclGinRequest_t& request, bool hasDescriptor,
+                                              ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    return nccl::gin::gpi::waitImplCore</*HasTimeout=*/true>(request, ord, abortFlag, timeoutCycles);
   }
 };
 

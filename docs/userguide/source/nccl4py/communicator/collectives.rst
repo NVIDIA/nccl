@@ -7,6 +7,9 @@ Collective Communication Methods
 Methods on :py:class:`Communicator` for collective communication. See
 :doc:`../../api/colls` for the corresponding C API.
 
+Each collective below takes an optional :py:class:`NCCLCollConfig` as
+``config`` to customize that one call; see :doc:`../configuration`.
+
 allreduce
 ---------
 .. automethod:: Communicator.allreduce

@@ -15,16 +15,10 @@
 #include <vector>
 #include <dlfcn.h>
 #include <nccl.h>
+#include "nccl_device.h"
 #include <cuda_runtime.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-
-/* Internal NCCL headers used:
- *   comm.h  — ncclComm::commHash (uint64_t) */
-#include "comm.h"
-#undef WARN
-#undef INFO
-#undef TRACE
 
 #define NCCL_CHECKPOINT_MAJOR 0
 #define NCCL_CHECKPOINT_MINOR 1
@@ -128,6 +122,30 @@ static inline void ncclCheckpointWarn(const char* file, const char* func, int li
 #define TRACE(_dummy, ...) \
   ::nccl_checkpoint::ncclCheckpointLog(::nccl_checkpoint::ncclCheckpointLogTrace, __func__, __LINE__, __VA_ARGS__)
 
+#define NCCLCHECK(cmd) \
+  do { \
+    ncclResult_t res = cmd; \
+    if (res != ncclSuccess && res != ncclInProgress) { \
+      WARN("-> %d\n",res); \
+      return res; \
+    }  \
+  } while (0)
+
+#define NCCLCHECKGOTO(cmd, RES, label) \
+  do { \
+    RES = cmd; \
+    if (RES != ncclSuccess && RES != ncclInProgress) goto label; \
+  } while (0)
+
+#define CUDACHECK(cmd) \
+  do { \
+    cudaError_t err = cmd; \
+    if (err != cudaSuccess) { \
+      WARN("Cuda failure '%s'", cudaGetErrorString(err)); \
+      return ncclUnhandledCudaError; \
+    } \
+  } while (0)
+
 template <typename FnT>
 static inline ncclResult_t resolveRealFunction(const char* name, FnT* fn) {
   if (*fn != nullptr) return ncclSuccess;
@@ -189,6 +207,17 @@ struct CommInitParams {
     return configProvided ? &config : nullptr;
   }
 };
+
+static inline ncclResult_t captureCommRuntimeProperties(ncclComm_t realComm, CommInitParams* params) {
+  using query_t = ncclResult_t (*)(ncclComm_t, ncclCommProperties_t*);
+  static query_t real_ncclCommQueryProperties = nullptr;
+  ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+  NCCLCHECK(resolveRealFunction("ncclCommQueryProperties", &real_ncclCommQueryProperties));
+  NCCLCHECK(real_ncclCommQueryProperties(realComm, &props));
+  params->commHash = props.commHash;
+  params->cudaDev = props.cudaDev;
+  return ncclSuccess;
+}
 
 struct NoConfig {};
 

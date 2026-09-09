@@ -71,7 +71,10 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
 ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int type, uint64_t offset, int fd,
                                        uint64_t mrFlags, void** mhandle) {
   ncclResult_t ret = ncclSuccess;
-  assert(size > 0);
+  if (size == 0) {
+    WARN("NET/IB: Invalid memory registration size %zu, expected > 0", size);
+    return ncclInternalError;
+  }
   struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
   struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*)malloc(sizeof(struct ncclIbMrHandle));
   for (int i = 0; i < base->vProps.ndevs; i++) {

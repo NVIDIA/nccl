@@ -6,7 +6,7 @@ Memory Registration Methods
 
 Methods on :py:class:`Communicator` for registering buffers and windows for
 zero-copy and RMA operations. The returned handle classes are documented
-under :doc:`../memory`.
+under :doc:`../resources`.
 
 register_buffer
 ===============

@@ -114,3 +114,20 @@ for(int i = 0; i < num_gpus; i++) {
 }
 ncclGroupEnd();
 ```
+
+### Cleanup
+
+Finalize all communicators within a single group, then destroy them. With multiple
+GPUs per thread, `ncclCommFinalize` is a collective and must be grouped to avoid a hang;
+`ncclCommDestroy` only frees local resources and runs after the group.
+
+```c
+ncclGroupStart();
+for(int i = 0; i < num_gpus; i++) {
+  ncclCommFinalize(comms[i]);
+}
+ncclGroupEnd();
+for(int i = 0; i < num_gpus; i++) {
+  ncclCommDestroy(comms[i]);
+}
+```

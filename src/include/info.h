@@ -38,6 +38,9 @@ struct ncclInfo {
   // WaitSignal descriptors
   int nDesc;
   ncclWaitSignalDesc_t* signalDescs;
+  // A config copied from config passed by user so older user config can be safely accessed
+  // during synchronous host scheduling (never at launch/replay).
+  ncclCollConfig_t collConfig;
 };
 
 #endif

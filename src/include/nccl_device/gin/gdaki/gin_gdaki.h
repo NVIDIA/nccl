@@ -10,8 +10,8 @@
 
 #include "nccl_device/utility.h"
 #include <cstdint>
-#ifndef DOCA_VERBS_USE_CUDA_WRAPPER
-#define DOCA_VERBS_USE_CUDA_WRAPPER
+#ifndef DOCA_GPUNETIO_USE_CUDA_WRAPPER
+#define DOCA_GPUNETIO_USE_CUDA_WRAPPER
 #endif
 
 #ifndef DOCA_VERBS_USE_NET_WRAPPER
@@ -330,23 +330,145 @@ NCCL_DEVICE_INLINE static void flushAsyncImpl(ncclGinCtx ctx, int peer, ncclGinR
   }
 }
 
-template <enum doca_gpu_dev_verbs_resource_sharing_mode doca_sharing_mode>
-NCCL_DEVICE_INLINE static void waitImpl(ncclGinCtx ctx, ncclGinRequest_t& request, uint32_t* abortFlag) {
+template <bool HasTimeout, enum doca_gpu_dev_verbs_resource_sharing_mode doca_sharing_mode>
+NCCL_DEVICE_INLINE static ncclResult_t waitImplCore(ncclGinCtx ctx, ncclGinRequest_t& request, cuda::memory_order ord,
+                                                    uint32_t* abortFlag, uint64_t timeoutCycles) {
   using nccl::utility::loadConst;
   using nccl::utility::testAbort;
+  (void)timeoutCycles; // referenced only when HasTimeout is true
   ncclGinGdakiRequest& req = reinterpret_cast<ncclGinGdakiRequest&>(request);
   ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
   doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + req.peer;
-  if (req.sq_rsvd_index == 0) return;
+  if (req.sq_rsvd_index == 0) return ncclSuccess;
   const doca_gpu_dev_verbs_ticket_t pollIdx = static_cast<doca_gpu_dev_verbs_ticket_t>(req.sq_rsvd_index - 1u);
-  if (abortFlag) {
-    uint32_t steps = 0;
-    int status = EBUSY;
-    while (status != 0 && !testAbort(abortFlag, steps)) {
-      status = doca_gpu_dev_verbs_poll_one_cq_at<doca_sharing_mode>(&qp->cq_sq, pollIdx);
+
+  // doca_gpu_dev_verbs_wait blocks indefinitely, so it can only be used when
+  // the caller has no deadline AND no abort flag to honor.
+  if NCCL_IF_CONSTEXPR (!HasTimeout) {
+    if (abortFlag == nullptr) {
+      doca_gpu_dev_verbs_wait<doca_sharing_mode>(qp, pollIdx);
+      cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+      return ncclSuccess;
     }
-  } else {
-    doca_gpu_dev_verbs_wait<doca_sharing_mode>(qp, pollIdx);
+  }
+
+  uint32_t steps = 0;
+  uint64_t startCycle = 0;
+  (void)startCycle; // referenced only when HasTimeout is true
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  NVCC_PRAGMA_UNROLL_DISABLED
+  while (true) {
+    int status = doca_gpu_dev_verbs_poll_one_cq_at<doca_sharing_mode>(qp, pollIdx);
+    if (status == 0) {
+      cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+      return ncclSuccess;
+    }
+    if NCCL_IF_CONSTEXPR (HasTimeout) {
+      if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
+    }
+    if (testAbort(abortFlag, steps)) {
+      cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+      return ncclSuccess;
+    }
+  }
+}
+
+template <enum doca_gpu_dev_verbs_resource_sharing_mode doca_sharing_mode>
+NCCL_DEVICE_INLINE static void waitImpl(ncclGinCtx ctx, ncclGinRequest_t& request, cuda::memory_order ord,
+                                        uint32_t* abortFlag) {
+  (void)waitImplCore</*HasTimeout=*/false, doca_sharing_mode>(ctx, request, ord, abortFlag, 0);
+}
+
+template <enum doca_gpu_dev_verbs_resource_sharing_mode doca_sharing_mode>
+NCCL_DEVICE_INLINE static ncclResult_t waitImpl(ncclGinCtx ctx, ncclGinRequest_t& request, cuda::memory_order ord,
+                                                uint32_t* abortFlag, uint64_t timeoutCycles) {
+  return waitImplCore</*HasTimeout=*/true, doca_sharing_mode>(ctx, request, ord, abortFlag, timeoutCycles);
+}
+
+template <bool HasTimeout, enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop coop, cuda::memory_order ord,
+                                                         uint32_t* abortFlag, uint64_t timeoutCycles) {
+  (void)timeoutCycles; // referenced only when HasTimeout is true
+  using nccl::utility::loadConst;
+  using nccl::utility::testAbort;
+
+  ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
+  doca_gpu_dev_verbs_qp* qps = loadConst(&gdaki->gdqp);
+  uint32_t steps = 0;
+  uint64_t startCycle = 0;
+  (void)startCycle; // referenced only when HasTimeout is true
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+
+  NVCC_PRAGMA_UNROLL_DISABLED
+  for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
+    uint64_t ticket = doca_gpu_dev_verbs_atomic_read<uint64_t, resource_sharing_mode>(&qps[peer].sq_rsvd_index);
+    if (ticket == 0) continue; // No need to poll if there are no outstanding operations
+    --ticket;
+
+    // doca_gpu_dev_verbs_wait blocks indefinitely; only usable when there's
+    // no deadline AND no abort flag to honor.
+    if NCCL_IF_CONSTEXPR (!HasTimeout) {
+      if (abortFlag == nullptr) {
+        doca_gpu_dev_verbs_wait<resource_sharing_mode>(&qps[peer], ticket);
+        continue;
+      }
+    }
+
+    NVCC_PRAGMA_UNROLL_DISABLED
+    while (true) {
+      int status = doca_gpu_dev_verbs_poll_one_cq_at<resource_sharing_mode>(&qps[peer], ticket);
+      if (status == 0) break;
+      if NCCL_IF_CONSTEXPR (HasTimeout) {
+        if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
+      }
+      if (testAbort(abortFlag, steps)) {
+        if NCCL_IF_CONSTEXPR (HasTimeout) {
+          cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+          return ncclSuccess;
+        } else break; // Original non-timeout path advances to the next peer on abort.
+      }
+    }
+  }
+  cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+  return ncclSuccess;
+}
+
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode, typename Coop>
+NCCL_DEVICE_INLINE static void flushImplMode(ncclGinCtx ctx, Coop coop, cuda::memory_order ord, uint32_t* abortFlag) {
+  (void)flushImplModeCore</*HasTimeout=*/false, resource_sharing_mode>(ctx, coop, ord, abortFlag, 0);
+}
+
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t flushImplMode(ncclGinCtx ctx, Coop coop, cuda::memory_order ord,
+                                                     uint32_t* abortFlag, uint64_t timeoutCycles) {
+  return flushImplModeCore</*HasTimeout=*/true, resource_sharing_mode>(ctx, coop, ord, abortFlag, timeoutCycles);
+}
+
+template <typename Coop>
+NCCL_DEVICE_INLINE static void flushImpl(ncclGinCtx ctx, Coop coop, cuda::memory_order ord, uint32_t* abortFlag) {
+  switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
+  case NCCL_GIN_RESOURCE_SHARING_THREAD:
+    flushImplMode<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(ctx, coop, ord, abortFlag);
+    break;
+  case NCCL_GIN_RESOURCE_SHARING_CTA:
+    flushImplMode<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA>(ctx, coop, ord, abortFlag);
+    break;
+  default:
+    flushImplMode<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(ctx, coop, ord, abortFlag);
+    break;
+  }
+}
+
+template <typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t flushImpl(ncclGinCtx ctx, Coop coop, cuda::memory_order ord, uint32_t* abortFlag,
+                                                 uint64_t timeoutCycles) {
+  switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
+  case NCCL_GIN_RESOURCE_SHARING_THREAD:
+    return flushImplMode<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(ctx, coop, ord, abortFlag, timeoutCycles);
+  case NCCL_GIN_RESOURCE_SHARING_CTA:
+    return flushImplMode<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA>(ctx, coop, ord, abortFlag, timeoutCycles);
+  default:
+    return flushImplMode<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(ctx, coop, ord, abortFlag, timeoutCycles);
   }
 }
 
@@ -390,17 +512,32 @@ template <>
 struct ncclGinApi_Wait<NCCL_NET_DEVICE_GIN_GDAKI> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinRequest_t& request, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor, cuda::memory_order ord, uint32_t* abortFlag) {
-    (void)ord; // Ignore. DOCA already guarantees memory_order_acquire
     switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
     case NCCL_GIN_RESOURCE_SHARING_THREAD:
-      nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(ctx, request, abortFlag);
+      nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(ctx, request, ord, abortFlag);
       break;
     case NCCL_GIN_RESOURCE_SHARING_CTA:
-      nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA>(ctx, request, abortFlag);
+      nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA>(ctx, request, ord, abortFlag);
       break;
     default:
-      nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(ctx, request, abortFlag);
+      nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(ctx, request, ord, abortFlag);
       break;
+    }
+  }
+
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, ncclGinRequest_t& request, bool hasDescriptor,
+                                              ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
+    case NCCL_GIN_RESOURCE_SHARING_THREAD:
+      return nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(ctx, request, ord,
+                                                                                             abortFlag, timeoutCycles);
+    case NCCL_GIN_RESOURCE_SHARING_CTA:
+      return nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA>(ctx, request, ord, abortFlag,
+                                                                                       timeoutCycles);
+    default:
+      return nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(ctx, request, ord, abortFlag,
+                                                                                       timeoutCycles);
     }
   }
 };
@@ -460,6 +597,13 @@ struct ncclGinApi_PutValue<NCCL_NET_DEVICE_GIN_GDAKI> {
 };
 
 template <>
+struct ncclGinApi_SupportsStrongSignal<NCCL_NET_DEVICE_GIN_GDAKI> {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx) {
+    return true;
+  }
+};
+
+template <>
 struct ncclGinApi_ResetCounter<NCCL_NET_DEVICE_GIN_GDAKI> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinCounter_t counterId) {
     using nccl::utility::loadConst;
@@ -511,20 +655,33 @@ struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GDAKI> {
       case NCCL_GIN_RESOURCE_SHARING_THREAD:
         nccl::gin::gdaki::flushAsyncImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE,
                                          NCCL_GIN_RESOURCE_SHARING_THREAD>(ctx, peer, &outRequest);
-        nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(ctx, outRequest, abortFlag);
+        nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>(
+          ctx, outRequest, cuda::memory_order_relaxed, abortFlag);
         break;
       case NCCL_GIN_RESOURCE_SHARING_CTA:
         nccl::gin::gdaki::flushAsyncImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA, NCCL_GIN_RESOURCE_SHARING_CTA>(
           ctx, peer, &outRequest);
-        nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA>(ctx, outRequest, abortFlag);
+        nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA>(
+          ctx, outRequest, cuda::memory_order_relaxed, abortFlag);
         break;
       default:
         nccl::gin::gdaki::flushAsyncImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU, NCCL_GIN_RESOURCE_SHARING_GPU>(
           ctx, peer, &outRequest);
-        nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(ctx, outRequest, abortFlag);
+        nccl::gin::gdaki::waitImpl<DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(
+          ctx, outRequest, cuda::memory_order_relaxed, abortFlag);
         break;
       }
     }
+    cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
+  }
+
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, bool hasDescriptor,
+                                              ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    (void)hasDescriptor;
+    (void)descriptor;
+    return nccl::gin::gdaki::flushImpl(ctx, coop, ord, abortFlag, timeoutCycles);
   }
 };
 

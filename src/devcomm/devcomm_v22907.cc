@@ -102,7 +102,17 @@ static ncclResult_t ncclDevCommCopyNewToOld_v22907(ncclComm_t comm, void* oldDev
   struct ncclDevComm_v22907* old = (struct ncclDevComm_v22907*)oldDevComm;
 
   memset(old, '\0', sizeof(*old));
-  ncclDevCommCopyLsaData(&old->rank, &newDevComm->rank);
+  old->rank = newDevComm->rank;
+  old->nRanks = newDevComm->nRanks;
+  old->nRanks_rcp32 = newDevComm->nRanks_rcp32;
+  old->lsaRank = newDevComm->lsaRank;
+  old->lsaSize = newDevComm->lsaSize;
+  old->lsaSize_rcp32 = newDevComm->lsaSize_rcp32;
+  old->windowTable = newDevComm->windowTable;
+  old->resourceWindow = newDevComm->resourceWindow;
+  ncclDevCommCopyResourceWindow_v22902(&old->resourceWindow_inlined, newDevComm->resourceWindow_inlined);
+  old->lsaMultimem = newDevComm->lsaMultimem;
+  old->lsaBarrier = newDevComm->lsaBarrier;
   // No need to copy GIN-specific fields since we don't provide backwards compatibility for GIN with 2.29.7.
   old->abortFlag = newDevComm->abortFlag;
 
@@ -110,8 +120,8 @@ static ncclResult_t ncclDevCommCopyNewToOld_v22907(ncclComm_t comm, void* oldDev
 }
 
 struct ncclDevCommCompat ncclDevCommCompat_v22907 = {
-  NCCL_VERSION(2, 29, 5),
-  NCCL_VERSION(2, 29, 7), // minVersion, maxVersion
+  NCCL_VERSION(2, 29, 5), // minVersion
+  NCCL_VERSION(2, 29, 7), // maxVersion
   ncclCommPropertiesFilter_v22907,                // commPropertiesFilter
   ncclDevCommRequirementsFilter_v22907,           // devCommRequirementsFilter
   ncclDevCommCopyNewToOld_v22907,                 // devCommCopyNewToOld

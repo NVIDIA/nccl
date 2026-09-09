@@ -130,7 +130,17 @@ static ncclResult_t ncclDevCommCopyNewToOld_v22902(ncclComm_t comm, void* oldDev
   struct ncclDevComm_v22902* old = (struct ncclDevComm_v22902*)oldDevComm;
 
   memset(old, '\0', sizeof(*old));
-  ncclDevCommCopyLsaData(&old->rank, &newDevComm->rank);
+  old->rank = newDevComm->rank;
+  old->nRanks = newDevComm->nRanks;
+  old->nRanks_rcp32 = newDevComm->nRanks_rcp32;
+  old->lsaRank = newDevComm->lsaRank;
+  old->lsaSize = newDevComm->lsaSize;
+  old->lsaSize_rcp32 = newDevComm->lsaSize_rcp32;
+  old->windowTable = newDevComm->windowTable;
+  old->resourceWindow = newDevComm->resourceWindow;
+  ncclDevCommCopyResourceWindow_v22902(&old->resourceWindow_inlined, newDevComm->resourceWindow_inlined);
+  old->lsaMultimem = newDevComm->lsaMultimem;
+  old->lsaBarrier = newDevComm->lsaBarrier;
   // No need to copy GIN-specific fields since we don't provide backwards compatibility for GIN with 2.29.2.
 
   return ncclSuccess;
@@ -143,14 +153,22 @@ static ncclResult_t ncclDevCommCopyOldToNew_v22902(ncclComm_t comm, struct ncclD
   // Note: this callback will be used with v22907 as well because, prior to 2.30.0, ncclDevComm was unversioned,
   // so v22902 and v22907 variants are indistinguishable.  Primary differences between them are related to GIN
   // but, since we don't support GIN here with either, the differences are irrelevant to us.
-  ncclDevCommCopyLsaData(&newDevComm->rank, &old->rank);
+  newDevComm->rank = old->rank;
+  newDevComm->nRanks = old->nRanks;
+  newDevComm->nRanks_rcp32 = old->nRanks_rcp32;
+  newDevComm->lsaRank = old->lsaRank;
+  newDevComm->lsaSize = old->lsaSize;
+  newDevComm->lsaSize_rcp32 = old->lsaSize_rcp32;
+  newDevComm->windowTable = old->windowTable;
+  newDevComm->resourceWindow = old->resourceWindow;
+  ncclDevCommCopyResourceWindow_v22902(&newDevComm->resourceWindow_inlined, old->resourceWindow_inlined);
 
   return ncclSuccess;
 }
 
 struct ncclDevCommCompat ncclDevCommCompat_v22902 = {
-  NCCL_VERSION(2, 29, 2),
-  NCCL_VERSION(2, 29, 3), // minVersion, maxVersion
+  NCCL_VERSION(2, 29, 2), // minVersion
+  NCCL_VERSION(2, 29, 3), // maxVersion
   ncclCommPropertiesFilter_v22902,                // commPropertiesFilter
   ncclDevCommRequirementsFilter_v22902,           // devCommRequirementsFilter
   ncclDevCommCopyNewToOld_v22902,                 // devCommCopyNewToOld

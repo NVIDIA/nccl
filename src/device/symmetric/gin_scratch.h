@@ -24,7 +24,7 @@ NCCL_EXTERN_C __host__ ncclResult_t ncclGinOutboxCreateRequirement(
 NCCL_EXTERN_C __host__ ncclResult_t ncclGinInboxA2ACreateRequirement(
   ncclTeam peers, int nBlocks, int size_log2, ncclGinInboxA2AHandle* outHandle, ncclDevResourceRequirements* outReq);
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 struct ncclGinOutboxSession_internal;
 
@@ -56,7 +56,7 @@ struct ncclGinOutboxSession : ncclGinOutboxSession_internal<Coop, ginBackendMask
 };
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 struct ncclGinInboxA2ASession_internal;
 

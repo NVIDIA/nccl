@@ -38,6 +38,8 @@ $(DOCPREPDIR)/% : $(DOCSRC)/%.in ../../makefiles/version.mk
 SPHINXOPTS    = -W --keep-going
 SPHINXBUILD   = sphinx-build
 PAPER         =
+SKIP_LLMSTXT ?= 0
+export SKIP_LLMSTXT
 
 # User-friendly check for sphinx-build
 ifeq ($(shell which $(SPHINXBUILD) >/dev/null 2>&1; echo $$?), 1)

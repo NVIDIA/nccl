@@ -204,6 +204,12 @@ ncclResult_t ncclIbResiliencyReceiverQpsCreateToRts(struct ncclIbResiliency* res
                                                     struct ncclIbConnectionMetadata* remInfo,
                                                     struct ncclIbResiliencyInfo* localResiliencyInfo);
 
+ncclResult_t ncclIbResiliencyQpsReconfigure(struct ncclIbResiliency* resCtx, int devIndex, bool* success);
+
+// Reconfigure a single QP through RESET -> INIT -> ECE -> RTR -> RTS.
+ncclResult_t ncclIbResiliencyQpReconfigure(struct ncclIbResiliency* resCtx, struct ncclIbQp* qp,
+                                           struct ncclIbNetCommDevBase* devBase, int devIndex, bool* success);
+
 ncclResult_t ncclIbResiliencyClose(struct ncclIbResiliency* resCtx);
 
 // Allow resiliency context to reuse the memory registration

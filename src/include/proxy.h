@@ -43,7 +43,6 @@ typedef enum : uint8_t {
   ncclPatternPatDown,
   ncclPatternSend,
   ncclPatternRecv,
-  ncclPatternProfiler,
 } ncclPattern_t;
 
 enum ncclProxyOpState {
@@ -109,16 +108,6 @@ struct ncclProxyOp {
     struct ncclTaskColl* coll;
     struct ncclTaskP2p* p2p;
   } task;
-
-  // Profiler work counter increment flag. Set to 'true' if the profiler work counter for this channel needs
-  // increment.
-  // Always 'true' for collective operations. Grouped p2p operations are fused into one <send, recv> pair in the GPU
-  // kernel,
-  // meaning the GPU profiler code increments the work counter for the pair rather than the individual p2p. For this
-  // reason, the incWorkCounter flag is used to avoid incrementing the work counter twice in the host code. This is
-  // done
-  // by setting incWorkCounter to 'true' only for one of the p2ps in the pair during enqueue.
-  bool incWorkCounter;
   int eActivationMask;
   void* taskEventHandle;
   int rank;
@@ -231,6 +220,7 @@ struct ncclProxyOpsPool {
   volatile int nextOps;
   volatile int nextOpsEnd;
   volatile int freeOps[NCCL_MAX_LOCAL_RANKS];
+  int syncObjectsInitialized;
   std::mutex mutex;
   std::condition_variable cond;
 };
@@ -246,7 +236,7 @@ struct ncclProxyOps {
 
 struct ncclProxySharedP2p {
   int refcount;
-  int size;
+  ssize_t size;
   char* cudaBuff;
   char* hostBuff;
   // CUDA IPC
@@ -276,7 +266,7 @@ struct ncclProxyProgressState {
   char opsPoolShmSuffix[16];
 
   std::thread thread;
-  volatile int stop;
+  std::atomic<int> stop{0};
   struct ncclProxyPeer** localPeers;
   struct ncclSharedNetComms* netComms[NCCL_MAX_NETDEVS];
   struct ncclProxyArgs* active;

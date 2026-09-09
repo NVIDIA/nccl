@@ -11,7 +11,7 @@
 #include "impl/lsa_barrier__types.h"
 #include "impl/gin_barrier__types.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 struct ncclBarrierSession_internal;
 
@@ -37,7 +37,8 @@ struct ncclBarrierSession : ncclBarrierSession_internal<Coop> {
   NCCL_DEVICE_INLINE ncclResult_t sync(Coop, cuda::memory_order, ncclGinFenceLevel, uint64_t timeoutCycles);
 
 private:
-  NCCL_DEVICE_INLINE bool useWorldForFence(ncclGinFenceLevel fence) const;
+  NCCL_DEVICE_INLINE void selectBarrierAlgo(ncclGinFenceLevel fence, bool* needsLsaBarrier, bool* needsRailGinBarrier,
+                                            bool* needsDenseGinBarrier) const;
 };
 
 // Free-function hybrid barrier. Wraps session construct + sync + destruct.

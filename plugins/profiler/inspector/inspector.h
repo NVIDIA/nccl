@@ -145,6 +145,7 @@ struct inspectorCompletedOpInfo {
   bool isP2p;
   ncclFunc_t func;
   uint64_t sn;
+  uint64_t timestampUsec;
   size_t msgSizeBytes;
   uint64_t execTimeUsecs;
   inspectorTimingSource_t timingSource;
@@ -219,6 +220,7 @@ struct inspectorDumpThread {
   inspectorResult_t inspectorStateDump(const char* output_root);
   inspectorResult_t inspectorStateDumpJSON(const char* output_root);
   inspectorResult_t inspectorStateDumpProm(const char* output_root);
+  inspectorResult_t inspectorStateDumpOtel(const char* output_root);
   static void* dumpMain(void* arg);
 };
 

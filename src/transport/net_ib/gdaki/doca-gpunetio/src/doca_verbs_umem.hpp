@@ -36,11 +36,12 @@
 #include <stdlib.h>
 
 #include "host/doca_verbs.h"
+#include "doca_verbs_dev.hpp"
 
 /**
  *  @brief This struct implements the doca verbs umem
  */
-struct doca_verbs_umem {
+struct doca_verbs_umem_open {
    public:
     /**
      * @brief constructor
@@ -58,13 +59,13 @@ struct doca_verbs_umem {
      * @param [in] dmabuf_offset
      * The umem dmabuf offset.
      */
-    doca_verbs_umem(struct ibv_context *ibv_ctx, void *address, size_t size, uint32_t access_flags,
-                    int dmabuf_fd, size_t dmabuf_offset);
+    doca_verbs_umem_open(struct ibv_context *ibv_ctx, void *address, size_t size,
+                         uint32_t access_flags, int dmabuf_fd, size_t dmabuf_offset);
 
     /**
      * @brief destructor
      */
-    ~doca_verbs_umem();
+    ~doca_verbs_umem_open();
 
     /**
      * @brief destroy the umem
@@ -104,7 +105,7 @@ struct doca_verbs_umem {
     void *get_umem_address() const noexcept { return m_address; }
 
    private:
-    struct mlx5dv_devx_umem *m_umem_obj{};
+    struct mlx5dv_devx_umem *m_umem{};
     struct ibv_context *m_ibv_ctx{};
     void *m_address{};
     size_t m_size{};
@@ -113,6 +114,6 @@ struct doca_verbs_umem {
     int m_dmabuf_fd;
     size_t m_dmabuf_offset;
 
-    doca_verbs_umem(doca_verbs_umem const &) = delete;
-    doca_verbs_umem &operator=(doca_verbs_umem const &) = delete;
+    doca_verbs_umem_open(doca_verbs_umem_open const &) = delete;
+    doca_verbs_umem_open &operator=(doca_verbs_umem_open const &) = delete;
 };

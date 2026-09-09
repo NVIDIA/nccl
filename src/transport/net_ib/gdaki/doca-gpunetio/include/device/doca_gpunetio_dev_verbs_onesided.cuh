@@ -44,7 +44,8 @@
 /* **************************************** PUT **************************************** */
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put_thread(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, doca_gpu_dev_verbs_ticket_t *out_ticket,
@@ -63,8 +64,9 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_thread(
     // DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
     base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
-    NVCC_PRAGMA_UNROLL_DISABLED
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(qp, num_chunks, code_opt);
+#pragma unroll 1
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
@@ -75,12 +77,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_thread(
         [[likely]] if (size_ > 0) {
             doca_gpu_dev_verbs_wqe_prepare_write(
                 qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE,
-                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, 0,
-                raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+                0, raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
         } else {
-            doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
-                                               DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
+            doca_gpu_dev_verbs_wqe_prepare_nop(
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp,
+                                                                                      code_opt));
         }
         remaining_size -= size_;
     }
@@ -101,7 +105,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_thread(
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put_warp(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, doca_gpu_dev_verbs_ticket_t *out_ticket,
@@ -117,7 +122,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_warp(
     DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
 
     if (lane_idx == 0) {
-        base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(
+        base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode,
+                                                           DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
             qp, DOCA_GPUNETIO_VERBS_WARP_SIZE, code_opt);
         base_wqe_idx_0 = (uint32_t)base_wqe_idx;
         base_wqe_idx_1 = (uint32_t)(base_wqe_idx >> 32);
@@ -131,10 +137,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_warp(
     wqe_idx = base_wqe_idx + lane_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
-    doca_gpu_dev_verbs_wqe_prepare_write(qp, wqe_ptr, wqe_idx,
-                                         DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE,
-                                         DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, 0, raddr.addr,
-                                         raddr.key, laddr.addr, laddr.key, size);
+    doca_gpu_dev_verbs_wqe_prepare_write(
+        qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt), 0,
+        raddr.addr, raddr.key, laddr.addr, laddr.key, size);
 
     __syncwarp();
     if (lane_idx == 0) {
@@ -162,30 +168,32 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_warp(
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, doca_gpu_dev_verbs_ticket_t *out_ticket,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD)
-        doca_gpu_dev_verbs_put_thread<resource_sharing_mode, nic_handler>(qp, raddr, laddr, size,
-                                                                          out_ticket, code_opt);
+        doca_gpu_dev_verbs_put_thread<resource_sharing_mode, nic_handler, cq_type>(
+            qp, raddr, laddr, size, out_ticket, code_opt);
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
-        doca_gpu_dev_verbs_put_warp<resource_sharing_mode, nic_handler>(qp, raddr, laddr, size,
-                                                                        out_ticket, code_opt);
+        doca_gpu_dev_verbs_put_warp<resource_sharing_mode, nic_handler, cq_type>(
+            qp, raddr, laddr, size, out_ticket, code_opt);
 }
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     uint64_t ticket;
-    doca_gpu_dev_verbs_put<resource_sharing_mode, nic_handler, exec_scope>(qp, raddr, laddr, size,
-                                                                           &ticket, code_opt);
+    doca_gpu_dev_verbs_put<resource_sharing_mode, nic_handler, exec_scope, cq_type>(
+        qp, raddr, laddr, size, &ticket, code_opt);
 }
 
 /* **************************************** PUT INLINE **************************************** */
@@ -193,7 +201,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put(
 template <typename T,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_p_thread(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr, T value,
     doca_gpu_dev_verbs_ticket_t *out_ticket,
@@ -205,12 +214,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_p_thread(
     DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
     // DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
-    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, 1, code_opt);
+    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                                  cq_type>(qp, 1, code_opt);
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
-    doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_header(qp, wqe_ptr, wqe_idx,
-                                                         DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
-                                                         raddr.addr, raddr.key, sizeof(T));
+    doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_header(
+        qp, wqe_ptr, wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        raddr.addr, raddr.key, sizeof(T));
     doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_data<T>(qp, wqe_ptr, value);
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, wqe_idx, wqe_idx);
 
@@ -229,7 +240,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_p_thread(
 template <typename T,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_p_warp(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr, T value,
     doca_gpu_dev_verbs_ticket_t *out_ticket,
@@ -241,30 +253,32 @@ template <typename T,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_p(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr, T value,
     doca_gpu_dev_verbs_ticket_t *out_ticket,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD)
-        doca_gpu_dev_verbs_p_thread<T, resource_sharing_mode, nic_handler>(qp, raddr, value,
-                                                                           out_ticket, code_opt);
+        doca_gpu_dev_verbs_p_thread<T, resource_sharing_mode, nic_handler, cq_type>(
+            qp, raddr, value, out_ticket, code_opt);
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
-        doca_gpu_dev_verbs_p_warp<T, resource_sharing_mode, nic_handler>(qp, raddr, value,
-                                                                         out_ticket, code_opt);
+        doca_gpu_dev_verbs_p_warp<T, resource_sharing_mode, nic_handler, cq_type>(
+            qp, raddr, value, out_ticket, code_opt);
 }
 
 template <typename T,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_p(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr, T value,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     uint64_t ticket;
-    doca_gpu_dev_verbs_p<T, resource_sharing_mode, nic_handler, exec_scope>(qp, raddr, value,
-                                                                            &ticket, code_opt);
+    doca_gpu_dev_verbs_p<T, resource_sharing_mode, nic_handler, exec_scope, cq_type>(
+        qp, raddr, value, &ticket, code_opt);
 }
 
 /* **************************************** PUT SIGNAL **************************************** */
@@ -272,7 +286,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_p(
 template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_thread(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr sig_raddr,
@@ -294,9 +309,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_thread(
     DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
     base_wqe_idx =
-        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks + 1, code_opt);
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(qp, num_chunks + 1, code_opt);
 
-    NVCC_PRAGMA_UNROLL_DISABLED
+#pragma unroll 1
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
@@ -308,12 +324,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_thread(
         [[likely]] if (size_ > 0) {
             doca_gpu_dev_verbs_wqe_prepare_write(
                 qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE,
-                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, 0,
-                raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+                0, raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
         } else {
-            doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
-                                               DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
+            doca_gpu_dev_verbs_wqe_prepare_nop(
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp,
+                                                                                      code_opt));
         }
         remaining_size -= size_;
     }
@@ -324,8 +342,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_thread(
 
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, sig_raddr.addr, sig_raddr.key, sig_laddr.addr,
-        sig_laddr.key, sizeof(uint64_t), sig_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        sig_raddr.addr, sig_raddr.key, sig_laddr.addr, sig_laddr.key, sizeof(uint64_t), sig_val, 0);
 
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
 
@@ -344,7 +362,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_thread(
 template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal_warp(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr sig_raddr,
@@ -358,7 +377,8 @@ template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr sig_raddr,
@@ -366,10 +386,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal(
     doca_gpu_dev_verbs_ticket_t *out_ticket,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD)
-        doca_gpu_dev_verbs_put_signal_thread<sig_op, resource_sharing_mode, nic_handler>(
+        doca_gpu_dev_verbs_put_signal_thread<sig_op, resource_sharing_mode, nic_handler, cq_type>(
             qp, raddr, laddr, size, sig_raddr, sig_laddr, sig_val, out_ticket, code_opt);
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
-        doca_gpu_dev_verbs_put_signal_warp<sig_op, resource_sharing_mode, nic_handler>(
+        doca_gpu_dev_verbs_put_signal_warp<sig_op, resource_sharing_mode, nic_handler, cq_type>(
             qp, raddr, laddr, size, sig_raddr, sig_laddr, sig_val, out_ticket, code_opt);
 }
 
@@ -377,21 +397,23 @@ template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_put_signal(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr sig_raddr,
     struct doca_gpu_dev_verbs_addr sig_laddr, uint64_t sig_val,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     uint64_t ticket;
-    doca_gpu_dev_verbs_put_signal<sig_op, resource_sharing_mode, nic_handler, exec_scope>(
+    doca_gpu_dev_verbs_put_signal<sig_op, resource_sharing_mode, nic_handler, exec_scope, cq_type>(
         qp, raddr, laddr, size, sig_raddr, sig_laddr, sig_val, &ticket, code_opt);
 }
 
 template <typename T, enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_p_signal(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr, T value,
     struct doca_gpu_dev_verbs_addr sig_raddr, struct doca_gpu_dev_verbs_addr sig_laddr,
@@ -405,21 +427,24 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_p_signal(
     DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
     // DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
-    base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, 2, code_opt);
+    base_wqe_idx =
+        doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                            cq_type>(qp, 2, code_opt);
     wqe_idx = base_wqe_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
-    doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_header(qp, wqe_ptr, wqe_idx,
-                                                         DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
-                                                         raddr.addr, raddr.key, sizeof(T));
+    doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_header(
+        qp, wqe_ptr, wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        raddr.addr, raddr.key, sizeof(T));
     doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_data<T>(qp, wqe_ptr, value);
 
     ++wqe_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, sig_raddr.addr, sig_raddr.key, sig_laddr.addr,
-        sig_laddr.key, sizeof(uint64_t), sig_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        sig_raddr.addr, sig_raddr.key, sig_laddr.addr, sig_laddr.key, sizeof(uint64_t), sig_val, 0);
 
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
 
@@ -438,13 +463,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_p_signal(
 template <typename T, enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_p_signal(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr, T value,
     struct doca_gpu_dev_verbs_addr sig_raddr, struct doca_gpu_dev_verbs_addr sig_laddr,
     uint64_t sig_val, uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     uint64_t ticket;
-    doca_gpu_dev_verbs_p_signal<T, sig_op, resource_sharing_mode, nic_handler>(
+    doca_gpu_dev_verbs_p_signal<T, sig_op, resource_sharing_mode, nic_handler, cq_type>(
         qp, raddr, value, sig_raddr, sig_laddr, sig_val, &ticket, code_opt);
 }
 
@@ -453,7 +479,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_p_signal(
 template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_signal_thread(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr sig_raddr,
     struct doca_gpu_dev_verbs_addr sig_laddr, uint64_t sig_val,
@@ -466,13 +493,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_signal_thread(
     DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
     // DOCA_GPUNETIO_VERBS_ASSERT(qp->mem_type == DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU);
 
-    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, 1, code_opt);
+    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                                  cq_type>(qp, 1, code_opt);
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
     doca_gpu_dev_verbs_wqe_prepare_atomic(
         qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
-        DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, sig_raddr.addr, sig_raddr.key, sig_laddr.addr,
-        sig_laddr.key, sizeof(uint64_t), sig_val, 0);
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        sig_raddr.addr, sig_raddr.key, sig_laddr.addr, sig_laddr.key, sizeof(uint64_t), sig_val, 0);
 
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, wqe_idx, wqe_idx);
 
@@ -491,7 +519,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_signal_thread(
 template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_signal_warp(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr sig_raddr,
     struct doca_gpu_dev_verbs_addr sig_laddr, uint64_t sig_val,
@@ -504,30 +533,33 @@ template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD>
+          enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_signal(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr sig_raddr,
     struct doca_gpu_dev_verbs_addr sig_laddr, uint64_t sig_val,
     doca_gpu_dev_verbs_ticket_t *out_ticket,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD)
-        doca_gpu_dev_verbs_signal_thread<sig_op, resource_sharing_mode, nic_handler>(
+        doca_gpu_dev_verbs_signal_thread<sig_op, resource_sharing_mode, nic_handler, cq_type>(
             qp, sig_raddr, sig_laddr, sig_val, out_ticket, code_opt);
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
-        doca_gpu_dev_verbs_signal_warp<sig_op, resource_sharing_mode, nic_handler>(
+        doca_gpu_dev_verbs_signal_warp<sig_op, resource_sharing_mode, nic_handler, cq_type>(
             qp, sig_raddr, sig_laddr, sig_val, out_ticket, code_opt);
 }
 
 template <enum doca_gpu_dev_verbs_signal_op sig_op,
           enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_signal(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr sig_raddr,
     struct doca_gpu_dev_verbs_addr sig_laddr, uint64_t sig_val,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     uint64_t ticket;
-    doca_gpu_dev_verbs_signal<sig_op, resource_sharing_mode, nic_handler>(
+    doca_gpu_dev_verbs_signal<sig_op, resource_sharing_mode, nic_handler,
+                              DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD, cq_type>(
         qp, sig_raddr, sig_laddr, sig_val, &ticket, code_opt);
 }
 
@@ -551,7 +583,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
           enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
           enum doca_gpu_dev_verbs_blocking_mode blocking_mode =
-              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED>
+              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_get_thread(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr daddr,
@@ -569,13 +602,15 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_thread(
     num_chunks = num_chunks > 0 ? num_chunks : 1;
 
     if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED)
-        base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(
-            qp, num_chunks + 1, code_opt);
+        base_wqe_idx =
+            doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                                cq_type>(qp, num_chunks + 1, code_opt);
     else
         base_wqe_idx =
-            doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, num_chunks, code_opt);
+            doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                                cq_type>(qp, num_chunks, code_opt);
 
-    NVCC_PRAGMA_UNROLL_DISABLED
+#pragma unroll 1
     for (uint64_t i = 0; i < num_chunks; i++) {
         wqe_idx = base_wqe_idx + i;
         size_ = remaining_size > DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE
@@ -585,12 +620,15 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_thread(
         wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
         [[likely]] if (size_ > 0) {
             doca_gpu_dev_verbs_wqe_prepare_read(
-                qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
                 raddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), raddr.key,
                 laddr.addr + (i * DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE), laddr.key, size_);
         } else {
-            doca_gpu_dev_verbs_wqe_prepare_nop(qp, wqe_ptr, wqe_idx,
-                                               DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE);
+            doca_gpu_dev_verbs_wqe_prepare_nop(
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp,
+                                                                                      code_opt));
         }
         remaining_size -= size_;
     }
@@ -599,9 +637,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_thread(
         wqe_idx = base_wqe_idx + num_chunks;  // Use the reserved slot after all chunks
         wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
-        doca_gpu_dev_verbs_wqe_prepare_dump(qp, wqe_ptr, wqe_idx,
-                                            DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, daddr.addr,
-                                            daddr.key, 1);
+        doca_gpu_dev_verbs_wqe_prepare_dump(
+            qp, wqe_ptr, wqe_idx,
+            doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+            daddr.addr, daddr.key, 1);
     }
 
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
@@ -616,8 +655,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_thread(
 
     // Wait for the actual last WQE we submitted (either last GET chunk or DUMP)
     if (blocking_mode == DOCA_GPUNETIO_VERBS_BLOCKING_MODE_ENABLED)
-        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
-                                                             wqe_idx);
+        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
+            qp, wqe_idx);
 
     // The actual last WQE we submitted could be either last READ chunk or DUMP
     *out_ticket = wqe_idx;
@@ -642,7 +681,8 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
           enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
           enum doca_gpu_dev_verbs_blocking_mode blocking_mode =
-              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED>
+              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_get_warp(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr daddr,
@@ -661,10 +701,12 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_warp(
 
     if (lane_idx == 0) {
         if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED)
-            base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(
+            base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode,
+                                                               DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
                 qp, DOCA_GPUNETIO_VERBS_WARP_SIZE + 1, code_opt);
         else
-            base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(
+            base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode,
+                                                               DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
                 qp, DOCA_GPUNETIO_VERBS_WARP_SIZE, code_opt);
 
         base_wqe_idx_0 = (uint32_t)base_wqe_idx;
@@ -678,9 +720,10 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_warp(
 
     wqe_idx = base_wqe_idx + lane_idx;
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
-    doca_gpu_dev_verbs_wqe_prepare_read(qp, wqe_ptr, wqe_idx,
-                                        DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, raddr.addr,
-                                        raddr.key, laddr.addr, laddr.key, size);
+    doca_gpu_dev_verbs_wqe_prepare_read(
+        qp, wqe_ptr, wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        raddr.addr, raddr.key, laddr.addr, laddr.key, size);
     __syncwarp();
 
     if (lane_idx == 0) {
@@ -689,16 +732,17 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_warp(
                       DOCA_GPUNETIO_VERBS_WARP_SIZE;  // Use the reserved slot after all chunks
             wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
-            doca_gpu_dev_verbs_wqe_prepare_dump(qp, wqe_ptr, wqe_idx,
-                                                DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE,
-                                                daddr.addr, daddr.key, 1);
+            doca_gpu_dev_verbs_wqe_prepare_dump(
+                qp, wqe_ptr, wqe_idx,
+                doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+                daddr.addr, daddr.key, 1);
             doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, base_wqe_idx, wqe_idx);
             doca_gpu_dev_verbs_submit<resource_sharing_mode, DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU,
                                       nic_handler>(qp, wqe_idx + 1);
             // Wait for the actual last WQE we submitted (either last GET chunk or DUMP)
             if (blocking_mode == DOCA_GPUNETIO_VERBS_BLOCKING_MODE_ENABLED)
-                doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(
-                    doca_gpu_dev_verbs_qp_get_cq_sq(qp), wqe_idx);
+                doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                              cq_type>(qp, wqe_idx);
         } else {
             doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(
                 qp, base_wqe_idx, base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1);
@@ -714,9 +758,9 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_warp(
 
             // Wait for the actual last WQE we submitted (either last GET chunk or DUMP)
             if (blocking_mode == DOCA_GPUNETIO_VERBS_BLOCKING_MODE_ENABLED)
-                doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(
-                    doca_gpu_dev_verbs_qp_get_cq_sq(qp),
-                    base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1);
+                doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                              cq_type>(
+                    qp, base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1);
         }
     }
     __syncwarp();
@@ -745,40 +789,45 @@ template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
           enum doca_gpu_dev_verbs_exec_scope exec_scope = DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD,
           enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
           enum doca_gpu_dev_verbs_blocking_mode blocking_mode =
-              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED>
+              DOCA_GPUNETIO_VERBS_BLOCKING_MODE_DISABLED,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_get(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr raddr,
     struct doca_gpu_dev_verbs_addr laddr, size_t size, struct doca_gpu_dev_verbs_addr daddr,
     doca_gpu_dev_verbs_ticket_t *out_ticket,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_THREAD)
-        doca_gpu_dev_verbs_get_thread<resource_sharing_mode, nic_handler, mcst_mode, blocking_mode>(
-            qp, raddr, laddr, size, daddr, out_ticket, code_opt);
+        doca_gpu_dev_verbs_get_thread<resource_sharing_mode, nic_handler, mcst_mode, blocking_mode,
+                                      cq_type>(qp, raddr, laddr, size, daddr, out_ticket, code_opt);
     if (exec_scope == DOCA_GPUNETIO_VERBS_EXEC_SCOPE_WARP)
-        doca_gpu_dev_verbs_get_warp<resource_sharing_mode, nic_handler, mcst_mode, blocking_mode>(
-            qp, raddr, laddr, size, daddr, out_ticket, code_opt);
+        doca_gpu_dev_verbs_get_warp<resource_sharing_mode, nic_handler, mcst_mode, blocking_mode,
+                                    cq_type>(qp, raddr, laddr, size, daddr, out_ticket, code_opt);
 }
 
 /* **************************************** GET WAIT **************************************** */
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_mcst(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr daddr,
-    doca_gpu_dev_verbs_ticket_t *out_ticket) {
-
+    doca_gpu_dev_verbs_ticket_t *out_ticket,
+    uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
     DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
     DOCA_GPUNETIO_VERBS_ASSERT(out_ticket != NULL);
 
     struct doca_gpu_dev_verbs_wqe *wqe_ptr;
     uint64_t wqe_idx = 0;
 
-    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode>(qp, 1);
+    wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ,
+                                                  cq_type>(qp, 1);
     wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
 
     doca_gpu_dev_verbs_wqe_prepare_dump(
-        qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_WQE_CTRL_CQ_UPDATE, daddr.addr, daddr.key, 1);
+        qp, wqe_ptr, wqe_idx,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        daddr.addr, daddr.key, 1);
 
     doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(qp, wqe_idx, wqe_idx);
 
@@ -794,38 +843,43 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_mcst(
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED>
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_priv_gpu_dev_verbs_get_wait(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr daddr,
     doca_gpu_dev_verbs_ticket_t ticket) {
-
     if (mcst_mode == DOCA_GPUNETIO_VERBS_MCST_ENABLED) {
         uint64_t wqe_idx = 0;
         uint64_t new_ticket;
-        doca_gpu_dev_verbs_mcst<resource_sharing_mode, nic_handler>(qp, daddr, &wqe_idx);
+        doca_gpu_dev_verbs_mcst<resource_sharing_mode, nic_handler, cq_type>(qp, daddr, &wqe_idx);
         new_ticket = (wqe_idx >= ticket) ? wqe_idx : ticket;
-        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
-                                                             new_ticket);
+        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
+            qp, new_ticket);
     } else
-        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
-                                                             ticket);
+        doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
+            qp, ticket);
+#if DOCA_GPUNETIO_VERBS_EXP_NIC_FENCE_ACQUIRE_CTA
+    doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS>();
+#endif
 }
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED>
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_get_wait(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr daddr,
     doca_gpu_dev_verbs_ticket_t ticket) {
-    doca_priv_gpu_dev_verbs_get_wait<resource_sharing_mode, nic_handler, mcst_mode>(qp, daddr,
-                                                                                    ticket);
+    doca_priv_gpu_dev_verbs_get_wait<resource_sharing_mode, nic_handler, mcst_mode, cq_type>(
+        qp, daddr, ticket);
 }
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
           enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
-          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED>
+          enum doca_gpu_dev_verbs_mcst_mode mcst_mode = DOCA_GPUNETIO_VERBS_MCST_DISABLED,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_get_wait(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_addr daddr) {
     uint64_t ticket =
@@ -834,39 +888,42 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_get_wait(
         return;
     --ticket;
 
-    doca_priv_gpu_dev_verbs_get_wait<resource_sharing_mode, nic_handler, mcst_mode>(qp, daddr,
-                                                                                    ticket);
+    doca_priv_gpu_dev_verbs_get_wait<resource_sharing_mode, nic_handler, mcst_mode, cq_type>(
+        qp, daddr, ticket);
 }
 
 /* **************************************** WAIT **************************************** */
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_wait(struct doca_gpu_dev_verbs_qp *qp,
                                                                doca_gpu_dev_verbs_ticket_t ticket) {
-    doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
-                                                         ticket);
+    doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
+        qp, ticket);
 }
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_wait(struct doca_gpu_dev_verbs_qp *qp) {
     uint64_t ticket =
         doca_gpu_dev_verbs_atomic_read<uint64_t, resource_sharing_mode>(&qp->sq_rsvd_index);
     [[unlikely]] if (ticket == 0)
         return;
     --ticket;
-    doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(doca_gpu_dev_verbs_qp_get_cq_sq(qp),
-                                                         ticket);
+    doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode, DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
+        qp, ticket);
 }
 
 /* **************************************** OTHERS **************************************** */
 
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode =
               DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU,
-          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO>
+          enum doca_gpu_dev_verbs_nic_handler nic_handler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO,
+          enum doca_gpu_dev_verbs_cq_type cq_type = DOCA_GPUNETIO_VERBS_CQ_UNKNOWN>
 __device__ static __forceinline__ void doca_gpu_dev_verbs_fence(struct doca_gpu_dev_verbs_qp *qp) {
     // This is no-op in the current implementation
     return;

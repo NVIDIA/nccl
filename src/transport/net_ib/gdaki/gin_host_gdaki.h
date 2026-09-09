@@ -8,8 +8,8 @@
 #ifndef _GIN_HOST_GDAKI_H_
 #define _GIN_HOST_GDAKI_H_
 
-#ifndef DOCA_VERBS_USE_CUDA_WRAPPER
-#define DOCA_VERBS_USE_CUDA_WRAPPER
+#ifndef DOCA_GPUNETIO_USE_CUDA_WRAPPER
+#define DOCA_GPUNETIO_USE_CUDA_WRAPPER
 #endif
 
 #ifndef DOCA_VERBS_USE_NET_WRAPPER
@@ -25,8 +25,7 @@
 #include "nccl.h"
 #include "gin/gin_host.h"
 
-ncclResult_t ncclGinGdakiCreateContext(void* collComm, int nSignals, int nCounters, int nContexts, int queueDepth,
-                                       int trafficClass, int backendVersion, void** outGinCtx,
+ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void** outGinCtx,
                                        ncclNetDeviceHandle_t** outDevHandle);
 ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx);
 ncclResult_t ncclGinGdakiRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mr_flags, void** mhandle,

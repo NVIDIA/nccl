@@ -1,10 +1,6 @@
 # Include nccl package with all source files
 recursive-include nccl *.pyx *.pxd
 
-# Keep prebuilt nccl.ep artifacts
-recursive-include nccl/ep/lib *.so
-recursive-include nccl/ep/include *.h *.hpp *.cuh
-
 # Exclude directories not needed in sdist
 prune examples
 prune *.egg-info

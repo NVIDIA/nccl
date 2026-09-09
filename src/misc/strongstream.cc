@@ -32,10 +32,15 @@ struct ncclStrongStreamCapture {
 static ncclCudaContext* cxtListHead = nullptr;
 static std::mutex cxtListMutex;
 
-ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out) {
+static int launchOrderImplicitEffective(int launchOrderImplicit) {
+  return launchOrderImplicit == 1 ? 1 : 0;
+}
+
+ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out, int launchOrderImplicit, uint64_t commHash) {
   ncclResult_t result = ncclSuccess;
   CUcontext hcontext;
   CUCHECK(cuCtxGetCurrent(&hcontext));
+  int launchOrderImplicitEnabled = launchOrderImplicitEffective(launchOrderImplicit);
 
   std::lock_guard<std::mutex> lock(cxtListMutex);
   struct ncclCudaContext* p = cxtListHead;
@@ -44,12 +49,22 @@ ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out) {
       p = new ncclCudaContext{};
       p->refCount = 1;
       p->hcontext = hcontext;
+      p->launchOrderImplicitEverEnabled = launchOrderImplicitEnabled;
+      p->launchOrderImplicitEverDisabled = !launchOrderImplicitEnabled;
       p->next = cxtListHead;
       cxtListHead = p;
       NCCLCHECKGOTO(ncclStrongStreamConstruct(&p->launchOrder), result, leave);
       break;
     }
     if (p->hcontext == hcontext) {
+      if (launchOrderImplicitEnabled ? p->launchOrderImplicitEverDisabled : p->launchOrderImplicitEverEnabled) {
+        INFO(NCCL_INIT,
+             "commHash 0x%lx uses config launchOrderImplicit=%d after this CUDA context used the opposite value. "
+             "Only overlap communication with communicators that share the same launchOrderImplicit settings.",
+             (unsigned long)commHash, launchOrderImplicitEnabled ? 1 : 0);
+      }
+      p->launchOrderImplicitEverEnabled |= launchOrderImplicitEnabled;
+      p->launchOrderImplicitEverDisabled |= !launchOrderImplicitEnabled;
       p->refCount += 1;
       break;
     }

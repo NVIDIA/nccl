@@ -48,6 +48,16 @@
 // Define static schema ID for the reduction operation.
 #define NVTX_PAYLOAD_ENTRY_NCCL_REDOP 24 + NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START
 
+// Per-collective-config API variants: distinct schema IDs (reuse the base payload schemas).
+#define NVTX_SID_AllReduceConfig 25
+#define NVTX_SID_BroadcastConfig 26
+#define NVTX_SID_ReduceConfig 27
+#define NVTX_SID_AllGatherConfig 28
+#define NVTX_SID_ReduceScatterConfig 29
+#define NVTX_SID_AlltoAllConfig 30
+#define NVTX_SID_GatherConfig 31
+#define NVTX_SID_ScatterConfig 32
+
 extern const nvtxDomainHandle_t ncclNvtxDomainHandle;
 
 struct nccl_domain {

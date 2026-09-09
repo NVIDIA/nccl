@@ -1,0 +1,9 @@
+==============================================================================
+This package does not bundle third-party source code.
+==============================================================================
+
+NIIN depends on CUDA and NCCL at build or runtime as documented in README.md.
+MPI is used by examples and test infrastructure for multi-PE launches, but it
+is not a NIIN runtime dependency. The NVSHMEM compatibility tests can compile
+external NVSHMEM test sources when NVSHMEM_HOME is provided, but those sources
+are not included in this contribution.

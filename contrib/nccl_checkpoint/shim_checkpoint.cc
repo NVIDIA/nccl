@@ -37,7 +37,7 @@ static ncclResult_t replayWindow(ncclComm_t synthComm, ncclWindow_t synthWin, Wi
 }
 
 static ncclResult_t isCommBlocking(CommInitParams* params, bool* isBlocking) {
-  if (params->commParent != nullptr) {
+  if (!params->configProvided && params->commParent != nullptr) {
     const CommHandleEntry* parentEntry = nullptr;
     NCCLCHECK(g_commHandles.find(params->commParent, &parentEntry));
     if (parentEntry->config == nullptr) return ncclInternalError;
@@ -80,21 +80,6 @@ static ncclResult_t replayCommResources(ncclComm_t synthComm) {
     if (entry->config == nullptr) return ncclInternalError;
     NCCLCHECK(replayWindow(synthComm, synthWin, entry->config));
   }
-  return ncclSuccess;
-}
-
-static ncclResult_t commGetHash(ncclComm_t realComm, uint64_t* commHash) {
-  if (realComm->endMagic != NCCL_MAGIC) {
-    int runtime_version;
-    NCCLCHECK(ncclGetVersion(&runtime_version));
-    WARN("Detected memory sentinel mismatch!  Likely the NCCL runtime version "
-         "(%d) is not compatible with the libnccl-checkpoint-shim.so version (%d), "
-         "or the communicator has experienced memory corruption."
-         "  Please recompile with the same versions.",
-         runtime_version, NCCL_VERSION_CODE);
-    return ncclInternalError;
-  }
-  *commHash = realComm->commHash;
   return ncclSuccess;
 }
 
@@ -424,20 +409,34 @@ static ncclResult_t destroyRestoredUserDestroyedComms() {
 extern "C" ncclResult_t ncclCheckpointPrepare(void) {
   using finalize_t = ncclResult_t (*)(ncclComm_t);
   using destroy_t = ncclResult_t (*)(ncclComm_t);
+  using group_t = ncclResult_t (*)();
   static finalize_t real_finalize = nullptr;
   static destroy_t real_destroy = nullptr;
-  ncclResult_t ret;
-
+  static group_t ncclGroupStart = nullptr;
+  static group_t ncclGroupEnd = nullptr;
+  bool currentGroupBlocking = true;
+  bool haveComms = false;
+  ncclResult_t ret, retGroup;
   g_CommCheckpointCount = 0;
 
   NCCLCHECK(g_commHandles.forEachHandle([&](ncclComm_t synthComm, const CommHandleEntry* entry) {
-    if (!entry->restoreUnsafe) return ncclSuccess;
-    WARN("ncclCheckpointPrepare: communicator %p cannot be checkpointed: %s", synthComm,
-         entry->restoreUnsafeReason ? entry->restoreUnsafeReason : "restore-unsafe API was used");
-    return ncclInvalidUsage;
+    if (entry->restoreUnsafe) {
+      WARN("ncclCheckpointPrepare: communicator %p cannot be checkpointed: %s", synthComm,
+           entry->restoreUnsafeReason ? entry->restoreUnsafeReason : "restore-unsafe API was used");
+      return ncclInvalidUsage;
+    }
+    haveComms = true;
+    return ncclSuccess;
   }));
 
-  NCCLCHECK(g_commHandles.forEachHandle([&](ncclComm_t synthComm, const CommHandleEntry* entry) {
+  if (!haveComms) {
+    goto end;
+  }
+  NCCLCHECK(resolveRealFunction("ncclGroupStart", &ncclGroupStart));
+  NCCLCHECK(resolveRealFunction("ncclGroupEnd", &ncclGroupEnd));
+  NCCLCHECK(ncclGroupStart());
+
+  ret = g_commHandles.forEachHandle([&](ncclComm_t synthComm, const CommHandleEntry* entry) {
     CommInitParams* params = entry->config;
     if (!commNeedsRestore(entry)) return ncclSuccess;
     g_CommCheckpointCount++;
@@ -451,11 +450,19 @@ extern "C" ncclResult_t ncclCheckpointPrepare(void) {
       return ncclSuccess;
     }
     ncclResult_t ret;
+    bool thisCommBlocking;
+    NCCLCHECK(isCommBlocking(params, &thisCommBlocking));
+    if (thisCommBlocking != currentGroupBlocking) {
+      /* not valid to group blocking and non-blocking comms together: start new group */
+      NCCLCHECK(ncclGroupEnd());
+      NCCLCHECK(ncclGroupStart());
+      currentGroupBlocking = thisCommBlocking;
+    }
+
     NCCLCHECK(ncclCommGetAsyncError(realComm, &ret));
     NCCLCHECK_WAIT(ret, realComm);
-    // extract hash at prepare time rather than blocking during init time.
-    NCCLCHECK(commGetHash(realComm, &params->commHash));
-    params->cudaDev = realComm->cudaDev;
+    // Extract runtime properties at prepare time rather than blocking during init time.
+    NCCLCHECK(captureCommRuntimeProperties(realComm, params));
     TRACE(NCCL_CHECKPOINT, "prepare finalize comm %p real=%p hash=0x%016lx cudaDev=%d", synthComm, realComm,
           params->commHash, params->cudaDev);
     if (isActive) {
@@ -464,7 +471,11 @@ extern "C" ncclResult_t ncclCheckpointPrepare(void) {
     }
     TRACE(NCCL_CHECKPOINT, "prepare waited for comm %p status=%d", synthComm, ret);
     return ret;
-  }));
+  });
+  retGroup = ncclGroupEnd(); /* end the group no matter what forEachHandle returned*/
+  NCCLCHECK(ret);
+  NCCLCHECK(retGroup);
+
 
   NCCLCHECK(g_commHandles.forEachHandle([&](ncclComm_t synthComm, const CommHandleEntry* entry) {
     if (!commNeedsRestore(entry)) return ncclSuccess;
@@ -495,6 +506,8 @@ extern "C" ncclResult_t ncclCheckpointPrepare(void) {
     NCCLCHECK(ret);
     return ncclSuccess;
   }));
+
+  end:
   markCheckpointPrepared();
   return ncclSuccess;
 }

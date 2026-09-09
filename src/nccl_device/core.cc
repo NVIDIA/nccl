@@ -32,6 +32,40 @@ ncclTeam_t ncclTeamLsa(ncclComm_t comm) {
   return ans;
 }
 
+NCCL_API(ncclTeam_t, ncclTeamCft, ncclComm_t comm, ncclCftTeamMode_t mode);
+ncclTeam_t ncclTeamCft(ncclComm_t comm, ncclCftTeamMode_t mode) {
+  // Ignoring errors as in ncclTeamLsa().
+  if (ncclSuccess != ncclDevrInitOnce(comm)) return ncclTeam_t{};
+
+  ncclTeam_t flatTeam;
+  flatTeam.nRanks = comm->devrState.cftSize;
+  flatTeam.rank = comm->devrState.cftSelf;
+  flatTeam.stride = 1;
+  if (mode == NCCL_CFT_TEAM_FLAT) return flatTeam;
+
+  int innerSize;
+  if (mode == NCCL_CFT_TEAM_HIER_MULTIMEM) {
+    innerSize = comm->devrState.cftMcSize;
+  } else if (mode == NCCL_CFT_TEAM_HIER_LSA) {
+    innerSize = comm->devrState.lsaSize;
+  } else {
+    return ncclTeam_t{};
+  }
+  return ncclTeamOuterFactor(flatTeam, innerSize);
+}
+
+NCCL_API(ncclTeam_t, ncclTeamCftMultimem, ncclComm_t comm);
+ncclTeam_t ncclTeamCftMultimem(ncclComm_t comm) {
+  // Ignoring errors as in ncclTeamLsa().
+  if (ncclSuccess != ncclDevrInitOnce(comm)) return ncclTeam_t{};
+
+  ncclTeam_t ans;
+  ans.nRanks = comm->devrState.cftMcSize;
+  ans.rank = comm->devrState.cftMcSelf;
+  ans.stride = 1;
+  return ans;
+}
+
 NCCL_API(ncclTeam_t, ncclTeamRail, ncclComm_t comm);
 ncclTeam_t ncclTeamRail(ncclComm_t comm) {
   // Ignoring errors as above.

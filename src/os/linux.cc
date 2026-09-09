@@ -52,7 +52,6 @@ ncclOsLibraryHandle ncclOsDlopen(const char* filename) {
   ncclOsLibraryHandle handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
   if (handle == NULL) {
     saveDlError();
-    INFO(NCCL_INIT, "ncclOsDlopen(%s) failed: %s", filename, ncclDlErrorBuf);
   }
   return handle;
 }
@@ -61,7 +60,6 @@ void* ncclOsDlsym(ncclOsLibraryHandle handle, const char* symbol) {
   void* ptr = dlsym(handle, symbol);
   if (ptr == NULL) {
     saveDlError();
-    INFO(NCCL_INIT, "ncclOsDlsym(%s) failed: %s", symbol, ncclDlErrorBuf);
   }
   return ptr;
 }
@@ -71,7 +69,9 @@ const char* ncclOsDlerror() {
 }
 
 ncclOsLibraryHandle ncclOsDlopen(const char* path, int mode) {
-  return (ncclOsLibraryHandle)dlopen(path, (mode == NCCL_OS_DL_NOW) ? RTLD_NOW : RTLD_LAZY);
+  ncclOsLibraryHandle handle = dlopen(path, (mode == NCCL_OS_DL_NOW) ? RTLD_NOW : RTLD_LAZY);
+  if (handle == NULL) saveDlError();
+  return handle;
 }
 
 void ncclOsDlclose(ncclOsLibraryHandle handle) {
@@ -547,7 +547,8 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
   return ncclSuccess;
 }
 
-void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond) {
+void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized) {
+  if (initialized != NULL && *initialized) return;
   pthread_mutexattr_t mutexAttr;
   pthread_mutexattr_init(&mutexAttr);
   pthread_mutexattr_setpshared(&mutexAttr, PTHREAD_PROCESS_SHARED);
@@ -561,6 +562,14 @@ void ncclOsSetMutexCondShared(std::mutex& mutex, std::condition_variable& cond) 
   pthread_cond_t* condHandle = cond.native_handle();
   pthread_cond_init(condHandle, &condAttr);
   pthread_condattr_destroy(&condAttr);
+  if (initialized != NULL) *initialized = 1;
+}
+
+void ncclOsUnsetMutexCondShared(std::mutex& mutex, std::condition_variable& cond, int* initialized) {
+  if (initialized != NULL && *initialized == 0) return;
+  pthread_cond_destroy(cond.native_handle());
+  pthread_mutex_destroy(mutex.native_handle());
+  if (initialized != NULL) *initialized = 0;
 }
 
 void ncclOsCpuZero(ncclAffinity& affinity) {

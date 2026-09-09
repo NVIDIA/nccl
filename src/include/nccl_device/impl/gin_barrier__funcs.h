@@ -9,7 +9,7 @@
 #define _NCCL_DEVICE_GIN_BARRIER__FUNCS_H_
 #include "gin_barrier__types.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
   Coop coop, ncclGin net, ncclTeam team, ncclGinBarrierHandle handle, uint32_t barrierIndex)
@@ -19,14 +19,14 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGin net, ncclTeamTagRail,
                                                                       uint32_t barrierIndex)
   : ncclGinBarrierSession(coop, net, ncclTeamRail(net.comm), net.comm.railGinBarrier, barrierIndex) {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGin net, ncclTeamTagWorld,
                                                                       uint32_t barrierIndex)
@@ -36,7 +36,7 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop,
 // All-contexts constructors: build a single-context gin (context 0) for the signal/wait
 // path, then flip the `fenceAllContexts` flag so the fence iterates every GIN context on
 // the comm.
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
   Coop coop, ncclGinAllContexts allCtx, ncclTeam team, ncclGinBarrierHandle handle, uint32_t barrierIndex)
@@ -46,26 +46,26 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGinAllContexts allCtx,
                                                                       ncclTeamTagRail, uint32_t barrierIndex)
   : ncclGinBarrierSession(coop, allCtx, ncclTeamRail(allCtx.comm), allCtx.comm.railGinBarrier, barrierIndex) {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::ncclGinBarrierSession(Coop coop, ncclGinAllContexts allCtx,
                                                                       ncclTeamTagWorld, uint32_t barrierIndex)
   : ncclGinBarrierSession(coop, allCtx, ncclTeamWorld(allCtx.comm), allCtx.comm.worldGinBarrier, barrierIndex) {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>::~ncclGinBarrierSession() {}
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 template <bool EnableTimeout>
 NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncInternal(
@@ -79,10 +79,8 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
   // pair per thread so the flush is parallelised on both axes.
   auto fenceFlush = [&](cuda::memory_order order) {
     if (this->fenceAllContexts) {
-      ncclTeam fenceTeam =
-        this->net.comm.ginContextsRailed ? ncclTeamRail(this->net.comm) : ncclTeamWorld(this->net.comm);
       int nCtx = (int)this->net.comm.ginContextCount;
-      int nPeers = fenceTeam.nRanks;
+      int nPeers = this->team.nRanks;
       int total = nCtx * nPeers;
       NVCC_PRAGMA_UNROLL_DISABLED
       for (int i = this->coop.thread_rank(); i < total; i += this->coop.size()) {
@@ -90,20 +88,20 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
         int peer = i - ctx * nPeers;
         ncclGin scratch(this->net.comm, ctx, this->net.resourceSharingMode);
         ncclGinRequest_t req;
-        scratch.flushAsync(fenceTeam, (uint32_t)peer, &req);
+        scratch.flushAsync(this->team, (uint32_t)peer, &req);
         scratch.wait(req, ncclCoopThread{}, ncclGin_None{}, order);
       }
     } else {
       this->net.flush(this->coop, order);
     }
   };
-
-  // Signal `peer` on `net` and wait for `peer`'s reciprocal signal on the calling rank's
-  // matching slot. Returns ncclTimeout (timeout path only) if the wait exceeds budget.
-  auto signalAndWait = [&](ncclGin& net, int peer) -> ncclResult_t {
+  auto signalPeer = [&](ncclGin& net, int peer) {
     net.signal(this->team, peer, ncclGin_SignalInc{this->signal + this->team.rank}, ncclCoopThread(), ncclGin_None(),
                nccl::utility::releaseOrderOf(ord) != cuda::memory_order_relaxed ? cuda::thread_scope_thread :
                                                                                   cuda::thread_scope_system);
+  };
+
+  auto waitForPeer = [&](ncclGin& net, int peer) -> ncclResult_t {
     uint32_t* shadowPtr = (uint32_t*)net.getSignalShadowPtr(this->signal + peer);
     int waitVal = ++*shadowPtr;
     if NCCL_IF_CONSTEXPR (EnableTimeout) {
@@ -120,6 +118,10 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
 
   if NCCL_IF_CONSTEXPR (EnableTimeout) {
     startCycle = clock64();
+  }
+
+  if ((fence & ncclGinFenceLevel::Put) && !this->net._supportsStrongSignal()) {
+    fenceFlush(nccl::utility::acquireOrderOf(ord));
   }
 
   // Signal/wait with the calling rank's own slot included on Put so self-puts get the same
@@ -142,14 +144,29 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
       int peer = 1 + this->team.rank + peerStep;
       if (this->team.nRanks <= peer) peer -= this->team.nRanks;
       ncclGin scratch(this->net.comm, ctx, this->net.resourceSharingMode);
-      if ((ret = signalAndWait(scratch, peer)) != ncclSuccess) goto exit;
+      signalPeer(scratch, peer);
+    }
+    NVCC_PRAGMA_UNROLL_DISABLED
+    for (int i = this->coop.thread_rank(); i < total; i += this->coop.size()) {
+      int ctx = i / nPeerSigs;
+      int peerStep = i - ctx * nPeerSigs;
+      int peer = 1 + this->team.rank + peerStep;
+      if (this->team.nRanks <= peer) peer -= this->team.nRanks;
+      ncclGin scratch(this->net.comm, ctx, this->net.resourceSharingMode);
+      if ((ret = waitForPeer(scratch, peer)) != ncclSuccess) goto exit;
     }
   } else {
     NVCC_PRAGMA_UNROLL_DISABLED
     for (int i = this->coop.thread_rank(); i < nPeerSigs; i += this->coop.size()) {
       int peer = 1 + this->team.rank + i;
       if (this->team.nRanks <= peer) peer -= this->team.nRanks;
-      if ((ret = signalAndWait(this->net, peer)) != ncclSuccess) goto exit;
+      signalPeer(this->net, peer);
+    }
+    NVCC_PRAGMA_UNROLL_DISABLED
+    for (int i = this->coop.thread_rank(); i < nPeerSigs; i += this->coop.size()) {
+      int peer = 1 + this->team.rank + i;
+      if (this->team.nRanks <= peer) peer -= this->team.nRanks;
+      if ((ret = waitForPeer(this->net, peer)) != ncclSuccess) goto exit;
     }
   }
 
@@ -165,14 +182,14 @@ exit:
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE void ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memory_order ord, ncclGinFenceLevel fence) {
   (void)(this->template syncInternal</*EnableTimeout=*/false>(coop, ord, fence, 0ULL));
 }
 #endif
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession<Coop>::sync(Coop coop, cuda::memory_order ord,
                                                                   ncclGinFenceLevel fence, uint64_t timeoutCycles) {
@@ -181,7 +198,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession<Coop>::sync(Coop coop, cud
 #endif
 
 // Free-function GIN barrier: thin wrappers around session construct + sync + destruct.
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE void ncclGinBarrier(Coop coop, ncclGin gin, ncclTeam team, ncclGinBarrierHandle handle,
                                        uint32_t index, cuda::memory_order ord, ncclGinFenceLevel fence) {

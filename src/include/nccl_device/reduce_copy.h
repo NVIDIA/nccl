@@ -13,7 +13,7 @@
 // Forward declarations for public API functions
 // Implementations are in impl/reduce_copy__funcs.h
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 // SERIES 1.x - Generic ReduceCopy with RedOp (LSA sources only)
 template <typename T, typename Coop, typename SrcLambda, typename DstLambda, typename RedOp, typename IntCount,
           int UNROLL = 4 * 16 / sizeof(T)>
@@ -174,6 +174,6 @@ NCCL_DEVICE_INLINE void ncclMultimemReduceSumLsaCopy(Coop, T*, ncclSymPtr<T>, nc
 template <typename T, typename Coop, typename IntCount, int UNROLL = 4 * 16 / sizeof(T)>
 NCCL_DEVICE_INLINE void ncclLocalReduceSumCopy(Coop, int, T*, size_t, int, T*, size_t, IntCount);
 
-#endif // NCCL_CHECK_CUDACC
+#endif // __CUDACC__
 
 #endif // _NCCL_DEVICE_REDUCE_COPY_H_

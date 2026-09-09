@@ -217,15 +217,15 @@ void rasConnsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
         if (now - std::max(conn->sock->lastSendTime, ncclIntruQueueHead(&conn->sendQ)->enqueueTime) >
             RAS_STUCK_TIMEOUT) {
           char details[256];
-          long timeoutSecs = (now - std::max(conn->sock->lastSendTime, ncclIntruQueueHead(&conn->sendQ)->enqueueTime)) /
-                             CLOCK_UNITS_PER_SEC;
-          snprintf(details, sizeof(details), "send operation stuck for %" PRId64 "s, terminating connection",
-                   (int64_t)timeoutSecs);
+          double timeoutSecs =
+            (double)(now - std::max(conn->sock->lastSendTime, ncclIntruQueueHead(&conn->sendQ)->enqueueTime)) /
+            CLOCK_UNITS_PER_SEC;
+          snprintf(details, sizeof(details), "send operation stuck for %gs, terminating connection", timeoutSecs);
           struct rasEventNotification event = {"PEER_SEND_STUCK", details, nullptr, &conn->addr};
           rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
 
-          INFO(NCCL_RAS, "RAS send stuck timeout error (%" PRId64 "s) on socket connection with %s",
-               (int64_t)timeoutSecs, ncclSocketToString(&conn->addr, rasLine));
+          INFO(NCCL_RAS, "RAS send stuck timeout error (%gs) on socket connection with %s", timeoutSecs,
+               ncclSocketToString(&conn->addr, rasLine));
           rasSocketTerminate(conn->sock, /*finalize*/ false, RAS_STUCK_TIMEOUT);
           // We will retry below in the same loop.
         } else {
@@ -244,15 +244,15 @@ void rasConnsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
       // If we've been trying to open a connection for too long (60s), give up and mark the peer as dead
       // so that we don't try again.
       if (now - conn->startRetryTime > RAS_PEER_DEAD_TIMEOUT) {
-        struct rasCollRequest bCast;
+        struct rasCollRequest bCast = {};
         char details[256];
-        snprintf(details, sizeof(details), "peer failed to respond for %" PRId64 "s, declaring dead",
-                 (int64_t)((now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC));
+        double timeoutSecs = (double)(now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC;
+        snprintf(details, sizeof(details), "peer failed to respond for %gs, declaring dead", timeoutSecs);
         struct rasEventNotification event = {"PEER_TIMEOUT_DEAD", details, nullptr, &conn->addr};
         rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
 
-        INFO(NCCL_RAS, "RAS connect retry timeout (%" PRId64 "s) on socket connection with %s",
-             (int64_t)((now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC), ncclSocketToString(&conn->addr, rasLine));
+        INFO(NCCL_RAS, "RAS connect retry timeout (%gs) on socket connection with %s", timeoutSecs,
+             ncclSocketToString(&conn->addr, rasLine));
 
         // Broadcast the info about a dead peer to everybody.  This will handle it locally as well, including
         // declaring the peer dead and terminating the connection.
@@ -275,12 +275,11 @@ void rasConnsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
         if (now - conn->startRetryTime > RAS_CONNECT_WARN) {
           if (!conn->experiencingDelays) {
             char details[256];
-            snprintf(details, sizeof(details), "peer not responding for %" PRId64 "s (connect timeout)",
-                     (int64_t)((now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC));
+            double timeoutSecs = (double)(now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC;
+            snprintf(details, sizeof(details), "peer not responding for %gs (connect timeout)", timeoutSecs);
             struct rasEventNotification event = {"PEER_UNRESPONSIVE", details, nullptr, &conn->addr};
             rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
-            INFO(NCCL_RAS, "RAS connect timeout warning (%" PRId64 "s) on socket connection with %s",
-                 (int64_t)((now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC),
+            INFO(NCCL_RAS, "RAS connect timeout warning (%gs) on socket connection with %s", timeoutSecs,
                  ncclSocketToString(&conn->addr, rasLine));
 
             // See if the connection was meant to be a part of a RAS link and if so, try to initiate fallback
@@ -301,17 +300,17 @@ void rasConnsHandleTimeouts(int64_t now, int64_t* nextWakeup) {
         // We retry once a second.
         if (conn->sock == nullptr) {
           if (now - conn->lastRetryTime > RAS_CONNECT_RETRY) {
+            double timeoutSecs = (double)(now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC;
             if (conn->lastRetryTime == 0) {
               char details[256];
-              snprintf(details, sizeof(details),
-                       "connection attempt timed out after %" PRId64 "s, attempting reconnect",
-                       (int64_t)((now - conn->startRetryTime) / CLOCK_UNITS_PER_SEC));
+              snprintf(details, sizeof(details), "connection attempt timed out after %gs, attempting reconnect",
+                       timeoutSecs);
               struct rasEventNotification event = {"PEER_RETRY", details, nullptr, &conn->addr};
               rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
             }
             INFO(NCCL_RAS, "RAS trying to reconnect with %s (experiencingDelays %d, startRetryTime %.2fs)",
                  ncclSocketToString(&conn->addr, rasLine), conn->experiencingDelays,
-                 (conn->startRetryTime ? (now - conn->startRetryTime) / 1e9 : 0.0));
+                 (conn->startRetryTime ? timeoutSecs : 0.0));
             rasConnOpen(conn);
           }
           if (conn->sock == nullptr)
@@ -439,27 +438,27 @@ void rasSocksHandleTimeouts(int64_t now, int64_t* nextWakeup) {
       // For socket connections that are still being established, give up on the ones that take too long to initialize.
       if (now - sock->createTime > RAS_STUCK_TIMEOUT) {
         char details[256];
+        double timeoutSecs = (double)(now - sock->createTime) / CLOCK_UNITS_PER_SEC;
         if (sock->conn == nullptr) {
-          snprintf(details, sizeof(details), "handshake completion timed out after %" PRId64 "s (incoming connection)",
-                   (int64_t)((now - sock->createTime) / CLOCK_UNITS_PER_SEC));
+          snprintf(details, sizeof(details), "handshake completion timed out after %gs (incoming connection)",
+                   timeoutSecs);
           struct rasEventNotification event = {"PEER_INIT_TIMEOUT", details, nullptr, &sock->sock.addr};
           rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
 
-          INFO(NCCL_RAS, "RAS init timeout error (%" PRId64 "s) on incoming socket connection from %s",
-               (int64_t)((now - sock->createTime) / CLOCK_UNITS_PER_SEC),
+          INFO(NCCL_RAS, "RAS init timeout error (%gs) on incoming socket connection from %s", timeoutSecs,
                ncclSocketToString(&sock->sock.addr, rasLine));
         } else {
-          snprintf(details, sizeof(details), "handshake completion timed out after %" PRId64 "s (outgoing connection)",
-                   (int64_t)((now - sock->createTime) / CLOCK_UNITS_PER_SEC));
+          snprintf(details, sizeof(details), "handshake completion timed out after %gs (outgoing connection)",
+                   timeoutSecs);
           struct rasEventNotification event = {"PEER_INIT_TIMEOUT", details, nullptr, &sock->sock.addr};
           rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
 
           INFO(NCCL_RAS,
-               "RAS init timeout error (%" PRId64 "s) on socket connection with %s "
+               "RAS init timeout error (%gs) on socket connection with %s "
                "(experiencingDelays %d, startRetryTime %.2fs, socket status %d)",
-               (int64_t)((now - sock->createTime) / CLOCK_UNITS_PER_SEC), ncclSocketToString(&sock->sock.addr, rasLine),
-               sock->conn->experiencingDelays,
-               (sock->conn->startRetryTime ? (now - sock->conn->startRetryTime) / 1e9 : 0.0), sock->status);
+               timeoutSecs, ncclSocketToString(&sock->sock.addr, rasLine), sock->conn->experiencingDelays,
+               (sock->conn->startRetryTime ? (double)(now - sock->conn->startRetryTime) / CLOCK_UNITS_PER_SEC : 0.0),
+               sock->status);
         }
         rasSocketTerminate(sock, /*finalize*/ true);
         // We may retry later.
@@ -469,8 +468,8 @@ void rasSocksHandleTimeouts(int64_t now, int64_t* nextWakeup) {
     } else if (sock->status == RAS_SOCK_TERMINATING) {
       // For sockets that are being terminated, force finalization of the ones that haven't made progress in too long.
       if (now - std::max(sock->lastSendTime, sock->lastRecvTime) > RAS_STUCK_TIMEOUT) {
-        INFO(NCCL_RAS, "RAS termination stuck timeout error (%" PRId64 "s) on socket connection with %s",
-             (int64_t)((now - std::max(sock->lastSendTime, sock->lastRecvTime)) / CLOCK_UNITS_PER_SEC),
+        INFO(NCCL_RAS, "RAS termination stuck timeout error (%gs) on socket connection with %s",
+             (double)(now - std::max(sock->lastSendTime, sock->lastRecvTime)) / CLOCK_UNITS_PER_SEC,
              ncclSocketToString(&sock->sock.addr, rasLine));
         rasSocketTerminate(sock, /*finalize*/ true);
         // This socket is presumably already being re-established, if needed.
@@ -483,8 +482,8 @@ void rasSocksHandleTimeouts(int64_t now, int64_t* nextWakeup) {
       // important due to shorter timeouts on RAS network connections, but in case of weird situations like process
       // suspend, rasSocketTerminate will do additional checking.
       if (now - std::max(sock->lastSendTime, sock->lastRecvTime) > RAS_IDLE_TIMEOUT) {
-        INFO(NCCL_RAS, "RAS idle timeout (%" PRId64 "s) on socket connection with %s",
-             (int64_t)((now - std::max(sock->lastSendTime, sock->lastRecvTime)) / CLOCK_UNITS_PER_SEC),
+        INFO(NCCL_RAS, "RAS idle timeout (%gs) on socket connection with %s",
+             (double)(now - std::max(sock->lastSendTime, sock->lastRecvTime)) / CLOCK_UNITS_PER_SEC,
              ncclSocketToString(&sock->sock.addr, rasLine));
         rasSocketTerminate(sock, /*finalize*/ false, /*startRetryOffset*/ 0, /*retry*/ false);
         // The RAS network timeout handler will terminate the conn it was associated with, if any.
@@ -746,8 +745,8 @@ static ncclResult_t rasLinkHandleNetTimeouts(struct rasLink* link, int64_t now, 
       // This triggers when rasLinkReinitConns didn't create the primary connection because we have a higher address
       // than the peer.  If that peer fails to initiate within RAS_CONNECT_WARN, we need to take action.
       if (now - link->lastUpdatePeersTime > RAS_CONNECT_WARN) {
-        INFO(NCCL_RAS, "RAS peer connect timeout warning (%" PRId64 "s) on socket connection from %s",
-             (int64_t)((now - link->lastUpdatePeersTime) / CLOCK_UNITS_PER_SEC),
+        INFO(NCCL_RAS, "RAS peer connect timeout warning (%gs) on socket connection from %s",
+             (double)(now - link->lastUpdatePeersTime) / CLOCK_UNITS_PER_SEC,
              ncclSocketToString(&rasPeers[linkConn->peerIdx].addr, rasLine));
         NCCLCHECK(rasConnCreate(&rasPeers[linkConn->peerIdx].addr, &linkConn->conn));
         if (linkConn->conn) {
@@ -780,12 +779,11 @@ static void rasConnHandleNetTimeouts(struct rasConnection* conn, int64_t now, in
       if (now - conn->sock->lastRecvTime > RAS_KEEPALIVE_TIMEOUT_WARN) {
         if (!conn->experiencingDelays) {
           char details[256];
-          snprintf(details, sizeof(details), "peer not responding for %" PRId64 "s (keepalive warning)",
-                   (int64_t)((now - conn->sock->lastRecvTime) / CLOCK_UNITS_PER_SEC));
+          double timeoutSecs = (double)(now - conn->sock->lastRecvTime) / CLOCK_UNITS_PER_SEC;
+          snprintf(details, sizeof(details), "peer not responding for %gs (keepalive warning)", timeoutSecs);
           struct rasEventNotification event = {"PEER_UNRESPONSIVE", details, nullptr, &conn->addr};
           rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
-          INFO(NCCL_RAS, "RAS keep-alive timeout warning (%" PRId64 "s) on socket connection with %s",
-               (int64_t)((now - conn->sock->lastRecvTime) / CLOCK_UNITS_PER_SEC),
+          INFO(NCCL_RAS, "RAS keep-alive timeout warning (%gs) on socket connection with %s", timeoutSecs,
                ncclSocketToString(&conn->addr, rasLine));
 
           // At this point, it's mostly just a precaution; we will continue with the primary connection until
@@ -805,13 +803,12 @@ static void rasConnHandleNetTimeouts(struct rasConnection* conn, int64_t now, in
       // For long timeouts we need to act.
       if (now - conn->sock->lastRecvTime > RAS_KEEPALIVE_TIMEOUT_ERROR) {
         char details[256];
-        snprintf(details, sizeof(details), "keepalive timeout after %" PRId64 "s, terminating connection",
-                 (int64_t)((now - conn->sock->lastRecvTime) / CLOCK_UNITS_PER_SEC));
+        double timeoutSecs = (double)(now - conn->sock->lastRecvTime) / CLOCK_UNITS_PER_SEC;
+        snprintf(details, sizeof(details), "keepalive timeout after %gs, terminating connection", timeoutSecs);
         struct rasEventNotification event = {"PEER_KEEPALIVE_TIMEOUT", details, nullptr, &conn->addr};
         rasClientsNotifyEvent(RAS_EVENT_TRACE, &event);
 
-        INFO(NCCL_RAS, "RAS keep-alive timeout error (%" PRId64 "s) on socket connection with %s",
-             (int64_t)((now - conn->sock->lastRecvTime) / CLOCK_UNITS_PER_SEC),
+        INFO(NCCL_RAS, "RAS keep-alive timeout error (%gs) on socket connection with %s", timeoutSecs,
              ncclSocketToString(&conn->addr, rasLine));
         rasSocketTerminate(conn->sock, /*finalize*/ true, RAS_KEEPALIVE_TIMEOUT_ERROR);
         *nextWakeup = now; // Retry will be in the next iteration of the main loop so ensure we don't wait.
@@ -1018,7 +1015,8 @@ ncclResult_t rasLinkAddFallback(struct rasLink* link, const struct rasConnection
     // If the fallback connection is also experiencing delays, we need to keep trying.
     if (!newConn->experiencingDelays) break;
     INFO(NCCL_RAS, "RAS connection experiencingDelays %d, startRetryTime %.2fs, socket status %d",
-         newConn->experiencingDelays, (newConn->startRetryTime ? (clockNano() - newConn->startRetryTime) / 1e9 : 0.0),
+         newConn->experiencingDelays,
+         (newConn->startRetryTime ? (double)(clockNano() - newConn->startRetryTime) / CLOCK_UNITS_PER_SEC : 0.0),
          (newConn->sock ? newConn->sock->status : -1));
 
     newPeerIdx = rasLinkCalculatePeer(link, newPeerIdx, /*isFallback*/ true);
@@ -1039,7 +1037,8 @@ static void rasConnResume(struct rasConnection* conn) {
     INFO(NCCL_RAS, "RAS %s connection with %s (sendQ %sempty, experiencingDelays %d, startRetryTime %.2fs)",
          (conn->experiencingDelays && conn->startRetryTime == 0 ? "recovered" : "established"),
          ncclSocketToString(&conn->addr, rasLine), (ncclIntruQueueEmpty(&conn->sendQ) ? "" : "not "),
-         conn->experiencingDelays, (conn->startRetryTime ? (clockNano() - conn->startRetryTime) / 1e9 : 0.0));
+         conn->experiencingDelays,
+         (conn->startRetryTime ? (double)(clockNano() - conn->startRetryTime) / CLOCK_UNITS_PER_SEC : 0.0));
 
     if (conn->experiencingDelays) {
       struct rasEventNotification event = {"PEER_RECOVERED", "peer responding again", nullptr, &conn->addr};

@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/nccl-sys",
+    "crates/nccl",
+    "crates/nccl-device-sys",
+    "crates/nccl-device",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/NVIDIA/nccl"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+nccl-sys = { path = "crates/nccl-sys", version = "0.1.0" }
+nccl-device-sys = { path = "crates/nccl-device-sys", version = "0.1.0" }
+
+# CUDA-Oxide is the device-code frontend used by the NVSHMEM Rust prototype
+# that this contribution follows. Keep this revision synchronized with the
+# standalone CUDA-Oxide smoke package so `#[device]` uses one compiler contract.
+cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", rev = "c9a55dfb5e7c06f17aa8a50c1d17ae8bfa984fda" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+missing_safety_doc = "warn"

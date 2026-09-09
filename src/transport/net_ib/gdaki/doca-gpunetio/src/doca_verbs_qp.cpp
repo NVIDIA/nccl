@@ -36,6 +36,7 @@
 #include <mutex>
 #include <time.h>
 #include <string.h>
+#include <stdexcept>
 
 #include "host/doca_verbs.h"
 #include "host/mlx5_prm.h"
@@ -48,6 +49,7 @@
 #include "doca_verbs_qp.hpp"
 #include "doca_verbs_net_wrapper.h"
 #include "common/doca_gpunetio_verbs_def.h"
+#include "doca_verbs_qp_sdk_wrapper.h"
 
 #define USER_INDEX_MSB_8BITS_MASK 0xFF000000
 #define DOCA_VERBS_LOG_OCTOWORD_SIZE 4
@@ -63,6 +65,7 @@
 
 enum {
     PRIV_DOCA_MLX5_QP_OPT_PARAM_RRE = (1 << 1),
+    PRIV_DOCA_MLX5_QP_OPT_PARAM_RAE = (1 << 2),
     PRIV_DOCA_MLX5_QP_OPT_PARAM_RWE = (1 << 3),
     PRIV_DOCA_MLX5_QP_OPT_PARAM_PKEY_INDEX = (1 << 4),
     PRIV_DOCA_MLX5_QP_OPT_PARAM_MIN_RNR_NAK = (1 << 6),
@@ -138,25 +141,27 @@ int rtr2rts_requested_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
 int init2init_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(PKEY_INDEX) | QP_ATTR(PORT_NUM) |
-        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(ATOMIC_MODE),
 };
 
 int init2rtr_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(PKEY_INDEX) |
-        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(MAX_DEST_RD_ATOMIC),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(ATOMIC_MODE) |
+        QP_ATTR(MAX_DEST_RD_ATOMIC),
 };
 
 int rtr2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(MIN_RNR_TIMER) |
-        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(MAX_QP_RD_ATOMIC),
+        QP_ATTR(ALLOW_REMOTE_WRITE) | QP_ATTR(ATOMIC_MODE) | QP_ATTR(MAX_QP_RD_ATOMIC),
 };
 
 int rts2rts_optional_attr[DOCA_VERBS_QP_TYPE_RC + 1] = {
     /* [DOCA_VERBS_QP_TYPE_RC] */
     QP_ATTR(CURRENT_STATE) | QP_ATTR(NEXT_STATE) | QP_ATTR(ALLOW_REMOTE_WRITE) |
-        QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(MIN_RNR_TIMER) | QP_ATTR(AH_ATTR),
+        QP_ATTR(ALLOW_REMOTE_READ) | QP_ATTR(ATOMIC_MODE) | QP_ATTR(MIN_RNR_TIMER) |
+        QP_ATTR(AH_ATTR),
 };
 
 const char *qp_attr_to_string(int attr) {
@@ -191,6 +196,8 @@ const char *qp_attr_to_string(int attr) {
             return "RNR_RETRY";
         case DOCA_VERBS_QP_ATTR_AH_ATTR:
             return "AH_ATTR";
+        case DOCA_VERBS_QP_ATTR_ATOMIC_MODE:
+            return "ATOMIC_MODE";
         case DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC:
             return "MAX_QP_RD_ATOMIC";
         case DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC:
@@ -252,8 +259,8 @@ bool is_X2err_attrs_valid(int attr_mask) {
 
 bool is_rst2init_attrs_valid(int attr_mask, uint32_t qp_type) {
     int required_attr = rst2init_requested_attr[qp_type];
-    int valid_attr =
-        required_attr | DOCA_VERBS_QP_ATTR_CURRENT_STATE | DOCA_VERBS_QP_ATTR_NEXT_STATE;
+    int valid_attr = required_attr | DOCA_VERBS_QP_ATTR_CURRENT_STATE |
+                     DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ATOMIC_MODE;
 
     if (attr_mask & ~(valid_attr)) {
         DOCA_LOG(LOG_ERR, "attr_mask contains invalid bit attr_masks (attr_mask=%d)", attr_mask);
@@ -333,15 +340,18 @@ void convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(
         0,
         // INIT2INIT
         DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ |
-            DOCA_VERBS_QP_ATTR_PKEY_INDEX | DOCA_VERBS_QP_ATTR_PORT_NUM,
+            DOCA_VERBS_QP_ATTR_ATOMIC_MODE | DOCA_VERBS_QP_ATTR_PKEY_INDEX |
+            DOCA_VERBS_QP_ATTR_PORT_NUM,
         // INIT2RTR
         DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ |
-            DOCA_VERBS_QP_ATTR_PKEY_INDEX,
+            DOCA_VERBS_QP_ATTR_ATOMIC_MODE | DOCA_VERBS_QP_ATTR_PKEY_INDEX,
         // RTR2RTS
-        DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER,
+        DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ATOMIC_MODE |
+            DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER,
         // RTS2RTS
         DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ |
-            DOCA_VERBS_QP_ATTR_AH_ATTR | DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER,
+            DOCA_VERBS_QP_ATTR_ATOMIC_MODE | DOCA_VERBS_QP_ATTR_AH_ATTR |
+            DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER,
     };
 
     attr_mask &= valid_opt_mask[state_mod];
@@ -364,6 +374,10 @@ void convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(
 
     if (attr_mask & DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ) {
         mlx5_opt_mask |= PRIV_DOCA_MLX5_QP_OPT_PARAM_RRE;
+    }
+
+    if (attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) {
+        mlx5_opt_mask |= PRIV_DOCA_MLX5_QP_OPT_PARAM_RAE;
     }
 }
 
@@ -538,7 +552,7 @@ doca_error_t convert_prm_qp_state_to_doca_verbs_qp_state(uint32_t qp_state,
  * doca_verbs Member Functions
  *********************************************************************************************************************/
 
-bool doca_verbs_qp::is_qp_attr_state_valid(enum doca_verbs_qp_state state) noexcept {
+bool doca_verbs_qp_open::is_qp_attr_state_valid(enum doca_verbs_qp_state state) noexcept {
     switch (state) {
         case DOCA_VERBS_QP_STATE_RST:
         case DOCA_VERBS_QP_STATE_INIT:
@@ -555,7 +569,7 @@ bool doca_verbs_qp::is_qp_attr_state_valid(enum doca_verbs_qp_state state) noexc
     return true;
 }
 
-bool doca_verbs_qp::is_qp_attr_path_mtu_valid(enum doca_verbs_mtu_size path_mtu) noexcept {
+bool doca_verbs_qp_open::is_qp_attr_path_mtu_valid(enum doca_verbs_mtu_size path_mtu) noexcept {
     switch (path_mtu) {
         case DOCA_VERBS_MTU_SIZE_256_BYTES:
         case DOCA_VERBS_MTU_SIZE_512_BYTES:
@@ -573,7 +587,7 @@ bool doca_verbs_qp::is_qp_attr_path_mtu_valid(enum doca_verbs_mtu_size path_mtu)
 }
 
 // No value of PSN causes a value (we print a warning and mask it in case of overflow)
-uint32_t doca_verbs_qp::is_qp_attr_queue_psn_valid(uint32_t psn) noexcept {
+uint32_t doca_verbs_qp_open::is_qp_attr_queue_psn_valid(uint32_t psn) noexcept {
     if (psn & ~0xffffff) {
         DOCA_LOG(LOG_ERR, "PSN value overflow (max is %x). Masking to 24 bits", 0xffffff);
         psn &= 0xffffff;
@@ -582,7 +596,8 @@ uint32_t doca_verbs_qp::is_qp_attr_queue_psn_valid(uint32_t psn) noexcept {
     return psn;
 }
 
-bool doca_verbs_qp::is_qp_attr_ah_add_type_valid(enum doca_verbs_addr_type addr_type) noexcept {
+bool doca_verbs_qp_open::is_qp_attr_ah_add_type_valid(
+    enum doca_verbs_addr_type addr_type) noexcept {
     switch (addr_type) {
         case DOCA_VERBS_ADDR_TYPE_IPv4:
         case DOCA_VERBS_ADDR_TYPE_IPv6:
@@ -598,7 +613,7 @@ bool doca_verbs_qp::is_qp_attr_ah_add_type_valid(enum doca_verbs_addr_type addr_
     return true;
 }
 
-bool doca_verbs_qp::is_qp_attr_ah_sgid_index_valid(uint8_t sgid_index) noexcept {
+bool doca_verbs_qp_open::is_qp_attr_ah_sgid_index_valid(uint8_t sgid_index) noexcept {
     if (sgid_index >= m_verbs_device_attr->m_gid_table_size) {
         DOCA_LOG(LOG_ERR, "sgid_index should be less than %u (value is %u)",
                  m_verbs_device_attr->m_gid_table_size - 1, sgid_index);
@@ -608,7 +623,7 @@ bool doca_verbs_qp::is_qp_attr_ah_sgid_index_valid(uint8_t sgid_index) noexcept 
     return true;
 }
 
-bool doca_verbs_qp::is_qp_attr_pkey_index_valid(uint16_t pkey_index) noexcept {
+bool doca_verbs_qp_open::is_qp_attr_pkey_index_valid(uint16_t pkey_index) noexcept {
     if (pkey_index > m_verbs_device_attr->m_max_pkeys) {
         DOCA_LOG(LOG_ERR, "pkey_index should be less than %u (value is %u)",
                  m_verbs_device_attr->m_max_pkeys, pkey_index);
@@ -618,7 +633,7 @@ bool doca_verbs_qp::is_qp_attr_pkey_index_valid(uint16_t pkey_index) noexcept {
     return true;
 }
 
-bool doca_verbs_qp::is_qp_attr_port_num_valid(uint16_t port_num) noexcept {
+bool doca_verbs_qp_open::is_qp_attr_port_num_valid(uint16_t port_num) noexcept {
     if (port_num > m_verbs_device_attr->m_phys_port_cnt || port_num < 1) {
         DOCA_LOG(LOG_ERR, "port_num should be from %u to %u (value is %u)", 1,
                  m_verbs_device_attr->m_phys_port_cnt, port_num);
@@ -628,8 +643,8 @@ bool doca_verbs_qp::is_qp_attr_port_num_valid(uint16_t port_num) noexcept {
     return true;
 }
 
-bool doca_verbs_qp::is_qp_attr_valid(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                     int attr_mask) noexcept {
+bool doca_verbs_qp_open::is_qp_attr_valid(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                          int attr_mask) noexcept {
     if ((attr_mask & DOCA_VERBS_QP_ATTR_CURRENT_STATE) &&
         !is_qp_attr_state_valid(verbs_qp_attr->current_state))
         return false;
@@ -644,10 +659,10 @@ bool doca_verbs_qp::is_qp_attr_valid(struct doca_verbs_qp_attr *verbs_qp_attr,
     if ((attr_mask & DOCA_VERBS_QP_ATTR_SQ_PSN))
         verbs_qp_attr->sq_psn = is_qp_attr_queue_psn_valid(verbs_qp_attr->sq_psn);
     if ((attr_mask & DOCA_VERBS_QP_ATTR_AH_ATTR) &&
-        !is_qp_attr_ah_add_type_valid(verbs_qp_attr->ah_attr->addr_type))
+        !is_qp_attr_ah_add_type_valid(verbs_qp_attr->ah_attr.addr_type))
         return false;
     if ((attr_mask & DOCA_VERBS_QP_ATTR_AH_ATTR) &&
-        !is_qp_attr_ah_sgid_index_valid(verbs_qp_attr->ah_attr->sgid_index))
+        !is_qp_attr_ah_sgid_index_valid(verbs_qp_attr->ah_attr.sgid_index))
         return false;
     if ((attr_mask & DOCA_VERBS_QP_ATTR_PKEY_INDEX) &&
         !is_qp_attr_pkey_index_valid(verbs_qp_attr->pkey_index))
@@ -659,18 +674,34 @@ bool doca_verbs_qp::is_qp_attr_valid(struct doca_verbs_qp_attr *verbs_qp_attr,
     return true;
 }
 
-doca_verbs_qp_state doca_verbs_qp::get_current_state() const noexcept { return m_current_state; }
+doca_verbs_qp_state doca_verbs_qp_open::get_current_state() const noexcept {
+    return m_current_state;
+}
 
-doca_error_t doca_verbs_qp::create_qp_obj(
+doca_error_t doca_verbs_qp_open::create_qp_obj(
     uint32_t uar_id, uint32_t log_rq_size, uint32_t log_sq_size_wqebb, uint32_t log_stride,
-    uint64_t dbr_umem_offset, uint32_t dbr_umem_id, uint32_t wq_umem_id,
-    struct doca_verbs_qp_init_attr &verbs_qp_init_attr) noexcept {
+    uint64_t dbr_umem_offset, uint32_t dbr_umem_id, uint64_t wq_umem_offset, uint32_t wq_umem_id,
+    struct doca_verbs_qp_init_attr_open *verbs_qp_init_attr) noexcept {
     create_qp_in create_in{0};
     create_qp_out create_out{0};
 
+    if (verbs_qp_init_attr->send_cq) {
+        if (verbs_qp_init_attr->send_cq->type != DOCA_VERBS_SDK_LIB_TYPE_OPEN) {
+            DOCA_LOG(LOG_ERR, "Error: send_cq is not an open handler");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    }
+
+    if (verbs_qp_init_attr->receive_cq) {
+        if (verbs_qp_init_attr->receive_cq->type != DOCA_VERBS_SDK_LIB_TYPE_OPEN) {
+            DOCA_LOG(LOG_ERR, "Error: receive_cq is not an open handler");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    }
+
     void *qpc = MLX5_ADDR_OF(create_qp_in, create_in, qpc);
 
-    const bool use_rq = ((m_rq_size > 0) || (verbs_qp_init_attr.srq != nullptr));
+    const bool use_rq = ((m_rq_size > 0) || (verbs_qp_init_attr->srq != nullptr));
 
     DEVX_SET(create_qp_in, create_in, opcode, MLX5_CMD_OP_CREATE_QP);
     DEVX_SET(qpc, qpc, st, MLX5_QPC_ST_RC);
@@ -690,33 +721,33 @@ doca_error_t doca_verbs_qp::create_qp_obj(
 
     DEVX_SET(qpc, qpc, pd, dvpd.pdn);
 
-    DEVX_SET(qpc, qpc, user_index, verbs_qp_init_attr.user_index);
+    DEVX_SET(qpc, qpc, user_index, verbs_qp_init_attr->user_index);
     DEVX_SET(qpc, qpc, uar_page, uar_id);
 
     if (m_sq_size_wqebb > 0) {
-        if (verbs_qp_init_attr.send_cq == nullptr) {
+        if (verbs_qp_init_attr->send_cq == nullptr) {
             DOCA_LOG(LOG_ERR, "Failed to create QP. Send CQ is null");
             return DOCA_ERROR_INVALID_VALUE;
         }
-        DEVX_SET(qpc, qpc, cqn_snd, verbs_qp_init_attr.send_cq->get_cqn());
+        DEVX_SET(qpc, qpc, cqn_snd, verbs_qp_init_attr->send_cq->open->get_cqn());
         DEVX_SET(qpc, qpc, log_sq_size, log_sq_size_wqebb);
     } else {
         DEVX_SET(qpc, qpc, no_sq, 1);
     }
 
     if (use_rq) {
-        if (verbs_qp_init_attr.receive_cq == nullptr) {
+        if (verbs_qp_init_attr->receive_cq == nullptr) {
             DOCA_LOG(LOG_ERR, "Failed to create QP. Receive CQ is null");
             return DOCA_ERROR_INVALID_VALUE;
         }
 
-        DEVX_SET(qpc, qpc, cqn_rcv, verbs_qp_init_attr.receive_cq->get_cqn());
+        DEVX_SET(qpc, qpc, cqn_rcv, verbs_qp_init_attr->receive_cq->open->get_cqn());
 
-        if (verbs_qp_init_attr.srq != nullptr) {
+        if (verbs_qp_init_attr->srq != nullptr) {
             /* Case of SRQ */
-            DEVX_SET(qpc, qpc, srqn_rmpn_xrqn, verbs_qp_init_attr.srq->get_srqn());
+            DEVX_SET(qpc, qpc, srqn_rmpn_xrqn, verbs_qp_init_attr->srq->get_srqn());
             DEVX_SET(qpc, qpc, rq_type, MLX5_QPC_RQ_TYPE_SRQ_RMP_XRC_SRQ_XRQ);
-            m_srq = verbs_qp_init_attr.srq;
+            m_srq = verbs_qp_init_attr->srq;
         } else if (m_rq_size > 0) {
             /* Case of regular RQ */
             DEVX_SET(qpc, qpc, log_rq_stride, log_stride);
@@ -731,12 +762,14 @@ doca_error_t doca_verbs_qp::create_qp_obj(
     // DEVX_SET(qpc, qpc, cs_req, 0);            // Disable CS Request
     // DEVX_SET(qpc, qpc, cs_res, 0);            // Disable CS Response
 
-    DEVX_SET(qpc, qpc, send_dbr_mode, verbs_qp_init_attr.send_dbr_mode);
+    DEVX_SET(qpc, qpc, send_dbr_mode, verbs_qp_init_attr->send_dbr_mode);
     DEVX_SET(qpc, qpc, dbr_umem_valid, 1);
     DEVX_SET(qpc, qpc, dbr_umem_id, dbr_umem_id);
     DEVX_SET64(qpc, qpc, dbr_addr, dbr_umem_offset);
 
-    DEVX_SET64(qpc, qpc, cd_master, verbs_qp_init_attr.core_direct_master);
+    DEVX_SET(qpc, qpc, cd_master, verbs_qp_init_attr->core_direct_master);
+
+    DEVX_SET64(create_qp_in, create_in, wq_umem_offset, wq_umem_offset);
     DEVX_SET(create_qp_in, create_in, wq_umem_id, wq_umem_id);
     DEVX_SET(create_qp_in, create_in, wq_umem_valid, 1);
 
@@ -758,8 +791,8 @@ doca_error_t doca_verbs_qp::create_qp_obj(
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::rst2init(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                     int attr_mask) noexcept {
+doca_error_t doca_verbs_qp_open::rst2init(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                          int attr_mask) noexcept {
     rst2init_qp_in in{0};
     rst2init_qp_out out{0};
 
@@ -771,27 +804,28 @@ doca_error_t doca_verbs_qp::rst2init(struct doca_verbs_qp_attr &verbs_qp_attr,
     void *qpc = MLX5_ADDR_OF(rst2init_qp_in, &in, qpc);
     DEVX_SET(rst2init_qp_in, &in, opcode, MLX5_CMD_OP_RST2INIT_QP);
     DEVX_SET(rst2init_qp_in, &in, qpn, m_qp_num);
-    DEVX_SET(qpc, qpc, primary_address_path.vhca_port_num, verbs_qp_attr.port_num);
+    DEVX_SET(qpc, qpc, primary_address_path.vhca_port_num, verbs_qp_attr->port_num);
     DEVX_SET(qpc, qpc, pm_state, MLX5_QPC_PM_STATE_MIGRATED);
-    // DEVX_SET(qpc, qpc, counter_set_id, 0x0);  // Not connected to a counter set
-    DEVX_SET(qpc, qpc, primary_address_path.pkey_index, verbs_qp_attr.pkey_index);
+    DEVX_SET(qpc, qpc, counter_set_id, verbs_qp_attr->counter_set_id);
+    DEVX_SET(qpc, qpc, primary_address_path.pkey_index, verbs_qp_attr->pkey_index);
 
-    if (verbs_qp_attr.allow_remote_write == 1) {
+    if (verbs_qp_attr->allow_remote_write == 1) {
         DEVX_SET(qpc, qpc, rwe, 1);
     }
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ) &&
-        verbs_qp_attr.allow_remote_read == 1) {
+        verbs_qp_attr->allow_remote_read == 1) {
         DEVX_SET(qpc, qpc, rre, 1);
     }
 
-    if (verbs_qp_attr.allow_remote_write == 1) {
+    if (verbs_qp_attr->allow_remote_write == 1) {
         DEVX_SET(qpc, qpc, rwe, 1);
     }
 
-    if (verbs_qp_attr.allow_remote_atomic > DOCA_VERBS_QP_ATOMIC_MODE_NONE) {
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) &&
+        (verbs_qp_attr->atomic_mode != DOCA_VERBS_QP_ATOMIC_MODE_NONE)) {
         DEVX_SET(qpc, qpc, rae, 1);
-        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
+        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr->atomic_mode);
     }
 
     auto ret =
@@ -808,8 +842,8 @@ doca_error_t doca_verbs_qp::rst2init(struct doca_verbs_qp_attr &verbs_qp_attr,
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::init2init(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                      int attr_mask) noexcept {
+doca_error_t doca_verbs_qp_open::init2init(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                           int attr_mask) noexcept {
     init2init_qp_in in{0};
     init2init_qp_out out{0};
 
@@ -821,21 +855,22 @@ doca_error_t doca_verbs_qp::init2init(struct doca_verbs_qp_attr &verbs_qp_attr,
     void *qpc = MLX5_ADDR_OF(init2init_qp_in, &in, qpc);
     DEVX_SET(init2init_qp_in, &in, opcode, MLX5_CMD_OP_INIT2INIT_QP);
     DEVX_SET(init2init_qp_in, &in, qpn, m_qp_num);
-    DEVX_SET(qpc, qpc, primary_address_path.vhca_port_num, verbs_qp_attr.port_num);
-    DEVX_SET(qpc, qpc, primary_address_path.pkey_index, verbs_qp_attr.pkey_index);
+    DEVX_SET(qpc, qpc, primary_address_path.vhca_port_num, verbs_qp_attr->port_num);
+    DEVX_SET(qpc, qpc, primary_address_path.pkey_index, verbs_qp_attr->pkey_index);
 
-    if (verbs_qp_attr.allow_remote_write == 1) {
+    if (verbs_qp_attr->allow_remote_write == 1) {
         DEVX_SET(qpc, qpc, rwe, 1);
     }
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ) &&
-        verbs_qp_attr.allow_remote_read == 1) {
+        verbs_qp_attr->allow_remote_read == 1) {
         DEVX_SET(qpc, qpc, rre, 1);
     }
 
-    if (verbs_qp_attr.allow_remote_atomic > DOCA_VERBS_QP_ATOMIC_MODE_NONE) {
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) &&
+        (verbs_qp_attr->atomic_mode != DOCA_VERBS_QP_ATOMIC_MODE_NONE)) {
         DEVX_SET(qpc, qpc, rae, 1);
-        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
+        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr->atomic_mode);
     }
 
     int mlx5_opt_param_mask{0};
@@ -857,13 +892,13 @@ doca_error_t doca_verbs_qp::init2init(struct doca_verbs_qp_attr &verbs_qp_attr,
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                     int attr_mask) noexcept {
+doca_error_t doca_verbs_qp_open::init2rtr(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                          int attr_mask) noexcept {
     if (!is_init2rtr_attrs_valid(attr_mask, m_qp_type)) {
         DOCA_LOG(LOG_ERR, "init2rtr attrs are invalid");
         return DOCA_ERROR_INVALID_VALUE;
     }
-    if ((attr_mask & DOCA_VERBS_QP_ATTR_AH_ATTR) && !verbs_qp_attr.ah_attr) {
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_AH_ATTR) && !verbs_qp_attr->ah_attr_enabled) {
         DOCA_LOG(LOG_ERR, "AH_ATTR mask is enabled but ah_attr=nullptr");
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -874,39 +909,39 @@ doca_error_t doca_verbs_qp::init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr,
     void *qpc = MLX5_ADDR_OF(init2rtr_qp_in, in, qpc);
     DEVX_SET(init2rtr_qp_in, in, opcode, MLX5_CMD_OP_INIT2RTR_QP);
     DEVX_SET(init2rtr_qp_in, in, qpn, m_qp_num);
-    DEVX_SET(qpc, qpc, next_rcv_psn, verbs_qp_attr.rq_psn);
-    DEVX_SET(qpc, qpc, remote_qpn, verbs_qp_attr.dest_qp_num);
+    DEVX_SET(qpc, qpc, next_rcv_psn, verbs_qp_attr->rq_psn);
+    DEVX_SET(qpc, qpc, remote_qpn, verbs_qp_attr->dest_qp_num);
     DEVX_SET(qpc, qpc, log_msg_max, sc_verbs_log_msg_max);
 
     uint32_t prm_mtu{};
-    auto status = convert_doca_mtu_size_to_prm_mtu_size(verbs_qp_attr.path_mtu, prm_mtu);
+    auto status = convert_doca_mtu_size_to_prm_mtu_size(verbs_qp_attr->path_mtu, prm_mtu);
     if (status != DOCA_SUCCESS) return status;
     DEVX_SET(qpc, qpc, mtu, prm_mtu);
 
     if (attr_mask & DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER)
-        DEVX_SET(qpc, qpc, min_rnr_nak, verbs_qp_attr.min_rnr_timer);
-    if ((verbs_qp_attr.ah_attr->addr_type == DOCA_VERBS_ADDR_TYPE_IB_GRH) ||
-        (verbs_qp_attr.ah_attr->addr_type == DOCA_VERBS_ADDR_TYPE_IB_NO_GRH)) { /* IB */
-        DEVX_SET(qpc, qpc, primary_address_path.tclass, verbs_qp_attr.ah_attr->traffic_class);
-        DEVX_SET(qpc, qpc, primary_address_path.rlid, verbs_qp_attr.ah_attr->dlid);
-        DEVX_SET(qpc, qpc, primary_address_path.sl, verbs_qp_attr.ah_attr->sl);
+        DEVX_SET(qpc, qpc, min_rnr_nak, verbs_qp_attr->min_rnr_timer);
+    if ((verbs_qp_attr->ah_attr.addr_type == DOCA_VERBS_ADDR_TYPE_IB_GRH) ||
+        (verbs_qp_attr->ah_attr.addr_type == DOCA_VERBS_ADDR_TYPE_IB_NO_GRH)) { /* IB */
+        DEVX_SET(qpc, qpc, primary_address_path.tclass, verbs_qp_attr->ah_attr.traffic_class);
+        DEVX_SET(qpc, qpc, primary_address_path.rlid, verbs_qp_attr->ah_attr.dlid);
+        DEVX_SET(qpc, qpc, primary_address_path.sl, verbs_qp_attr->ah_attr.sl);
     }
-    DEVX_SET(qpc, qpc, primary_address_path.stat_rate, verbs_qp_attr.ah_attr->static_rate);
+    DEVX_SET(qpc, qpc, primary_address_path.stat_rate, verbs_qp_attr->ah_attr.static_rate);
 
-    if (verbs_qp_attr.ah_attr->addr_type != DOCA_VERBS_ADDR_TYPE_IB_NO_GRH) {
+    if (verbs_qp_attr->ah_attr.addr_type != DOCA_VERBS_ADDR_TYPE_IB_NO_GRH) {
         memcpy(MLX5_ADDR_OF(qpc, qpc, primary_address_path.rgid_rip),
-               verbs_qp_attr.ah_attr->gid.raw, sizeof(struct doca_verbs_gid));
-        DEVX_SET(qpc, qpc, primary_address_path.hop_limit, verbs_qp_attr.ah_attr->hop_limit);
-        DEVX_SET(qpc, qpc, primary_address_path.src_addr_index, verbs_qp_attr.ah_attr->sgid_index);
+               verbs_qp_attr->ah_attr.gid.raw, sizeof(struct doca_verbs_gid));
+        DEVX_SET(qpc, qpc, primary_address_path.hop_limit, verbs_qp_attr->ah_attr.hop_limit);
+        DEVX_SET(qpc, qpc, primary_address_path.src_addr_index, verbs_qp_attr->ah_attr.sgid_index);
     }
 
-    if ((verbs_qp_attr.ah_attr->addr_type == DOCA_VERBS_ADDR_TYPE_IPv4) ||
-        (verbs_qp_attr.ah_attr->addr_type == DOCA_VERBS_ADDR_TYPE_IPv6)) { /* ROCE */
+    if ((verbs_qp_attr->ah_attr.addr_type == DOCA_VERBS_ADDR_TYPE_IPv4) ||
+        (verbs_qp_attr->ah_attr.addr_type == DOCA_VERBS_ADDR_TYPE_IPv6)) { /* ROCE */
         uint8_t dest_mac[PRIV_DOCA_MAC_BYTE_LENGTH];
         status =
-            resolve_remote_mac(m_pd, PRIV_DOCA_VERBS_PORT_NUM, verbs_qp_attr.ah_attr->sgid_index,
-                               verbs_qp_attr.ah_attr->gid.raw, verbs_qp_attr.ah_attr->hop_limit,
-                               verbs_qp_attr.ah_attr->is_global, dest_mac);
+            resolve_remote_mac(m_pd, PRIV_DOCA_VERBS_PORT_NUM, verbs_qp_attr->ah_attr.sgid_index,
+                               verbs_qp_attr->ah_attr.gid.raw, verbs_qp_attr->ah_attr.hop_limit,
+                               verbs_qp_attr->ah_attr.is_global, dest_mac);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to get remote MAC");
             return status;
@@ -919,13 +954,13 @@ doca_error_t doca_verbs_qp::init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr,
                sc_verbs_mac_addr_len - sc_verbs_mac_addr_2msbytes_len);
     }
 
-    if (verbs_qp_attr.ah_attr->addr_type == DOCA_VERBS_ADDR_TYPE_IB_GRH) {
+    if (verbs_qp_attr->ah_attr.addr_type == DOCA_VERBS_ADDR_TYPE_IB_GRH) {
         DEVX_SET(qpc, qpc, primary_address_path.grh, 1);
     }
 
     if (m_verbs_device_attr->m_port_type == MLX5_CAP_PORT_TYPE_ETH) {
         uint8_t roce_version{};
-        status = query_roce_version(m_ibv_ctx, verbs_qp_attr.ah_attr->sgid_index, roce_version);
+        status = query_roce_version(m_ibv_ctx, verbs_qp_attr->ah_attr.sgid_index, roce_version);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to query roce version");
             return status;
@@ -940,27 +975,35 @@ doca_error_t doca_verbs_qp::init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr,
 
             DEVX_SET(qpc, qpc, primary_address_path.udp_sport, udp_sport);
             DEVX_SET(qpc, qpc, primary_address_path.dscp,
-                     verbs_qp_attr.ah_attr->traffic_class >> 2);
+                     verbs_qp_attr->ah_attr.traffic_class >> 2);
         }
     }
 
-    DEVX_SET(qpc, qpc, primary_address_path.pkey_index, verbs_qp_attr.pkey_index);
-    if (verbs_qp_attr.allow_remote_write == 1) {
+    DEVX_SET(qpc, qpc, primary_address_path.pkey_index, verbs_qp_attr->pkey_index);
+    if (verbs_qp_attr->allow_remote_write == 1) {
         DEVX_SET(qpc, qpc, rwe, 1);
     }
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ) &&
-        verbs_qp_attr.allow_remote_read == 1) {
+        verbs_qp_attr->allow_remote_read == 1) {
         DEVX_SET(qpc, qpc, rre, 1);
     }
 
-    if (verbs_qp_attr.allow_remote_atomic > DOCA_VERBS_QP_ATOMIC_MODE_NONE) {
+    if (!(attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) &&
+        (verbs_qp_attr->atomic_mode != DOCA_VERBS_QP_ATOMIC_MODE_NONE))
+        DOCA_LOG(LOG_WARNING,
+                 "verbs_qp_attr atomic_mode is set but attr_mask flag "
+                 "DOCA_VERBS_QP_ATTR_ATOMIC_MODE is not set");
+
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) &&
+        (verbs_qp_attr->atomic_mode != DOCA_VERBS_QP_ATOMIC_MODE_NONE)) {
         DEVX_SET(qpc, qpc, rae, 1);
-        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
+        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr->atomic_mode);
     }
 
     if (attr_mask & DOCA_VERBS_QP_ATTR_MAX_DEST_RD_ATOMIC)
-        DEVX_SET(qpc, qpc, log_rra_max, doca_internal_utils_log2(verbs_qp_attr.max_dest_rd_atomic));
+        DEVX_SET(qpc, qpc, log_rra_max,
+                 doca_internal_utils_log2(verbs_qp_attr->max_dest_rd_atomic));
 
     int mlx5_opt_param_mask{0};
     convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(attr_mask, mlx5_opt_param_mask,
@@ -976,15 +1019,15 @@ doca_error_t doca_verbs_qp::init2rtr(struct doca_verbs_qp_attr &verbs_qp_attr,
     }
 
     m_current_state = DOCA_VERBS_QP_STATE_RTR;
-    m_addr_type = verbs_qp_attr.ah_attr->addr_type;
+    m_addr_type = verbs_qp_attr->ah_attr.addr_type;
 
     DOCA_LOG(LOG_INFO, "DOCA IB Verbs QP %p: has been successfully moved to RTR state", this);
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::rtr2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                    int attr_mask) noexcept {
+doca_error_t doca_verbs_qp_open::rtr2rts(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                         int attr_mask) noexcept {
     rtr2rts_qp_in in{0};
     rtr2rts_qp_out out{0};
 
@@ -996,25 +1039,27 @@ doca_error_t doca_verbs_qp::rtr2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
     void *qpc = MLX5_ADDR_OF(rtr2rts_qp_in, &in, qpc);
     DEVX_SET(rtr2rts_qp_in, &in, opcode, MLX5_CMD_OP_RTR2RTS_QP);
     DEVX_SET(rtr2rts_qp_in, &in, qpn, m_qp_num);
-    DEVX_SET(qpc, qpc, next_send_psn, verbs_qp_attr.sq_psn);
+    DEVX_SET(qpc, qpc, next_send_psn, verbs_qp_attr->sq_psn);
     if (attr_mask & DOCA_VERBS_QP_ATTR_ACK_TIMEOUT)
-        DEVX_SET(qpc, qpc, primary_address_path.ack_timeout, verbs_qp_attr.ack_timeout);
+        DEVX_SET(qpc, qpc, primary_address_path.ack_timeout, verbs_qp_attr->ack_timeout);
     if (attr_mask & DOCA_VERBS_QP_ATTR_RETRY_CNT)
-        DEVX_SET(qpc, qpc, retry_count, verbs_qp_attr.retry_cnt);
+        DEVX_SET(qpc, qpc, retry_count, verbs_qp_attr->retry_cnt);
     if (attr_mask & DOCA_VERBS_QP_ATTR_RNR_RETRY)
-        DEVX_SET(qpc, qpc, rnr_retry, verbs_qp_attr.rnr_retry);
+        DEVX_SET(qpc, qpc, rnr_retry, verbs_qp_attr->rnr_retry);
     if (attr_mask & DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER)
-        DEVX_SET(qpc, qpc, min_rnr_nak, verbs_qp_attr.min_rnr_timer);
-    if (verbs_qp_attr.allow_remote_write == 1) {
+        DEVX_SET(qpc, qpc, min_rnr_nak, verbs_qp_attr->min_rnr_timer);
+    if (verbs_qp_attr->allow_remote_write == 1) {
         DEVX_SET(qpc, qpc, rwe, 1);
     }
-    if (verbs_qp_attr.allow_remote_atomic > DOCA_VERBS_QP_ATOMIC_MODE_NONE) {
+
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) &&
+        (verbs_qp_attr->atomic_mode != DOCA_VERBS_QP_ATOMIC_MODE_NONE)) {
         DEVX_SET(qpc, qpc, rae, 1);
-        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
+        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr->atomic_mode);
     }
 
     if (attr_mask & DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC)
-        DEVX_SET(qpc, qpc, log_sra_max, doca_internal_utils_log2(verbs_qp_attr.max_rd_atomic));
+        DEVX_SET(qpc, qpc, log_sra_max, doca_internal_utils_log2(verbs_qp_attr->max_rd_atomic));
 
     DEVX_SET(qpc, qpc, log_ack_req_freq, 0x0);  // 8
 
@@ -1038,13 +1083,13 @@ doca_error_t doca_verbs_qp::rtr2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::rts2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                    int attr_mask) noexcept {
+doca_error_t doca_verbs_qp_open::rts2rts(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                         int attr_mask) noexcept {
     if (!is_rts2rts_attrs_valid(attr_mask, m_qp_type)) {
         DOCA_LOG(LOG_ERR, "rts2rts attrs are invalid");
         return DOCA_ERROR_INVALID_VALUE;
     }
-    if ((attr_mask & DOCA_VERBS_QP_ATTR_AH_ATTR) && !verbs_qp_attr.ah_attr) {
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_AH_ATTR) && !verbs_qp_attr->ah_attr_enabled) {
         DOCA_LOG(LOG_ERR, "AH_ATTR mask is enabled but ah_attr=nullptr");
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -1057,28 +1102,30 @@ doca_error_t doca_verbs_qp::rts2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
     DEVX_SET(rts2rts_qp_in, in, qpn, m_qp_num);
 
     if (attr_mask & DOCA_VERBS_QP_ATTR_MIN_RNR_TIMER)
-        DEVX_SET(qpc, qpc, min_rnr_nak, verbs_qp_attr.min_rnr_timer);
-    if (verbs_qp_attr.allow_remote_write == 1) {
+        DEVX_SET(qpc, qpc, min_rnr_nak, verbs_qp_attr->min_rnr_timer);
+    if (verbs_qp_attr->allow_remote_write == 1) {
         DEVX_SET(qpc, qpc, rwe, 1);
     }
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ) &&
-        verbs_qp_attr.allow_remote_read == 1) {
+        verbs_qp_attr->allow_remote_read == 1) {
         DEVX_SET(qpc, qpc, rre, 1);
     }
-    if (verbs_qp_attr.allow_remote_atomic > DOCA_VERBS_QP_ATOMIC_MODE_NONE) {
+
+    if ((attr_mask & DOCA_VERBS_QP_ATTR_ATOMIC_MODE) &&
+        (verbs_qp_attr->atomic_mode != DOCA_VERBS_QP_ATOMIC_MODE_NONE)) {
         DEVX_SET(qpc, qpc, rae, 1);
-        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr.allow_remote_atomic);
+        DEVX_SET(qpc, qpc, atomic_mode, verbs_qp_attr->atomic_mode);
     }
 
     if (attr_mask & DOCA_VERBS_QP_ATTR_AH_ATTR) {
-        DEVX_SET(qpc, qpc, primary_address_path.src_addr_index, verbs_qp_attr.ah_attr->sgid_index);
+        DEVX_SET(qpc, qpc, primary_address_path.src_addr_index, verbs_qp_attr->ah_attr.sgid_index);
 
         if (m_verbs_device_attr->m_is_rts2rts_qp_dscp_supported &&
             m_verbs_device_attr->m_port_type == MLX5_CAP_PORT_TYPE_ETH) {
             uint8_t roce_version{};
             auto status =
-                query_roce_version(m_ibv_ctx, verbs_qp_attr.ah_attr->sgid_index, roce_version);
+                query_roce_version(m_ibv_ctx, verbs_qp_attr->ah_attr.sgid_index, roce_version);
             if (status != DOCA_SUCCESS) {
                 DOCA_LOG(LOG_ERR, "Failed to query roce version");
                 return status;
@@ -1086,7 +1133,7 @@ doca_error_t doca_verbs_qp::rts2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
 
             if (roce_version >= MLX5_ROCE_ADDR_LAYOUT_ROCE_VERSION_VERSION_2_0)
                 DEVX_SET(qpc, qpc, primary_address_path.dscp,
-                         verbs_qp_attr.ah_attr->traffic_class >> 2);
+                         verbs_qp_attr->ah_attr.traffic_class >> 2);
         }
     }
 
@@ -1110,8 +1157,8 @@ doca_error_t doca_verbs_qp::rts2rts(struct doca_verbs_qp_attr &verbs_qp_attr,
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::qp2err(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                   int attr_mask) noexcept {
+doca_error_t doca_verbs_qp_open::qp2err(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                        int attr_mask) noexcept {
     qp_2err_in in{0};
     qp_2err_out out{0};
 
@@ -1137,8 +1184,8 @@ doca_error_t doca_verbs_qp::qp2err(struct doca_verbs_qp_attr &verbs_qp_attr,
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::qp2rst(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                   int attr_mask) noexcept {
+doca_error_t doca_verbs_qp_open::qp2rst(struct doca_verbs_qp_attr_open *verbs_qp_attr,
+                                        int attr_mask) noexcept {
     qp_2rst_in in{0};
     qp_2rst_out out{0};
 
@@ -1164,8 +1211,9 @@ doca_error_t doca_verbs_qp::qp2rst(struct doca_verbs_qp_attr &verbs_qp_attr,
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp::query_qp(struct doca_verbs_qp_attr &verbs_qp_attr,
-                                     struct doca_verbs_qp_init_attr &verbs_qp_init_attr) noexcept {
+doca_error_t doca_verbs_qp_open::query_qp(
+    struct doca_verbs_qp_attr_open *verbs_qp_attr,
+    struct doca_verbs_qp_init_attr_open *verbs_qp_init_attr) noexcept {
     query_qp_in in{0};
     query_qp_out out{0};
 
@@ -1183,75 +1231,75 @@ doca_error_t doca_verbs_qp::query_qp(struct doca_verbs_qp_attr &verbs_qp_attr,
     auto prm_qp_state = DEVX_GET(qpc, qpc, state);
 
     auto status =
-        convert_prm_qp_state_to_doca_verbs_qp_state(prm_qp_state, verbs_qp_attr.current_state);
+        convert_prm_qp_state_to_doca_verbs_qp_state(prm_qp_state, verbs_qp_attr->current_state);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to get state, invalid qp state");
         return DOCA_ERROR_UNEXPECTED;
     }
 
-    verbs_qp_attr.next_state = verbs_qp_attr.current_state;
+    verbs_qp_attr->next_state = verbs_qp_attr->current_state;
 
     auto prm_mtu_size = DEVX_GET(qpc, qpc, mtu);
-    status = convert_prm_mtu_size_to_doca_verbs_mtu_size(prm_mtu_size, verbs_qp_attr.path_mtu);
+    status = convert_prm_mtu_size_to_doca_verbs_mtu_size(prm_mtu_size, verbs_qp_attr->path_mtu);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to get state, invalid MTU size");
         return DOCA_ERROR_UNEXPECTED;
     }
 
-    verbs_qp_attr.rq_psn = DEVX_GET(qpc, qpc, next_rcv_psn);
-    verbs_qp_attr.sq_psn = DEVX_GET(qpc, qpc, next_send_psn);
-    verbs_qp_attr.dest_qp_num = DEVX_GET(qpc, qpc, remote_qpn);
-    verbs_qp_attr.pkey_index = DEVX_GET(qpc, qpc, primary_address_path.pkey_index);
-    verbs_qp_attr.port_num = DEVX_GET(qpc, qpc, primary_address_path.vhca_port_num);
-    verbs_qp_attr.ack_timeout = DEVX_GET(qpc, qpc, primary_address_path.ack_timeout);
-    verbs_qp_attr.retry_cnt = DEVX_GET(qpc, qpc, retry_count);
-    verbs_qp_attr.rnr_retry = DEVX_GET(qpc, qpc, rnr_retry);
-    verbs_qp_attr.min_rnr_timer = DEVX_GET(qpc, qpc, min_rnr_nak);
-    verbs_qp_attr.allow_remote_write = DEVX_GET(qpc, qpc, rwe);
-    verbs_qp_attr.allow_remote_read = DEVX_GET(qpc, qpc, rre);
-    // verbs_qp_attr.allow_remote_atomic = DEVX_GET(qpc, qpc, rae);
-    verbs_qp_attr.max_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_sra_max);
-    verbs_qp_attr.max_dest_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_rra_max);
+    verbs_qp_attr->rq_psn = DEVX_GET(qpc, qpc, next_rcv_psn);
+    verbs_qp_attr->sq_psn = DEVX_GET(qpc, qpc, next_send_psn);
+    verbs_qp_attr->dest_qp_num = DEVX_GET(qpc, qpc, remote_qpn);
+    verbs_qp_attr->pkey_index = DEVX_GET(qpc, qpc, primary_address_path.pkey_index);
+    verbs_qp_attr->port_num = DEVX_GET(qpc, qpc, primary_address_path.vhca_port_num);
+    verbs_qp_attr->ack_timeout = DEVX_GET(qpc, qpc, primary_address_path.ack_timeout);
+    verbs_qp_attr->counter_set_id = DEVX_GET(qpc, qpc, counter_set_id);
+    verbs_qp_attr->retry_cnt = DEVX_GET(qpc, qpc, retry_count);
+    verbs_qp_attr->rnr_retry = DEVX_GET(qpc, qpc, rnr_retry);
+    verbs_qp_attr->min_rnr_timer = DEVX_GET(qpc, qpc, min_rnr_nak);
+    verbs_qp_attr->allow_remote_write = DEVX_GET(qpc, qpc, rwe);
+    verbs_qp_attr->allow_remote_read = DEVX_GET(qpc, qpc, rre);
+    // verbs_qp_attr->atomic_mode = DEVX_GET(qpc, qpc, rae);
+    verbs_qp_attr->max_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_sra_max);
+    verbs_qp_attr->max_dest_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_rra_max);
 
-    if (verbs_qp_attr.ah_attr != nullptr) {
-        verbs_qp_attr.ah_attr->addr_type = m_addr_type;
-        verbs_qp_attr.ah_attr->dlid = DEVX_GET(qpc, qpc, primary_address_path.rlid);
-        verbs_qp_attr.ah_attr->sl = DEVX_GET(qpc, qpc, primary_address_path.sl);
-        verbs_qp_attr.ah_attr->sgid_index = DEVX_GET(qpc, qpc, primary_address_path.src_addr_index);
-        verbs_qp_attr.ah_attr->static_rate = DEVX_GET(qpc, qpc, primary_address_path.stat_rate);
-        verbs_qp_attr.ah_attr->hop_limit = DEVX_GET(qpc, qpc, primary_address_path.hop_limit);
-        verbs_qp_attr.ah_attr->traffic_class = DEVX_GET(qpc, qpc, primary_address_path.tclass);
+    if (verbs_qp_attr->ah_attr_enabled != false) {
+        verbs_qp_attr->ah_attr.addr_type = m_addr_type;
+        verbs_qp_attr->ah_attr.dlid = DEVX_GET(qpc, qpc, primary_address_path.rlid);
+        verbs_qp_attr->ah_attr.sl = DEVX_GET(qpc, qpc, primary_address_path.sl);
+        verbs_qp_attr->ah_attr.sgid_index = DEVX_GET(qpc, qpc, primary_address_path.src_addr_index);
+        verbs_qp_attr->ah_attr.static_rate = DEVX_GET(qpc, qpc, primary_address_path.stat_rate);
+        verbs_qp_attr->ah_attr.hop_limit = DEVX_GET(qpc, qpc, primary_address_path.hop_limit);
+        verbs_qp_attr->ah_attr.traffic_class = DEVX_GET(qpc, qpc, primary_address_path.tclass);
 
-        memcpy(verbs_qp_attr.ah_attr->gid.raw,
+        memcpy(verbs_qp_attr->ah_attr.gid.raw,
                MLX5_ADDR_OF(qpc, qpc, primary_address_path.rgid_rip),
                sizeof(struct doca_verbs_gid));
     }
 
     /* Set verbs_qp_init_attr with the QP information */
-    verbs_qp_init_attr.send_cq = m_init_attr.send_cq;
-    verbs_qp_init_attr.receive_cq = m_init_attr.receive_cq;
-    verbs_qp_init_attr.sq_sig_all = m_init_attr.sq_sig_all;
-    verbs_qp_init_attr.qp_context = m_init_attr.qp_context;
-    verbs_qp_init_attr.pd = m_pd;
-    verbs_qp_init_attr.sq_wr = m_sq_size_wr;
-    verbs_qp_init_attr.rq_wr = m_rq_size;
-    verbs_qp_init_attr.receive_max_sges = m_rcv_max_sges;
-    verbs_qp_init_attr.user_index = DEVX_GET(qpc, qpc, user_index);
-    verbs_qp_init_attr.qp_type = m_qp_type;
-    verbs_qp_init_attr.send_max_sges = m_send_max_sges;
-    verbs_qp_init_attr.max_inline_data = m_init_attr.max_inline_data;
-    verbs_qp_init_attr.external_umem = m_init_attr.external_umem;
-    verbs_qp_init_attr.external_umem_offset = m_init_attr.external_umem_offset;
-    verbs_qp_init_attr.external_uar = m_init_attr.external_uar;
-    verbs_qp_init_attr.core_direct_master = m_init_attr.core_direct_master;
-    verbs_qp_init_attr.send_dbr_mode = m_init_attr.send_dbr_mode;
+    verbs_qp_init_attr->send_cq = m_init_attr.send_cq;
+    verbs_qp_init_attr->receive_cq = m_init_attr.receive_cq;
+    verbs_qp_init_attr->sq_sig_all = m_init_attr.sq_sig_all;
+    verbs_qp_init_attr->qp_context = m_init_attr.qp_context;
+    verbs_qp_init_attr->pd = m_pd;
+    verbs_qp_init_attr->sq_wr = m_sq_size_wr;
+    verbs_qp_init_attr->rq_wr = m_rq_size;
+    verbs_qp_init_attr->receive_max_sges = m_rcv_max_sges;
+    verbs_qp_init_attr->user_index = DEVX_GET(qpc, qpc, user_index);
+    verbs_qp_init_attr->qp_type = m_qp_type;
+    verbs_qp_init_attr->send_max_sges = m_send_max_sges;
+    verbs_qp_init_attr->max_inline_data = m_init_attr.max_inline_data;
+    verbs_qp_init_attr->external_umem = m_init_attr.external_umem;
+    verbs_qp_init_attr->external_umem_offset = m_init_attr.external_umem_offset;
+    verbs_qp_init_attr->external_uar = m_init_attr.external_uar;
+    verbs_qp_init_attr->core_direct_master = m_init_attr.core_direct_master;
+    verbs_qp_init_attr->send_dbr_mode = m_init_attr.send_dbr_mode;
 
     return DOCA_SUCCESS;
 }
 
-void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
+void doca_verbs_qp_open::create() {
     auto status{DOCA_SUCCESS};
-    m_ibv_ctx = ibv_ctx;
     m_pd = m_init_attr.pd;
 
     if ((m_init_attr.external_umem != nullptr && m_init_attr.external_umem_dbr == nullptr) ||
@@ -1261,7 +1309,7 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
     }
 
     /* Query device attr */
-    status = doca_verbs_query_device(ibv_ctx, &m_verbs_device_attr);
+    status = doca_verbs_query_device(m_ibv_ctx, &m_verbs_device_attr);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to query device attr");
         throw DOCA_ERROR_INVALID_VALUE;
@@ -1437,6 +1485,7 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
     uint32_t dbr_umem_id{0};
     uint64_t dbr_umem_offset{0};
     uint32_t wq_umem_id{0};
+    uint64_t wq_umem_offset{0};
 
     if (m_init_attr.external_umem == nullptr) {
         auto db_umem_offset =
@@ -1464,6 +1513,7 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
             throw DOCA_ERROR_DRIVER;
         }
 
+        wq_umem_offset = 0;
         wq_umem_id = m_umem_obj->umem_id;
         dbr_umem_offset = db_umem_offset;
         dbr_umem_id = wq_umem_id;
@@ -1480,7 +1530,8 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
             throw status;
         }
 
-        m_wq_buf += m_init_attr.external_umem_offset;
+        wq_umem_offset = m_init_attr.external_umem_offset;
+        m_wq_buf += wq_umem_offset;
         m_rq_buf = m_wq_buf;
         m_sq_buf = m_wq_buf + ((uintptr_t)m_rq_size << m_log_rcv_wqe_size);
 
@@ -1510,7 +1561,7 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
 
     /* Create QP object */
     status = create_qp_obj(uar_id, log_rq_size, log_sq_size_wqebb, log_stride, dbr_umem_offset,
-                           dbr_umem_id, wq_umem_id, m_init_attr);
+                           dbr_umem_id, wq_umem_offset, wq_umem_id, &m_init_attr);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to create QP object");
         throw DOCA_ERROR_DRIVER;
@@ -1519,7 +1570,7 @@ void doca_verbs_qp::create(struct ibv_context *ibv_ctx) {
     DOCA_LOG(LOG_INFO, "DOCA IB Verbs QP %p: has been successfully created", this);
 }
 
-doca_error_t doca_verbs_qp::destroy() noexcept {
+doca_error_t doca_verbs_qp_open::destroy() noexcept {
     doca_error_t ret = DOCA_SUCCESS;
 
     if (m_verbs_device_attr) {
@@ -1562,11 +1613,40 @@ doca_error_t doca_verbs_qp::destroy() noexcept {
     return DOCA_SUCCESS;
 }
 
-doca_verbs_qp::doca_verbs_qp(struct ibv_context *ibv_ctx,
-                             struct doca_verbs_qp_init_attr &verbs_qp_init_attr)
-    : m_ibv_ctx(ibv_ctx), m_init_attr(verbs_qp_init_attr) {
+doca_verbs_qp_open::doca_verbs_qp_open(struct ibv_context *ibv_ctx,
+                                       struct doca_verbs_qp_init_attr_open *verbs_qp_init_attr)
+    : m_ibv_ctx(ibv_ctx) {
+    if (verbs_qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create QP, verbs_qp_init_attr is NULL");
+        throw std::invalid_argument("verbs_qp_init_attr is NULL");
+    }
+
+    m_init_attr.pd = verbs_qp_init_attr->pd;
+    m_init_attr.send_cq = verbs_qp_init_attr->send_cq;
+    m_init_attr.receive_cq = verbs_qp_init_attr->receive_cq;
+    m_init_attr.srq = verbs_qp_init_attr->srq;
+    m_init_attr.external_umem = verbs_qp_init_attr->external_umem;
+    m_init_attr.external_umem_dbr = verbs_qp_init_attr->external_umem_dbr;
+    m_init_attr.external_uar = verbs_qp_init_attr->external_uar;
+    m_init_attr.external_umem_offset = verbs_qp_init_attr->external_umem_offset;
+    m_init_attr.external_umem_dbr_offset = verbs_qp_init_attr->external_umem_dbr_offset;
+    m_init_attr.sq_sig_all = verbs_qp_init_attr->sq_sig_all;
+    m_init_attr.sq_wr = verbs_qp_init_attr->sq_wr;
+    m_init_attr.rq_wr = verbs_qp_init_attr->rq_wr;
+    m_init_attr.send_max_sges = verbs_qp_init_attr->send_max_sges;
+    m_init_attr.receive_max_sges = verbs_qp_init_attr->receive_max_sges;
+    m_init_attr.max_inline_data = verbs_qp_init_attr->max_inline_data;
+    m_init_attr.user_index = verbs_qp_init_attr->user_index;
+    m_init_attr.qp_type = verbs_qp_init_attr->qp_type;
+    m_init_attr.qp_context = verbs_qp_init_attr->qp_context;
+    m_init_attr.send_cqn = verbs_qp_init_attr->send_cqn;
+    m_init_attr.receive_cqn = verbs_qp_init_attr->receive_cqn;
+    m_init_attr.core_direct_master = verbs_qp_init_attr->core_direct_master;
+    m_init_attr.send_dbr_mode = verbs_qp_init_attr->send_dbr_mode;
+    m_init_attr.emulate_no_dbr_ext = verbs_qp_init_attr->emulate_no_dbr_ext;
+
     try {
-        create(ibv_ctx);
+        create();
     } catch (...) {
         (void)destroy();
         DOCA_LOG(LOG_ERR, "Failed to create QP");
@@ -1574,33 +1654,33 @@ doca_verbs_qp::doca_verbs_qp(struct ibv_context *ibv_ctx,
     }
 }
 
-doca_verbs_qp::~doca_verbs_qp() { static_cast<void>(destroy()); }
+doca_verbs_qp_open::~doca_verbs_qp_open() { static_cast<void>(destroy()); }
 
-uint32_t doca_verbs_qp::get_qpn() const noexcept { return m_qp_num; }
+uint32_t doca_verbs_qp_open::get_qpn() const noexcept { return m_qp_num; }
 
-void *doca_verbs_qp::get_dbr_addr() const noexcept { return (void *)m_db_buffer; }
+void *doca_verbs_qp_open::get_dbr_addr() const noexcept { return (void *)m_db_buffer; }
 
-void *doca_verbs_qp::get_uar_addr() const noexcept { return (void *)m_uar_db_reg; }
+void *doca_verbs_qp_open::get_uar_addr() const noexcept { return (void *)m_uar_db_reg; }
 
-enum doca_verbs_uar_allocation_type doca_verbs_qp::get_uar_mtype() const noexcept {
-    return m_init_attr.external_uar->get_uar_mtype();
+enum doca_verbs_uar_allocation_type doca_verbs_qp_open::get_uar_mtype() const noexcept {
+    return m_init_attr.external_uar->allocation_type;
 }
 
-void *doca_verbs_qp::get_sq_buf() const noexcept { return m_sq_buf; }
+void *doca_verbs_qp_open::get_sq_buf() const noexcept { return m_sq_buf; }
 
-void *doca_verbs_qp::get_rq_buf() const noexcept { return (void *)m_wq_buf; }
+void *doca_verbs_qp_open::get_rq_buf() const noexcept { return (void *)m_wq_buf; }
 
-uint32_t doca_verbs_qp::get_sq_size_wqebb() const noexcept { return m_sq_size_wqebb; }
+uint32_t doca_verbs_qp_open::get_sq_size_wqebb() const noexcept { return m_sq_size_wqebb; }
 
-uint32_t doca_verbs_qp::get_rq_size() const noexcept { return m_rq_size; }
+uint32_t doca_verbs_qp_open::get_rq_size() const noexcept { return m_rq_size; }
 
-uint32_t doca_verbs_qp::get_rcv_wqe_size() const noexcept { return m_rcv_wqe_size; }
+uint32_t doca_verbs_qp_open::get_rcv_wqe_size() const noexcept { return m_rcv_wqe_size; }
 
-enum doca_verbs_qp_send_dbr_mode doca_verbs_qp::get_send_dbr_mode() const noexcept {
+enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_open::get_send_dbr_mode() const noexcept {
     return static_cast<enum doca_verbs_qp_send_dbr_mode>(m_init_attr.send_dbr_mode);
 }
 
-bool doca_verbs_qp::get_emulate_no_dbr_ext() const noexcept {
+bool doca_verbs_qp_open::get_emulate_no_dbr_ext() const noexcept {
     return m_init_attr.emulate_no_dbr_ext;
 }
 
@@ -1608,415 +1688,545 @@ bool doca_verbs_qp::get_emulate_no_dbr_ext() const noexcept {
  * Public API functions
  *********************************************************************************************************************/
 
-doca_error_t doca_verbs_qp_init_attr_create(struct doca_verbs_qp_init_attr **verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create qp_init_attr: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
+doca_error_t doca_verbs_qp_init_attr_create(doca_verbs_qp_init_attr_t **qp_init_attr) {
+    doca_verbs_qp_init_attr_t *attr_ = nullptr;
 
-    *verbs_qp_init_attr =
-        (struct doca_verbs_qp_init_attr *)calloc(1, sizeof(struct doca_verbs_qp_init_attr));
-    if (*verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create qp_init_attr: failed to allocate memory");
+    attr_ = (doca_verbs_qp_init_attr_t *)calloc(1, sizeof(doca_verbs_qp_init_attr_t));
+    if (attr_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_verbs_qp_init_attr_t",
+                 __func__);
         return DOCA_ERROR_NO_MEMORY;
     }
 
+    /* Try with DOCA SDK first */
+    auto err = doca_verbs_sdk_wrapper_qp_init_attr_create(&(attr_->sdk));
+    if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Use DOCA Verbs QP Init Attr SDK", __func__);
+        attr_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
+        (*qp_init_attr) = attr_;
+        return DOCA_SUCCESS;
+    } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+        goto exit_error;
+    }
+
+    /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
+     * version */
+    DOCA_LOG(LOG_INFO, "Use DOCA Verbs QP Init Attr open", __func__);
+
+    attr_->type = DOCA_VERBS_SDK_LIB_TYPE_OPEN;
+
+    try {
+        attr_->open = new doca_verbs_qp_init_attr_open();
+        DOCA_LOG(LOG_INFO, "doca_verbs_qp_init_attr_open=%p was created", attr_);
+        (*qp_init_attr) = attr_;
+        return DOCA_SUCCESS;
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "doca_verbs_qp_init_attr_open allocation failed");
+        goto exit_error;
+    }
+
+exit_error:
+    if (attr_ != nullptr) {
+        if (attr_->open) delete attr_->open;
+        free(attr_);
+    }
+
+    return DOCA_ERROR_INITIALIZATION;
+}
+
+doca_error_t doca_verbs_qp_init_attr_destroy(doca_verbs_qp_init_attr_t *qp_init_attr) {
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy qp_init_attr: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_destroy(qp_init_attr->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            qp_init_attr->sdk = nullptr;
+            goto exit;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            status = DOCA_ERROR_UNEXPECTED;
+            goto exit;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto exit;
+    }
+
+exit:
+    if (qp_init_attr->open) delete qp_init_attr->open;
+    memset(qp_init_attr, 0, sizeof(doca_verbs_qp_init_attr_t));
+    free(qp_init_attr);
+
+    return status;
+}
+
+doca_error_t doca_verbs_qp_init_attr_set_pd(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                            doca_dev_t *net_dev) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set pd: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_pd(qp_init_attr->sdk, net_dev);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (net_dev == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set pd: parameter net_dev is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "Failed to set pd: parameter net_dev is SDK type");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->pd = net_dev->open->get_pd();
+
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_init_attr_destroy(struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to destroy qp_init_attr: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_send_cq(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                 doca_verbs_cq_t *send_cq) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set send_cq: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    free(verbs_qp_init_attr);
-    verbs_qp_init_attr = nullptr;
-
-    return DOCA_SUCCESS;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_pd(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-                                            struct ibv_pd *pd) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set pd: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (pd == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set pd: parameter pd is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_qp_init_attr->pd = pd;
-
-    return DOCA_SUCCESS;
-}
-
-struct ibv_pd *doca_verbs_qp_init_attr_get_pd(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get pd: parameter verbs_qp_init_attr is NULL");
-        return nullptr;
-    }
-
-    return verbs_qp_init_attr->pd;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_send_cq(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-                                                 struct doca_verbs_cq *send_cq) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set send_cq: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
     if (send_cq == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set send_cq: parameter send_cq is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->send_cq = send_cq;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_send_cq(qp_init_attr->sdk, send_cq);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->send_cq = send_cq;
 
     return DOCA_SUCCESS;
 }
 
-struct doca_verbs_cq *doca_verbs_qp_init_attr_get_send_cq(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get send_cq: parameter verbs_qp_init_attr is NULL");
-        return nullptr;
-    }
-
-    return verbs_qp_init_attr->send_cq;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_receive_cq(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_cq *receive_cq) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set receive_cq: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_receive_cq(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    doca_verbs_cq_t *receive_cq) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set receive_cq: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
+
     if (receive_cq == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set receive_cq: parameter receive_cq is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->receive_cq = receive_cq;
-
-    return DOCA_SUCCESS;
-}
-
-struct doca_verbs_cq *doca_verbs_qp_init_attr_get_receive_cq(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get receive_cq: parameter verbs_qp_init_attr is NULL");
-        return nullptr;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_set_receive_cq(qp_init_attr->sdk, receive_cq);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
     }
 
-    return verbs_qp_init_attr->receive_cq;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_sq_sig_all(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, int sq_sig_all) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set sq_sig_all: parameter verbs_qp_init_attr is NULL");
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->sq_sig_all = sq_sig_all;
+    qp_init_attr->open->receive_cq = receive_cq;
 
     return DOCA_SUCCESS;
 }
 
-int doca_verbs_qp_init_attr_get_sq_sig_all(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get sq_sig_all: parameter verbs_qp_init_attr is NULL");
-        return -1;
+doca_error_t doca_verbs_qp_init_attr_set_sq_sig_all(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    int sq_sig_all) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set sq_sig_all: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
     }
 
-    return verbs_qp_init_attr->sq_sig_all;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_set_sq_sig_all(qp_init_attr->sdk, sq_sig_all);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->sq_sig_all = sq_sig_all;
+
+    return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_init_attr_set_sq_wr(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_init_attr_set_sq_wr(doca_verbs_qp_init_attr_t *qp_init_attr,
                                                uint32_t sq_wr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set sq_wr: parameter verbs_qp_init_attr is NULL");
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set sq_wr: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->sq_wr = sq_wr;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_sq_wr(qp_init_attr->sdk, sq_wr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->sq_wr = sq_wr;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_init_attr_get_sq_wr(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get sq_wr: parameter verbs_qp_init_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_init_attr->sq_wr;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_rq_wr(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_init_attr_set_rq_wr(doca_verbs_qp_init_attr_t *qp_init_attr,
                                                uint32_t rq_wr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set receive_cq: parameter verbs_qp_init_attr is NULL");
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set rq_wr: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->rq_wr = rq_wr;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_rq_wr(qp_init_attr->sdk, rq_wr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->rq_wr = rq_wr;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_init_attr_get_rq_wr(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get rq_wr: parameter verbs_qp_init_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_init_attr->rq_wr;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_send_max_sges(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t send_max_sges) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set send_max_sges: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_send_max_sges(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                       uint32_t send_max_sges) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set send_max_sges: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->send_max_sges = send_max_sges;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_set_send_max_sges(qp_init_attr->sdk, send_max_sges);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->send_max_sges = send_max_sges;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_init_attr_get_send_max_sges(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get send_max_sges: parameter verbs_qp_init_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_init_attr->send_max_sges;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_receive_max_sges(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t receive_max_sges) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set receive_max_sges: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_receive_max_sges(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                          uint32_t receive_max_sges) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set receive_max_sges: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->receive_max_sges = receive_max_sges;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_receive_max_sges(qp_init_attr->sdk,
+                                                                            receive_max_sges);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->receive_max_sges = receive_max_sges;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_init_attr_get_receive_max_sges(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get receive_max_sges: parameter verbs_qp_init_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_init_attr->receive_max_sges;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_max_inline_data(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t max_inline_data) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set max_inline_data: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_max_inline_data(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                         uint32_t max_inline_data) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_inline_data: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->max_inline_data = max_inline_data;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_max_inline_data(qp_init_attr->sdk,
+                                                                           max_inline_data);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->max_inline_data = max_inline_data;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_init_attr_get_max_inline_data(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get max_inline_data: parameter verbs_qp_init_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_init_attr->max_inline_data;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_user_index(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint32_t user_index) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set user_index: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_user_index(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    uint32_t user_index) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set user_index: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if ((user_index & USER_INDEX_MSB_8BITS_MASK) != 0) {
-        DOCA_LOG(LOG_ERR, "Failed to set user_index: input parameter user_index=%u exceeds 24 bits",
-                 user_index);
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_set_user_index(qp_init_attr->sdk, user_index);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->user_index = user_index;
+    qp_init_attr->open->user_index = user_index;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_init_attr_get_user_index(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get user_index: parameter verbs_qp_init_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_init_attr->user_index;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_qp_type(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_init_attr_set_qp_type(doca_verbs_qp_init_attr_t *qp_init_attr,
                                                  uint32_t qp_type) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set qp_type: parameter verbs_qp_init_attr is NULL");
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set qp_type: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->qp_type = qp_type;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_qp_type(qp_init_attr->sdk, qp_type);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->qp_type = qp_type;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_init_attr_get_qp_type(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get qp_type: parameter verbs_qp_init_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_init_attr->qp_type;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_external_umem(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_umem *external_umem,
-    uint64_t external_umem_offset) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_external_umem(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                       doca_verbs_umem_t *external_umem,
+                                                       uint64_t external_umem_offset) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
+
     if (external_umem == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter external_umem is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->external_umem = external_umem;
-    verbs_qp_init_attr->external_umem_offset = external_umem_offset;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_external_umem(
+            qp_init_attr->sdk, external_umem, external_umem_offset);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->external_umem = external_umem;
+    qp_init_attr->open->external_umem_offset = external_umem_offset;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_init_attr_set_external_dbr_umem(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_umem *external_umem,
-    uint64_t external_umem_offset) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (external_umem == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set external_umem: parameter external_umem is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_external_umem_dbr(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                           doca_verbs_umem_t *external_umem_dbr,
+                                                           uint64_t external_umem_dbr_offset) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set external_umem_dbr: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->external_umem_dbr = external_umem;
-    verbs_qp_init_attr->external_umem_dbr_offset = external_umem_offset;
-
-    return DOCA_SUCCESS;
-}
-
-doca_error_t doca_verbs_qp_init_attr_get_external_umem(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-    struct doca_verbs_umem **external_umem, uint64_t *external_umem_offset) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get external_umem: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (external_umem == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get external_umem: parameter external_umem is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (external_umem_offset == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get external_umem: parameter external_umem_offset is NULL");
+    if (external_umem_dbr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set external_umem_dbr: parameter external_umem_dbr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *external_umem = verbs_qp_init_attr->external_umem;
-    *external_umem_offset = verbs_qp_init_attr->external_umem_offset;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_external_umem_dbr(
+            qp_init_attr->sdk, external_umem_dbr, external_umem_dbr_offset);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->external_umem_dbr = external_umem_dbr;
+    qp_init_attr->open->external_umem_dbr_offset = external_umem_dbr_offset;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_init_attr_set_external_uar(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, struct doca_verbs_uar *external_uar) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set external_uar: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_external_uar(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                      doca_verbs_uar_t *external_uar) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set external_uar: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
+
     if (external_uar == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to set external_uar: parameter external_uar is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->external_uar = external_uar;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_set_external_uar(qp_init_attr->sdk, external_uar);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->external_uar = external_uar;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_init_attr_get_external_uar(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-    struct doca_verbs_uar **external_uar) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get external_uar: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (external_uar == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get external_uar: parameter external_uar is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_qp_context(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                    void *qp_context) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set qp_context: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *external_uar = verbs_qp_init_attr->external_uar;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_set_qp_context(qp_init_attr->sdk, qp_context);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->qp_context = qp_context;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_init_attr_set_qp_context(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, void *qp_context) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set qp_context: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (qp_context == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set qp_context: parameter qp_context is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_qp_init_attr->qp_context = qp_context;
-
-    return DOCA_SUCCESS;
-}
-
-void *doca_verbs_qp_init_attr_get_qp_context(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get qp_context: parameter verbs_qp_init_attr is NULL");
-        return nullptr;
-    }
-
-    return verbs_qp_init_attr->qp_context;
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_core_direct_master(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, uint8_t core_direct_master) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set core_direct_master: parameter verbs_qp_init_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_set_core_direct_master(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                            uint8_t core_direct_master) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set core_direct_master: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2026,446 +2236,714 @@ doca_error_t doca_verbs_qp_init_attr_set_core_direct_master(
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->core_direct_master = core_direct_master;
-
-    return DOCA_SUCCESS;
-}
-
-uint8_t doca_verbs_qp_init_attr_get_core_direct_master(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get core_direct_master: parameter verbs_qp_init_attr is NULL");
-        return 0;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_core_direct_master(qp_init_attr->sdk,
+                                                                              core_direct_master);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
     }
 
-    return verbs_qp_init_attr->core_direct_master;
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->core_direct_master = core_direct_master;
+
+    return DOCA_SUCCESS;
 }
 
 doca_error_t doca_verbs_qp_init_attr_set_send_dbr_mode(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-    enum doca_verbs_qp_send_dbr_mode send_dbr_mode) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set send_dbr_mode: parameter verbs_qp_init_attr is NULL");
+    doca_verbs_qp_init_attr_t *qp_init_attr, enum doca_verbs_qp_send_dbr_mode send_dbr_mode) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set send_dbr_mode: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->send_dbr_mode = static_cast<uint8_t>(send_dbr_mode);
-    return DOCA_SUCCESS;
-}
-
-enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_init_attr_get_send_dbr_mode(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get send_dbr_mode: parameter verbs_qp_init_attr is NULL");
-        return DOCA_VERBS_QP_SEND_DBR_MODE_DBR_VALID;
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_set_send_dbr_mode(qp_init_attr->sdk, send_dbr_mode);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
     }
 
-    return static_cast<enum doca_verbs_qp_send_dbr_mode>(verbs_qp_init_attr->send_dbr_mode);
-}
-
-doca_error_t doca_verbs_qp_init_attr_set_emulate_no_dbr_ext(
-    struct doca_verbs_qp_init_attr *verbs_qp_init_attr, bool emulate_no_dbr_ext) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set emulate_no_dbr_ext: parameter verbs_qp_init_attr is NULL");
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->emulate_no_dbr_ext = emulate_no_dbr_ext;
+    qp_init_attr->open->send_dbr_mode = send_dbr_mode;
 
     return DOCA_SUCCESS;
 }
 
-bool doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get emulate_no_dbr_ext: parameter verbs_qp_init_attr is NULL");
-        return false;
-    }
-
-    return verbs_qp_init_attr->emulate_no_dbr_ext;
-}
-
-doca_error_t doca_verbs_qp_attr_create(struct doca_verbs_qp_attr **verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create qp_attr: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_init_attr_get_send_dbr_mode(
+    const doca_verbs_qp_init_attr_t *qp_init_attr,
+    enum doca_verbs_qp_send_dbr_mode *send_dbr_mode) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set send_dbr_mode: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *verbs_qp_attr = (struct doca_verbs_qp_attr *)calloc(1, sizeof(struct doca_verbs_qp_attr));
-    if (*verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create qp_attr: failed to allocate memory");
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_init_attr_get_send_dbr_mode(qp_init_attr->sdk, send_dbr_mode);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *send_dbr_mode =
+        static_cast<enum doca_verbs_qp_send_dbr_mode>(qp_init_attr->open->send_dbr_mode);
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_init_attr_set_emulate_no_dbr_ext(doca_verbs_qp_init_attr_t *qp_init_attr,
+                                                            bool emulate_no_dbr_ext) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set send_dbr_mode: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "Failed to set emulate_no_dbr_ext: not supported by DOCA SDK");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->emulate_no_dbr_ext = emulate_no_dbr_ext;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
+    const doca_verbs_qp_init_attr_t *qp_init_attr, bool *emulate_no_dbr_ext) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get send_dbr_mode: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "Failed to get emulate_no_dbr_ext: not supported by DOCA SDK");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *emulate_no_dbr_ext = qp_init_attr->open->emulate_no_dbr_ext;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_init_attr_set_ordering_semantic(
+    doca_verbs_qp_init_attr_t *qp_init_attr,
+    enum doca_verbs_qp_ordering_semantic ordering_semantic) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set ordering_semantic: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_set_ordering_semantic(qp_init_attr->sdk,
+                                                                             ordering_semantic);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        } else if (err == DOCA_SDK_WRAPPER_NOT_SUPPORTED) {
+            DOCA_LOG(LOG_INFO,
+                     "DOCA SDK installation doesn't support QP init attribute setter "
+                     "set_ordering_semantic",
+                     __func__);
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    } else {
+        DOCA_LOG(LOG_INFO,
+                 "QP init attribute setter set_ordering_semantic not supported in open mode.",
+                 __func__);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_init_attr_get_ordering_semantic(
+    const doca_verbs_qp_init_attr_t *qp_init_attr,
+    enum doca_verbs_qp_ordering_semantic *ordering_semantic) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get ordering_semantic: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ordering_semantic == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get ordering_semantic: parameter ordering_semantic is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_init_attr_get_ordering_semantic(qp_init_attr->sdk,
+                                                                             ordering_semantic);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        } else if (err == DOCA_SDK_WRAPPER_NOT_SUPPORTED) {
+            DOCA_LOG(LOG_INFO,
+                     "DOCA SDK installation doesn't support QP init attribute getter "
+                     "get_ordering_semantic",
+                     __func__);
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    } else {
+        DOCA_LOG(LOG_INFO,
+                 "QP init attribute getter get_ordering_semantic not supported in open mode.",
+                 __func__);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_attr_create(doca_verbs_qp_attr_t **qp_attr) {
+    doca_verbs_qp_attr_t *attr_ = nullptr;
+
+    attr_ = (doca_verbs_qp_attr_t *)calloc(1, sizeof(doca_verbs_qp_attr_t));
+    if (attr_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_verbs_qp_attr_t",
+                 __func__);
         return DOCA_ERROR_NO_MEMORY;
     }
 
-    return DOCA_SUCCESS;
+    /* Try with DOCA SDK first */
+    auto err = doca_verbs_sdk_wrapper_qp_attr_create(&(attr_->sdk));
+    if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Use DOCA Verbs QP Attr SDK", __func__);
+        attr_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
+        (*qp_attr) = attr_;
+        return DOCA_SUCCESS;
+    } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+        goto exit_error;
+    }
+
+    /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
+     * version */
+    DOCA_LOG(LOG_INFO, "Use DOCA Verbs QP Attr open", __func__);
+
+    attr_->type = DOCA_VERBS_SDK_LIB_TYPE_OPEN;
+
+    try {
+        attr_->open = new doca_verbs_qp_attr_open();
+        DOCA_LOG(LOG_INFO, "doca_verbs_qp_attr_open=%p was created", attr_);
+        (*qp_attr) = attr_;
+        return DOCA_SUCCESS;
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "doca_verbs_qp_attr_open allocation failed");
+        goto exit_error;
+    }
+
+exit_error:
+    if (attr_ != nullptr) {
+        if (attr_->open) delete attr_->open;
+        free(attr_);
+    }
+
+    return DOCA_ERROR_INITIALIZATION;
 }
 
-doca_error_t doca_verbs_qp_attr_destroy(struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to destroy qp_attr: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_attr_destroy(doca_verbs_qp_attr_t *qp_attr) {
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy qp_attr: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    free(verbs_qp_attr);
-    verbs_qp_attr = nullptr;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_destroy(qp_attr->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            qp_attr->sdk = nullptr;
+            goto exit;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            status = DOCA_ERROR_UNEXPECTED;
+            goto exit;
+        }
+    }
 
-    return DOCA_SUCCESS;
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto exit;
+    }
+
+exit:
+    if (qp_attr->open) delete qp_attr->open;
+    memset(qp_attr, 0, sizeof(doca_verbs_qp_attr_t));
+    free(qp_attr);
+
+    return status;
 }
 
-doca_error_t doca_verbs_qp_attr_set_next_state(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_next_state(doca_verbs_qp_attr_t *qp_attr,
                                                enum doca_verbs_qp_state next_state) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set next_state: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set next_state: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->next_state = next_state;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_next_state(qp_attr->sdk, next_state);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->next_state = next_state;
 
     return DOCA_SUCCESS;
 }
 
-enum doca_verbs_qp_state doca_verbs_qp_attr_get_next_state(
-    const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get next_state: parameter verbs_qp_attr is NULL");
-        return static_cast<enum doca_verbs_qp_state>(0);
-    }
-
-    return verbs_qp_attr->next_state;
-}
-
-doca_error_t doca_verbs_qp_attr_set_current_state(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_current_state(doca_verbs_qp_attr_t *qp_attr,
                                                   enum doca_verbs_qp_state current_state) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set current_state: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set current_state: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->current_state = current_state;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_current_state(qp_attr->sdk, current_state);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->current_state = current_state;
 
     return DOCA_SUCCESS;
 }
 
-enum doca_verbs_qp_state doca_verbs_qp_attr_get_current_state(
-    const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get current_state: parameter verbs_qp_attr is NULL");
-        return static_cast<enum doca_verbs_qp_state>(0);
+doca_error_t doca_verbs_qp_attr_get_current_state(doca_verbs_qp_attr_t *qp_attr,
+                                                  enum doca_verbs_qp_state *current_state) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set current_state: parameter qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
     }
 
-    return verbs_qp_attr->current_state;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_get_current_state(qp_attr->sdk, current_state);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *current_state = qp_attr->open->current_state;
+
+    return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_attr_set_path_mtu(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_path_mtu(doca_verbs_qp_attr_t *qp_attr,
                                              enum doca_verbs_mtu_size path_mtu) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set path_mtu: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set path_mtu: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->path_mtu = path_mtu;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_path_mtu(qp_attr->sdk, path_mtu);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->path_mtu = path_mtu;
 
     return DOCA_SUCCESS;
 }
 
-enum doca_verbs_mtu_size doca_verbs_qp_attr_get_path_mtu(
-    const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get path_mtu: parameter verbs_qp_attr is NULL");
-        return static_cast<enum doca_verbs_mtu_size>(0);
-    }
-
-    return verbs_qp_attr->path_mtu;
-}
-
-doca_error_t doca_verbs_qp_attr_set_rq_psn(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                           uint32_t rq_psn) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set rq_psn: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_attr_set_rq_psn(doca_verbs_qp_attr_t *qp_attr, uint32_t rq_psn) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set rq_psn: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->rq_psn = rq_psn;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_rq_psn(qp_attr->sdk, rq_psn);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->rq_psn = rq_psn;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_attr_get_rq_psn(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get rq_psn: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->rq_psn;
-}
-
-doca_error_t doca_verbs_qp_attr_set_sq_psn(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                           uint32_t sq_psn) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set sq_psn: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_attr_set_sq_psn(doca_verbs_qp_attr_t *qp_attr, uint32_t sq_psn) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set sq_psn: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->sq_psn = sq_psn;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_sq_psn(qp_attr->sdk, sq_psn);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->sq_psn = sq_psn;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_attr_get_sq_psn(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get sq_psn: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->sq_psn;
-}
-
-doca_error_t doca_verbs_qp_attr_set_dest_qp_num(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_dest_qp_num(doca_verbs_qp_attr_t *qp_attr,
                                                 uint32_t dest_qp_num) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set dest_qp_num: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set dest_qp_num: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->dest_qp_num = dest_qp_num;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_dest_qp_num(qp_attr->sdk, dest_qp_num);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->dest_qp_num = dest_qp_num;
 
     return DOCA_SUCCESS;
 }
 
-uint32_t doca_verbs_qp_attr_get_dest_qp_num(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get dest_qp_num: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->dest_qp_num;
-}
-
-doca_error_t doca_verbs_qp_attr_set_allow_remote_write(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_allow_remote_write(doca_verbs_qp_attr_t *qp_attr,
                                                        int allow_remote_write) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set allow_remote_write: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set allow_remote_write: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->allow_remote_write = allow_remote_write;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_attr_set_allow_remote_write(qp_attr->sdk, allow_remote_write);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->allow_remote_write = allow_remote_write;
 
     return DOCA_SUCCESS;
 }
 
-int doca_verbs_qp_attr_get_allow_remote_write(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get allow_remote_write: parameter verbs_qp_attr is NULL");
-        return -1;
-    }
-
-    return verbs_qp_attr->allow_remote_write;
-}
-
-doca_error_t doca_verbs_qp_attr_set_allow_remote_read(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_allow_remote_read(doca_verbs_qp_attr_t *qp_attr,
                                                       int allow_remote_read) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set allow_remote_read: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set allow_remote_read: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->allow_remote_read = allow_remote_read;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_attr_set_allow_remote_read(qp_attr->sdk, allow_remote_read);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->allow_remote_read = allow_remote_read;
 
     return DOCA_SUCCESS;
 }
 
-int doca_verbs_qp_attr_get_allow_remote_read(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get allow_remote_read: parameter verbs_qp_attr is NULL");
-        return -1;
-    }
-
-    return verbs_qp_attr->allow_remote_read;
-}
-
-doca_error_t doca_verbs_qp_attr_set_allow_remote_atomic(
-    struct doca_verbs_qp_attr *verbs_qp_attr, enum doca_verbs_qp_atomic_type atomic_type) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set allow_remote_atomic: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_attr_set_atomic_mode(doca_verbs_qp_attr_t *qp_attr,
+                                                enum doca_verbs_qp_atomic_mode atomic_mode) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set atomic_mode: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->allow_remote_atomic = atomic_type;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_atomic_mode(qp_attr->sdk, atomic_mode);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->atomic_mode = atomic_mode;
 
     return DOCA_SUCCESS;
 }
 
-enum doca_verbs_qp_atomic_type doca_verbs_qp_attr_get_allow_remote_atomic(
-    const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get allow_remote_atomic: parameter verbs_qp_attr is NULL");
-        return DOCA_VERBS_QP_ATOMIC_MODE_NONE;
-    }
-
-    return verbs_qp_attr->allow_remote_atomic;
-}
-
-doca_error_t doca_verbs_qp_attr_set_ah_attr(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                            doca_verbs_ah_attr *ah_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set ah_attr: parameter verbs_qp_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (ah_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set ah_attr: parameter ah_attr is NULL");
+doca_error_t doca_verbs_qp_attr_set_pkey_index(doca_verbs_qp_attr_t *qp_attr, uint16_t pkey_index) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set pkey_index: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->ah_attr = ah_attr;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_pkey_index(qp_attr->sdk, pkey_index);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->pkey_index = pkey_index;
 
     return DOCA_SUCCESS;
 }
 
-struct doca_verbs_ah_attr *doca_verbs_qp_attr_get_ah_attr(
-    const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get ah_attr: parameter verbs_qp_attr is NULL");
-        return nullptr;
-    }
-    if (verbs_qp_attr->ah_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get ah_attr: ah_attr object was not set previously");
-        return nullptr;
-    }
-
-    return verbs_qp_attr->ah_attr;
-}
-
-doca_error_t doca_verbs_qp_attr_set_pkey_index(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                               uint16_t pkey_index) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set pkey_index: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_attr_set_port_num(doca_verbs_qp_attr_t *qp_attr, uint16_t port_num) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set port_num: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->pkey_index = pkey_index;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_port_num(qp_attr->sdk, port_num);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->port_num = port_num;
 
     return DOCA_SUCCESS;
 }
 
-uint16_t doca_verbs_qp_attr_get_pkey_index(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get pkey_index: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->pkey_index;
-}
-
-doca_error_t doca_verbs_qp_attr_set_port_num(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                             uint16_t port_num) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set port_num: parameter verbs_qp_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_qp_attr->port_num = port_num;
-
-    return DOCA_SUCCESS;
-}
-
-uint16_t doca_verbs_qp_attr_get_port_num(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get port_num: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->port_num;
-}
-
-doca_error_t doca_verbs_qp_attr_set_ack_timeout(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_ack_timeout(doca_verbs_qp_attr_t *qp_attr,
                                                 uint16_t ack_timeout) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set ack_timeout: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set ack_timeout: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->ack_timeout = ack_timeout;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_ack_timeout(qp_attr->sdk, ack_timeout);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->ack_timeout = ack_timeout;
 
     return DOCA_SUCCESS;
 }
 
-uint16_t doca_verbs_qp_attr_get_ack_timeout(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get ack_timeout: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->ack_timeout;
-}
-
-doca_error_t doca_verbs_qp_attr_set_retry_cnt(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                              uint16_t retry_cnt) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set retry_cnt: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_attr_set_retry_cnt(doca_verbs_qp_attr_t *qp_attr, uint16_t retry_cnt) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set retry_cnt: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->retry_cnt = retry_cnt;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_retry_cnt(qp_attr->sdk, retry_cnt);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->retry_cnt = retry_cnt;
 
     return DOCA_SUCCESS;
 }
 
-uint16_t doca_verbs_qp_attr_get_retry_cnt(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get retry_cnt: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->retry_cnt;
-}
-
-doca_error_t doca_verbs_qp_attr_set_rnr_retry(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                              uint16_t rnr_retry) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set rnr_retry: parameter verbs_qp_attr is NULL");
+doca_error_t doca_verbs_qp_attr_set_rnr_retry(doca_verbs_qp_attr_t *qp_attr, uint16_t rnr_retry) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set rnr_retry: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->rnr_retry = rnr_retry;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_rnr_retry(qp_attr->sdk, rnr_retry);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->rnr_retry = rnr_retry;
 
     return DOCA_SUCCESS;
 }
 
-uint16_t doca_verbs_qp_attr_get_rnr_retry(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get rnr_retry: parameter verbs_qp_attr is NULL");
-        return 0;
-    }
-
-    return verbs_qp_attr->rnr_retry;
-}
-
-doca_error_t doca_verbs_qp_attr_set_min_rnr_timer(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_min_rnr_timer(doca_verbs_qp_attr_t *qp_attr,
                                                   uint16_t min_rnr_timer) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set min_rnr_timer: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set min_rnr_timer: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->min_rnr_timer = min_rnr_timer;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_min_rnr_timer(qp_attr->sdk, min_rnr_timer);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->min_rnr_timer = min_rnr_timer;
 
     return DOCA_SUCCESS;
 }
 
-uint16_t doca_verbs_qp_attr_get_min_rnr_timer(const struct doca_verbs_qp_attr *verbs_qp_attr) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get min_rnr_timer: parameter verbs_qp_attr is NULL");
-        return 0;
+doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(doca_verbs_qp_attr_t *qp_attr,
+                                                  uint8_t max_rd_atomic) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_rd_atomic: parameter qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
     }
 
-    return verbs_qp_attr->min_rnr_timer;
-}
-
-doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
-                                                  uint8_t max_rd_atomic) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set max_rd_atomic: parameter verbs_qp_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_max_rd_atomic(qp_attr->sdk, max_rd_atomic);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
     }
 
     if (!doca_internal_utils_is_power_of_two(max_rd_atomic)) {
@@ -2475,16 +2953,32 @@ doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(struct doca_verbs_qp_attr *ver
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->max_rd_atomic = max_rd_atomic;
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->max_rd_atomic = max_rd_atomic;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr *verbs_qp_attr,
+doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(doca_verbs_qp_attr_t *qp_attr,
                                                        uint8_t max_dest_rd_atomic) {
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set max_dest_rd_atomic: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set max_dest_rd_atomic: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_verbs_sdk_wrapper_qp_attr_set_max_dest_rd_atomic(qp_attr->sdk, max_dest_rd_atomic);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
     }
 
     if (!doca_internal_utils_is_power_of_two(max_dest_rd_atomic)) {
@@ -2494,267 +2988,524 @@ doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(struct doca_verbs_qp_attr
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_attr->max_dest_rd_atomic = max_dest_rd_atomic;
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->max_dest_rd_atomic = max_dest_rd_atomic;
 
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_ah_attr_create(struct ibv_context *context,
-                                       struct doca_verbs_ah_attr **verbs_ah) {
-    if (context == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create verbs_ah: parameter context is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create verbs_ah: parameter verbs_ah is NULL");
+doca_error_t doca_verbs_qp_attr_set_cc_group(doca_verbs_qp_attr_t *qp_attr,
+                                             doca_verbs_cc_group_t *cc_group) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set cc_group: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    *verbs_ah = (struct doca_verbs_ah_attr *)calloc(1, sizeof(struct doca_verbs_ah_attr));
-    if (*verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create verbs_ah: failed to allocate memory");
+    if (cc_group == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set cc_group: parameter cc_group is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_cc_group(qp_attr->sdk, cc_group);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+        DOCA_LOG(LOG_INFO, "QP CC group not available (SDK symbol or DOCA_SDK_LIB_PATH)", __func__);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    DOCA_LOG(LOG_INFO, "QP CC group attribute is SDK-only.", __func__);
+    return DOCA_ERROR_NOT_SUPPORTED;
+}
+
+doca_error_t doca_verbs_qp_attr_set_counter_set_id(doca_verbs_qp_attr_t *qp_attr,
+                                                   uint32_t counter_set_id) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set counter_set_id: parameter qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "DOCA SDK doesn't support this function", __func__);
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_attr->open->counter_set_id = counter_set_id;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_attr_set_ah_attr(doca_verbs_qp_attr_t *qp_attr,
+                                            doca_verbs_ah_attr_t *ah_attr) {
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set ah_attr: parameter qp_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_ah_attr(qp_attr->sdk, ah_attr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    memcpy(&qp_attr->open->ah_attr.gid, &ah_attr->open->gid, sizeof(struct doca_verbs_gid));
+    qp_attr->open->ah_attr.addr_type = ah_attr->open->addr_type;
+    qp_attr->open->ah_attr.dlid = ah_attr->open->dlid;
+    qp_attr->open->ah_attr.sl = ah_attr->open->sl;
+    qp_attr->open->ah_attr.sgid_index = ah_attr->open->sgid_index;
+    qp_attr->open->ah_attr.static_rate = ah_attr->open->static_rate;
+    qp_attr->open->ah_attr.hop_limit = ah_attr->open->hop_limit;
+    qp_attr->open->ah_attr.traffic_class = ah_attr->open->traffic_class;
+    qp_attr->open->ah_attr.is_global = ah_attr->open->is_global;
+    qp_attr->open->ah_attr_enabled = true;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_ah_attr_create(doca_dev_t *net_dev, doca_verbs_ah_attr_t **ah_attr) {
+    doca_verbs_ah_attr_t *attr_ = nullptr;
+
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create ah_attr: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    attr_ = (doca_verbs_ah_attr_t *)calloc(1, sizeof(doca_verbs_ah_attr_t));
+    if (attr_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_verbs_ah_attr_t",
+                 __func__);
         return DOCA_ERROR_NO_MEMORY;
     }
 
-    (*verbs_ah)->is_global = 1;
-
-    return DOCA_SUCCESS;
-}
-
-doca_error_t doca_verbs_ah_attr_destroy(struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to destroy verbs_ah: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
+    /* Try with DOCA SDK first */
+    auto err = doca_verbs_sdk_wrapper_ah_attr_create(net_dev, &(attr_->sdk));
+    if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Use DOCA Verbs AH Attr SDK", __func__);
+        attr_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
+        (*ah_attr) = attr_;
+        return DOCA_SUCCESS;
+    } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+        goto exit_error;
     }
 
-    free(verbs_ah);
-    verbs_ah = nullptr;
+    /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
+     * version */
+    DOCA_LOG(LOG_INFO, "Use DOCA Verbs AH Attr open", __func__);
 
-    return DOCA_SUCCESS;
-}
-
-doca_error_t doca_verbs_ah_attr_set_gid(struct doca_verbs_ah_attr *verbs_ah,
-                                        struct doca_verbs_gid gid) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set gid: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->gid = gid;
-
-    return DOCA_SUCCESS;
-}
-
-struct doca_verbs_gid doca_verbs_ah_get_gid(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get gid: parameter verbs_ah is NULL");
-        struct doca_verbs_gid zero_gid {};
-        memset(&zero_gid, 0, sizeof(zero_gid));
-        return zero_gid;
-    }
-
-    return verbs_ah->gid;
-}
-
-doca_error_t doca_verbs_ah_attr_set_addr_type(struct doca_verbs_ah_attr *verbs_ah,
-                                              enum doca_verbs_addr_type addr_type) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set addr_type: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->addr_type = addr_type;
-
-    return DOCA_SUCCESS;
-}
-
-enum doca_verbs_addr_type doca_verbs_ah_get_addr_type(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get addr_type: parameter verbs_ah is NULL");
-        return static_cast<enum doca_verbs_addr_type>(0);
-    }
-
-    return verbs_ah->addr_type;
-}
-
-doca_error_t doca_verbs_ah_attr_set_dlid(struct doca_verbs_ah_attr *verbs_ah, uint32_t dlid) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set dlid: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->dlid = dlid;
-
-    return DOCA_SUCCESS;
-}
-
-uint32_t doca_verbs_ah_get_dlid(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get dlid: parameter verbs_ah is NULL");
-        return 0;
-    }
-
-    return verbs_ah->dlid;
-}
-
-doca_error_t doca_verbs_ah_attr_set_sl(struct doca_verbs_ah_attr *verbs_ah, uint8_t sl) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set sl: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->sl = sl;
-
-    return DOCA_SUCCESS;
-}
-
-uint8_t doca_verbs_ah_get_sl(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get sl: parameter verbs_ah is NULL");
-        return 0;
-    }
-
-    return verbs_ah->sl;
-}
-
-doca_error_t doca_verbs_ah_attr_set_sgid_index(struct doca_verbs_ah_attr *verbs_ah,
-                                               uint8_t sgid_index) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set sgid_index: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->sgid_index = sgid_index;
-
-    return DOCA_SUCCESS;
-}
-
-uint8_t doca_verbs_ah_get_sgid_index(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get sgid_index: parameter verbs_ah is NULL");
-        return 0;
-    }
-
-    return verbs_ah->sgid_index;
-}
-
-doca_error_t doca_verbs_ah_attr_set_static_rate(struct doca_verbs_ah_attr *verbs_ah,
-                                                uint8_t static_rate) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set static_rate: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->static_rate = static_rate;
-
-    return DOCA_SUCCESS;
-}
-
-uint8_t doca_verbs_ah_get_static_rate(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get static_rate: parameter verbs_ah is NULL");
-        return 0;
-    }
-
-    return verbs_ah->static_rate;
-}
-
-doca_error_t doca_verbs_ah_attr_set_hop_limit(struct doca_verbs_ah_attr *verbs_ah,
-                                              uint8_t hop_limit) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set hop_limit: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->hop_limit = hop_limit;
-
-    return DOCA_SUCCESS;
-}
-
-uint8_t doca_verbs_ah_get_hop_limit(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get hop_limit: parameter verbs_ah is NULL");
-        return 0;
-    }
-
-    return verbs_ah->hop_limit;
-}
-
-doca_error_t doca_verbs_ah_attr_set_traffic_class(struct doca_verbs_ah_attr *verbs_ah,
-                                                  uint8_t traffic_class) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set traffic_class: parameter verbs_ah is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    verbs_ah->traffic_class = traffic_class;
-
-    return DOCA_SUCCESS;
-}
-
-uint8_t doca_verbs_ah_get_traffic_class(const struct doca_verbs_ah_attr *verbs_ah) {
-    if (verbs_ah == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get traffic_class: parameter verbs_ah is NULL");
-        return 0;
-    }
-
-    return verbs_ah->traffic_class;
-}
-
-doca_error_t doca_verbs_qp_create(struct ibv_context *context,
-                                  struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
-                                  struct doca_verbs_qp **verbs_qp) {
-    if (context == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create verbs_qp: parameter context is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create verbs_qp: parameter verbs_qp_init_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (verbs_qp == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to create verbs_qp: parameter verbs_qp is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
+    attr_->type = DOCA_VERBS_SDK_LIB_TYPE_OPEN;
 
     try {
-        *verbs_qp = new doca_verbs_qp(context, *verbs_qp_init_attr);
-        DOCA_LOG(LOG_INFO, "IB Verbs Context %p: verbs_qp=%p was created", context, *verbs_qp);
+        attr_->open = new doca_verbs_ah_attr_open();
+        DOCA_LOG(LOG_INFO, "doca_verbs_verbs_ah_open=%p was created", attr_);
+        attr_->open->is_global = 1;
+        (*ah_attr) = attr_;
         return DOCA_SUCCESS;
-    } catch (doca_error_t err) {
-        return err;
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "doca_verbs_verbs_ah_open allocation failed");
+        goto exit_error;
     }
 
-    return DOCA_SUCCESS;
+exit_error:
+    if (attr_ != nullptr) {
+        if (attr_->open) delete attr_->open;
+        free(attr_);
+    }
+
+    return DOCA_ERROR_INITIALIZATION;
 }
 
-doca_error_t doca_verbs_qp_destroy(struct doca_verbs_qp *verbs_qp) {
-    if (verbs_qp == nullptr) {
-        DOCA_LOG(LOG_INFO, "Failed to destroy verbs_qp: parameter verbs_qp is NULL");
+doca_error_t doca_verbs_ah_attr_destroy(doca_verbs_ah_attr_t *ah_attr) {
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy ah_attr: parameter ah_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    auto status = verbs_qp->destroy();
-    if (status != DOCA_SUCCESS) {
-        DOCA_LOG(LOG_INFO, "Failed to destroy verbs_qp.");
-        return status;
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_destroy(ah_attr->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            ah_attr->sdk = nullptr;
+            goto exit;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            status = DOCA_ERROR_UNEXPECTED;
+            goto exit;
+        }
     }
 
-    delete (verbs_qp);
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto exit;
+    }
+
+exit:
+    if (ah_attr->open) delete ah_attr->open;
+    memset(ah_attr, 0, sizeof(doca_verbs_ah_attr_t));
+    free(ah_attr);
+
+    return status;
+}
+
+doca_error_t doca_verbs_ah_attr_set_gid(doca_verbs_ah_attr_t *ah_attr, struct doca_verbs_gid gid) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set gid: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_gid(ah_attr->sdk, gid);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->gid = gid;
+
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_modify(struct doca_verbs_qp *verbs_qp,
-                                  struct doca_verbs_qp_attr *verbs_qp_attr, int attr_mask) {
+doca_error_t doca_verbs_ah_attr_set_addr_type(doca_verbs_ah_attr_t *ah_attr,
+                                              enum doca_verbs_addr_type addr_type) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set addr_type: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_addr_type(ah_attr->sdk, addr_type);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->addr_type = addr_type;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_ah_attr_set_dlid(doca_verbs_ah_attr_t *ah_attr, uint32_t dlid) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set dlid: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_dlid(ah_attr->sdk, dlid);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->dlid = dlid;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_ah_attr_set_sl(doca_verbs_ah_attr_t *ah_attr, uint8_t sl) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set sl: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_sl(ah_attr->sdk, sl);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->sl = sl;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_ah_attr_set_sgid_index(doca_verbs_ah_attr_t *ah_attr, uint8_t sgid_index) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set sgid_index: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_sgid_index(ah_attr->sdk, sgid_index);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->sgid_index = sgid_index;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_ah_attr_set_static_rate(doca_verbs_ah_attr_t *ah_attr,
+                                                uint8_t static_rate) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set static_rate: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_static_rate(ah_attr->sdk, static_rate);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->static_rate = static_rate;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_ah_attr_set_hop_limit(doca_verbs_ah_attr_t *ah_attr, uint8_t hop_limit) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set hop_limit: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_hop_limit(ah_attr->sdk, hop_limit);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->hop_limit = hop_limit;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_ah_attr_set_traffic_class(doca_verbs_ah_attr_t *ah_attr,
+                                                  uint8_t traffic_class) {
+    if (ah_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set traffic_class: parameter ah_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ah_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_ah_attr_set_traffic_class(ah_attr->sdk, traffic_class);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (ah_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    ah_attr->open->traffic_class = traffic_class;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_create(doca_dev_t *net_dev, doca_verbs_qp_init_attr_t *qp_init_attr,
+                                  doca_verbs_qp_t **verbs_qp) {
+    doca_verbs_qp_t *qp_ = nullptr;
+
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to create qp: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_ = (doca_verbs_qp_t *)calloc(1, sizeof(doca_verbs_qp_t));
+    if (qp_ == nullptr) {
+        DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_verbs_qp_t", __func__);
+        return DOCA_ERROR_NO_MEMORY;
+    }
+
+    /* Try with DOCA SDK first */
+    auto err = doca_verbs_sdk_wrapper_qp_create(net_dev, qp_init_attr, &(qp_->sdk));
+    if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+        DOCA_LOG(LOG_INFO, "Use DOCA Verbs qp SDK", __func__);
+        qp_->type = DOCA_VERBS_SDK_LIB_TYPE_SDK;
+        (*verbs_qp) = qp_;
+        return DOCA_SUCCESS;
+    } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+        DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+        goto exit_error;
+    }
+
+    /* In case of DOCA_SDK_WRAPPER_NOT_FOUND or DOCA_SDK_WRAPPER_NOT_SUPPORTED, just rely on open
+     * version */
+    DOCA_LOG(LOG_INFO, "Use DOCA Verbs qp open", __func__);
+
+    qp_->type = DOCA_VERBS_SDK_LIB_TYPE_OPEN;
+
+    try {
+        qp_->open = new doca_verbs_qp_open(net_dev->open->get_ctx(), qp_init_attr->open);
+        DOCA_LOG(LOG_INFO, "doca_verbs_qp_open=%p was created", qp_);
+        (*verbs_qp) = qp_;
+        return DOCA_SUCCESS;
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "doca_verbs_qp_open allocation failed");
+        goto exit_error;
+    }
+
+exit_error:
+    if (qp_ != nullptr) {
+        if (qp_->open) delete qp_->open;
+        free(qp_);
+    }
+
+    return DOCA_ERROR_INITIALIZATION;
+}
+
+doca_error_t doca_verbs_qp_destroy(doca_verbs_qp_t *verbs_qp) {
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (verbs_qp == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy verbs_qp: parameter verbs_qp is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_destroy(verbs_qp->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            verbs_qp->sdk = nullptr;
+            goto exit;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            status = DOCA_ERROR_UNEXPECTED;
+            goto exit;
+        }
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        status = DOCA_ERROR_INVALID_VALUE;
+        goto exit;
+    }
+
+    status = verbs_qp->open->destroy();
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to destroy qp.");
+        goto exit;
+    }
+
+exit:
+    if (verbs_qp->open) delete verbs_qp->open;
+    memset(verbs_qp, 0, sizeof(doca_verbs_qp_t));
+    free(verbs_qp);
+
+    return status;
+}
+
+doca_error_t doca_verbs_qp_modify(doca_verbs_qp_t *verbs_qp, doca_verbs_qp_attr_t *qp_attr,
+                                  int attr_mask) {
     if (verbs_qp == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to modify verbs_qp: parameter verbs_qp is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to modify verbs_qp: parameter verbs_qp_attr is NULL");
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to modify verbs_qp: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
-    if (!verbs_qp->is_qp_attr_valid(verbs_qp_attr, attr_mask)) {
+
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_modify(verbs_qp->sdk, qp_attr, attr_mask);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (!verbs_qp->open->is_qp_attr_valid(qp_attr->open, attr_mask)) {
         DOCA_LOG(LOG_ERR, "Failed to modify verbs_qp: some QP attributes values are invalid");
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -2762,38 +3513,38 @@ doca_error_t doca_verbs_qp_modify(struct doca_verbs_qp *verbs_qp,
     doca_verbs_qp_state current_state;
     doca_verbs_qp_state next_state;
     if (!(attr_mask & DOCA_VERBS_QP_ATTR_CURRENT_STATE))
-        current_state = verbs_qp->get_current_state();
+        current_state = verbs_qp->open->get_current_state();
     else
-        current_state = verbs_qp_attr->current_state;
+        current_state = qp_attr->open->current_state;
     if (!(attr_mask & DOCA_VERBS_QP_ATTR_NEXT_STATE))
         next_state = current_state;
     else
-        next_state = verbs_qp_attr->next_state;
+        next_state = qp_attr->open->next_state;
 
     switch (next_state) {
         case DOCA_VERBS_QP_STATE_RST:
-            return verbs_qp->qp2rst(*verbs_qp_attr, attr_mask);
+            return verbs_qp->open->qp2rst(qp_attr->open, attr_mask);
         case DOCA_VERBS_QP_STATE_INIT:
             if (current_state == DOCA_VERBS_QP_STATE_RST)
-                return verbs_qp->rst2init(*verbs_qp_attr, attr_mask);
+                return verbs_qp->open->rst2init(qp_attr->open, attr_mask);
             else if (current_state == DOCA_VERBS_QP_STATE_INIT)
-                return verbs_qp->init2init(*verbs_qp_attr, attr_mask);
+                return verbs_qp->open->init2init(qp_attr->open, attr_mask);
             else
                 goto invalid_input;
         case DOCA_VERBS_QP_STATE_RTR:
             if (current_state == DOCA_VERBS_QP_STATE_INIT)
-                return verbs_qp->init2rtr(*verbs_qp_attr, attr_mask);
+                return verbs_qp->open->init2rtr(qp_attr->open, attr_mask);
             else
                 goto invalid_input;
         case DOCA_VERBS_QP_STATE_RTS:
             if (current_state == DOCA_VERBS_QP_STATE_RTR)
-                return verbs_qp->rtr2rts(*verbs_qp_attr, attr_mask);
+                return verbs_qp->open->rtr2rts(qp_attr->open, attr_mask);
             else if (current_state == DOCA_VERBS_QP_STATE_RTS)
-                return verbs_qp->rts2rts(*verbs_qp_attr, attr_mask);
+                return verbs_qp->open->rts2rts(qp_attr->open, attr_mask);
             else
                 goto invalid_input;
         case DOCA_VERBS_QP_STATE_ERR:
-            return verbs_qp->qp2err(*verbs_qp_attr, attr_mask);
+            return verbs_qp->open->qp2err(qp_attr->open, attr_mask);
         default:
             DOCA_LOG(LOG_ERR, "Failed to modify verbs_qp: invalid next_state");
             return DOCA_ERROR_INVALID_VALUE;
@@ -2805,49 +3556,187 @@ invalid_input:
     return DOCA_ERROR_INVALID_VALUE;
 }
 
-doca_error_t doca_verbs_qp_query(struct doca_verbs_qp *verbs_qp,
-                                 struct doca_verbs_qp_attr *verbs_qp_attr,
-                                 struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
+doca_error_t doca_verbs_qp_query(doca_verbs_qp_t *verbs_qp, doca_verbs_qp_attr_t *qp_attr,
+                                 doca_verbs_qp_init_attr_t *qp_init_attr, int *attr_mask) {
     if (verbs_qp == nullptr) {
         DOCA_LOG(LOG_ERR, "Failed to query verbs_qp: parameter verbs_qp is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
-    if (verbs_qp_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to query verbs_qp: parameter verbs_qp_attr is NULL");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to query verbs_qp: parameter verbs_qp_init_attr is NULL");
+
+    if (qp_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to query verbs_qp: parameter qp_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    return verbs_qp->query_qp(*verbs_qp_attr, *verbs_qp_init_attr);
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to query verbs_qp: parameter qp_init_attr is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_query(verbs_qp->sdk, qp_attr, qp_init_attr, attr_mask);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    return verbs_qp->open->query_qp(qp_attr->open, qp_init_attr->open);
 }
 
-uint32_t doca_verbs_qp_get_qpn(const struct doca_verbs_qp *verbs_qp) { return verbs_qp->get_qpn(); }
+doca_error_t doca_verbs_qp_get_qpn(const doca_verbs_qp_t *verbs_qp, uint32_t *qpn) {
+    if (verbs_qp == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_qpn: parameter verbs_qp is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
 
-void *doca_verbs_qp_get_dbr_addr(const struct doca_verbs_qp *verbs_qp) {
-    return verbs_qp->get_dbr_addr();
+    if (qpn == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_qpn: parameter qpn is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_get_qpn(verbs_qp->sdk, qpn);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *qpn = verbs_qp->open->get_qpn();
+
+    return DOCA_SUCCESS;
 }
 
-void *doca_verbs_qp_get_uar_addr(const struct doca_verbs_qp *verbs_qp) {
-    return verbs_qp->get_uar_addr();
+doca_error_t doca_verbs_qp_get_dbr_addr(const doca_verbs_qp_t *verbs_qp, void **dbr_addr) {
+    if (verbs_qp == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_dbr_addr: parameter verbs_qp is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (dbr_addr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_dbr_addr: parameter qpn is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_get_dbr_addr(verbs_qp->sdk, dbr_addr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *dbr_addr = verbs_qp->open->get_dbr_addr();
+
+    return DOCA_SUCCESS;
 }
 
-void doca_verbs_qp_get_wq(const struct doca_verbs_qp *verbs_qp, void **sq_buf,
-                          uint32_t *sq_num_entries, void **rq_buf, uint32_t *rq_num_entries,
-                          uint32_t *rwqe_size_bytes) {
-    *sq_buf = verbs_qp->get_sq_buf();
-    *rq_buf = verbs_qp->get_rq_buf();
-    *sq_num_entries = verbs_qp->get_sq_size_wqebb();
-    *rq_num_entries = verbs_qp->get_rq_size();
-    *rwqe_size_bytes = verbs_qp->get_rcv_wqe_size();
+doca_error_t doca_verbs_qp_get_uar_addr(const doca_verbs_qp_t *verbs_qp, void **uar_addr) {
+    if (verbs_qp == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_uar_addr: parameter verbs_qp is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (uar_addr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_uar_addr: parameter qpn is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_get_uar_addr(verbs_qp->sdk, uar_addr);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *uar_addr = verbs_qp->open->get_uar_addr();
+
+    return DOCA_SUCCESS;
 }
 
-doca_error_t doca_verbs_qp_init_attr_set_srq(struct doca_verbs_qp_init_attr *verbs_qp_init_attr,
+doca_error_t doca_verbs_qp_get_wq(const doca_verbs_qp_t *verbs_qp, void **sq_buf,
+                                  uint32_t *sq_num_entries, void **rq_buf, uint32_t *rq_num_entries,
+                                  uint32_t *rwqe_size_bytes) {
+    if (verbs_qp == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_wq: parameter verbs_qp is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (sq_buf == nullptr || sq_num_entries == nullptr || rq_buf == nullptr ||
+        rq_num_entries == nullptr || rwqe_size_bytes == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get_wq: some input parameter is NULL");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_verbs_sdk_wrapper_qp_get_wq(verbs_qp->sdk, sq_buf, sq_num_entries, rq_buf,
+                                                    rq_num_entries, rwqe_size_bytes);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid input parameters.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *sq_buf = verbs_qp->open->get_sq_buf();
+    *rq_buf = verbs_qp->open->get_rq_buf();
+    *sq_num_entries = verbs_qp->open->get_sq_size_wqebb();
+    *rq_num_entries = verbs_qp->open->get_rq_size();
+    *rwqe_size_bytes = verbs_qp->open->get_rcv_wqe_size();
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_verbs_qp_init_attr_set_srq(doca_verbs_qp_init_attr_t *qp_init_attr,
                                              struct doca_verbs_srq *srq) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to set srq: parameter verbs_qp_init_attr is NULL");
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to set srq: parameter qp_init_attr is NULL");
         return DOCA_ERROR_INVALID_VALUE;
     }
     if (srq == nullptr) {
@@ -2855,26 +3744,36 @@ doca_error_t doca_verbs_qp_init_attr_set_srq(struct doca_verbs_qp_init_attr *ver
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    verbs_qp_init_attr->srq = srq;
+    qp_init_attr->open->srq = srq;
 
     return DOCA_SUCCESS;
 }
 
 struct doca_verbs_srq *doca_verbs_qp_init_attr_get_srq(
-    const struct doca_verbs_qp_init_attr *verbs_qp_init_attr) {
-    if (verbs_qp_init_attr == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to get srq: parameter verbs_qp_init_attr is NULL");
+    const doca_verbs_qp_init_attr_t *qp_init_attr) {
+    if (qp_init_attr == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get srq: parameter qp_init_attr is NULL");
         return nullptr;
     }
 
-    return verbs_qp_init_attr->srq;
+    return qp_init_attr->open->srq;
 }
 
-enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_get_send_dbr_mode(
-    const struct doca_verbs_qp *verbs_qp) {
-    return verbs_qp->get_send_dbr_mode();
-}
+bool doca_verbs_qp_get_emulate_no_dbr_ext(const doca_verbs_qp_t *verbs_qp) {
+    if (verbs_qp == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get emulate_no_dbr_ext: parameter verbs_qp is NULL");
+        return false;
+    }
 
-bool doca_verbs_qp_get_emulate_no_dbr_ext(const struct doca_verbs_qp *verbs_qp) {
-    return verbs_qp->get_emulate_no_dbr_ext();
+    if (verbs_qp->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        DOCA_LOG(LOG_ERR, "Failed to get emulate_no_dbr_ext: not supported by DOCA SDK");
+        return false;
+    }
+
+    if (verbs_qp->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to get emulate_no_dbr_ext: verbs_qp->open is NULL");
+        return false;
+    }
+
+    return verbs_qp->open->get_emulate_no_dbr_ext();
 }

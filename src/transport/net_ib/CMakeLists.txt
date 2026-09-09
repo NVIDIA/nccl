@@ -9,6 +9,7 @@ set(NET_IB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/p2p_resiliency_recovery.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/reg.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/gin.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/wqe_lat_mon.cc
 )
 
 add_subdirectory(gdaki)

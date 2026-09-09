@@ -188,13 +188,11 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t cursor = nPreBytes;
 
-  constexpr int MinWarpPerBlock = 4;
-
 #if __CUDA_ARCH__ >= 1000
   if NCCL_IF_CONSTEXPR (EnableTma) {
     if (alignment % 256 == 0) {
-      constexpr int BytePerPack = 16, UnrollPacks = 16, UnrollPeers = 2;
-      constexpr int BytePerChunk = MinWarpPerBlock * UnrollPacks * WARP_SIZE * BytePerPack;
+      constexpr int BytePerPack = ncclSymkBytePerPack, UnrollPacks = ncclSymkAlign256BDeepUnrollPacks, UnrollPeers = 2;
+      constexpr int BytePerChunk = ncclSymkAlign256BDeepBytePerChunk;
       uint32_t chunks = (nBytes - cursor) / BytePerChunk;
       chunks -= imodFast32(chunks, nBlocks, nBlocks_rcp32);
       if (chunks != 0) {
@@ -202,7 +200,7 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
         bcastDeep<BytePerPack, UnrollPacks, UnrollPeers, EnableTma>(handler, tn, t, waitNeeded, bar,
                                                                     (ncclSymPtr<char>)input + cursor,
                                                                     (ncclSymPtr<char>)output + cursor, inPlace,
-                                                                    chunks * MinWarpPerBlock);
+                                                                    chunks * ncclSymkMinWarpsPerBlock);
         cursor = cursorAfter;
         waitNeeded = false;
       }
@@ -211,8 +209,8 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
 #endif
 
   if (alignment % 16 == 0) {
-    constexpr int BytePerPack = 16, UnrollPacks = 4, UnrollPeers = 2;
-    constexpr int BytePerChunk = MinWarpPerBlock * UnrollPacks * WARP_SIZE * BytePerPack;
+    constexpr int BytePerPack = ncclSymkBytePerPack, UnrollPacks = ncclSymkUnrollPacks, UnrollPeers = 2;
+    constexpr int BytePerChunk = ncclSymkBytePerChunk;
     uint32_t chunks = (nBytes - cursor) / BytePerChunk;
     chunks -= imodFast32(chunks, nBlocks, nBlocks_rcp32);
     if (chunks != 0) {
@@ -220,7 +218,7 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
       bcastDeep<BytePerPack, UnrollPacks, UnrollPeers, EnableTma>(handler, tn, t, waitNeeded, bar,
                                                                   (ncclSymPtr<char>)input + cursor,
                                                                   (ncclSymPtr<char>)output + cursor, inPlace,
-                                                                  chunks * MinWarpPerBlock);
+                                                                  chunks * ncclSymkMinWarpsPerBlock);
       cursor = cursorAfter;
       waitNeeded = false;
     }
@@ -228,14 +226,14 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
 
   if (sizeof(T) == 4 || (sizeof(T) < 4 && alignment % 4 == 0)) {
     constexpr int BytePerPack = 4, UnrollPacks = 4, UnrollPeers = 4;
-    constexpr int BytePerChunk = MinWarpPerBlock * UnrollPacks * WARP_SIZE * BytePerPack;
+    constexpr int BytePerChunk = ncclSymkMinWarpsPerBlock * UnrollPacks * WARP_SIZE * BytePerPack;
     uint32_t chunks = (nBytes - cursor) / BytePerChunk;
     chunks -= imodFast32(chunks, nBlocks, nBlocks_rcp32);
     if (chunks != 0) {
       uintptr_t cursorAfter = cursor + uintptr_t(chunks) * BytePerChunk;
       bcastDeep<(sizeof(T) <= BytePerPack ? BytePerPack : 0), UnrollPacks, UnrollPeers, false>(
         handler, tn, t, waitNeeded, bar, (ncclSymPtr<char>)input + cursor, (ncclSymPtr<char>)output + cursor, inPlace,
-        chunks * MinWarpPerBlock);
+        chunks * ncclSymkMinWarpsPerBlock);
       cursor = cursorAfter;
       waitNeeded = false;
     }
@@ -248,15 +246,22 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
   bcastEnds<UnrollPeers>(handler, tn, t, input, output, inPlace, nElts, nPreBytes / sizeof(T), nSufElts);
 }
 
-template <bool EnableTma>
+template <bool EnableProfiler, bool EnableTma>
 __device__ __forceinline__ void ncclSymkRun_AllGather_ST_impl(ncclSymkDevWorkArgs const* args) {
   ncclSymkArgsHandler handler{args};
   ncclLsaBarrierSession<ncclCoopCta> bar{ncclCoopCta(), handler.comm, ncclTeamTagLsa(), blockIdx.x};
   int const& rank = handler.comm.rank;
 
   bar.arrive(ncclCoopCta(), cuda::memory_order_relaxed);
+  if NCCL_IF_CONSTEXPR (EnableProfiler) {
+    // Finish the opening barrier here so AFTER_OPEN marks the end of the peer sync.
+    // Same barrier ops as the default variant (which fuses the wait into bcast), so
+    // the two stay barrier-compatible when peers disagree on profiling.
+    bar.wait(ncclCoopCta(), cuda::memory_order_acquire);
+    ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
+  }
 
-  bool waitNeeded = true;
+  bool waitNeeded = !EnableProfiler;
   handler.forEachWork<char>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts,
                                            ncclSymPtr<char> input, ncclSymPtr<char> output) {
         // Threads numbered over rank.
@@ -267,24 +272,28 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_ST_impl(ncclSymkDevWorkArg
     waitNeeded = false;
   });
 
+  if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_BEFORE_CLOSE);
   bar.sync(ncclCoopCta(), cuda::memory_order_release);
 }
 
+template <bool EnableProfiler>
 __device__ __forceinline__ void ncclSymkRun_AllGather_ST(ncclSymkDevWorkArgs const* args) {
-  ncclSymkRun_AllGather_ST_impl</*EnableTma=*/false>(args);
+  ncclSymkRun_AllGather_ST_impl<EnableProfiler, /*EnableTma=*/false>(args);
 }
 
+template <bool EnableProfiler>
 __device__ __forceinline__ void ncclSymkRun_AllGather_TmaST(ncclSymkDevWorkArgs const* args) {
-  ncclSymkRun_AllGather_ST_impl</*EnableTma=*/true>(args);
+  ncclSymkRun_AllGather_ST_impl<EnableProfiler, /*EnableTma=*/true>(args);
 }
 
-template <bool EnableTma>
+template <bool EnableProfiler, bool EnableTma>
 __device__ __forceinline__ void ncclSymkRun_AllGather_STMC_impl(ncclSymkDevWorkArgs const* args) {
   ncclSymkArgsHandler handler{args};
   ncclLsaBarrierSession<ncclCoopCta> bar(ncclCoopCta(), handler.comm, ncclTeamTagLsa(), blockIdx.x, /*multimem=*/true);
   int const& rank = handler.comm.rank;
 
   bar.sync(ncclCoopCta(), cuda::memory_order_acquire);
+  if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
   handler.forEachWork<char>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts,
                                            ncclSymPtr<char> input, ncclSymPtr<char> output) {
@@ -295,20 +304,24 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_STMC_impl(ncclSymkDevWorkA
     bcastMultimem<char, EnableTma>(handler, tn, t, input, output + rank * nAllElts, nElts);
   });
 
+  if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_BEFORE_CLOSE);
   bar.sync(ncclCoopCta(), cuda::memory_order_release);
 }
 
+template <bool EnableProfiler>
 __device__ __forceinline__ void ncclSymkRun_AllGather_STMC(ncclSymkDevWorkArgs const* args) {
-  ncclSymkRun_AllGather_STMC_impl</*EnableTma=*/false>(args);
+  ncclSymkRun_AllGather_STMC_impl<EnableProfiler, /*EnableTma=*/false>(args);
 }
 
+template <bool EnableProfiler>
 __device__ __forceinline__ void ncclSymkRun_AllGather_TmaSTMC(ncclSymkDevWorkArgs const* args) {
-  ncclSymkRun_AllGather_STMC_impl</*EnableTma=*/true>(args);
+  ncclSymkRun_AllGather_STMC_impl<EnableProfiler, /*EnableTma=*/true>(args);
 }
 
-template <typename EltType>
-static __device__ void allgather_LL_body(ncclSymkArgsHandler& handler, ncclLLA2ASession<ncclCoopCta>& lla2a,
-                                         EltType* input, EltType* output, int nElts, int nPacks, int nStrideElts) {
+template <bool EnableProfiler, typename EltType>
+static __device__ void allgather_LL_body(ncclSymkDevWorkArgs const* args, ncclSymkArgsHandler& handler,
+                                         ncclLLA2ASession<ncclCoopCta>& lla2a, EltType* input, EltType* output,
+                                         int nElts, int nPacks, int nStrideElts) {
   using Pack = BytePack<8>;
   constexpr int EltPerPack = 8 / sizeof(EltType);
   int const& rank = handler.comm.rank;
@@ -316,6 +329,9 @@ static __device__ void allgather_LL_body(ncclSymkArgsHandler& handler, ncclLLA2A
   int t = threadIdx.x;
   constexpr int tn = ncclSymkMaxThreads;
 
+  // LL fuses the peer sync into the first epoch, so AFTER_OPEN is stamped once, at the
+  // first endEpoch below (see ncclDevProfilerPhases in device.h); BEGIN marks the start.
+  [[maybe_unused]] bool profilerPhase1Done = false;
   NVCC_PRAGMA_UNROLL_DISABLED
   while (0 < nElts) {
     int nIterPacks = min(nPacks, tn);
@@ -381,14 +397,22 @@ static __device__ void allgather_LL_body(ncclSymkArgsHandler& handler, ncclLLA2A
 #endif
 
     lla2a.endEpoch(ncclCoopCta());
+    if NCCL_IF_CONSTEXPR (EnableProfiler) {
+      if (!profilerPhase1Done) {
+        ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
+        profilerPhase1Done = true;
+      }
+    }
 
     input += tn * EltPerPack;
     output += tn * EltPerPack;
     nElts -= tn * EltPerPack;
     nPacks -= tn;
   }
+  if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_BEFORE_CLOSE);
 }
 
+template <bool EnableProfiler>
 static __device__ void ncclSymkRun_AllGather_LL_impl(ncclSymkDevWorkArgs const* args, bool multimem) {
   ncclSymkArgsHandler handler{args};
   ncclLLA2ASession<ncclCoopCta> lla2a(ncclCoopCta(), handler.comm, ncclTeamLsa(handler.comm), handler.lsaLLA2A,
@@ -408,18 +432,20 @@ static __device__ void ncclSymkRun_AllGather_LL_impl(ncclSymkDevWorkArgs const* 
     lowBits |= (uintptr_t)blockOutput;
     if (__builtin_expect(lowBits % 8 == 0, true)) {
           // NOTE: Specializing for 8-byte alignment in one case help at size=65K: 8.9us vs 5.6us
-      allgather_LL_body(handler, lla2a, (BytePack<8>*)blockInput, (BytePack<8>*)blockOutput, nElts / 8, nPacks,
-                        nAllElts / 8);
+      allgather_LL_body<EnableProfiler>(args, handler, lla2a, (BytePack<8>*)blockInput, (BytePack<8>*)blockOutput,
+                                        nElts / 8, nPacks, nAllElts / 8);
     } else {
-      allgather_LL_body(handler, lla2a, blockInput, blockOutput, nElts, nPacks, nAllElts);
+      allgather_LL_body<EnableProfiler>(args, handler, lla2a, blockInput, blockOutput, nElts, nPacks, nAllElts);
     }
   });
 }
 
+template <bool EnableProfiler>
 __device__ __forceinline__ void ncclSymkRun_AllGather_LL(ncclSymkDevWorkArgs const* args) {
-  ncclSymkRun_AllGather_LL_impl(args, /*multimem=*/false);
+  ncclSymkRun_AllGather_LL_impl<EnableProfiler>(args, /*multimem=*/false);
 }
 
+template <bool EnableProfiler>
 __device__ __forceinline__ void ncclSymkRun_AllGather_LLMC(ncclSymkDevWorkArgs const* args) {
-  ncclSymkRun_AllGather_LL_impl(args, /*multimem=*/true);
+  ncclSymkRun_AllGather_LL_impl<EnableProfiler>(args, /*multimem=*/true);
 }

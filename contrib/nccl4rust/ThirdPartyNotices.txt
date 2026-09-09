@@ -1,0 +1,21 @@
+nccl4rust direct third-party dependencies
+==========================================
+
+rust-bindgen
+------------
+Project: https://github.com/rust-lang/rust-bindgen
+Version: 0.71.1
+License: BSD-3-Clause
+Use: build-time generation of the raw NCCL host ABI.
+
+CUDA-Oxide
+----------
+Project: https://github.com/NVlabs/cuda-oxide
+Revision: c9a55dfb5e7c06f17aa8a50c1d17ae8bfa984fda
+License: Apache-2.0
+Use: Rust CUDA device annotations and compilation pipeline.
+
+Cargo resolves additional transitive Rust packages. Their package metadata and
+license files are retained in Cargo's source distribution/cache and should be
+included by any downstream binary distributor according to its normal Rust
+third-party-notice process.

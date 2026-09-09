@@ -10,19 +10,19 @@
 #include "../barrier.h"
 #include "../utility.h"
 
-#if NCCL_CHECK_CUDACC
+#ifdef __CUDACC__
 template <typename Coop>
 struct ncclBarrierSession_internal {
   Coop coop;
   nccl::utility::Optional<ncclGin> gin;
   nccl::utility::Optional<ncclLsaBarrierSession<Coop>> innerLsaBar;
   nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerRailGinBar;
-  nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerWorldGinBar;
+  nccl::utility::Optional<ncclGinBarrierSession<Coop>> outerDenseGinBar;
 
   template <typename GinInit, typename InnerInit, typename OuterInit, typename OuterWorldInit>
   NCCL_DEVICE_INLINE ncclBarrierSession_internal(Coop coop, GinInit ginInit, InnerInit innerInit, OuterInit outerInit,
-                                                 OuterWorldInit outerWorldInit)
-    : coop(coop), gin{ginInit}, innerLsaBar{innerInit}, outerRailGinBar{outerInit}, outerWorldGinBar{outerWorldInit} {}
+                                                 OuterWorldInit outerDenseInit)
+    : coop(coop), gin{ginInit}, innerLsaBar{innerInit}, outerRailGinBar{outerInit}, outerDenseGinBar{outerDenseInit} {}
 };
 #endif
 

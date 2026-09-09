@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+
 # Source files
 set(LIBSRCFILES
     bootstrap.cc
@@ -5,7 +10,6 @@ set(LIBSRCFILES
     ce_coll.cc
     collectives.cc
     debug.cc
-    enqueue.cc
     group.cc
     init.cc
     proxy.cc
@@ -14,6 +18,7 @@ set(LIBSRCFILES
     allocator.cc
     sym_kernels.cc
     dev_runtime.cc
+    cft_dev_runtime.cc
     dev_runtime_segments.cc
     mem_manager.cc
 )
@@ -36,14 +41,17 @@ configure_file(
 )
 
 # Add files from subdirectories
+add_subdirectory(config)
 add_subdirectory(transport)
 add_subdirectory(misc)
 add_subdirectory(register)
 add_subdirectory(graph)
+add_subdirectory(enqueue)
 
 if (NCCL_OS_LINUX)
 add_subdirectory(plugin)
 add_subdirectory(ras)
+add_subdirectory(diagnostics)
 endif()
 
 add_subdirectory(device)
@@ -53,6 +61,7 @@ add_subdirectory(os)
 add_subdirectory(rma)
 add_subdirectory(param)
 add_subdirectory(devcomm)
+add_subdirectory(tuning)
 
 # GIN is Linux-only (requires InfiniBand verbs)
 if(NCCL_OS_LINUX)
@@ -65,10 +74,12 @@ endif()
 
 # Add all source files
 list(APPEND LIBSRCFILES
+    ${CONFIG_SOURCES}
     ${TRANSPORT_SOURCES}
     ${MISC_SOURCES}
     ${REGISTER_SOURCES}
     ${GRAPH_SOURCES}
+    ${ENQUEUE_SOURCES}
     ${PLUGIN_SOURCES}
     ${RAS_SOURCES}
     ${SYM_SOURCES}
@@ -78,11 +89,13 @@ list(APPEND LIBSRCFILES
     ${RMA_SOURCES}
     ${PARAM_SOURCES}
     ${DEVCOMM_SOURCES}
+    ${TUNING_SOURCES}
 )
 
 # Add GIN sources only on Linux
 if(NCCL_OS_LINUX)
     list(APPEND LIBSRCFILES ${GIN_SOURCES})
+    list(APPEND LIBSRCFILES diagnostics.cc ${DIAGNOSTICS_SOURCES})
 endif()
 
 ###################### Create a shared NCCL library ############################
@@ -93,6 +106,9 @@ if(NCCL_OS_WINDOWS)
     target_link_libraries(nccl PRIVATE nccl_device)
 else()
     target_sources(nccl PRIVATE $<TARGET_OBJECTS:nccl_device>)
+endif()
+if(NCCL_OS_LINUX)
+    target_sources(nccl PRIVATE $<TARGET_OBJECTS:nccl_diagnostics_device>)
 endif()
 
 # Include directories; add DOCA only on non-Windows (skip for Windows platform)
@@ -154,10 +170,16 @@ set(NCCL_HEADER_DEPS ${CMAKE_BINARY_DIR}/include/nccl.h ${CMAKE_BINARY_DIR}/incl
 if(NOT NCCL_OS_WINDOWS AND DEVICE_DOCA_HEADERS)
     list(APPEND NCCL_HEADER_DEPS ${DEVICE_DOCA_HEADERS})
 endif()
+if(NOT NCCL_OS_WINDOWS AND DEVICE_EFA_DP_HEADERS)
+    list(APPEND NCCL_HEADER_DEPS ${DEVICE_EFA_DP_HEADERS})
+endif()
 add_custom_target(nccl_header DEPENDS ${NCCL_HEADER_DEPS})
 
 add_dependencies(nccl nccl_header)
 add_dependencies(nccl_device nccl_header)
+if(NCCL_OS_LINUX)
+    add_dependencies(nccl_diagnostics_device nccl_header)
+endif()
 
 # Set version and output name
 # On Windows, use nccl.dll/nccl.lib (no "lib" prefix) so the import library matches what linkers expect
@@ -227,9 +249,11 @@ endif()
 
 ###################### Create a ras binary executable ############################
 if(NOT NCCL_OS_WINDOWS)
-set(RAS_BINSRCFILES ras/client.cc)
+set(RAS_BINSRCFILES ras/client.cc ras/ras_param.cc)
 
 add_executable(ncclras ${RAS_BINSRCFILES})
+
+target_compile_definitions(ncclras PRIVATE NCCL_RAS_CLIENT)
 
 target_include_directories(ncclras
   PUBLIC
@@ -287,6 +311,9 @@ if(NCCL_OS_WINDOWS)
     target_link_libraries(nccl_static PRIVATE nccl_device)
 else()
     target_sources(nccl_static PRIVATE $<TARGET_OBJECTS:nccl_device>)
+endif()
+if(NCCL_OS_LINUX)
+    target_sources(nccl_static PRIVATE $<TARGET_OBJECTS:nccl_diagnostics_device>)
 endif()
 
 # Include directories

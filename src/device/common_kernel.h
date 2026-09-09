@@ -28,6 +28,12 @@ inline __device__ int loadInt(int* ptr) {
   return v;
 }
 
+inline __device__ ssize_t loadSsize(ssize_t* ptr) {
+  ssize_t v;
+  asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(v) : "l"(ptr) : "memory");
+  return v;
+}
+
 template <typename RedFn, typename T, int Unroll, int BytePerPack, int MultimemSrcs, int MinSrcs, int MaxSrcs,
           int MultimemDsts, int MinDsts, int MaxDsts, int PreOpSrcs, typename IntBytes, typename SrcPtrFn,
           typename DstPtrFn>

@@ -19,7 +19,9 @@
 #include "test_common.h"
 #include "../nccl_ep_test_internal.h"
 
-static float bf16_val(nv_bfloat16 v) { return __bfloat162float(v); }
+static float bf16_val(nv_bfloat16 v) {
+    return __bfloat162float(v);
+}
 
 class LifecycleTest : public EpTestBase {
 protected:
@@ -29,54 +31,59 @@ protected:
         std::vector<nv_bfloat16> h_tok(kNumTokens * kHidden);
         for (int i = 0; i < kNumTokens; ++i) {
             float v = static_cast<float>(g_rank * kNumTokens + i + 1);
-            for (int hh = 0; hh < kHidden; ++hh)
-                h_tok[i * kHidden + hh] = __float2bfloat16(v);
+            for (int hh = 0; hh < kHidden; ++hh) h_tok[i * kHidden + hh] = __float2bfloat16(v);
         }
 
         nv_bfloat16 *d_tok, *d_recv, *d_out;
-        float       *d_weights, *d_recv_w;
-        int64_t     *d_recv_idx;
-        EXPECT_EQ(cudaMalloc(&d_tok,      kNumTokens    * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
-        EXPECT_EQ(cudaMalloc(&d_recv,     kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
-        EXPECT_EQ(cudaMalloc(&d_out,      kNumTokens    * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
-        EXPECT_EQ(cudaMalloc(&d_weights,  kNumTokens    * kTopK   * sizeof(float)),       cudaSuccess);
-        EXPECT_EQ(cudaMalloc(&d_recv_w,   kMaxRecvSlots * kTopK   * sizeof(float)),       cudaSuccess);
-        EXPECT_EQ(cudaMalloc(&d_recv_idx, kMaxRecvSlots * kTopK   * sizeof(int64_t)),     cudaSuccess);
-        EXPECT_EQ(cudaMemset(d_recv, 0,   kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
+        float *d_weights, *d_recv_w;
+        int64_t* d_recv_idx;
+        EXPECT_EQ(cudaMalloc(&d_tok, kNumTokens * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
+        EXPECT_EQ(cudaMalloc(&d_recv, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
+        EXPECT_EQ(cudaMalloc(&d_out, kNumTokens * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
+        EXPECT_EQ(cudaMalloc(&d_weights, kNumTokens * kTopK * sizeof(float)), cudaSuccess);
+        EXPECT_EQ(cudaMalloc(&d_recv_w, kMaxRecvSlots * kTopK * sizeof(float)), cudaSuccess);
+        EXPECT_EQ(cudaMalloc(&d_recv_idx, kMaxRecvSlots * kTopK * sizeof(int64_t)), cudaSuccess);
+        EXPECT_EQ(cudaMemset(d_recv, 0, kMaxRecvSlots * kHidden * sizeof(nv_bfloat16)), cudaSuccess);
 
         std::vector<float> h_w(kNumTokens * kTopK, 1.0f);
-        EXPECT_EQ(cudaMemcpy(d_tok,     h_tok.data(), kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyHostToDevice), cudaSuccess);
-        EXPECT_EQ(cudaMemcpy(d_weights, h_w.data(),   kNumTokens*kTopK*sizeof(float),         cudaMemcpyHostToDevice), cudaSuccess);
+        EXPECT_EQ(
+            cudaMemcpy(d_tok, h_tok.data(), kNumTokens * kHidden * sizeof(nv_bfloat16), cudaMemcpyHostToDevice),
+            cudaSuccess);
+        EXPECT_EQ(
+            cudaMemcpy(d_weights, h_w.data(), kNumTokens * kTopK * sizeof(float), cudaMemcpyHostToDevice),
+            cudaSuccess);
 
         ncclEpTensor_t *t_tok, *t_recv, *t_out, *t_w, *t_recv_w, *t_recv_idx;
-        EXPECT_EQ(epTensorCreate(&t_tok,      2, ncclBfloat16, d_tok,      kNumTokens,    kHidden), ncclSuccess);
-        EXPECT_EQ(epTensorCreate(&t_recv,     2, ncclBfloat16, d_recv,     kMaxRecvSlots, kHidden), ncclSuccess);
-        EXPECT_EQ(epTensorCreate(&t_out,      2, ncclBfloat16, d_out,      kNumTokens,    kHidden), ncclSuccess);
-        EXPECT_EQ(epTensorCreate(&t_w,        2, ncclFloat32,  d_weights,  kNumTokens,    kTopK),   ncclSuccess);
-        EXPECT_EQ(epTensorCreate(&t_recv_w,   2, ncclFloat32,  d_recv_w,   kMaxRecvSlots, kTopK),   ncclSuccess);
-        EXPECT_EQ(epTensorCreate(&t_recv_idx, 2, ncclInt64,    d_recv_idx, kMaxRecvSlots, kTopK),   ncclSuccess);
+        EXPECT_EQ(epTensorCreate(&t_tok, 2, ncclBfloat16, d_tok, kNumTokens, kHidden), ncclSuccess);
+        EXPECT_EQ(epTensorCreate(&t_recv, 2, ncclBfloat16, d_recv, kMaxRecvSlots, kHidden), ncclSuccess);
+        EXPECT_EQ(epTensorCreate(&t_out, 2, ncclBfloat16, d_out, kNumTokens, kHidden), ncclSuccess);
+        EXPECT_EQ(epTensorCreate(&t_w, 2, ncclFloat32, d_weights, kNumTokens, kTopK), ncclSuccess);
+        EXPECT_EQ(epTensorCreate(&t_recv_w, 2, ncclFloat32, d_recv_w, kMaxRecvSlots, kTopK), ncclSuccess);
+        EXPECT_EQ(epTensorCreate(&t_recv_idx, 2, ncclInt64, d_recv_idx, kMaxRecvSlots, kTopK), ncclSuccess);
 
-        ncclEpDispatchInputs_t  d_in  = NCCL_EP_DISPATCH_INPUTS_INIT;
+        ncclEpDispatchInputs_t d_in = NCCL_EP_DISPATCH_INPUTS_INIT;
         ncclEpDispatchOutputs_t d_out_s = NCCL_EP_DISPATCH_OUTPUTS_INIT;
-        d_in.tokens         = t_tok;
-        d_in.topk_weights   = t_w;
-        d_out_s.tokens       = t_recv;
+        d_in.tokens = t_tok;
+        d_in.topk_weights = t_w;
+        d_out_s.tokens = t_recv;
         d_out_s.topk_weights = t_recv_w;
-        d_out_s.topk_idx     = t_recv_idx;
+        d_out_s.topk_idx = t_recv_idx;
         ncclEpDispatchConfig_t dcfg = NCCL_EP_DISPATCH_CONFIG_INIT;
         EXPECT_EQ(ncclEpDispatch(handle, &d_in, &d_out_s, nullptr, &dcfg, g_stream), ncclSuccess);
         EXPECT_EQ(ncclEpComplete(handle, nullptr, g_stream), ncclSuccess);
         EXPECT_EQ(cudaStreamSynchronize(g_stream), cudaSuccess);
 
-        ncclEpCombineInputs_t  c_in  = NCCL_EP_COMBINE_INPUTS_INIT;
+        ncclEpCombineInputs_t c_in = NCCL_EP_COMBINE_INPUTS_INIT;
         ncclEpCombineOutputs_t c_out_s = NCCL_EP_COMBINE_OUTPUTS_INIT;
-        c_in.tokens   = t_recv;
+        c_in.tokens = t_recv;
         c_out_s.tokens = t_out;
         EXPECT_EQ(ncclEpCombine(handle, &c_in, &c_out_s, nullptr, g_stream), ncclSuccess);
         EXPECT_EQ(cudaStreamSynchronize(g_stream), cudaSuccess);
 
         std::vector<nv_bfloat16> h_out(kNumTokens * kHidden);
-        EXPECT_EQ(cudaMemcpy(h_out.data(), d_out, kNumTokens*kHidden*sizeof(nv_bfloat16), cudaMemcpyDeviceToHost), cudaSuccess);
+        EXPECT_EQ(
+            cudaMemcpy(h_out.data(), d_out, kNumTokens * kHidden * sizeof(nv_bfloat16), cudaMemcpyDeviceToHost),
+            cudaSuccess);
 
         ncclEpTensorDestroy(t_tok);
         ncclEpTensorDestroy(t_recv);
@@ -84,12 +91,15 @@ protected:
         ncclEpTensorDestroy(t_w);
         ncclEpTensorDestroy(t_recv_w);
         ncclEpTensorDestroy(t_recv_idx);
-        cudaFree(d_tok); cudaFree(d_recv); cudaFree(d_out);
-        cudaFree(d_weights); cudaFree(d_recv_w); cudaFree(d_recv_idx);
+        cudaFree(d_tok);
+        cudaFree(d_recv);
+        cudaFree(d_out);
+        cudaFree(d_weights);
+        cudaFree(d_recv_w);
+        cudaFree(d_recv_idx);
 
         std::vector<float> vals(kNumTokens);
-        for (int i = 0; i < kNumTokens; ++i)
-            vals[i] = bf16_val(h_out[i * kHidden]);
+        for (int i = 0; i < kNumTokens; ++i) vals[i] = bf16_val(h_out[i * kHidden]);
         return vals;
     }
 };
@@ -158,9 +168,7 @@ TEST_F(LifecycleTest, CallerOwnedHandleMem) {
     CUDA_ASSERT(cudaMalloc(&d_handle_mem, handle_mem_bytes));
 
     ncclEpTensor_t* t_handle_mem = nullptr;
-    NCCL_ASSERT(epTensorCreate(&t_handle_mem, 1, ncclUint8,
-                                   d_handle_mem,
-                                   static_cast<unsigned int>(handle_mem_bytes)));
+    NCCL_ASSERT(epTensorCreate(&t_handle_mem, 1, ncclUint8, d_handle_mem, static_cast<unsigned int>(handle_mem_bytes)));
 
     ncclEpHandle_t h = nullptr;
     NCCL_ASSERT(ncclEpInitHandle(&h, g_ep_group, NCCL_EP_LAYOUT_FLAT, nullptr, kTopK, t_handle_mem));
@@ -191,8 +199,7 @@ TEST_F(LifecycleTest, MultiIterHandleReuse) {
         auto combined = run_dispatch_combine_flat(h);
         for (int i = 0; i < kNumTokens; ++i) {
             float expected = static_cast<float>(g_rank * kNumTokens + i + 1);
-            EXPECT_NEAR(combined[i], expected, 0.5f)
-                << "iter " << iter << " rank " << g_rank << " token " << i;
+            EXPECT_NEAR(combined[i], expected, 0.5f) << "iter " << iter << " rank " << g_rank << " token " << i;
         }
     }
 

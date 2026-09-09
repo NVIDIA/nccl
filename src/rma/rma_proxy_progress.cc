@@ -9,6 +9,7 @@
 #include "checks.h"
 #include "compiler.h"
 #include "comm.h"
+#include "rma/rma.h"
 #include "rma/rma_proxy.h"
 
 // Helper functions to manage request credits
@@ -21,11 +22,11 @@ static ncclResult_t ncclRmaProxyIssuePutSignal(ncclRma_t* ncclRma, struct ncclRm
                                                struct ncclRmaPutSignalOp* ps) {
   if (ps->signal.op == 0) {
     NCCLCHECK(ncclRma->iput(ctx->rmaCtx, 0, ps->srcOff, ps->srcHandle, ps->size, ps->dstOff, ps->dstHandle,
-                            ps->targetRank, &ps->request));
+                            ps->targetRank, /*optFlags*/ 0, &ps->request));
   } else {
     NCCLCHECK(ncclRma->iputSignal(ctx->rmaCtx, 0, ps->srcOff, ps->srcHandle, ps->size, ps->dstOff, ps->dstHandle,
                                   ps->targetRank, ps->signal.offset, ps->signal.signalMhandle, ps->signal.val,
-                                  ps->signal.op, /*isStrongSignal*/ true, &ps->request));
+                                  ps->signal.op, /*isStrongSignal*/ true, /*optFlags*/ 0, &ps->request));
   }
   // Defensive: RMA proxy iput/iputSignal should return a non-NULL request with inflightReqeusts checked.
   if (ps->request == nullptr) {
@@ -155,7 +156,7 @@ static ncclResult_t ncclRmaProxyFlushNicGpuPath(ncclRma_t* ncclRma, struct ncclR
   void* request = nullptr;
   size_t flushOff = (size_t)ctx->comm->rank * sizeof(uint64_t);
   NCCLCHECK(ncclRma->iput(ctx->rmaCtx, 0, flushOff, ctx->flushBufMhandle, sizeof(uint64_t), flushOff,
-                          ctx->flushBufMhandle, ctx->comm->rank, &request));
+                          ctx->flushBufMhandle, ctx->comm->rank, /*optFlags*/ 0, &request));
   int done = 0;
   while (!done) {
     NCCLCHECK(ncclRma->test(ctx->rmaCollComm, request, &done));
@@ -235,8 +236,9 @@ static ncclResult_t ncclRmaProxyPollPersistDesc(ncclRma_t* ncclRma, struct ncclR
         bool signalsAllArrived = true;
         for (int i = 0; i < desc->waitSignal.npeers; i++) {
           int peerRank = desc->waitSignal.waitPeers[i];
-          uint64_t signalVal = COMPILER_ATOMIC_LOAD(&ctx->cpuAccessSignals[peerRank], std::memory_order_acquire);
-          if (signalVal < ctx->cpuAccessSignalsHost[peerRank] + desc->waitSignal.waitSignals[i]) {
+          size_t signalSlot = ncclRmaSignalSlot(ctx->comm->nRanks, desc->waitSignal.waitSignalIdxs[i], peerRank);
+          uint64_t signalVal = COMPILER_ATOMIC_LOAD(&ctx->cpuAccessSignals[signalSlot], std::memory_order_acquire);
+          if (signalVal < ctx->cpuAccessSignalsHost[signalSlot] + desc->waitSignal.waitSignals[i]) {
             signalsAllArrived = false;
             break;
           }
@@ -249,7 +251,8 @@ static ncclResult_t ncclRmaProxyPollPersistDesc(ncclRma_t* ncclRma, struct ncclR
 
           for (int i = 0; i < desc->waitSignal.npeers; i++) {
             int peerRank = desc->waitSignal.waitPeers[i];
-            ctx->cpuAccessSignalsHost[peerRank] += desc->waitSignal.waitSignals[i];
+            size_t signalSlot = ncclRmaSignalSlot(ctx->comm->nRanks, desc->waitSignal.waitSignalIdxs[i], peerRank);
+            ctx->cpuAccessSignalsHost[signalSlot] += desc->waitSignal.waitSignals[i];
           }
 
           COMPILER_ATOMIC_STORE(desc->doneSeq, (uint64_t)1, std::memory_order_release);

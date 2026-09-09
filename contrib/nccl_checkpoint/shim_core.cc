@@ -8,8 +8,6 @@
 
 #include "shim_core.h"
 
-thread_local int ncclDebugNoWarn = 0;
-
 #include <atomic>
 
 namespace nccl_checkpoint {

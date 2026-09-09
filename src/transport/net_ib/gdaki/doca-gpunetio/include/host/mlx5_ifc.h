@@ -3647,7 +3647,7 @@ struct mlx5_ifc_create_qp_in_bits {
 
     struct mlx5_ifc_qpc_bits qpc;
 
-    u8 reserved_at_800[0x40];
+    u8 wq_umem_offset[0x40];
 
     u8 wq_umem_id[0x20];
 

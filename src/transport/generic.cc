@@ -66,12 +66,64 @@ fail:
   goto exit;
 }
 
+// Build a node-major rank order with the supplied transport heads first.
+ncclResult_t ncclTransportInitRankMap(struct ncclComm* comm, int nHeads, const int* heads) {
+  ncclResult_t ret = ncclSuccess;
+  if (comm->denseToUserRank != nullptr) return ncclSuccess;
+
+  int rank = comm->rank;
+  int* userToDenseRank = NULL;
+
+  NCCLCHECKGOTO(ncclCalloc(&userToDenseRank, comm->nRanks), ret, exit);
+  userToDenseRank[rank] = -1;
+
+  for (int h = 0; h < nHeads; h++) {
+    if (heads[h] == rank) userToDenseRank[rank] = h;
+  }
+  if (userToDenseRank[rank] == -1) {
+    int denseLocalRank = nHeads;
+    for (int localRank = 0; localRank < comm->localRank; localRank++) {
+      bool isHead = false;
+      for (int h = 0; h < nHeads; h++) isHead |= comm->rankToLocalRank[heads[h]] == localRank;
+      if (!isHead) denseLocalRank++;
+    }
+    userToDenseRank[rank] = denseLocalRank;
+  }
+  userToDenseRank[rank] += comm->node * comm->localRanks;
+
+  NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, userToDenseRank, sizeof(int)), ret, exit);
+  comm->denseToUserRank = ncclMemoryStackAlloc<int>(&comm->memPermanent, comm->nRanks);
+  for (int r = 0; r < comm->nRanks; r++) {
+    comm->denseToUserRank[userToDenseRank[r]] = r;
+  }
+exit:
+  free(userToDenseRank);
+  return ret;
+}
+
 ncclResult_t ncclTransportPatConnect(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
   if (comm && comm->nRanks > 1) {
-    for (int mask = 1; mask < comm->nRanks; mask <<= 1) {
-      int prevPeer = (comm->rank + mask) % comm->nRanks;
-      int nextPeer = (comm->rank + comm->nRanks - mask) % comm->nRanks;
+    int denseLocalRank = 0;
+    // Connect corresponding NVLS-dense rails across nodes.
+    if (comm->localRanks > 1) {
+      if (!comm->nvlsSupport || comm->channels[0].nvls.nHeads != comm->localRanks ||
+          comm->channels[0].nvls.headRank < 0 || comm->channels[0].nvls.headRank >= comm->localRanks) {
+        goto exit;
+      }
+      denseLocalRank = comm->channels[0].nvls.headRank;
+    }
+
+    for (int mask = 1; mask < comm->nNodes; mask <<= 1) {
+      int prevNode = (comm->node + mask) % comm->nNodes;
+      int numLocalRanks = comm->localRanks;
+      int nextNode = (comm->node + comm->nNodes - mask) % comm->nNodes;
+      int prevPeer = prevNode;
+      int nextPeer = nextNode;
+      if (comm->localRanks > 1) {
+        prevPeer = comm->denseToUserRank[prevNode * numLocalRanks + denseLocalRank];
+        nextPeer = comm->denseToUserRank[nextNode * numLocalRanks + denseLocalRank];
+      }
       for (int c = 0; c < comm->nChannels; c++) {
         NCCLCHECKGOTO(ncclTransportP2pConnect(comm, c, 1, &prevPeer, 1, &nextPeer, 0), ret, fail); // ReduceScatter
       }

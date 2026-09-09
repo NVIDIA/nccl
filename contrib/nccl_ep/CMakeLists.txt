@@ -47,6 +47,7 @@ set(NCCL_EP_LIBDIR "${NCCL_EP_BUILDDIR}/lib")
 # Source files
 set(NCCL_EP_HOST_SRC
     nccl_ep.cc
+    nccl_ep_env.cc
     device/jit/jit_utils.cc
     device/jit/jit_cache.cc
     device/jit/nvcc_compiler.cc
@@ -54,7 +55,7 @@ set(NCCL_EP_HOST_SRC
 )
 
 set(NCCL_EP_DEVICE_SRC
-    device/low_latency.cu
+    device/ll_ep_adapter.cu
     device/hybridep_adapter.cu
 )
 
@@ -118,6 +119,8 @@ set(NCCL_EP_JIT_HEADERS
     device/cuda_compat_shims.cuh
     device/scan_kernel.cuh
     device/macros.cuh
+    device/ll_ep.cuh
+    device/ll_ep_adapter.cuh
 )
 
 file(MAKE_DIRECTORY "${NCCL_EP_JIT_SOURCE_DIR}")

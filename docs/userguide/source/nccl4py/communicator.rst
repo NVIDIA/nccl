@@ -7,8 +7,8 @@ Communicator
 The :py:class:`Communicator` class and its methods, organized by lifecycle
 stage and operation kind:
 
-- :doc:`communicator/class` — the class itself, its constructor, and
-  per-instance properties for identity and device-API capability.
+- :doc:`communicator/class` — the class itself, its constructor, its
+  per-instance properties, and the predefined teams.
 - :doc:`communicator/lifecycle` — creating, splitting, growing, and tearing
   down communicators.
 - :doc:`communicator/collectives` — collective communication methods

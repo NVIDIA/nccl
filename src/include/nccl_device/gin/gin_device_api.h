@@ -12,6 +12,9 @@
 #if NCCL_GIN_GDAKI_ENABLE
 #include "gdaki/gin_gdaki.h"
 #endif
+#if NCCL_GIN_EFA_GDA_ENABLE
+#include "efa_gda/gin_efa_gda.h"
+#endif
 #if NCCL_GIN_PROXY_ENABLE
 #include "proxy/gin_proxy.h"
 #endif

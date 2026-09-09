@@ -4,7 +4,8 @@ Troubleshooting
 
 Use the pages below to narrow the problem down before changing NCCL settings.
 
-* :doc:`troubleshooting/gpu_troubleshooting` covers GPU-to-GPU, GPU-to-NIC, ACS, topology, and multi-node NVLink issues.
+* :doc:`troubleshooting/diagnostics` covers NCCL's built-in diagnostics that can help identify and potentialy fix problems.
+* :doc:`troubleshooting/gpu_troubleshooting` covers GPU-to-GPU, GPU-to-NIC, IOMMU, ACS, topology, and multi-node NVLink issues.
 * :doc:`troubleshooting/networking_troubleshooting` covers interface selection, low-level fabric checks, latency and bandwidth tests, and InfiniBand or RoCE diagnostics.
 * :doc:`troubleshooting/runtime_and_mpi_issues` covers basic error handling, shared-memory and runtime problems, and MPI startup validation.
 * :doc:`troubleshooting/performance_and_tuning` covers baseline performance triage and NCCL tuning knobs to try after system checks look healthy.
@@ -15,6 +16,7 @@ Use the pages below to narrow the problem down before changing NCCL settings.
    :hidden:
    :maxdepth: 1
 
+   troubleshooting/diagnostics
    troubleshooting/gpu_troubleshooting
    troubleshooting/networking_troubleshooting
    troubleshooting/runtime_and_mpi_issues

@@ -10,6 +10,7 @@
 #include "primitives.cuh"
 #include "gin_scratch__types.h"
 
+template <bool EnableProfiler>
 __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct ncclSymkDevWorkArgs const* args) {
   ncclCoopCta cta;
   ncclSymkArgsHandler handler(args);
@@ -25,6 +26,7 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct nc
   const int ringThreads = WARP_SIZE;
 
   bar.sync(cta, cuda::memory_order_acquire, ncclGinFenceLevel::None);
+  if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
   handler.template forEachWorkNoFusion<uint8_t>([&] __device__(size_t nElts, size_t nAllElts, ncclSymPtr<uint8_t> input,
                                                                ncclSymPtr<uint8_t> output) {
@@ -96,5 +98,6 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct nc
   if (threadIdx.x == ringThreads) {
     *localSignalPtr = localSignalValue;
   }
+  if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_BEFORE_CLOSE);
   bar.sync(cta, cuda::memory_order_release, ncclGinFenceLevel::None);
 }

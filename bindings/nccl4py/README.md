@@ -18,6 +18,19 @@ This allows Cython code to call NCCL functions with minimal overhead. The `cyncc
 - **NCCL Library**: Matching CUDA version (nvidia-nccl-cu12 or nvidia-nccl-cu13)
 - **Python**: 3.10 or later
 
+## Namespace Package
+
+`nccl` is a PEP 420 implicit namespace package: nccl4py owns `nccl.bindings` and
+`nccl.core`, and NCCL extension distributions add their own `nccl.<ext>` subpackage.
+Two consequences:
+
+- Install into a real environment, not `pip install --target DIR`. pip cannot merge
+  two distributions into one target directory, so the second one's package payload is
+  silently dropped.
+- `pip uninstall nccl4py` leaves an empty `nccl/` in site-packages, which keeps
+  `import nccl` succeeding as an empty namespace. Remove it by hand if that matters.
+  `uv pip uninstall` is unaffected.
+
 ## Development Setup
 
 ### Prerequisites

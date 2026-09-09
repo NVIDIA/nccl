@@ -23,7 +23,7 @@ __all__ = [
 # CTA (Cooperative Thread Array) Policy flags
 class CTAPolicy(IntFlag):
     """NCCL performance policy for CTA scheduling, used by
-    :py:attr:`NCCLConfig.cta_policy`.
+    :py:attr:`NCCLConfig.cta_policy` and :py:attr:`NCCLCollConfig.cta_policy`.
     """
 
     DEFAULT = 0x00

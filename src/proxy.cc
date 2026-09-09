@@ -2043,7 +2043,12 @@ void* ncclProxyServiceUDS(void* _args) {
 
     if (pollfds[0].revents) {
       // A request was seen on the UDS fd
-      proxyUDSRecvReq(proxyState, pollfds[0].fd);
+      ncclResult_t ret = proxyUDSRecvReq(proxyState, pollfds[0].fd);
+      if (ret != ncclSuccess) {
+        COMPILER_ATOMIC_STORE(&proxyState->asyncResult, ret, std::memory_order_release);
+        COMPILER_ATOMIC_STORE(proxyState->abortFlag, uint32_t(1), std::memory_order_release);
+        break;
+      }
     }
   }
 

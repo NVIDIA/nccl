@@ -324,7 +324,8 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   argsBuf->maxDynamicSmem = maxDynamicSmem;
   // KernelCh-only launches leave the phase bit clear, so the profile variant skips the
   // phase stamps and their fence at runtime.
-  argsBuf->profilerMode = profilerEnabled ? ncclProfilerDeviceMode(headTask->eActivationMask) : ncclDevProfilerModeNone;
+  argsBuf->profilerMode =
+    profilerEnabled ? ncclProfilerDeviceMode(headTask->eActivationMask) : (uint8_t)ncclDevProfilerModeNone;
 
   remainCell = cellPerChannel = DIVUP(DIVUP(totalCount, nMaxChannels), cellCount);
   workRangePtr = argsBuf->getWorkRange();

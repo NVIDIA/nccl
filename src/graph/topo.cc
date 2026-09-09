@@ -868,12 +868,14 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
       if (familyId == 7 && modelId == 0x5B) cpu->cpu.model = NCCL_TOPO_CPU_MODEL_YONGFENG;
     }
   }
+  int nicIndex = 0;
   for (int s = 0; s < xmlCpu->nSubs; s++) {
     struct ncclXmlNode* node = xmlCpu->subs[s];
     if (strcmp(node->name, "pci") == 0) NCCLCHECK(ncclTopoAddPci(node, system, cpu, systemId, numaId));
     if (strcmp(node->name, "nic") == 0) {
       struct ncclTopoNode* nic = NULL;
-      int64_t localNicId = NCCL_TOPO_LOCAL_NIC_ID(numaId, 0);
+      // NICs under <cpu> have no busid, index them to keep several on one NUMA node distinct
+      int64_t localNicId = NCCL_TOPO_LOCAL_NIC_ID(numaId, nicIndex++);
       int64_t id = NCCL_TOPO_ID(systemId, localNicId);
       NCCLCHECK(ncclTopoGetNode(system, &nic, NIC, id));
       if (nic == NULL) {

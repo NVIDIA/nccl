@@ -175,8 +175,9 @@ ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t siz
 }
 
 static ncclResult_t commDeregister(struct ncclComm* comm, bool isGraph, struct ncclReg* reg) {
-  NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
+  NCCLCHECK(CommCheck(comm, isGraph ? "ncclCommGraphDeregister" : "ncclCommDeregister", "comm"));
   struct ncclRegCache* cache = &comm->regCache;
+  ncclResult_t ret = ncclSuccess;
   int slot;
   int saveDev;
   if (reg == NULL) goto exit;
@@ -185,18 +186,20 @@ static ncclResult_t commDeregister(struct ncclComm* comm, bool isGraph, struct n
   for (slot = 0; slot < cache->population && cache->slots[slot] != reg; slot++);
   if (slot == cache->population) {
     WARN("Deregister: Could not find handle");
-    return ncclInvalidUsage;
+    ret = ncclInvalidUsage;
+    goto restore;
   }
   if (isGraph) --reg->graphRefs;
   else --reg->localRefs;
-  if (reg->localRefs || reg->graphRefs) return ncclSuccess;
-  NCCLCHECK(regCleanup(comm, reg));
+  if (reg->localRefs || reg->graphRefs) goto restore;
+  NCCLCHECKGOTO(regCleanup(comm, reg), ret, restore);
   free(reg);
   memmove(cache->slots + slot, cache->slots + slot + 1, (cache->population - slot - 1) * sizeof(struct ncclReg*));
   cache->population -= 1;
+restore:
   CUDACHECK(cudaSetDevice(saveDev));
 exit:
-  return ncclSuccess;
+  return ret;
 }
 
 NCCL_API(ncclResult_t, ncclCommDeregister, const ncclComm_t comm, void* handle);

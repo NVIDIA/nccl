@@ -323,7 +323,7 @@ ncclResult_t ncclTopoFuseXml(struct ncclXml* dst, struct ncclXml* src) {
   NCCLCHECK(xmlFindTag(dst, "system", &topNodeDst));
 
   if (topNodeDst == NULL) {
-    xmlAddTree(dst, NULL, src->nodes);
+    NCCLCHECK(xmlAddTree(dst, NULL, src->nodes));
     return ncclSuccess;
   }
 

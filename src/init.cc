@@ -1765,8 +1765,12 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       comm->globalGinSupport = NCCL_GIN_CONNECTION_RAIL;
     }
   }
-  comm->globalRmaProxySupport = globalRmaPluginSupport && globalCrossNicSupport && globalCuMemGdrSupport;
   isOneLsaTeams = ncclDevrIsOneLsaTeam(comm);
+  comm->globalRmaProxySupport = globalRmaPluginSupport && globalCrossNicSupport && globalCuMemGdrSupport;
+  if (!isOneLsaTeams && comm->globalRmaProxySupport && !ncclCpuAccessibleMemSupported()) {
+    INFO(NCCL_INIT, "RMA proxy is not supported because neither GDRCopy nor cuMem host allocations are available");
+    comm->globalRmaProxySupport = false;
+  }
   comm->symmetricSupport = comm->isAllCudaP2p && ncclParamWinEnable() && ncclCuMemEnable() &&
                            (comm->globalGinSupport != NCCL_GIN_CONNECTION_NONE || isOneLsaTeams);
   comm->hostRmaSupport =

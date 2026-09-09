@@ -120,6 +120,11 @@ extern gdr_t ncclGdrCopy;
 
 #include "alloc.h"
 
+// CPU-accessible control memory can be backed by GDRCopy or cuMem host allocations.
+static inline bool ncclCpuAccessibleMemSupported(bool forceHost = false) {
+  return (ncclGdrCopy && !forceHost) || ncclCuMemHostEnable();
+}
+
 typedef struct gdr_mem_desc {
   void *gdrDevMem;
   void *gdrMap;
@@ -252,11 +257,14 @@ static ncclResult_t allocMemCPUAccessible(T **ptr, T **devPtr, size_t nelem, int
                                           void **gdrHandle, struct ncclMemManager* manager, bool forceHost = false) {
   if (ncclGdrCopy && !forceHost) {
     NCCLCHECK(ncclGdrCudaCalloc(ptr, devPtr, nelem, gdrHandle, manager));
-  } else {
+  } else if (ncclCuMemHostEnable()) {
     NCCLCHECK(ncclCuMemHostAlloc((void **)ptr, NULL, nelem * sizeof(T)));
     memset((void *)*ptr, 0, nelem * sizeof(T));
     *devPtr = *ptr;
     if (gdrHandle) *gdrHandle = NULL;  // Mark as host allocated by nulling GDR handle
+  } else {
+    WARN("CPU-accessible memory allocation requires GDRCopy or cuMem host allocations");
+    return ncclSystemError;
   }
   return ncclSuccess;
 }

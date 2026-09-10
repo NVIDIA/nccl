@@ -452,10 +452,6 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                  ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar,
                  ncclIbDevs[ncclNIbDevs].oooRqSize);
 
-            ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
-            ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
-            ncclIbAsyncThread.detach();
-
             ncclNIbDevs++;
             nPorts++;
           }
@@ -513,6 +509,15 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       vProps.ndevs = 1;
       vProps.devs[0] = d;
       NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
+    }
+    // Start one reader per context only after the device table is complete and sorted.
+    for (int d = 0; d < ncclNIbDevs; d++) {
+      int first = 0;
+      while (first < d && ncclIbDevs[first].context != ncclIbDevs[d].context) first++;
+      if (first != d) continue;
+      ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + d);
+      ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", d);
+      ncclIbAsyncThread.detach();
     }
     char addrline[SOCKET_NAME_MAXLEN + 1];
     INFO(NCCL_INIT | NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "",

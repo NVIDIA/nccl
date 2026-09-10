@@ -165,9 +165,10 @@ static void ncclIbUpdateDeviceSpeed(struct ncclIbDev* dev) {
 std::thread ncclIbAsyncThread;
 void* ncclIbAsyncThreadMain(void* args) {
   struct ncclIbDev* dev = (struct ncclIbDev*)args;
+  struct ibv_context* context = dev->context;
   while (1) {
     struct ibv_async_event event;
-    if (ncclSuccess != wrap_ibv_get_async_event(dev->context, &event)) break;
+    if (ncclSuccess != wrap_ibv_get_async_event(context, &event)) break;
     char* str;
     struct ibv_cq* cq = event.element.cq;    // only valid if CQ error
     struct ibv_qp* qp = event.element.qp;    // only valid if QP error
@@ -177,7 +178,9 @@ void* ncclIbAsyncThreadMain(void* args) {
     case IBV_EVENT_DEVICE_FATAL:
       // the above is device fatal error
       WARN("NET/IB : %s:%d async fatal event: %s", dev->devName, dev->portNum, str);
-      ncclIbDevFatalError(dev);
+      for (int d = 0; d < ncclNIbDevs; d++) {
+        if (ncclIbDevs[d].context == context) ncclIbDevFatalError(ncclIbDevs + d);
+      }
       break;
     case IBV_EVENT_CQ_ERR:
       WARN("NET/IB : %s:%d async fatal event on CQ (%p) handle=%u cqe=%d: %s", dev->devName, dev->portNum, cq,
@@ -206,14 +209,19 @@ void* ncclIbAsyncThreadMain(void* args) {
       WARN("NET/IB : %s:%d async fatal event on SRQ, unused for now (%p): %s", dev->devName, dev->portNum, srq, str);
       break;
     case IBV_EVENT_GID_CHANGE:
-      if (ncclIbEventGidChange(dev) != ncclSuccess) {
-        WARN("NET/IB : %s:%d marking device with fatal error after GID-change event handler failed", dev->devName,
-             dev->portNum);
-        ncclIbDevFatalError(dev);
-      }
-      break;
     case IBV_EVENT_DEVICE_SPEED_CHANGE:
-      ncclIbUpdateDeviceSpeed(dev);
+      // A context can contain multiple ports and Data Direct entries for the same port.
+      for (int d = 0; d < ncclNIbDevs; d++) {
+        struct ncclIbDev* portDev = ncclIbDevs + d;
+        if (portDev->context != context || portDev->portNum != event.element.port_num) continue;
+        if (event.event_type == IBV_EVENT_DEVICE_SPEED_CHANGE) {
+          ncclIbUpdateDeviceSpeed(portDev);
+        } else if (ncclIbEventGidChange(portDev) != ncclSuccess) {
+          WARN("NET/IB : %s:%d marking device with fatal error after GID-change event handler failed",
+               portDev->devName, portDev->portNum);
+          ncclIbDevFatalError(portDev);
+        }
+      }
       break;
     case IBV_EVENT_PATH_MIG_ERR:
     case IBV_EVENT_PORT_ERR:

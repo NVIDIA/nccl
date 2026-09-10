@@ -79,6 +79,11 @@ class WindowFlag(IntFlag):
     """Collective symmetric window registration."""
     STRICT_ORDERING = 0x02
     """Strict ordering for window operations."""
+    GIN_ONLY = 0x04
+    """Register the window for GIN access only (NCCL 2.32+)."""
+    CFT_COUNTED = 0x08
+    """Register the window against counted CFT logical endpoints instead of
+    the default non-counted ones (NCCL 2.32+)."""
 
     # Backward-compat aliases.
     Default = 0x00

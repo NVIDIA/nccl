@@ -47,6 +47,7 @@ __all__ = [  # noqa: RUF022
     "NcclGinType",
     "NcclGinConnectionType",
     "NcclHostCftMode",
+    "NcclNvlsHostMode",
     "NcclCftTeamMode",
     "NcclCftCap",
     "NcclCommMemStat",

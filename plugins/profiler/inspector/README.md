@@ -46,6 +46,12 @@ The build process creates:
 
 ## Using NCCL Inspector
 
+To obtain output, explicitly set `NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS`
+to a non-negative value (for example, `500` for periodic dumping) and leave
+`NCCL_INSPECTOR_DUMP_THREAD_ENABLE=1` (the default). The interval defaults to `-1`,
+which disables the internal dump thread entirely: no output is written, including
+at communicator teardown or finalization.
+
 ### Key Differences from Normal NCCL Usage
 
 The main difference between running NCCL with the Inspector plugin versus running NCCL normally is the addition of environment variables that enable detailed performance logging:
@@ -81,7 +87,7 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=500
 - `NCCL_INSPECTOR_DUMP_THREAD_ENABLE=<0|1>` (default: `1`)
   Enables or disables the internal dump thread.
 - `NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=<interval>` (default: `-1`)
-  Sets the interval (in microseconds) for the internal dump thread to write output. A value of `-1` (default) disables periodic dumping — output is written only at communicator teardown/finalization. A value of `0` enables continuous dumping (dumps as fast as possible). Set to a positive value to enable periodic dumps at the specified interval (e.g., `500` for every 500 µs). When Prometheus mode is enabled (`NCCL_INSPECTOR_PROM_DUMP=1`), a minimum of `30000000` (30 seconds) is enforced to align with the node exporter polling interval.
+  Sets the interval (in microseconds) for the internal dump thread to write output. A value of `-1` (default) disables the internal dump thread entirely, so no output is written; set a non-negative value to obtain output. A value of `0` enables continuous dumping (dumps as fast as possible). Set to a positive value to enable periodic dumps at the specified interval (e.g., `500` for every 500 µs). When Prometheus mode is enabled (`NCCL_INSPECTOR_PROM_DUMP=1`), non-negative intervals are raised to a minimum of `30000000` (30 seconds) to align with the node exporter polling interval; `-1` still disables dumping.
 - `NCCL_INSPECTOR_DUMP_DIR=<output_dir>`
   Sets the output directory for logs. If not set, defaults to `nccl-inspector-unknown-jobid` or `nccl-inspector-<slurm_job_id>` if running under SLURM.
 - `NCCL_INSPECTOR_DUMP_VERBOSE=<0|1>` (default: `0`)

@@ -875,7 +875,7 @@ static void showInspectorEnvVars() {
     {"NCCL_INSPECTOR_ENABLE_PROXY", getenv("NCCL_INSPECTOR_ENABLE_PROXY"), "0", "Enable/disable ProxyOp/ProxyStep tracking"},
     {"NCCL_INSPECTOR_DUMP_PROXY_STEPS", getenv("NCCL_INSPECTOR_DUMP_PROXY_STEPS"), "1", "Emit completed ProxyStep records; callbacks always maintain ProxyOp statistics"},
     {"NCCL_INSPECTOR_DUMP_THREAD_ENABLE", getenv("NCCL_INSPECTOR_DUMP_THREAD_ENABLE"), "1", "Enable/disable dump thread"},
-    {"NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS", getenv("NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS"), "-1", "Dump interval in microseconds (-1 = disabled/dump only at teardown, 0 = continuous, >0 = periodic)"},
+    {"NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS", getenv("NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS"), "-1", "Dump interval in microseconds (-1 = dump thread disabled/no output, 0 = continuous, >0 = periodic)"},
     {"NCCL_INSPECTOR_DUMP_DIR", getenv("NCCL_INSPECTOR_DUMP_DIR"), "(auto-generated)", "Output directory for inspector logs"},
     {"NCCL_INSPECTOR_DUMP_VERBOSE", getenv("NCCL_INSPECTOR_DUMP_VERBOSE"), "0", "Enable/disable verbose dumping (event_trace)"},
     {"NCCL_INSPECTOR_PROM_DUMP", getenv("NCCL_INSPECTOR_PROM_DUMP"), "0", "Enable/disable Prometheus format output dump"},

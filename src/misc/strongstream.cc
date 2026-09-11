@@ -390,48 +390,57 @@ ncclResult_t ncclStreamWaitStream(cudaStream_t a, cudaStream_t b, cudaEvent_t sc
 }
 
 ncclResult_t ncclStreamAdvanceToEvent(struct ncclCudaGraph g, cudaStream_t s, cudaEvent_t e) {
+  ncclResult_t ret = ncclSuccess;
+  cudaStream_t tmp = nullptr;
   if (g.graphId == ULLONG_MAX) {
     CUDACHECK(cudaStreamWaitEvent(s, e, 0));
   } else {
-    cudaStream_t tmp;
-    CUDACHECK(cudaStreamCreateWithFlags(&tmp, cudaStreamNonBlocking));
-    CUDACHECK(cudaStreamWaitEvent(tmp, e, 0));
-
     cudaStreamCaptureStatus status;
     cudaGraphNode_t const* nodes;
     size_t count = 0;
+    cudaError_t res;
+    CUDACHECK(cudaStreamCreateWithFlags(&tmp, cudaStreamNonBlocking));
+    // From here on, every failure must destroy the temporary stream.
+    CUDACHECKGOTO(cudaStreamWaitEvent(tmp, e, 0), ret, fail);
+
 #if CUDART_VERSION >= 13000
-    cudaError_t res = cudaStreamGetCaptureInfo_v3(tmp, &status, nullptr, nullptr, &nodes, nullptr, &count);
+    res = cudaStreamGetCaptureInfo_v3(tmp, &status, nullptr, nullptr, &nodes, nullptr, &count);
 #else
-    cudaError_t res = cudaStreamGetCaptureInfo_v2(tmp, &status, nullptr, nullptr, &nodes, &count);
+    res = cudaStreamGetCaptureInfo_v2(tmp, &status, nullptr, nullptr, &nodes, &count);
 #endif
 
 #if CUDART_VERSION >= 12030
     if (res == cudaErrorLossyQuery) {
       // CUDA is telling us the dependencies have edge annotations.
       cudaGraphEdgeData const* edges;
-      CUDACHECK(cudaStreamGetCaptureInfo_v3(tmp, &status, nullptr, nullptr, &nodes, &edges, &count));
-      CUDACHECK(cudaStreamUpdateCaptureDependencies_v2(s, (cudaGraphNode_t*)nodes, edges, count,
-                                                       cudaStreamSetCaptureDependencies));
+      CUDACHECKGOTO(cudaStreamGetCaptureInfo_v3(tmp, &status, nullptr, nullptr, &nodes, &edges, &count), ret, fail);
+      CUDACHECKGOTO(cudaStreamUpdateCaptureDependencies_v2(s, (cudaGraphNode_t*)nodes, edges, count,
+                                                           cudaStreamSetCaptureDependencies),
+                    ret, fail);
     }
 #else
     if (false) {
     }
 #endif
     else {
-      CUDACHECK(res /* = cudaStreamGetCaptureInfo_v2(...)*/);
+      CUDACHECKGOTO(res /* = cudaStreamGetCaptureInfo_v2(...)*/, ret, fail);
 #if CUDART_VERSION >= 13000
-      CUDACHECK(cudaStreamUpdateCaptureDependencies_v2(s, (cudaGraphNode_t*)nodes, nullptr, count,
-                                                       cudaStreamSetCaptureDependencies));
+      CUDACHECKGOTO(cudaStreamUpdateCaptureDependencies_v2(s, (cudaGraphNode_t*)nodes, nullptr, count,
+                                                           cudaStreamSetCaptureDependencies),
+                    ret, fail);
 #else
-      CUDACHECK(cudaStreamUpdateCaptureDependencies(s, (cudaGraphNode_t*)nodes, count,
-                                                    cudaStreamSetCaptureDependencies));
+      CUDACHECKGOTO(cudaStreamUpdateCaptureDependencies(s, (cudaGraphNode_t*)nodes, count,
+                                                        cudaStreamSetCaptureDependencies),
+                    ret, fail);
 #endif
     }
-
-    CUDACHECK(cudaStreamDestroy(tmp));
   }
-  return ncclSuccess;
+  if (tmp) CUDACHECK(cudaStreamDestroy(tmp));
+exit:
+  return ret;
+fail:
+  if (tmp) (void)cudaStreamDestroy(tmp);
+  goto exit;
 }
 
 ncclResult_t ncclStrongStreamSynchronize(struct ncclStrongStream* ss) {

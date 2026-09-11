@@ -21,7 +21,8 @@ int64_t ncclParamMaxCTAs();
 static ncclResult_t preTuningEnqueueRawTask(struct ncclComm* comm, struct ncclRawTask* raw,
                                             struct ncclTaskTuningInfoQueue* tiq);
 
-static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTaskColl* raw, ncclTuningInput_t* in) {
+static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTaskColl* raw,
+                                        const ncclCollConfig_t* collConfig, ncclTuningInput_t* in) {
   size_t userElementSize;
   size_t sendbuffSize;
   size_t recvbuffSize;
@@ -33,8 +34,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   bool isRecvValid;
 
   in->comm = comm;
-  // disable ce temporarily
-  in->tuningMask = NCCL_TUNING_MASK_SYM_KERNELS | NCCL_TUNING_MASK_GENERAL_KERNELS;
+  in->tuningMask = raw->algMask != 0 ? raw->algMask & ncclCommDefaultAlgoMask(comm) : ncclCommDefaultAlgoMask(comm);
+  in->forceAlgSelection = raw->algMask != 0 ? collConfig->forceAlgSelection : 0;
   in->func = raw->func;
   in->redOp = raw->opHost;
   in->devRedOp = raw->opDev.op;
@@ -58,11 +59,14 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
 
   NCCLCHECK(ncclDevrFindWindow(comm, raw->sendbuff, &sendWin));
   NCCLCHECK(ncclDevrFindWindow(comm, raw->recvbuff, &recvWin));
+  in->winRegType = ncclSymSendNonregRecvNonreg;
   if (sendWin != nullptr || recvWin != nullptr) {
     NCCLCHECK(ncclGetSymRegType(sendWin, recvWin, &in->winRegType));
   }
-  in->nvlsSupport = ncclNvlsTransportEnabled(comm) &&
-                    (ncclNvlsSupported(raw->opDev.op, raw->datatype) || raw->func == ncclFuncAllGather);
+  in->ceAvailable = ncclCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
+  in->hierCeAvailable =
+    ncclHierCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
+  in->nvlsSupport = ncclNvlsTransportEnabled(comm) && (ncclNvlsSupported(raw->opDev.op, raw->datatype) || raw->func == ncclFuncAllGather);
   {
     size_t inputOff = sendWin ? (uintptr_t)raw->sendbuff - (uintptr_t)sendWin->userPtr : (uintptr_t)raw->sendbuff;
     size_t outputOff = recvWin ? (uintptr_t)raw->recvbuff - (uintptr_t)recvWin->userPtr : (uintptr_t)raw->recvbuff;
@@ -79,10 +83,15 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   NCCLCHECK(ncclRegLocalIsValid(regRecvBuf, &isRecvValid));
   in->regBuff = (regSendBuf && regRecvBuf && isSendValid && isRecvValid) ||
                 (ncclCudaGraphValid(comm->planner.capturingGraph) && ncclParamGraphRegister());
-  NCCL_CONFIG_SET(in, minCTAs, ncclParamMinCTAs(), raw->collConfig.minCTAs, comm->config.minCTAs, 1, MAXCHANNELS);
-  NCCL_CONFIG_SET(in, maxCTAs, ncclParamMaxCTAs(), std::min(raw->collConfig.maxCTAs, comm->config.maxCTAs),
-                  comm->config.maxCTAs, 1, MAXCHANNELS);
-  if (in->minCTAs > in->maxCTAs) in->minCTAs = 1;
+  {
+    bool ctaPolicyEnvOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
+    NCCL_CONFIG_SET(in, minCTAs, ncclParamMinCTAs(), collConfig->minCTAs, comm->config.minCTAs, 1, MAXCHANNELS);
+    NCCL_CONFIG_SET(in, maxCTAs, ncclParamMaxCTAs(), std::min(collConfig->maxCTAs, comm->config.maxCTAs),
+                    comm->config.maxCTAs, 1, MAXCHANNELS);
+    if (in->minCTAs > in->maxCTAs) in->minCTAs = 1;
+    in->CTAPolicy =
+      ncclCollConfigResolveCTAPolicy(collConfig->CTAPolicy, comm->config.CTAPolicy, ctaPolicyEnvOverridden);
+  }
   return ncclSuccess;
 }
 
@@ -92,7 +101,8 @@ static ncclResult_t fillSendRecvTuningInput(struct ncclComm* comm, struct ncclRa
   bool isValid;
 
   in->comm = comm;
-  in->tuningMask = NCCL_TUNING_MASK_ALL;
+  in->tuningMask = ncclCommDefaultAlgoMask(comm);
+  in->forceAlgSelection = 0;
   in->func = raw->func;
   in->datatype = raw->datatype;
   in->count = raw->count;
@@ -100,6 +110,8 @@ static ncclResult_t fillSendRecvTuningInput(struct ncclComm* comm, struct ncclRa
   in->nWorks = 1;
   in->numPipeOps = 1;
   in->nBytes = raw->bytes;
+  in->ceAvailable = false;
+  in->hierCeAvailable = false;
 
   NCCLCHECK(ncclRegFind(comm, raw->buff, raw->bytes, &regBuf));
   NCCLCHECK(ncclRegLocalIsValid(regBuf, &isValid));
@@ -109,7 +121,8 @@ static ncclResult_t fillSendRecvTuningInput(struct ncclComm* comm, struct ncclRa
 
 static ncclResult_t fillRmaTuningInput(struct ncclComm* comm, struct ncclRawTaskRma* raw, ncclTuningInput_t* in) {
   in->comm = comm;
-  in->tuningMask = NCCL_TUNING_MASK_ALL;
+  in->tuningMask = ncclCommDefaultAlgoMask(comm);
+  in->forceAlgSelection = 0;
   in->func = raw->func;
   in->nWorks = 1;
   in->numPipeOps = 1;
@@ -125,115 +138,98 @@ static ncclResult_t fillRmaTuningInput(struct ncclComm* comm, struct ncclRawTask
     in->countMax = 0;
     in->nBytes = 0;
   }
+  in->ceAvailable = false;
+  in->hierCeAvailable = false;
   return ncclSuccess;
 }
 
 static ncclResult_t fillAllGatherVTuningInput(struct ncclComm* comm, struct ncclRawTaskAllGatherV* raw,
-                                              ncclTuningInput_t* in) {
-  size_t elementSize = ncclTypeSize(raw->datatype);
-
+                                              const ncclCollConfig_t* collConfig, ncclTuningInput_t* in) {
   in->comm = comm;
-  in->tuningMask = NCCL_TUNING_MASK_ALL;
-  in->func = ncclFuncAllGatherV;
-  in->datatype = raw->datatype;
+  in->tuningMask = raw->algMask != 0 ? raw->algMask & ncclCommDefaultAlgoMask(comm) : ncclCommDefaultAlgoMask(comm);
+  in->forceAlgSelection = raw->algMask != 0 ? collConfig->forceAlgSelection : 0;
+  // AllGatherV uses same tuning as AllGather
+  in->func = ncclFuncAllGather;
+  in->datatype = ncclInt8;
   in->nWorks = 1;
   in->numPipeOps = 1;
   in->count = raw->maxCount;
   in->countMax = raw->maxCount;
-  in->nBytes = raw->maxCount * elementSize;
+  in->nBytes = raw->maxCount;
+  in->ceAvailable = false;
+  in->hierCeAvailable = false;
+  {
+    bool ctaPolicyEnvOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
+    NCCL_CONFIG_SET(in, minCTAs, ncclParamMinCTAs(), collConfig->minCTAs, comm->config.minCTAs, 1, MAXCHANNELS);
+    NCCL_CONFIG_SET(in, maxCTAs, ncclParamMaxCTAs(), std::min(collConfig->maxCTAs, comm->config.maxCTAs),
+                    comm->config.maxCTAs, 1, MAXCHANNELS);
+    if (in->minCTAs > in->maxCTAs) in->minCTAs = 1;
+    in->CTAPolicy =
+      ncclCollConfigResolveCTAPolicy(collConfig->CTAPolicy, comm->config.CTAPolicy, ctaPolicyEnvOverridden);
+  }
   return ncclSuccess;
 }
 
-static ncclResult_t preTuningInitAllGatherVRaw(struct ncclComm* comm, struct ncclRawTask* raw) {
+static ncclResult_t preTuningInitAllGatherVRaw(struct ncclRawTask* raw) {
   struct ncclRawTaskAllGatherV* agv = &raw->allGatherV;
-  int nRanks = comm->nRanks;
 
   raw->kind = ncclTaskKindAllGatherV;
-  agv->func = ncclFuncAllGatherV;
-  agv->nRanks = nRanks;
-  agv->sendbuff = nullptr;
-  agv->recvbuff = ncclMemoryStackAlloc<void*>(&comm->memScoped, nRanks);
-  agv->counts = ncclMemoryStackAlloc<size_t>(&comm->memScoped, nRanks);
+  raw->collConfig = NCCL_COLLCONFIG_INITIALIZER;
+  raw->collConfig.size = 0;
   agv->maxCount = 0;
-  agv->datatype = ncclInt8;
   agv->stream = (cudaStream_t)-1; // invalid stream
+  agv->algMask = 0;
+  NEW_NOTHROW(agv->bcastTasks, ncclRawTaskAllGatherVBcastMap);
   return ncclSuccess;
 }
 
-static bool preTuningAllGatherVRootUsed(struct ncclRawTaskAllGatherV* agv, int root) {
-  return agv->counts[root] != 0;
-}
-
-static ncclResult_t preTuningAddBcastToAllGatherV(struct ncclComm* comm, struct ncclRawTaskAllGatherV* agv,
-                                                  struct ncclRawTaskColl* bcast) {
-  if (bcast->root < 0 || bcast->root >= agv->nRanks) return ncclInvalidArgument;
-
-  agv->stream = bcast->stream;
-  if (bcast->root == comm->rank) agv->sendbuff = bcast->sendbuff;
-  agv->recvbuff[bcast->root] = bcast->recvbuff;
+static ncclResult_t preTuningAddBcastToAllGatherV(struct ncclComm* comm, struct ncclRawTask* agvRaw,
+                                                  struct ncclRawTask* bcastRaw) {
+  struct ncclRawTaskAllGatherV* agv = &agvRaw->allGatherV;
+  struct ncclRawTaskColl* bcast = &bcastRaw->coll;
   size_t count = bcast->count * ncclTypeSize(bcast->datatype);
-  agv->counts[bcast->root] = count;
+  ncclRawTaskAllGatherVBcast contrib;
+
+  if (agv->stream == (cudaStream_t)-1) {
+    agv->stream = bcast->stream;
+  }
+  // Simply use the first bcast's collConfig for now
+  if (bcastRaw->collConfig.size != 0 && agvRaw->collConfig.size == 0) {
+    agvRaw->collConfig = bcastRaw->collConfig;
+    agv->algMask = bcast->algMask != 0 ? bcast->algMask : NCCL_TUNING_MASK_ALL;
+  }
   if (count > agv->maxCount) agv->maxCount = count;
+  contrib.sendbuff = (void*)bcast->sendbuff;
+  contrib.recvbuff = bcast->recvbuff;
+  contrib.count = count;
+  (*agv->bcastTasks)[bcast->root] = contrib;
+  ncclMemoryPoolFree(&comm->memPool_ncclRawTask, bcastRaw);
   return ncclSuccess;
 }
 
-static bool preTuningRawTaskPtrEqual(struct ncclRawTask* a, struct ncclRawTask* b) {
-  return a == b;
-}
-
-static bool preTuningBcastFallsBack(struct ncclRawTaskColl* bcast) {
-  // it is temporary and will be improved in the future
-  return true;
-}
-
-static bool preTuningBcastFitsAllGatherV(struct ncclRawTaskAllGatherV* agv, struct ncclRawTaskColl* bcast) {
-  if (bcast->stream != agv->stream) return false;
-  if (preTuningAllGatherVRootUsed(agv, bcast->root)) return false;
-  return true;
-}
-
-static ncclResult_t preTuningRemoveBcastRawFromQueue(
-  struct ncclComm* comm, struct ncclIntruQueue<struct ncclRawTask, &ncclRawTask::next>* bcastQueue,
-  struct ncclRawTask* bcastRaw, bool freeRaw) {
-  ncclIntruQueueDelete(bcastQueue, bcastRaw, preTuningRawTaskPtrEqual);
-  if (freeRaw) ncclMemoryPoolFree(&comm->memPool_ncclRawTask, bcastRaw);
-  return ncclSuccess;
-}
-
-static ncclResult_t preTuningMergeBcastQueue(struct ncclComm* comm,
-                                             struct ncclIntruQueue<struct ncclRawTask, &ncclRawTask::next>* bcastQueue,
+static ncclResult_t preTuningMergeBcastQueue(struct ncclComm* comm, ncclRawTaskBcastQueueMap* bcastQueue,
                                              struct ncclTaskTuningInfoQueue* tiq) {
-  while (!ncclIntruQueueEmpty(bcastQueue)) {
-    struct ncclRawTask* agvRaw = nullptr;
+  if (bcastQueue == nullptr) return ncclSuccess;
 
-    for (struct ncclRawTask* bcastRaw = ncclIntruQueueHead(bcastQueue); bcastRaw != nullptr;) {
-      struct ncclRawTask* next = bcastRaw->next;
-      struct ncclRawTaskColl* bcast = &bcastRaw->coll;
+  // Each pass builds one AllGatherV by taking a single broadcast from every non-empty root
+  // bucket. Repeat until every bucket is empty.
+  while (!bcastQueue->empty()) {
+    struct ncclRawTask* agvRaw =
+      ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
+    NCCLCHECK(preTuningInitAllGatherVRaw(agvRaw));
 
-      if (preTuningBcastFallsBack(bcast)) {
-        NCCLCHECK(preTuningEnqueueRawTask(comm, bcastRaw, tiq));
-        NCCLCHECK(preTuningRemoveBcastRawFromQueue(comm, bcastQueue, bcastRaw, /*freeRaw=*/false));
-        bcastRaw = next;
+    for (auto it = bcastQueue->begin(); it != bcastQueue->end();) {
+      if (ncclIntruQueueEmpty(&it->second)) {
+        it = bcastQueue->erase(it);
         continue;
       }
-
-      if (agvRaw != nullptr && !preTuningBcastFitsAllGatherV(&agvRaw->allGatherV, bcast)) {
-        bcastRaw = next;
-        continue;
-      }
-
-      if (agvRaw == nullptr) {
-        agvRaw = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
-        NCCLCHECK(preTuningInitAllGatherVRaw(comm, agvRaw));
-      }
-      NCCLCHECK(preTuningAddBcastToAllGatherV(comm, &agvRaw->allGatherV, bcast));
-      NCCLCHECK(preTuningRemoveBcastRawFromQueue(comm, bcastQueue, bcastRaw, /*freeRaw=*/true));
-      bcastRaw = next;
+      struct ncclRawTask* bcastRaw = ncclIntruQueueDequeue(&it->second);
+      NCCLCHECK(preTuningAddBcastToAllGatherV(comm, agvRaw, bcastRaw));
+      if (ncclIntruQueueEmpty(&it->second)) it = bcastQueue->erase(it);
+      else ++it;
     }
 
-    if (agvRaw != nullptr) {
-      NCCLCHECK(preTuningEnqueueRawTask(comm, agvRaw, tiq));
-    }
+    NCCLCHECK(preTuningEnqueueRawTask(comm, agvRaw, tiq));
   }
   return ncclSuccess;
 }
@@ -245,7 +241,7 @@ static ncclResult_t preTuningEnqueueRawTask(struct ncclComm* comm, struct ncclRa
   pt->tuningOut = NCCL_TUNING_RESULT_INIT;
   switch (raw->kind) {
   case ncclTaskKindColl:
-    NCCLCHECK(fillCollTuningInput(comm, &raw->coll, &pt->tuningIn));
+    NCCLCHECK(fillCollTuningInput(comm, &raw->coll, &raw->collConfig, &pt->tuningIn));
     break;
   case ncclTaskKindSendRecv:
     NCCLCHECK(fillSendRecvTuningInput(comm, &raw->sendRecv, &pt->tuningIn));
@@ -254,7 +250,7 @@ static ncclResult_t preTuningEnqueueRawTask(struct ncclComm* comm, struct ncclRa
     NCCLCHECK(fillRmaTuningInput(comm, &raw->rma, &pt->tuningIn));
     break;
   case ncclTaskKindAllGatherV:
-    NCCLCHECK(fillAllGatherVTuningInput(comm, &raw->allGatherV, &pt->tuningIn));
+    NCCLCHECK(fillAllGatherVTuningInput(comm, &raw->allGatherV, &raw->collConfig, &pt->tuningIn));
     break;
   default:
     return ncclInternalError;
@@ -273,6 +269,6 @@ ncclResult_t ncclTaskPreTuning(struct ncclComm* comm, struct ncclRawTaskQueue* r
     raw = ncclIntruQueueDequeue(&rtq->genericQueue);
     NCCLCHECK(preTuningEnqueueRawTask(comm, raw, tiq));
   }
-  NCCLCHECK(preTuningMergeBcastQueue(comm, &rtq->bcastQueue, tiq));
+  NCCLCHECK(preTuningMergeBcastQueue(comm, rtq->bcastQueue, tiq));
   return ncclSuccess;
 }

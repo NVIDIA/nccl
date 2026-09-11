@@ -8,29 +8,6 @@
 #include "comm.h"
 #include "enqueue.h"
 #include "enqueue/task_classify.h"
-#include "register.h"
-#include "register_inline.h"
-
-static ncclResult_t classifyFillSendRecvTuningInput(struct ncclComm* comm, struct ncclRawTaskSendRecv* raw,
-                                                    ncclTuningInput_t* in) {
-  struct ncclReg* regBuf;
-  bool isValid;
-
-  in->comm = comm;
-  in->tuningMask = NCCL_TUNING_MASK_ALL;
-  in->func = raw->func;
-  in->datatype = raw->datatype;
-  in->count = raw->count;
-  in->countMax = raw->count;
-  in->nWorks = 1;
-  in->numPipeOps = 1;
-  in->nBytes = raw->bytes;
-
-  NCCLCHECK(ncclRegFind(comm, raw->buff, raw->bytes, &regBuf));
-  NCCLCHECK(ncclRegLocalIsValid(regBuf, &isValid));
-  in->regBuff = (regBuf && isValid) || (ncclCudaGraphValid(comm->planner.capturingGraph) && ncclParamGraphRegister());
-  return ncclSuccess;
-}
 
 static ncclResult_t classifyEnqueueP2pTask(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* p2pTaskQueue,
@@ -50,8 +27,6 @@ static ncclResult_t classifyEnqueueP2pTask(
 
   struct ncclTaskTuningInfo* pt = ncclMemoryStackAlloc<struct ncclTaskTuningInfo>(&comm->memScoped);
   pt->raw = raw;
-  pt->tuningOut = NCCL_TUNING_RESULT_INIT;
-  NCCLCHECK(classifyFillSendRecvTuningInput(comm, &raw->sendRecv, &pt->tuningIn));
   ncclIntruQueueEnqueue(p2pTaskQueue, pt);
   return ncclSuccess;
 }
@@ -63,7 +38,7 @@ static ncclResult_t classifyCollToP2pTasks(
   ncclFunc_t collAPI = coll->func;
   size_t elemSize = ncclTypeSize(coll->datatype);
   cudaStream_t stream = coll->stream;
-  cudaEvent_t launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&coll->collConfig);
+  cudaEvent_t launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&tInfo->raw->collConfig);
 
   if (coll->func == ncclFuncAlltoAll) {
     for (int r = 0; r < comm->nRanks; r++) {
@@ -113,8 +88,8 @@ static bool taskUsesSymKernel(struct ncclTaskTuningInfo* tInfo) {
 }
 
 static bool taskUsesCe(struct ncclTaskTuningInfo* tInfo) {
-  return tInfo->tuningOut.valid && (tInfo->tuningOut.ceMethodId == ncclCeMethodId_AllGather_UC ||
-                                    tInfo->tuningOut.ceMethodId == ncclCeMethodId_AllGather_MC);
+  return tInfo->tuningOut.valid && tInfo->tuningOut.ceMethodId >= 0 &&
+         tInfo->tuningOut.ceMethodId < ncclCeMethodId_Count;
 }
 
 static bool taskUsesAllGatherV(struct ncclTaskTuningInfo* tInfo) {
@@ -140,8 +115,9 @@ ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuning
     if (tInfo->raw == nullptr) return ncclInternalError;
 
     if (tInfo->raw->kind == ncclTaskKindColl &&
-        ((tInfo->raw->coll.func == ncclFuncAlltoAll && !taskUsesSymKernel(tInfo)) ||
-         tInfo->raw->coll.func == ncclFuncScatter || tInfo->raw->coll.func == ncclFuncGather)) {
+        (tInfo->raw->coll.func == ncclFuncAlltoAll || tInfo->raw->coll.func == ncclFuncScatter ||
+         tInfo->raw->coll.func == ncclFuncGather) &&
+        !taskUsesCe(tInfo) && !taskUsesSymKernel(tInfo)) {
       NCCLCHECK(classifyCollToP2pTasks(comm, tInfo, &ctq->p2pTaskQueue));
       continue;
     }

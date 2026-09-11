@@ -20,6 +20,7 @@
 enum ncclCeMethodId {
   ncclCeMethodId_AllGather_UC,
   ncclCeMethodId_AllGather_MC,
+  ncclCeMethodId_Coll_P2P_UC,
   ncclCeMethodId_Count
 };
 

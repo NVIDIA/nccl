@@ -60,12 +60,12 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
   task->opHost = raw->opHost;
   task->opDev = raw->opDev;
   postTuningSetChunkSteps(task);
-  task->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&raw->collConfig);
+  task->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&tInfo->raw->collConfig);
   task->eActivationMask = ncclProfilerCurrentEventMask();
   task->groupApiEventHandle = {};
   task->collApiEventHandle = {};
 
-  const ncclCollConfig_t* cfg = &raw->collConfig;
+  const ncclCollConfig_t* cfg = &tInfo->raw->collConfig;
   bool ctaPolicyEnvOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
   task->CTAPolicy = ncclCollConfigResolveCTAPolicy(cfg->CTAPolicy, comm->config.CTAPolicy, ctaPolicyEnvOverridden);
   task->aggIsolate = ncclCollConfigNeedAggIsolate(cfg) || task->CTAPolicy != comm->config.CTAPolicy;
@@ -81,7 +81,7 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
   NCCL_CONFIG_SET(task, nvlsCTAs, ncclParamNvlsChannels(), cfg->nvlsCTAs, comm->config.nvlsCTAs, 1, MAXCHANNELS);
   NCCL_CONFIG_SET(task, cgaClusterSize, ncclParamCGAClusterSize(), cfg->cgaClusterSize, comm->config.cgaClusterSize, 0,
                   NCCL_MAX_CGA_CLUSTER_SIZE);
-  NCCLCHECK(ncclCollConfigGetAlgMask(cfg, task->func, &task->algMask));
+  task->algMask = raw->algMask;
   task->forceAlgSelection = cfg->forceAlgSelection;
 
   return ncclSuccess;
@@ -228,247 +228,6 @@ static ncclResult_t postTuneSymTasksLazyInit(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* symTaskQueue) {
   if (ncclIntruQueueEmpty(symTaskQueue)) return ncclSuccess;
   return ncclSymkInitOnce(comm);
-}
-
-static ncclResult_t postTuneRmaFreeTuningInfoRaw(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
-  if (tInfo->raw != nullptr) {
-    ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
-    tInfo->raw = nullptr;
-  }
-  return ncclSuccess;
-}
-
-static ncclResult_t postTuneRmaTaskAppend(struct ncclComm* comm, const struct ncclRawTaskRma* raw) {
-  struct ncclKernelPlanner* planner = &comm->planner;
-
-  ncclFunc_t func = raw->func;
-  void const* srcBuff = nullptr;
-  size_t count = 0;
-  ncclDataType_t datatype = ncclInt8;
-  int peer = 0;
-  ncclWindow_t peerWin = nullptr;
-  size_t peerWinOffset = 0;
-  int sigIdx = 0;
-  int ctx = 0;
-  unsigned int flags = 0;
-  ncclWaitSignalDesc_t signalDesc = {};
-
-  switch (func) {
-  case ncclFuncPutSignal:
-    srcBuff = raw->rmaOp.putSignal.localbuff;
-    count = raw->rmaOp.putSignal.count;
-    datatype = raw->rmaOp.putSignal.datatype;
-    peer = raw->rmaOp.putSignal.peer;
-    peerWin = raw->rmaOp.putSignal.peerWin;
-    peerWinOffset = raw->rmaOp.putSignal.peerWinOffset;
-    sigIdx = raw->rmaOp.putSignal.sigIdx;
-    ctx = raw->rmaOp.putSignal.ctx;
-    flags = raw->rmaOp.putSignal.flags;
-    break;
-  case ncclFuncSignal:
-    peer = raw->rmaOp.signal.peer;
-    sigIdx = raw->rmaOp.signal.sigIdx;
-    ctx = raw->rmaOp.signal.ctx;
-    flags = raw->rmaOp.signal.flags;
-    break;
-  case ncclFuncWaitSignal:
-    datatype = ncclInt32;
-    signalDesc = raw->rmaOp.waitSignal.signalDesc;
-    break;
-  default:
-    return ncclInternalError;
-  }
-
-  if (!comm->hostRmaSupport) {
-    WARN("One sided RMA: host RMA is not supported in this communicator.");
-    return ncclInvalidArgument;
-  }
-
-  int driverVersion;
-  NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
-  if (driverVersion < 12050) {
-    WARN("One-sided RMA requires CUDA driver 12.5 or later (found %d.%d).", driverVersion / 1000,
-         (driverVersion % 1000) / 10);
-    return ncclInvalidUsage;
-  }
-
-  // Check if signal index is valid
-  if (sigIdx < 0 || sigIdx >= comm->config.numRmaSig) {
-    WARN("Signal index %d is invalid (must be in [0, %d))", sigIdx, comm->config.numRmaSig);
-    return ncclInvalidArgument;
-  }
-
-  // Check if flags is valid
-  if (flags != 0) {
-    WARN("Flags %u is invalid (must be 0)", flags);
-    return ncclInvalidArgument;
-  }
-
-  // ncclSignal / ncclWaitSignal take no window, so they cannot trigger the collective RMA init that
-  // runs at the first window registration. Initializing here for a subset of ranks would deadlock,
-  // so instead require the user to register a symmetric window first or opt into eager init.
-  if ((func == ncclFuncSignal || func == ncclFuncWaitSignal) && !ncclRmaInitialized(comm)) {
-    WARN("ncclSignal/ncclWaitSignal called before RMA is initialized. Register a symmetric window "
-         "first, or set NCCL_RMA_EAGER_INIT=1 to initialize RMA at communicator creation.");
-    return ncclInvalidUsage;
-  }
-
-  // Initialize window pointers - only needed for Put and Signal
-  struct ncclDevrWindow* peerWinHost = NULL;
-  struct ncclDevrWindow* srcWinHost = NULL;
-  size_t srcWinOffset = 0;
-
-  if (func == ncclFuncPutSignal) {
-    // Validate peer window with detailed debugging
-    if (peerWin == NULL) {
-      WARN("ncclPutSignal: peerWin is NULL");
-      return ncclInvalidArgument;
-    }
-
-    struct ncclWindow_vidmem* peerWinDevHost = NULL;
-    NCCLCHECK(ncclShadowPoolToHost(&comm->devrState.shadows, peerWin, &peerWinDevHost));
-    peerWinHost = (struct ncclDevrWindow*)peerWinDevHost->winHost;
-
-    // Validate source buffer and window
-    if (srcBuff == NULL) {
-      WARN("ncclPutSignal: srcBuff is NULL");
-      return ncclInvalidArgument;
-    }
-    NCCLCHECK(ncclDevrFindWindow(comm, srcBuff, &srcWinHost));
-    if (srcWinHost == NULL || !(srcWinHost->winFlags & NCCL_WIN_COLL_SYMMETRIC)) {
-      WARN("ncclPutSignal: srcWinHost is not in a valid symmetric window");
-      return ncclInvalidArgument;
-    }
-    srcWinOffset = (char*)srcBuff - (char*)srcWinHost->userPtr;
-
-    bool isMultiSegment = ncclDevrWindowIsMultiSegment(srcWinHost) || ncclDevrWindowIsMultiSegment(peerWinHost);
-    bool hasSysmemSegment = ncclDevrWindowHasSysmemSegment(srcWinHost) || ncclDevrWindowHasSysmemSegment(peerWinHost);
-
-    if (isMultiSegment) {
-      WARN("ncclPutSignal currently does not support VAs backed by multiple physical cuMem segments");
-      return ncclInvalidArgument;
-    }
-    if (hasSysmemSegment) {
-      WARN("ncclPutSignal currently does not support VAs with host-backed cuMem segments");
-      return ncclInvalidArgument;
-    }
-  } else if (func == ncclFuncWaitSignal) {
-    if (signalDesc.opCnt <= 0) {
-      WARN("ncclWaitSignal: descriptor has invalid opCnt %d", signalDesc.opCnt);
-      return ncclInvalidArgument;
-    }
-    if (signalDesc.sigIdx < 0 || signalDesc.sigIdx >= comm->config.numRmaSig) {
-      WARN("ncclWaitSignal: descriptor has invalid sigIdx %d (must be in [0, %d))", signalDesc.sigIdx,
-           comm->config.numRmaSig);
-      return ncclInvalidArgument;
-    }
-    if (signalDesc.ctx < 0 || signalDesc.ctx >= comm->config.numRmaCtx) {
-      WARN("ncclWaitSignal: descriptor has invalid context %d (must be in [0, %d))", signalDesc.ctx,
-           comm->config.numRmaCtx);
-      return ncclInvalidArgument;
-    }
-  }
-
-  // Handle WaitSignal separately
-  if (func == ncclFuncWaitSignal) {
-    // ctx is per-descriptor, and rawTaskAppend already split a multi-descriptor
-    // ncclWaitSignal into one raw task per descriptor, so this files a single task
-    // into the queue of the context that descriptor names.
-    struct ncclTaskRma* t = ncclMemoryPoolAlloc<struct ncclTaskRma>(&comm->memPool_ncclTaskRma, &comm->memPermanent);
-
-    t->func = ncclFuncWaitSignal;
-    t->ctx = signalDesc.ctx;
-    t->count = 0;
-    t->bytes = 0;
-    t->srcBuff = NULL;
-    t->srcWinOffset = 0;
-    t->srcWinHost = NULL;
-    t->peer = 0;
-    t->peerWinOffset = 0;
-    t->peerWinHost = NULL;
-    t->signalMode = NCCL_SIGNAL;
-    t->signalIdx = 0;
-
-    // The downstream wait path is array-based, so present the descriptor as a one-entry set.
-    t->npeers = 1;
-    t->peers = ncclMemoryStackAlloc<int>(&comm->memScoped, 1);
-    t->nsignals = ncclMemoryStackAlloc<int>(&comm->memScoped, 1);
-    t->signalIdxs = ncclMemoryStackAlloc<int>(&comm->memScoped, 1);
-    t->peers[0] = signalDesc.peer;
-    t->nsignals[0] = signalDesc.opCnt;
-    t->signalIdxs[0] = signalDesc.sigIdx;
-
-    t->eActivationMask = ncclProfilerCurrentEventMask();
-    planner->nTasksRma++;
-    ncclIntruQueueEnqueue(&planner->rmaTaskQueues[t->ctx], t);
-
-  } else if (func == ncclFuncPutSignal || func == ncclFuncSignal) {
-    // Calculate total bytes for the operation
-    size_t totalBytes = count * ncclTypeSize(datatype);
-
-    // Define 1GB chunk size for splitting large put operations
-    const size_t chunkSize = 1ULL << 30; // 1GB = 1073741824 bytes
-
-    // Determine if we need to split the operation
-    int numChunks = 1;
-    if (func == ncclFuncPutSignal && totalBytes > chunkSize) {
-      numChunks = (totalBytes + chunkSize - 1) / chunkSize;
-    }
-
-    // Create tasks for each chunk
-    for (int chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
-      struct ncclTaskRma* t = ncclMemoryPoolAlloc<struct ncclTaskRma>(&comm->memPool_ncclTaskRma, &comm->memPermanent);
-
-      // Calculate chunk-specific size and offsets
-      size_t chunkBytes = (chunkIdx == numChunks - 1) ? (totalBytes - chunkIdx * chunkSize) : chunkSize;
-
-      size_t chunkOffset = chunkIdx * chunkSize;
-
-      t->func = func;
-      t->srcBuff = (const char*)srcBuff + chunkOffset;
-      t->srcWinOffset = srcWinOffset + chunkOffset;
-      t->srcWinHost = srcWinHost;
-      t->count = chunkBytes / ncclTypeSize(datatype);
-      t->datatype = datatype;
-      t->bytes = chunkBytes;
-      t->ctx = ctx;
-      t->signalIdx = sigIdx;
-      t->peer = peer;
-      t->peerWinOffset = peerWinOffset + chunkOffset;
-      t->peerWinHost = peerWinHost;
-
-      // Signal handling: only the last chunk gets the signal
-      bool isLastChunk = (chunkIdx == numChunks - 1);
-      if (isLastChunk) {
-        t->signalMode = NCCL_SIGNAL;
-      } else {
-        // Earlier chunks: no signal
-        t->signalMode = NCCL_SIGNAL_NONE;
-      }
-      t->peers = NULL;
-      t->nsignals = NULL;
-      t->signalIdxs = NULL;
-      t->npeers = 0;
-
-      t->eActivationMask = ncclProfilerCurrentEventMask();
-
-      planner->nTasksRma++;
-      // Enqueue the task into the appropriate context queue
-      ncclIntruQueueEnqueue(&planner->rmaTaskQueues[t->ctx], t);
-    }
-  }
-
-  return ncclSuccess;
-}
-
-static ncclResult_t postTuneRmaTasks(
-  struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* rmaTaskQueue) {
-  while (!ncclIntruQueueEmpty(rmaTaskQueue)) {
-    struct ncclTaskTuningInfo* tInfo = ncclIntruQueueDequeue(rmaTaskQueue);
-    NCCLCHECK(postTuneRmaTaskAppend(comm, &tInfo->raw->rma));
-    NCCLCHECK(postTuneRmaFreeTuningInfoRaw(comm, tInfo));
-  }
-  return ncclSuccess;
 }
 
 static ncclResult_t postTuneCeTasksLazyInit(
@@ -672,8 +431,9 @@ static ncclResult_t postTuneAllGatherVEnsureRingConnected(struct ncclComm* comm)
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm, struct ncclRawTaskAllGatherV* agv,
-                                                           int root) {
+static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
+                                                           int root,
+                                                           struct ncclRawTaskAllGatherVBcast* bcast) {
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* task =
     ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
@@ -685,15 +445,23 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
 
   memset(task, 0, sizeof(*task));
   task->func = ncclFuncBroadcast;
-  task->sendbuff = (root == comm->rank) ? agv->sendbuff : nullptr;
-  task->recvbuff = agv->recvbuff[root];
-  task->count = agv->counts[root];
+  task->sendbuff = (root == comm->rank) ? bcast->sendbuff : nullptr;
+  task->recvbuff = bcast->recvbuff;
+  task->count = bcast->count;
   task->root = root;
   task->datatype = ncclInt8;
   task->trafficBytes = task->count * ncclFuncTrafficPerByte(task->func, comm->nRanks);
   postTuningSetChunkSteps(task);
   task->eActivationMask = ncclProfilerCurrentEventMask();
   task->opHost = ncclSum;
+  // Carry over the AllGatherV's resolved channel budget. scheduleCollTasksToPlan clamps
+  // nMaxChannels by these caps unconditionally, so memset-zeroed caps would clamp it to 0.
+  // ncclGetAlgoInfo below keeps the seeded nMaxChannels when its own tuning yields none.
+  task->nMaxChannels = tInfo->tuningOut.maxChannels;
+  task->minCTAs = tInfo->tuningIn.minCTAs;
+  task->maxCTAs = tInfo->tuningIn.maxCTAs;
+  task->nvlsCTAs = comm->config.nvlsCTAs;
+  task->cgaClusterSize = comm->config.cgaClusterSize;
 
   NCCLCHECK(ncclGetCollNetSupport(comm, task, &collNetSupport));
   nvlsTransportEnabled = ncclNvlsTransportEnabled(comm) &&
@@ -722,73 +490,62 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneAllGatherVEnqueueBcastTasks(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
-  struct ncclKernelPlanner* planner = &comm->planner;
-  struct ncclRawTaskAllGatherV* agv = &tInfo->raw->allGatherV;
-  int nRoots = 0;
-  int soleRoot = -1;
-
-  if (tInfo->raw->kind != ncclTaskKindAllGatherV) return ncclInternalError;
-  if (agv->func != ncclFuncAllGatherV) return ncclInternalError;
-
-  for (int root = 0; root < agv->nRanks; root++) {
-    if (agv->counts[root] == 0) continue;
-    nRoots += 1;
-    soleRoot = root;
-  }
-  if (nRoots == 0) goto cleanup;
-
-  NCCLCHECK(postTuneAllGatherVEnsureRingConnected(comm));
-
-  if (nRoots == 1) {
-    NCCLCHECK(postTuneAllGatherVEnqueueBroadcastTask(comm, agv, soleRoot));
-    if (tInfo->raw != nullptr) {
-      ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
-      tInfo->raw = nullptr;
-    }
-    return ncclSuccess;
-  }
-
-  for (int root = 0; root < agv->nRanks; root++) {
-    if (agv->counts[root] == 0) continue;
-
-    struct ncclTaskBcast* t =
-      ncclMemoryPoolAlloc<struct ncclTaskBcast>(&comm->memPool_ncclTaskBcast, &comm->memPermanent);
-    t->func = ncclFuncAllGatherV;
-    t->sendbuff = (root == comm->rank) ? agv->sendbuff : nullptr;
-    t->recvbuff = agv->recvbuff[root];
-    t->count = agv->counts[root];
-    t->datatype = ncclInt8;
-    t->root = root;
-    t->eActivationMask = ncclProfilerCurrentEventMask();
-    t->groupApiEventHandle = {};
-    t->collApiEventHandle = {};
-    t->eventHandle = {};
-
-    planner->bcast_info.minBcastPeer = std::min(planner->bcast_info.minBcastPeer, root);
-    planner->bcast_info.maxBcastPeer = std::max(planner->bcast_info.maxBcastPeer, root);
-    if (ncclIntruQueueEmpty(&planner->peers[root].bcastQueue)) {
-      planner->bcast_info.BcastPeers += 1;
-    }
-
-    ncclIntruQueueEnqueue(&planner->peers[root].bcastQueue, t);
-    planner->nTasksBcast += 1;
-  }
-
-cleanup:
-  if (tInfo->raw != nullptr) {
-    ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
-    tInfo->raw = nullptr;
-  }
-  return ncclSuccess;
-}
-
 static ncclResult_t postTuneAllGatherVTasks(
   struct ncclComm* comm,
   struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* allgathervTaskQueue) {
+  struct ncclKernelPlanner* planner = &comm->planner;
+
   while (!ncclIntruQueueEmpty(allgathervTaskQueue)) {
     struct ncclTaskTuningInfo* tInfo = ncclIntruQueueDequeue(allgathervTaskQueue);
-    NCCLCHECK(postTuneAllGatherVEnqueueBcastTasks(comm, tInfo));
+    struct ncclRawTaskAllGatherV* agv;
+    int nRoots;
+
+    if (tInfo->raw == nullptr || tInfo->raw->kind != ncclTaskKindAllGatherV) return ncclInternalError;
+    agv = &tInfo->raw->allGatherV;
+    nRoots = (agv->bcastTasks != nullptr) ? (int)agv->bcastTasks->size() : 0;
+    if (nRoots == 0) goto cleanup;
+
+    NCCLCHECK(postTuneAllGatherVEnsureRingConnected(comm));
+
+    if (nRoots == 1) {
+      auto it = agv->bcastTasks->begin();
+      NCCLCHECK(postTuneAllGatherVEnqueueBroadcastTask(comm, tInfo, it->first, &it->second));
+      goto cleanup;
+    }
+
+    for (auto& kv : *agv->bcastTasks) {
+      int root = kv.first;
+      struct ncclRawTaskAllGatherVBcast* bcast = &kv.second;
+      struct ncclTaskBcast* t =
+        ncclMemoryPoolAlloc<struct ncclTaskBcast>(&comm->memPool_ncclTaskBcast, &comm->memPermanent);
+      t->func = ncclFuncAllGatherV;
+      t->sendbuff = (root == comm->rank) ? bcast->sendbuff : nullptr;
+      t->recvbuff = bcast->recvbuff;
+      t->count = bcast->count;
+      t->datatype = ncclInt8;
+      t->root = root;
+      t->eActivationMask = ncclProfilerCurrentEventMask();
+      t->groupApiEventHandle = {};
+      t->collApiEventHandle = {};
+      t->eventHandle = {};
+
+      planner->bcast_info.minBcastPeer = std::min(planner->bcast_info.minBcastPeer, root);
+      planner->bcast_info.maxBcastPeer = std::max(planner->bcast_info.maxBcastPeer, root);
+      if (ncclIntruQueueEmpty(&planner->peers[root].bcastQueue)) {
+        planner->bcast_info.BcastPeers += 1;
+      }
+
+      ncclIntruQueueEnqueue(&planner->peers[root].bcastQueue, t);
+      planner->nTasksBcast += 1;
+    }
+
+  cleanup:
+    if (tInfo->raw != nullptr) {
+      delete tInfo->raw->allGatherV.bcastTasks;
+      tInfo->raw->allGatherV.bcastTasks = nullptr;
+      ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
+      tInfo->raw = nullptr;
+    }
   }
   return ncclSuccess;
 }
@@ -828,66 +585,12 @@ static ncclResult_t postTuneP2pTasks(
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneCeFreeTuningInfoRaw(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
-  if (tInfo->raw != nullptr) {
-    ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
-    tInfo->raw = nullptr;
-  }
-  return ncclSuccess;
-}
-
-static ncclResult_t postTuneCeCollTaskAppend(struct ncclComm* comm, const struct ncclRawTaskColl* raw,
-                                             struct ncclDevrWindow* sendWin, struct ncclDevrWindow* recvWin) {
-  struct ncclKernelPlanner* planner = &comm->planner;
-
-  struct ncclTaskColl* t = ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
-
-  t->func = raw->func;
-  t->sendbuff = raw->sendbuff;
-  t->recvbuff = raw->recvbuff;
-  t->count = raw->count;
-  t->root = raw->root;
-  t->datatype = raw->datatype;
-  size_t elementSize = ncclTypeSize(t->datatype);
-  if (t->func == ncclFuncAllGather || t->func == ncclFuncBroadcast) {
-    t->count *= elementSize;
-    t->datatype = ncclInt8;
-    elementSize = 1;
-  }
-  t->trafficBytes = t->count * elementSize * ncclFuncTrafficPerByte(t->func, comm->nRanks);
-  t->opHost = raw->opHost;
-  t->opDev = raw->opDev; // C++ struct assignment
-  t->chunkSteps = 1;
-  t->sliceSteps = 1;
-  t->eActivationMask = ncclProfilerCurrentEventMask();
-  t->groupApiEventHandle = {};
-  t->collApiEventHandle = {};
-  t->sendWin = sendWin;
-  t->recvWin = recvWin;
-
-  ncclIntruQueueEnqueue(&planner->collCeTaskQueue, t);
-
-  return ncclSuccess;
-}
-
 /*
- * Materialize tuned copy-engine collectives into CE scheduler inputs.
+ * Initialize copy-engine collectives when any CE tasks are present.
  */
 static ncclResult_t postTuneCeTasks(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* ceTaskQueue) {
   NCCLCHECK(postTuneCeTasksLazyInit(comm, ceTaskQueue));
-
-  while (!ncclIntruQueueEmpty(ceTaskQueue)) {
-    struct ncclTaskTuningInfo* tInfo = ncclIntruQueueDequeue(ceTaskQueue);
-    struct ncclDevrWindow* sendWin = nullptr;
-    struct ncclDevrWindow* recvWin = nullptr;
-    struct ncclRawTaskColl* raw = &tInfo->raw->coll;
-
-    NCCLCHECK(ncclDevrFindWindow(comm, raw->sendbuff, &sendWin));
-    NCCLCHECK(ncclDevrFindWindow(comm, raw->recvbuff, &recvWin));
-    NCCLCHECK(postTuneCeCollTaskAppend(comm, raw, sendWin, recvWin));
-    NCCLCHECK(postTuneCeFreeTuningInfoRaw(comm, tInfo));
-  }
   return ncclSuccess;
 }
 
@@ -898,11 +601,9 @@ static void postTuningAccumulateTime(struct ncclIntruQueue<struct ncclTaskTuning
   }
 }
 
-static ncclResult_t postTuningSimulation(struct ncclComm* comm, struct ncclClassifiedTaskQueues* ctq,
-                                         ncclSimInfo_t* simInfo) {
+static ncclResult_t postTuningSimulation(struct ncclClassifiedTaskQueues* ctq, ncclSimInfo_t* simInfo) {
   float totalTimeUs = 0.0f;
 
-  (void)comm;
   postTuningAccumulateTime(&ctq->symTaskQueue, &totalTimeUs);
   postTuningAccumulateTime(&ctq->legacyTaskQueue, &totalTimeUs);
   postTuningAccumulateTime(&ctq->p2pTaskQueue, &totalTimeUs);
@@ -916,17 +617,18 @@ static ncclResult_t postTuningSimulation(struct ncclComm* comm, struct ncclClass
 ncclResult_t ncclTaskPostTuning(struct ncclComm* comm, struct ncclClassifiedTaskQueues* ctq, ncclSimInfo_t* simInfo) {
   if (comm == nullptr || ctq == nullptr) return ncclInvalidArgument;
   if (simInfo != nullptr) {
-    NCCLCHECK(postTuningSimulation(comm, ctq, simInfo));
+    if (simInfo != reinterpret_cast<ncclSimInfo_t*>(NCCL_COMM_SIMULATION_SKIP)) {
+      NCCLCHECK(postTuningSimulation(ctq, simInfo));
+    }
     return ncclSuccess;
   }
 
   // Traverse all task families in the order expected by launch preparation.
   NCCLCHECK(postTuneSymTasks(comm, &ctq->symTaskQueue));
+  NCCLCHECK(postTuneCeTasks(comm, &ctq->ceTaskQueue));
   NCCLCHECK(postTuneLegacyTasks(comm, &ctq->legacyTaskQueue));
   NCCLCHECK(postTuneAllGatherVTasks(comm, &ctq->allgathervTaskQueue));
   NCCLCHECK(postTuneP2pTasks(comm, &ctq->p2pTaskQueue));
-  // NCCLCHECK(postTuneRmaTasks(comm, &ctq->rmaTaskQueue));
-  // NCCLCHECK(postTuneCeTasks(comm, &ctq->ceTaskQueue));
 
   return ncclSuccess;
 }

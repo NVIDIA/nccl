@@ -194,6 +194,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         uint64_t symkMask = effAlgMask & NCCL_TUNING_MASK_SYM_KERNELS;
         if (symkMask != 0) input.tuningMask = symkMask;
       }
+      // A selection naming general kernels too must still reach the legacy fallback below,
+      // so the symmetric-only hard error stays here rather than inside the tuner.
+      input.forceAlgSelection = 0;
       input.func = headTask->func;
       input.redOp = headTask->opHost;
       input.devRedOp = symkOp;

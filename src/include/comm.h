@@ -560,6 +560,7 @@ struct ncclKernelPlanner {
 };
 
 #define NCCL_MAGIC 0x0280028002800280 // Nickel atomic number is 28.
+#define NCCL_COMM_SIMULATION_SKIP 0x01
 
 typedef enum ncclGroupTaskType {
   ncclGroupTaskTypeCollective = 0,
@@ -703,6 +704,7 @@ struct ncclComm {
 
   // Tuner values
   struct ncclTuningContext_t tuningContext;
+  uint64_t defaultAlgoMask; // NCCL_TUNING_MASK_ALL minus NVLS ids disabled by nvlsHostMode
 
   /* This attribute can indicate the states of communicators and return code of
    * asynchronous NCCL operations. */
@@ -889,6 +891,10 @@ inline bool ncclNvlsTransportEnabled(const struct ncclComm* comm) {
 
 inline bool ncclNvlsSymmetricMultimemEnabled(const struct ncclComm* comm) {
   return comm->nvlsSupport && !(comm->config.nvlsHostMode & ncclNvlsHostModeDisableSymmetricMultimem);
+}
+
+inline uint64_t ncclCommDefaultAlgoMask(const struct ncclComm* comm) {
+  return comm->defaultAlgoMask != 0 ? comm->defaultAlgoMask : NCCL_TUNING_MASK_ALL;
 }
 
 static_assert(offsetof(struct ncclComm, startMagic) == 0, "startMagic must be the first field of ncclComm");

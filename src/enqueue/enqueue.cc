@@ -2182,6 +2182,9 @@ ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, i
   if (effAlgMask != 0) {
     input.tuningMask = effAlgMask & NCCL_TUNING_MASK_GENERAL_KERNELS;
   }
+  // An unmet selection is resolved below (retune the full menu, then error or fall back
+  // per forceAlgSelection), so the tuner must not reject it on its own.
+  input.forceAlgSelection = 0;
   input.CTAPolicy = info->CTAPolicy;
   input.func = info->func;
   input.redOp = info->opHost;
@@ -3312,6 +3315,7 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     }
     t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
     t->kind = ncclTaskKindColl;
+    t->collConfig = info->collConfig;
     t->coll.func = info->coll;
     t->coll.sendbuff = info->sendbuff;
     t->coll.recvbuff = info->recvbuff;
@@ -3321,9 +3325,9 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     t->coll.opHost = info->op;
     t->coll.opDev = opDev;
     t->coll.stream = info->stream;
-    t->coll.collConfig = info->collConfig;
+    t->coll.algMask = algMask;
     if (info->coll == ncclFuncBroadcast) {
-      ncclIntruQueueEnqueue(&rtq->bcastQueue, t);
+      ncclIntruQueueEnqueue(&(*rtq->bcastQueue)[info->root], t);
     } else {
       ncclIntruQueueEnqueue(&rtq->genericQueue, t);
     }

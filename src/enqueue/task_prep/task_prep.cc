@@ -17,9 +17,7 @@ ncclResult_t ncclTaskPrepare(struct ncclComm* comm, ncclSimInfo_t* simInfo) {
 
   tInfo = ncclIntruQueueHead(&taskTuningInfoQueue.queue);
   for (; tInfo != nullptr; tInfo = tInfo->next) {
-    if (tInfo->raw->kind == ncclTaskKindColl && ncclTuningFuncIndex(tInfo->tuningIn.func) >= 0) {
-      NCCLCHECK(ncclTuningCompute(&tInfo->tuningIn, &tInfo->tuningOut));
-    }
+    NCCLCHECK(ncclTuningCompute(&tInfo->tuningIn, &tInfo->tuningOut));
   }
 
   NCCLCHECK(ncclTaskClassification(comm, &taskTuningInfoQueue, &comm->classifiedTaskQueues));

@@ -307,6 +307,7 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce, AlltoAll
   {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 0, 1}, {}}, // AlltoAll_LL
   {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Unicast
   {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
+  {nullptr, nullptr, nullptr, {0}, {}},             // CE Coll P2P Unicast
 };
 
 /*

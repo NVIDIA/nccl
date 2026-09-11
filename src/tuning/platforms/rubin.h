@@ -78,6 +78,7 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   {nullptr, nullptr, nullptr, {0}, {}}, // AlltoAll_LL
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Unicast
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
+  {nullptr, nullptr, nullptr, {0}, {}}, // CE Coll P2P Unicast
 };
 
 static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {

@@ -572,9 +572,14 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr,
             struct ncclRawTask* task = ncclIntruQueueDequeue(&comm->rawTaskQueue.genericQueue);
             ncclMemoryPoolFree(&comm->memPool_ncclRawTask, task);
           }
-          while (!ncclIntruQueueEmpty(&comm->rawTaskQueue.bcastQueue)) {
-            struct ncclRawTask* task = ncclIntruQueueDequeue(&comm->rawTaskQueue.bcastQueue);
-            ncclMemoryPoolFree(&comm->memPool_ncclRawTask, task);
+          if (comm->rawTaskQueue.bcastQueue != nullptr) {
+            for (auto& kv : *comm->rawTaskQueue.bcastQueue) {
+              while (!ncclIntruQueueEmpty(&kv.second)) {
+                struct ncclRawTask* task = ncclIntruQueueDequeue(&kv.second);
+                ncclMemoryPoolFree(&comm->memPool_ncclRawTask, task);
+              }
+            }
+            comm->rawTaskQueue.bcastQueue->clear();
           }
           ncclIntruQueueConstruct(&comm->classifiedTaskQueues.symTaskQueue);
           ncclIntruQueueConstruct(&comm->classifiedTaskQueues.legacyTaskQueue);
@@ -1001,7 +1006,11 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
       job->base.abortFlag = comm->abortFlag;
       job->base.abortFlagDev = comm->abortFlagDev;
       job->comm = comm;
-      job->simInfo = simInfo;
+      if (simInfo != nullptr) {
+        job->simInfo = (comm == cliqueHead) ? simInfo : reinterpret_cast<ncclSimInfo_t*>(NCCL_COMM_SIMULATION_SKIP);
+      } else {
+        job->simInfo = nullptr;
+      }
       ncclIntruQueueEnqueue(&asyncPrepareJobs, &job->base);
       comm = comm->groupNext[ncclGroupTaskTypeRawTask];
     } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);

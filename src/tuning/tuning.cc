@@ -173,6 +173,23 @@ static ncclResult_t ncclTuningSelectBestTuning(
 }
 
 /*
+  Reverse of ncclTuningExpandId: the tuningMask bit a selected tuning occupies,
+  or -1 when nothing was selected.
+*/
+static int ncclTuningCollapseId(const struct ncclTuningResult_t* tuning) {
+  if (tuning->symKernelId != ncclSymkKernelId_Count) {
+    return NCCL_TUNING_SYM_KERNEL_ID_OFFSET + tuning->symKernelId;
+  }
+  if (tuning->ceMethodId != ncclCeMethodId_Count) {
+    return NCCL_TUNING_CE_METHOD_ID_OFFSET + tuning->ceMethodId;
+  }
+  if (tuning->algo != NCCL_ALGO_UNDEF && tuning->proto != NCCL_PROTO_UNDEF) {
+    return tuning->algo * NCCL_NUM_PROTOCOLS + tuning->proto;
+  }
+  return -1;
+}
+
+/*
   Get the best tuning for the given input.
   Simulates the all tunings for the given input and engages the tuner plugin if defined.
   Then selects the best tuning from all the tuning results and returns that to the caller.
@@ -189,6 +206,12 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
   tunings.head = nullptr;
   struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;
   ncclSymkKernelMask symkLLMask = (ncclSymkLLKernelMask() & ~ncclGenkKernelMask());
+
+  if (input->func == ncclFuncSendRecv || input->func == ncclFuncSend || input->func == ncclFuncRecv ||
+      input->func == ncclFuncPutSignal || input->func == ncclFuncSignal || input->func == ncclFuncWaitSignal) {
+    return ncclSuccess;
+  }
+
   // Set tuning to Ring/Simple for single rank case
   if (input->comm->nRanks <= 1) {
     bestTuning.algo = NCCL_ALGO_RING;
@@ -199,11 +222,21 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
     bestTuning.maxChannels = 0;
     bestTuning.nWarps = 0;
     bestTuning.forced = 0;
-  } else if (input->func == ncclFuncAlltoAll && !ncclSymkAlltoAllLLForced(input->comm)) {
-    *result = NCCL_TUNING_RESULT_INIT;
-    result->valid = 0;
-    goto exit;
   } else {
+    if (input->func == ncclFuncAlltoAll || input->func == ncclFuncScatter || input->func == ncclFuncGather) {
+      if ((input->CTAPolicy & NCCL_CTA_POLICY_ZERO) && (input->ceAvailable || input->hierCeAvailable)) {
+        bestTuning.ceMethodId = ncclCeMethodId_Coll_P2P_UC;
+        bestTuning.id = NCCL_TUNING_CE_METHOD_ID_OFFSET + bestTuning.ceMethodId;
+        bestTuning.valid = 1;
+        goto exit;
+      } else if (!(input->func == ncclFuncAlltoAll && ncclSymkAlltoAllLLForced(input->comm))) {
+        *result = NCCL_TUNING_RESULT_INIT;
+        result->valid = 0;
+        goto exit;
+      }
+      // a2a symmetric kernel path
+    }
+
     NCCLCHECKGOTO(ncclTuningComputeAllTunings(input, &tunings), ret, exit);
     // The tuner plugin API covers the five standard collectives only.
     if (input->comm->tuner != NULL && (unsigned)input->func < NCCL_NUM_FUNCTIONS) {
@@ -236,6 +269,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
     }
     NCCLCHECKGOTO(ncclTuningSelectBestTuning(&tunings, &bestTuning), ret, exit);
   }
+
   if (bestTuning.algo != NCCL_ALGO_UNDEF && bestTuning.proto != NCCL_PROTO_UNDEF) {
     NCCLCHECKGOTO(ncclTuningGetChannels(input, &bestTuning, /*forceMaxTreeThreads=*/true), ret, exit);
   }
@@ -293,6 +327,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
         // (because they were not requested).  We need to check the legacy ones.
         struct ncclTuningInput_t bestNonSymkInput = *input;
         bestNonSymkInput.tuningMask = NCCL_TUNING_MASK_GENERAL_KERNELS;
+        bestNonSymkInput.forceAlgSelection = 0;
 
         NOWARN(ncclTuningCompute(&bestNonSymkInput, &bestNonSymkTuning), NCCL_TUNING);
 
@@ -335,6 +370,21 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
          ncclProtoEnvStr, ncclSymKernelIdEnvStr);
     ret = (algoEnv || protoEnv || symKernelIdEnv) ? ncclInvalidUsage : ncclInternalError;
   }
+
+  // With forceAlgSelection the mask is a hard constraint, so reject a selection that falls
+  // outside it: the fallbacks above (symmetric -> general kernels, EFFICIENCY -> NVLS) can
+  // land on an algorithm the caller excluded. The single-rank and AllToAll/Scatter/Gather
+  // paths pick without consulting the mask at all, so they are not constrained here.
+  if (input->forceAlgSelection && input->comm->nRanks > 1 && input->func != ncclFuncAlltoAll &&
+      input->func != ncclFuncScatter && input->func != ncclFuncGather) {
+    int tuningId = ncclTuningCollapseId(&bestTuning);
+    if (tuningId < 0 || (input->tuningMask & (1ULL << tuningId)) == 0) {
+      WARN("algSelection: no algorithm in the selected set (0x%lx) is available for %s", input->tuningMask,
+           ncclFuncToString(input->func));
+      ret = ncclInvalidArgument;
+    }
+  }
+
   *result = bestTuning;
 exit:
   ncclTuningResultListFree(&tunings);

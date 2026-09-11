@@ -14,6 +14,8 @@
 #include "nccl.h"
 #include "config/collconfig.h"
 
+#include <map>
+
 struct ncclComm;
 
 enum ncclTaskKind {
@@ -34,21 +36,25 @@ struct ncclRawTaskColl {
   ncclRedOp_t opHost;
   struct ncclDevRedOpFull opDev;
   cudaStream_t stream;
-  ncclCollConfig_t collConfig;
+  uint64_t algMask;
 };
 
+// Per-root contribution stored when merging broadcasts into an AllGatherV.
+struct ncclRawTaskAllGatherVBcast {
+  void* sendbuff;
+  void* recvbuff;
+  size_t count;
+};
+
+using ncclRawTaskAllGatherVBcastMap = std::map<int, ncclRawTaskAllGatherVBcast>;
+
 // AllGatherV inputs built by merging broadcast raw tasks during pre-tuning.
-// Per-rank recvbuff and counts arrays are allocated with length nRanks.
-// sendbuff is set only when this rank is the broadcast root.
+// bcastTasks is heap-allocated so ncclRawTaskAllGatherV can live in the ncclRawTask union.
 struct ncclRawTaskAllGatherV {
-  ncclFunc_t func;
-  int nRanks;
-  void const* sendbuff;
-  void** recvbuff;
-  size_t* counts;
   size_t maxCount;
-  ncclDataType_t datatype;
   cudaStream_t stream;
+  uint64_t algMask;
+  ncclRawTaskAllGatherVBcastMap* bcastTasks;
 };
 
 // Point-to-point API inputs captured at enqueue time.
@@ -108,6 +114,7 @@ struct ncclRawTaskRma {
 struct ncclRawTask {
   struct ncclRawTask* next;
   ncclTaskKind kind;
+  ncclCollConfig_t collConfig;
   union {
     struct ncclRawTaskColl coll;
     struct ncclRawTaskSendRecv sendRecv;
@@ -116,9 +123,11 @@ struct ncclRawTask {
   };
 };
 
+using ncclRawTaskBcastQueueMap = std::map<int, ncclIntruQueue<struct ncclRawTask, &ncclRawTask::next>>;
+
 struct ncclRawTaskQueue {
   struct ncclIntruQueue<struct ncclRawTask, &ncclRawTask::next> genericQueue;
-  struct ncclIntruQueue<struct ncclRawTask, &ncclRawTask::next> bcastQueue;
+  ncclRawTaskBcastQueueMap* bcastQueue;
 };
 
 #endif // NCCL_ENQUEUE_RAW_TASK_H_

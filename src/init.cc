@@ -316,6 +316,9 @@ static ncclResult_t commFree(ncclComm_t comm) {
   if (comm == NULL) return ncclSuccess;
   NCCLCHECK(ncclProgressCounterMonitorDestroy(comm));
 
+  delete comm->rawTaskQueue.bcastQueue;
+  comm->rawTaskQueue.bcastQueue = nullptr;
+
   NCCLCHECK(ncclCeFinalize(comm));
   NCCLCHECK(ncclRmaCeFinalize(comm));
 
@@ -643,7 +646,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   ncclIntruQueueConstruct(&comm->suspendTaskQueue);
   ncclIntruQueueConstruct(&comm->resumeTaskQueue);
   ncclIntruQueueConstruct(&comm->rawTaskQueue.genericQueue);
-  ncclIntruQueueConstruct(&comm->rawTaskQueue.bcastQueue);
+  NEW_NOTHROW(comm->rawTaskQueue.bcastQueue, ncclRawTaskBcastQueueMap);
   ncclIntruQueueConstruct(&comm->classifiedTaskQueues.symTaskQueue);
   ncclIntruQueueConstruct(&comm->classifiedTaskQueues.legacyTaskQueue);
   ncclIntruQueueConstruct(&comm->classifiedTaskQueues.allgathervTaskQueue);
@@ -1186,6 +1189,16 @@ cleanup:
   free(groupToLocal);
   free(cumulativeNetRecvCounts);
   return ret;
+}
+
+static void ncclCommSetDefaultAlgoMask(ncclComm_t comm) {
+  comm->defaultAlgoMask = NCCL_TUNING_MASK_ALL;
+  if (!comm->nvlsSupport || (comm->config.nvlsHostMode & ncclNvlsHostModeDisableTransport)) {
+    comm->defaultAlgoMask &= ~NCCL_TUNING_MASK_NVLS_GENERAL;
+  }
+  if (!comm->nvlsSupport || (comm->config.nvlsHostMode & ncclNvlsHostModeDisableSymmetricMultimem)) {
+    comm->defaultAlgoMask &= ~NCCL_TUNING_MASK_NVLS_SYM_KERNELS;
+  }
 }
 
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent,
@@ -1734,6 +1747,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   }
   if (graphs[NCCL_ALGO_COLLNET_CHAIN]->nChannels == 0) comm->config.collnetEnable = 0;
   if (graphs[NCCL_ALGO_NVLS]->nChannels == 0) comm->nvlsSupport = comm->nvlsChannels = 0;
+  ncclCommSetDefaultAlgoMask(comm);
 
   if (ncclNvlsTransportEnabled(comm)) {
     NCCLCHECKGOTO(ncclNvlsTuning(comm), ret, fail);

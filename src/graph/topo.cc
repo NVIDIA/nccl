@@ -1117,17 +1117,6 @@ static ncclResult_t xmlInitAttrInt(struct ncclXmlNode* node, const char* attrNam
   }
   return ncclSuccess;
 }
-static ncclResult_t xmlInitAttrUint64(struct ncclXmlNode* node, const char* attrName, const uint64_t value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
-  if (index == -1) {
-    NCCLCHECK(xmlGetNextAttrIndex(node, &index));
-    strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
-    node->attrs[index].key[MAX_STR_LEN] = '\0';
-    snprintf(node->attrs[index].value, MAX_STR_LEN, "0x%lx", value);
-  }
-  return ncclSuccess;
-}
 static ncclResult_t xmlInitAttrFloat(struct ncclXmlNode* node, const char* attrName, const float value) {
   int index;
   NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));

@@ -90,6 +90,8 @@ struct ncclTopoLinkList {
   int type;
 };
 
+#define NCCL_TOPO_UNDEF (-1)
+
 #define NCCL_TOPO_ID_LOCAL_ID_MASK 0x00ffffffffffffff
 #define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
 #define NCCL_TOPO_ID_LOCAL_ID(id) (id & NCCL_TOPO_ID_LOCAL_ID_MASK)

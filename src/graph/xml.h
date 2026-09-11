@@ -24,7 +24,6 @@
 #define MAX_ATTR_COUNT 16
 #define MAX_SUBS 640
 
-#define NCCL_TOPO_UNDEF (-1)
 #define NCCL_TOPO_UNDEF_BIT (0x1 << 16)
 
 #define NODE_TYPE_NONE 0

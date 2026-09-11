@@ -381,8 +381,9 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm* comm, int proxyRank, 
       ncclIpcFd fd = NCCL_INVALID_IPC_FD;
       // Send cuMem handle to remote for conversion to an fd
       NCCLCHECK(ncclProxyClientGetFdBlocking(comm, proxyRank, &desc->shmci.data, &fd));
-      CUCHECK(cuMemImportFromShareableHandle(&handle, (void*)(uintptr_t)fd, type));
-      (void)ncclIpcFdClose(fd);
+      CUresult shmImportRes = cuMemImportFromShareableHandle(&handle, (void*)(uintptr_t)fd, type);
+      (void)ncclIpcFdClose(fd);  // close the UDS fd whether or not the import succeeded
+      CUCHECK(shmImportRes);
     } else {
       CUCHECK(cuMemImportFromShareableHandle(&handle, &desc->shmci.handle, type));
     }

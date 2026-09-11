@@ -84,7 +84,7 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
     if (ibVerbsLib[i] == nullptr) continue;
     ibvhandle = dlopen(ibVerbsLib[i], RTLD_NOW);
     if (ibvhandle) break;
-    INFO(NCCL_INIT, "Count not open %s", ibVerbsLib[i]);
+    INFO(NCCL_INIT, "Could not open %s", ibVerbsLib[i]);
   }
   if (ibvhandle == nullptr) goto teardown;
 

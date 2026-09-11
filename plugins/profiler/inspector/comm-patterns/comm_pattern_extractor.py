@@ -22,6 +22,9 @@ from itertools import chain
 from pathlib import Path
 from time import perf_counter
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from inspector_json_reader import DumpContext
+
 EXTRACTOR_VERSION = "1.2"
 
 OP_EVENT_DATACLASS_OPTIONS = {"frozen": True}
@@ -104,14 +107,17 @@ def iter_records(path: Path) -> Iterator[tuple]:
     """
     unparsed = 0
     first_bad = 0
+    lineno = 0
     with smart_open(path) as infile:
+        dump_context = DumpContext()
         for lineno, line in enumerate(infile, 1):
             line = line.strip()
             if not line:
                 continue
             try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
+                rec = dump_context.restore(json.loads(line))
+            except (ValueError, KeyError):
+                dump_context.reset()
                 unparsed += 1
                 first_bad = first_bad or lineno
                 continue
@@ -167,6 +173,12 @@ def iter_records(path: Path) -> Iterator[tuple]:
                     start_ts_us=trace.get("p2p_start_ts"),
                     peer=perf.get("p2p_peer"),
                 )
+
+        try:
+            dump_context.finish()
+        except ValueError:
+            unparsed += 1
+            first_bad = first_bad or lineno
 
     if unparsed:
         yield "unparsed", first_bad, unparsed

@@ -25,7 +25,6 @@
 #include "os.h"
 #include "crypt.h"
 #include <cstring>
-#include <cstdbool>
 #include "socket.h"
 #include "utils.h"
 #include "checks.h"

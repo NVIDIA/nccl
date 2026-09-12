@@ -24,7 +24,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <cstring>
-#include <cstdbool>
 #include "socket.h"
 #include "utils.h"
 #include "checks.h"

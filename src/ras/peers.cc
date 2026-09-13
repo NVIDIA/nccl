@@ -557,8 +557,15 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
     INFO(NCCL_RAS, "RAS socket lacks a connection: status %d -- internal error?", sock->status);
     return ncclInternalError;
   }
-  sock->conn->lastRecvPeersHash = msg->peersUpdate.peersHash;
-  sock->conn->lastRecvDeadPeersHash = msg->peersUpdate.deadPeersHash;
+  struct rasConnection* conn = sock->conn;
+  // rasDeadPeersUpdate() below disconnects the connections of any newly dead peers, which frees
+  // the connection and all of its sockets.  Should that apply to the very connection this message
+  // arrived on (a peer can propagate its own death before going away), neither conn nor sock may
+  // be touched afterwards, so keep a copy of the address to determine whether conn remains valid.
+  union ncclSocketAddress connAddr;
+  memcpy(&connAddr, &conn->addr, sizeof(connAddr));
+  conn->lastRecvPeersHash = msg->peersUpdate.peersHash;
+  conn->lastRecvDeadPeersHash = msg->peersUpdate.deadPeersHash;
 
   // Prepare ours to send back.  We don't enqueue it right away because we want to make sure first that we need
   // to send it.  We'll find out by comparing the hash values after the merge.
@@ -593,6 +600,11 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
       NCCLCHECKGOTO(rasDeadPeersUpdate((union ncclSocketAddress*)(((char*)msg) + deadPeersOffset),
                                        &msg->peersUpdate.nDeadPeers),
                     ret, fail);
+      if (rasPeerIsDead(&connAddr)) {
+        // The peer at the other end of this connection is dead, so rasDeadPeersUpdate() may have
+        // terminated the connection and the socket this message arrived on.
+        conn = nullptr;
+      }
     } else {
       msg->peersUpdate.nDeadPeers = 0;
     }
@@ -605,11 +617,14 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
     if (msg->peersUpdate.nPeers > 0) rasPeersDump();
     if (msg->peersUpdate.nDeadPeers > 0) rasDeadPeersDump();
 
-    // If post-merge the hashes are still different, send our (dead) peers back.
-    updatePeers = (sock->conn->lastSentPeersHash != rasPeersHash && sock->conn->lastRecvPeersHash != rasPeersHash);
+    // If post-merge the hashes are still different, send our (dead) peers back.  If the connection
+    // is gone we cannot send anything through it, but still propagate below any dead peers we have
+    // just learned about (if any -- that's the only way the connection could be gone).
+    updatePeers = (conn && conn->lastSentPeersHash != rasPeersHash && conn->lastRecvPeersHash != rasPeersHash);
     updateDeadPeers =
-      (sock->conn->lastSentDeadPeersHash != rasDeadPeersHash && sock->conn->lastRecvDeadPeersHash != rasDeadPeersHash);
-    if (updatePeers || updateDeadPeers) {
+      (conn ? (conn->lastSentDeadPeersHash != rasDeadPeersHash && conn->lastRecvDeadPeersHash != rasDeadPeersHash) :
+              (msg->peersUpdate.nDeadPeers > 0));
+    if (conn && (updatePeers || updateDeadPeers)) {
       newMsg->peersUpdate.peersHash = rasPeersHash;
       newMsg->peersUpdate.deadPeersHash = rasDeadPeersHash;
       if (updatePeers) {
@@ -617,7 +632,7 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
           // Should never happen.
           INFO(NCCL_RAS, "RAS peersUpdate discrepancy: updatePeers is true but nPeers is 0 -- internal error?");
         }
-        sock->conn->lastSentPeersHash = rasPeersHash;
+        conn->lastSentPeersHash = rasPeersHash;
       } else {
         // If hashes match, make sure that we don't send the rasPeers back.
         newMsg->peersUpdate.nPeers = 0;
@@ -632,14 +647,14 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
           INFO(NCCL_RAS, "RAS peersUpdate discrepancy: updateDeadPeers is true but nRasDeadPeers is 0 -- "
                          "internal error?");
         }
-        sock->conn->lastSentDeadPeersHash = rasDeadPeersHash;
+        conn->lastSentDeadPeersHash = rasDeadPeersHash;
 
         ALIGN_SIZE(newMsgLen, alignof(union ncclSocketAddress));
         deadPeersOffset = newMsgLen;
         newMsgLen += nRasDeadPeers * sizeof(*rasDeadPeers);
 
         memcpy(((char*)newMsg) + deadPeersOffset, rasDeadPeers, nDeadPeers * sizeof(*rasDeadPeers));
-        sock->conn->lastSentDeadPeersHash = rasDeadPeersHash;
+        conn->lastSentDeadPeersHash = rasDeadPeersHash;
         newMsg->peersUpdate.nDeadPeers = nRasDeadPeers;
       } else {
         newMsg->peersUpdate.nDeadPeers = 0;
@@ -648,13 +663,12 @@ ncclResult_t rasMsgHandlePeersUpdate(struct rasMsg* msg, struct rasSocket* sock)
       INFO(NCCL_RAS, "RAS sending back a peersUpdate (nPeers %d, nDeadPeers %d)", newMsg->peersUpdate.nPeers,
            newMsg->peersUpdate.nDeadPeers);
 
-      rasConnEnqueueMsg(sock->conn, newMsg, newMsgLen);
+      rasConnEnqueueMsg(conn, newMsg, newMsgLen);
       newMsg = nullptr;
     } // if (updatePeers || updateDeadPeers)
 
     // Propagate the changes through our RAS network links.
-    NCCLCHECKGOTO(rasNetUpdatePeers(msg->peersUpdate.peers, msg->peersUpdate.nPeers, updateDeadPeers, nullptr, 0,
-                                    sock->conn),
+    NCCLCHECKGOTO(rasNetUpdatePeers(msg->peersUpdate.peers, msg->peersUpdate.nPeers, updateDeadPeers, nullptr, 0, conn),
                   ret, fail);
   }
 

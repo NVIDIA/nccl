@@ -162,6 +162,26 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     // The next M entries contain sendData, connection information for send connections
     // It's not guaranteed that each entry of data has the same number of total or send/recv specific connections
     int p = i - (done + 1);
+    if (sendPeer == recvPeer && (recvMask || sendMask)) {
+      // Both directions are exchanged in one message laid out as the mirror of ours; check that the peer's
+      // masks really mirror ours (not the case if e.g. both ranks call ncclSend outside a group).
+      uint64_t myMasks[2] = {recvMask, sendMask};
+      uint64_t peerMasks[2];
+      NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag + (1 << 6), myMasks, sizeof(myMasks)), ret,
+                    fail);
+      NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, recvPeer, bootstrapTag + (1 << 6), peerMasks, sizeof(peerMasks)),
+                    ret, fail);
+      if (peerMasks[0] != sendMask || peerMasks[1] != recvMask) {
+        WARN(
+          "Rank %d has %d send and %d recv connections with rank %d, but rank %d has %d send and %d recv connections "
+          "with rank %d; ncclSend/ncclRecv calls that must progress concurrently need to be in the same "
+          "ncclGroupStart/ncclGroupEnd",
+          comm->rank, __builtin_popcountll(sendMask), __builtin_popcountll(recvMask), recvPeer, recvPeer,
+          __builtin_popcountll(peerMasks[1]), __builtin_popcountll(peerMasks[0]), comm->rank);
+        ret = ncclInvalidUsage;
+        goto fail;
+      }
+    }
     if (recvMask || sendMask) {
       if (data[p] == NULL) NCCLCHECKGOTO(ncclCalloc(data + p, 2 * MAXCHANNELS), ret, fail);
       else memset(data[p], 0, 2 * MAXCHANNELS * sizeof(struct ncclConnect));

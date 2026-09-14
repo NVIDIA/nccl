@@ -18,9 +18,17 @@
 
 struct niinContext {
   ncclDevComm const* comm;       // NCCL device communicator
+  ncclDevComm commValue;         // Constant-context copy of the communicator
   ncclWindow_t heapWindow;       // The single symmetric heap window
   void* heapBase;                // Local base pointer of the heap
   size_t heapSize;               // Size of the symmetric heap
+  void** peerHeapBaseP2p;        // Per-world-rank LSA heap base, null for non-LSA peers
+  int rank;                      // WORLD rank cached for LSA fast paths
+  int nRanks;                    // WORLD size cached for LSA fast paths
+  int lsaRank;                   // LSA rank cached for LSA fast paths
+  int lsaSize;                   // LSA size cached for LSA fast paths
+  unsigned int ginConnectionCount; // Nonzero when GIN is provisioned
+  bool worldIsLsaOnly;           // True when TEAM_WORLD is one LSA domain
   int nodeRank;                  // Rank among PEs on this physical node
   int nodeSize;                  // Number of PEs on this physical node
   // Optional, NIIN-owned AMO provider (native GPUNetIO direct WQEs or the
@@ -29,6 +37,9 @@ struct niinContext {
   const struct niinGpunetioAtomicContext* gpunetioAtomicContext;
   bool peerNativeAtomic;         // True if peer GPUs support native system-scope atomics
   bool forceSeparatePutSignal;   // Force put+fence+signal instead of fused put_signal
+  unsigned int* ginPendingOps;   // Device scalar: unquieted GIN operations
+  unsigned int* lsaStorePending; // Per-CTA flag: local/LSA stores needing quiet fence
+  size_t lsaStorePendingLen;     // Number of entries in lsaStorePending
   int tmaPolicy;                 // nvshmemx_tma_policy_t for the LSA put/get paths
   uintptr_t* tmaSmemBases;       // Per-CTA shared-memory base registered by give_smem
   size_t tmaSmemBasesLen;        // Number of entries in tmaSmemBases

@@ -86,18 +86,26 @@ __device__ __forceinline__ void niin_coop_copy(
 template<int SCOPE, bool BLOCKING = true>
 __device__ __forceinline__ void niin_coop_put(
     void* dest, const void* src, size_t bytes, int pe,
-    int tid, int nthreads, int ctx = -1) {
+    int tid, int nthreads, int ctx = -1, bool markLsaPending = true) {
   if (pe == niin_device_my_pe()) {
-    if (niin_tma_try_copy<SCOPE, BLOCKING>(dest, src, bytes) == 0) return;
+    if (niin_tma_try_copy<SCOPE>(dest, src, bytes) == 0) {
+      if (markLsaPending && tid == 0) niin_note_lsa_store_pending();
+      return;
+    }
     niin_coop_copy(dest, src, bytes, tid, nthreads);
+    if (markLsaPending && tid == 0) niin_note_lsa_store_pending();
     return;
   }
 
   size_t offset = niin_sym_offset(dest);
-  if (niin_is_lsa_peer(pe)) {
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {
     void* peerDst = niin_get_peer_ptr(offset, pe);
-    if (niin_tma_try_copy<SCOPE, BLOCKING>(peerDst, src, bytes) == 0) return;
+    if (niin_tma_try_copy<SCOPE>(peerDst, src, bytes) == 0) {
+      if (markLsaPending && tid == 0) niin_note_lsa_store_pending();
+      return;
+    }
     niin_coop_copy(peerDst, src, bytes, tid, nthreads);
+    if (markLsaPending && tid == 0) niin_note_lsa_store_pending();
     return;
   }
 
@@ -120,7 +128,7 @@ __device__ __forceinline__ void niin_coop_get(
   }
 
   size_t offset = niin_sym_offset(src);
-  if (niin_is_lsa_peer(pe)) {
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {
     const void* peerSrc = niin_get_peer_ptr(offset, pe);
     if (niin_tma_try_copy<SCOPE>(dest, peerSrc, bytes) == 0) return;
     niin_coop_copy(dest, peerSrc, bytes, tid, nthreads);
@@ -401,18 +409,18 @@ __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_signal_warp(        \
     uint64_t* sig, uint64_t signal, int sig_op, int pe) {                    \
   /* Re-converge the warp before reading src: callers often have only lane 0 */ \
   /* wait on the inbound signal before forwarding the buffer. */              \
-  const bool lsa = niin_is_lsa_peer(pe);                                       \
+  const bool lsa = niin_world_is_lsa_only() || niin_is_lsa_peer(pe);           \
   int ctx = -1;                                                                \
   if (nccl::utility::lane() == 0 && !lsa) ctx = niin_gin_next_context();       \
   __syncwarp();                                                                \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system); \
   niin_coop_put<NIIN_TMA_WARP>(dest, src, nelems * sizeof(TYPE), pe,           \
-                               nccl::utility::lane(), 32, ctx);                \
+                               nccl::utility::lane(), 32, ctx, false);         \
   if (ctx >= 0) niin_gin_flush_thread(ctx);                                    \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system); \
   __syncwarp();                                                                \
   if (nccl::utility::lane() == 0) {                                            \
-    if (lsa) __threadfence_system();                                           \
+    if (lsa) { __threadfence_system(); niin_clear_lsa_store_pending(); }        \
     niin_deliver_signal(sig, signal, sig_op, pe, ctx);                         \
   }                                                                            \
   __syncwarp();                                                                \
@@ -427,18 +435,18 @@ __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_signal_block(       \
     uint64_t* sig, uint64_t signal, int sig_op, int pe) {                    \
   /* Re-converge the CTA before reading src: callers often have only thread 0 */ \
   /* wait on the inbound signal before forwarding the buffer. */              \
-  const bool lsa = niin_is_lsa_peer(pe);                                       \
+  const bool lsa = niin_world_is_lsa_only() || niin_is_lsa_peer(pe);           \
   int ctx = -1;                                                                \
   if (threadIdx.x == 0 && !lsa) ctx = niin_gin_next_context();                 \
   __syncthreads();                                                             \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system); \
   niin_coop_put<NIIN_TMA_BLOCK>(dest, src, nelems * sizeof(TYPE), pe,          \
-                                threadIdx.x, blockDim.x, ctx);                 \
+                                threadIdx.x, blockDim.x, ctx, false);          \
   if (ctx >= 0) niin_gin_flush_thread(ctx);                                    \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system); \
   __syncthreads();                                                             \
   if (threadIdx.x == 0) {                                                      \
-    if (lsa) __threadfence_system();                                           \
+    if (lsa) { __threadfence_system(); niin_clear_lsa_store_pending(); }        \
     niin_deliver_signal(sig, signal, sig_op, pe, ctx);                         \
   }                                                                            \
   __syncthreads();                                                             \
@@ -451,17 +459,17 @@ NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_PUT_SIGNAL_BLOCK)
 __device__ __forceinline__ void nvshmemx_putmem_signal_warp(
     void* dest, const void* src, size_t bytes,
     uint64_t* sig, uint64_t signal, int sig_op, int pe) {
-  const bool lsa = niin_is_lsa_peer(pe);
+  const bool lsa = niin_world_is_lsa_only() || niin_is_lsa_peer(pe);
   int ctx = -1;
   if (nccl::utility::lane() == 0 && !lsa) ctx = niin_gin_next_context();
   __syncwarp();
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
-  niin_coop_put<NIIN_TMA_WARP>(dest, src, bytes, pe, nccl::utility::lane(), 32, ctx);
+  niin_coop_put<NIIN_TMA_WARP>(dest, src, bytes, pe, nccl::utility::lane(), 32, ctx, false);
   if (ctx >= 0) niin_gin_flush_thread(ctx);
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
   __syncwarp();
   if (nccl::utility::lane() == 0) {
-    if (lsa) __threadfence_system();
+    if (lsa) { __threadfence_system(); niin_clear_lsa_store_pending(); }
     niin_deliver_signal(sig, signal, sig_op, pe, ctx);
   }
   __syncwarp();
@@ -469,17 +477,17 @@ __device__ __forceinline__ void nvshmemx_putmem_signal_warp(
 __device__ __forceinline__ void nvshmemx_putmem_signal_block(
     void* dest, const void* src, size_t bytes,
     uint64_t* sig, uint64_t signal, int sig_op, int pe) {
-  const bool lsa = niin_is_lsa_peer(pe);
+  const bool lsa = niin_world_is_lsa_only() || niin_is_lsa_peer(pe);
   int ctx = -1;
   if (threadIdx.x == 0 && !lsa) ctx = niin_gin_next_context();
   __syncthreads();
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
-  niin_coop_put<NIIN_TMA_BLOCK>(dest, src, bytes, pe, threadIdx.x, blockDim.x, ctx);
+  niin_coop_put<NIIN_TMA_BLOCK>(dest, src, bytes, pe, threadIdx.x, blockDim.x, ctx, false);
   if (ctx >= 0) niin_gin_flush_thread(ctx);
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
   __syncthreads();
   if (threadIdx.x == 0) {
-    if (lsa) __threadfence_system();
+    if (lsa) { __threadfence_system(); niin_clear_lsa_store_pending(); }
     niin_deliver_signal(sig, signal, sig_op, pe, ctx);
   }
   __syncthreads();

@@ -19,28 +19,66 @@
 // internal definition instead.
 #if defined(__CUDACC_RDC__)
 inline __device__ niinContext* niin_g_ctx;
+inline __constant__ niinContext niin_g_ctx_constant;
 #else
 static __device__ niinContext* niin_g_ctx;
+static __constant__ niinContext niin_g_ctx_constant;
 #endif
+
+#ifndef NIIN_USE_DEVICE_CONTEXT_POINTER
+#define NIIN_USE_DEVICE_CONTEXT_POINTER 0
+#endif
+
+__device__ __forceinline__ niinContext const& niin_ctx() {
+#if NIIN_USE_DEVICE_CONTEXT_POINTER
+  return *niin_g_ctx;
+#else
+  return niin_g_ctx_constant;
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers for accessing context fields
 // ---------------------------------------------------------------------------
 
 __device__ __forceinline__ ncclDevComm const& niin_comm() {
+#if NIIN_USE_DEVICE_CONTEXT_POINTER
   return *niin_g_ctx->comm;
+#else
+  return niin_g_ctx_constant.commValue;
+#endif
 }
 
 __device__ __forceinline__ ncclWindow_t niin_heap_window() {
-  return niin_g_ctx->heapWindow;
+  return niin_ctx().heapWindow;
 }
 
 __device__ __forceinline__ void* niin_heap_base() {
-  return niin_g_ctx->heapBase;
+  return niin_ctx().heapBase;
 }
 
 __device__ __forceinline__ size_t niin_heap_size() {
-  return niin_g_ctx->heapSize;
+  return niin_ctx().heapSize;
+}
+
+__device__ __forceinline__ void** niin_peer_heap_base_p2p() {
+  return niin_ctx().peerHeapBaseP2p;
+}
+
+__device__ __forceinline__ int niin_rank() {
+  return niin_ctx().rank;
+}
+
+__device__ __forceinline__ int niin_n_ranks() {
+  return niin_ctx().nRanks;
+}
+
+__device__ __forceinline__ int niin_lsa_rank() {
+  return niin_ctx().lsaRank;
+}
+
+__device__ __forceinline__ int niin_lsa_size() {
+  return niin_ctx().lsaSize;
 }
 
 // Number of GIN contexts on this comm. Each context owns one QP per peer, and
@@ -87,20 +125,82 @@ __device__ __forceinline__ int niin_gin_collective_context_index() {
 }
 
 __device__ __forceinline__ const struct niinGpunetioAtomicContext* niin_gpunetio_atomic_context() {
-  return niin_g_ctx->gpunetioAtomicContext;
+  return niin_ctx().gpunetioAtomicContext;
 }
 
 __device__ __forceinline__ bool niin_has_gin() {
-  return niin_comm().ginConnectionCount > 0;
+  return niin_ctx().ginConnectionCount > 0;
+}
+
+__device__ __forceinline__ bool niin_world_is_lsa_only() {
+  return niin_ctx().worldIsLsaOnly;
+}
+
+__device__ __forceinline__ size_t niin_linear_block_id() {
+  return (size_t)blockIdx.x + (size_t)blockIdx.y * gridDim.x +
+         (size_t)blockIdx.z * gridDim.x * gridDim.y;
+}
+
+__device__ __forceinline__ void niin_note_lsa_store_pending() {
+  niinContext const& ctx = niin_ctx();
+  unsigned int* pending = ctx.lsaStorePending;
+  size_t blockId = niin_linear_block_id();
+  if (pending != nullptr && blockId < ctx.lsaStorePendingLen) pending[blockId] = 1u;
+}
+
+__device__ __forceinline__ bool niin_consume_lsa_store_pending() {
+  niinContext const& ctx = niin_ctx();
+  unsigned int* pending = ctx.lsaStorePending;
+  size_t blockId = niin_linear_block_id();
+  if (pending == nullptr || blockId >= ctx.lsaStorePendingLen) return true;
+  if (*(volatile unsigned int*)&pending[blockId] == 0u) return false;
+  pending[blockId] = 0u;
+  return true;
+}
+
+__device__ __forceinline__ void niin_clear_lsa_store_pending() {
+  niinContext const& ctx = niin_ctx();
+  unsigned int* pending = ctx.lsaStorePending;
+  size_t blockId = niin_linear_block_id();
+  if (pending != nullptr && blockId < ctx.lsaStorePendingLen) pending[blockId] = 0u;
+}
+
+__device__ __forceinline__ void niin_note_gin_op_pending() {
+  unsigned int* pending = niin_ctx().ginPendingOps;
+  if (pending != nullptr) atomicAdd(pending, 1u);
+}
+
+__device__ __forceinline__ void niin_note_gin_op_complete() {
+  unsigned int* pending = niin_ctx().ginPendingOps;
+  if (pending == nullptr) return;
+  unsigned int old = atomicAdd(pending, 0u);
+  while (old != 0u) {
+    unsigned int prev = atomicCAS(pending, old, old - 1u);
+    if (prev == old) return;
+    old = prev;
+  }
+}
+
+__device__ __forceinline__ bool niin_has_gin_ops_pending() {
+  unsigned int* pending = niin_ctx().ginPendingOps;
+  if (pending == nullptr) return niin_has_gin();
+  return *(volatile unsigned int*)pending != 0u;
+}
+
+__device__ __forceinline__ unsigned int niin_take_gin_ops_pending() {
+  unsigned int* pending = niin_ctx().ginPendingOps;
+  if (pending == nullptr) return niin_has_gin() ? 1u : 0u;
+  return atomicExch(pending, 0u);
 }
 
 // Compute byte offset of a symmetric pointer relative to the heap base.
 __device__ __forceinline__ size_t niin_sym_offset(const void* symPtr) {
-  return (size_t)((const char*)symPtr - (const char*)niin_g_ctx->heapBase);
+  return (size_t)((const char*)symPtr - (const char*)niin_ctx().heapBase);
 }
 
 // Check whether pe is reachable via NVLink (i.e., is in our LSA team).
 __device__ __forceinline__ bool niin_is_lsa_peer(int pe) {
+  if (niin_world_is_lsa_only()) return true;
   ncclDevComm const& c = niin_comm();
   if (c.lsaSize <= 1) return false;
   ncclTeam lsa = ncclTeamLsa(c);
@@ -110,20 +210,25 @@ __device__ __forceinline__ bool niin_is_lsa_peer(int pe) {
 
 // Check whether peer GPUs support native system-scope atomics.
 __device__ __forceinline__ bool niin_peer_native_atomic() {
-  return niin_g_ctx->peerNativeAtomic;
+  return niin_ctx().peerNativeAtomic;
 }
 
 __device__ __forceinline__ bool niin_force_separate_put_signal() {
-  return niin_g_ctx->forceSeparatePutSignal;
+  return niin_ctx().forceSeparatePutSignal;
 }
 
 // TMA policy selected at initialization (NVSHMEM_TMA_POLICY).
 __device__ __forceinline__ int niin_tma_policy() {
-  return niin_g_ctx->tmaPolicy;
+  return niin_ctx().tmaPolicy;
 }
 
 // Get a peer pointer for an LSA peer at the given symmetric offset.
 __device__ __forceinline__ void* niin_get_peer_ptr(size_t offset, int pe) {
+  void** peerHeapBaseP2p = niin_peer_heap_base_p2p();
+  if (peerHeapBaseP2p != nullptr) {
+    auto base = (char*)__ldg((const unsigned long long*)peerHeapBaseP2p + pe);
+    if (base != nullptr) return base + offset;
+  }
   return ncclGetPeerPointer(niin_heap_window(), offset, pe);
 }
 

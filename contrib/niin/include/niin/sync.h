@@ -21,7 +21,7 @@ static __device__ unsigned long long niin_test_any_cursor = 0;
 // complete work issued by other threads entirely.
 __device__ __forceinline__ void niin_device_drain_all_contexts() {
   ncclDevComm const& comm = niin_comm();
-  if (comm.ginConnectionCount == 0) return;
+  if (niin_world_is_lsa_only() || !niin_has_gin()) return;
   uint32_t nCtx = niin_gin_context_count();
   if (nCtx == 1) {  // the common single-QP case: one flush, no loop
     ncclGin gin(comm, 0);
@@ -48,23 +48,49 @@ __device__ __forceinline__ void niin_device_drain_all_contexts() {
 //     from GIN, so a pending put is not ordered against a following AMO.
 // Either of those turns fence into the same all-contexts drain quiet does.
 __device__ __forceinline__ bool niin_fence_needs_completion() {
+  if (niin_world_is_lsa_only() || !niin_has_gin()) return false;
   if (niin_gin_context_count() > 1) return true;
   return niin_gpunetio_atomic_context() != nullptr;
 }
 
-__device__ __forceinline__ void niin_device_fence() {
+NIIN_NOINLINE_DEVICE void niin_device_fence_slow() {
   // Drain this thread's TMA bulk ops first. Unlike the context drain below this
   // is not gated on connectivity: in a mixed topology, TMA puts to LSA peers
   // are invisible to GIN, so a fence after a TMA put must order it either way.
+  const bool hadTma = niin_tma_smem_registered();
   niin_tma_drain_if_registered();
-  if (niin_fence_needs_completion()) niin_device_drain_all_contexts();
-  __threadfence_system();
+  const bool hadLsaStores = niin_consume_lsa_store_pending();
+  const bool hadGinOps = !niin_world_is_lsa_only() && niin_has_gin_ops_pending();
+  if (hadGinOps && niin_fence_needs_completion()) {
+    (void)niin_take_gin_ops_pending();
+    niin_device_drain_all_contexts();
+  }
+  if (hadTma || hadLsaStores || hadGinOps) __threadfence_system();
+}
+
+__device__ __forceinline__ void niin_device_fence() {
+  if (niin_world_is_lsa_only() && niin_tma_policy() == NVSHMEMX_TMA_DISABLE) {
+    if (niin_consume_lsa_store_pending()) __threadfence_system();
+    return;
+  }
+  niin_device_fence_slow();
+}
+
+NIIN_NOINLINE_DEVICE void niin_device_quiet_slow() {
+  const bool hadTma = niin_tma_smem_registered();
+  niin_tma_drain_if_registered();
+  const bool hadLsaStores = niin_consume_lsa_store_pending();
+  const bool hadGinOps = !niin_world_is_lsa_only() && (niin_take_gin_ops_pending() != 0u);
+  if (hadGinOps) niin_device_drain_all_contexts();
+  if (hadTma || hadLsaStores || hadGinOps) __threadfence_system();
 }
 
 __device__ __forceinline__ void niin_device_quiet() {
-  niin_tma_drain_if_registered();
-  niin_device_drain_all_contexts();
-  __threadfence_system();
+  if (niin_world_is_lsa_only() && niin_tma_policy() == NVSHMEMX_TMA_DISABLE) {
+    if (niin_consume_lsa_store_pending()) __threadfence_system();
+    return;
+  }
+  niin_device_quiet_slow();
 }
 
 // Kernel form of quiet for host-side paths. Templated so each translation unit

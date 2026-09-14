@@ -228,6 +228,7 @@ inline void enableGpunetioAtomics(GlobalState& s) {
   struct niinGpunetioAtomicHostContext* provider = nullptr;
   ncclResult_t r = niinGpunetioAtomicInit(s.comm, s.heapBase, s.heapSize, &options, &provider);
   if (r == ncclSuccess) r = niinGpunetioAtomicBind(provider, s.devCtx);
+  if (r == ncclSuccess) r = niinRefreshContextCache(s.devCtx);
   if (r != ncclSuccess) {
     if (provider != nullptr) niinGpunetioAtomicFinalize(provider);
     if (mode == 1 && s.rank == 0)
@@ -527,9 +528,14 @@ inline int initCommon(ncclComm_t comm) {
   }
   s.hostCtx.forceSeparatePutSignal = parseForceSeparatePutSignal();
 
+  // SHMEM TEAM WORLD is exactly one LSA domain on single-node jobs. Do not
+  // force GIN resources into that communicator: all WORLD peers are reachable
+  // by LSA, and device collectives/quiet have pure-LSA specializations.
+  const bool needGin = s.ginAvail && s.nRanks > s.nodeSize;
+
   // Two-phase init
   ncclGroupStart();
-  r = niinInit(comm, s.heapBase, s.heapSize, &s.hostCtx, s.ginAvail,
+  r = niinInit(comm, s.heapBase, s.heapSize, &s.hostCtx, needGin,
                /*barrierCount=*/1, /*ginSignalCount=*/0,
                /*ginContextCount=*/0, s.nodeRank, s.nodeSize);
   ncclGroupEnd();
@@ -995,7 +1001,7 @@ inline void niin_host_quiet() {
   auto& s = niin::detail::state();
   // Wait for in-flight kernels to retire first -- they may still be issuing puts.
   niin_host_fence();
-  if (!s.initialized || !s.ginAvail) return;
+  if (!s.initialized || s.hostCtx.devComm.ginConnectionCount == 0) return;
   // A put can still be in flight on a GIN context after the kernel that issued it
   // has retired, so cudaDeviceSynchronize() alone does not complete it.
   niin_quiet_kernel<><<<1, 1, 0, s.stream>>>();

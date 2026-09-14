@@ -16,6 +16,7 @@ NIIN_NOINLINE_DEVICE void niin_gin_flush_thread(int ctx) {
   if (!niin_has_gin()) return;
   ncclGin gin(niin_comm(), ctx);
   gin.flush(ncclCoopThread{});
+  niin_note_gin_op_complete();
 }
 
 NIIN_NOINLINE_DEVICE void niin_deliver_signal_remote_va(
@@ -32,24 +33,26 @@ NIIN_NOINLINE_DEVICE void niin_deliver_signal_remote_va(
   } else {
     gin.signal(world, pe, ncclGin_VASignalAdd{niin_heap_window(), sigOffset, signal});
   }
+  niin_note_gin_op_pending();
   gin.flush(ncclCoopThread{});
+  niin_note_gin_op_complete();
 }
 
 __device__ __forceinline__ void niin_deliver_signal(
     uint64_t* sig_addr, uint64_t signal, int sig_op, int pe, int ctx = -1) {
   size_t sigOffset = niin_sym_offset(sig_addr);
-  if (pe == nvshmem_my_pe()) {
+  if (pe == niin_rank()) {
     if (sig_op == NVSHMEM_SIGNAL_SET) atomicExch((unsigned long long*)sig_addr, signal);
     else atomicAdd((unsigned long long*)sig_addr, signal);
     return;
   }
-  if (niin_is_lsa_peer(pe) && niin_peer_native_atomic()) {
+  if ((niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) && niin_peer_native_atomic()) {
     uint64_t* peerSig = (uint64_t*)niin_get_peer_ptr(sigOffset, pe);
     if (sig_op == NVSHMEM_SIGNAL_SET) {
-      *(volatile uint64_t*)peerSig = signal;
+      atomicExch_system((unsigned long long*)peerSig, signal);
       return;
     }
-    atomicAdd((unsigned long long*)peerSig, signal);
+    atomicAdd_system((unsigned long long*)peerSig, signal);
     return;
   }
   niin_deliver_signal_remote_va(sigOffset, signal, sig_op, pe, ctx);
@@ -58,8 +61,33 @@ __device__ __forceinline__ void niin_deliver_signal(
 __device__ __forceinline__ bool niin_use_separate_put_signal(int pe, int sig_op) {
   if (sig_op == NVSHMEM_SIGNAL_SET) return true;
   if (niin_force_separate_put_signal()) return true;
+  if (niin_world_is_lsa_only()) return !niin_peer_native_atomic();
   if (!niin_is_lsa_peer(pe)) return true;
-  return niin_is_lsa_peer(pe) && !niin_peer_native_atomic();
+  return !niin_peer_native_atomic();
+}
+
+__device__ __forceinline__ void niin_memcpy_to_peer_latency_path(
+    void* __restrict__ dst, const void* __restrict__ src, size_t bytes) {
+  if (bytes == 1) {
+    *(volatile unsigned char*)dst = *(volatile const unsigned char*)src;
+    return;
+  }
+  niin_memcpy_to_peer(dst, src, bytes);
+}
+
+__device__ __forceinline__ void niin_deliver_signal_lsa_fast(
+    uint64_t* sig_addr, uint64_t signal, int sig_op, int pe) {
+  uint64_t* target = sig_addr;
+  if (pe != niin_rank()) {
+    target = (uint64_t*)niin_get_peer_ptr(niin_sym_offset(sig_addr), pe);
+  }
+  if (sig_op == NVSHMEM_SIGNAL_SET) {
+    if (pe == niin_rank()) atomicExch((unsigned long long*)target, signal);
+    else atomicExch_system((unsigned long long*)target, signal);
+  } else {
+    if (pe == niin_rank()) atomicAdd((unsigned long long*)target, signal);
+    else atomicAdd_system((unsigned long long*)target, signal);
+  }
 }
 
 // The GIN transport routines stay out of line. Inlining them expanded a full
@@ -96,23 +124,26 @@ NIIN_NOINLINE_DEVICE void niin_putmem_signal_remote_fused(
     niin_heap_window(), niin_sym_offset(src), bytes,
     sigAction
   );
+  niin_note_gin_op_pending();
 }
 
-__device__ __forceinline__ void niin_putmem_signal_impl(
+NIIN_NOINLINE_DEVICE void niin_putmem_signal_slow(
     void* dest, const void* src, size_t bytes,
     uint64_t* sig_addr, uint64_t signal, int sig_op, int pe) {
-  if (pe == nvshmem_my_pe()) {
+  if (pe == niin_rank()) {
     niin_memcpy_to_peer(dest, src, bytes);
     __threadfence_system();
+    niin_clear_lsa_store_pending();
     niin_deliver_signal(sig_addr, signal, sig_op, pe);
     return;
   }
 
   size_t dstOffset = niin_sym_offset(dest);
-  if (niin_is_lsa_peer(pe)) {
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {
     void* peerDst = niin_get_peer_ptr(dstOffset, pe);
     niin_memcpy_to_peer(peerDst, src, bytes);
     __threadfence_system();
+    niin_clear_lsa_store_pending();
     niin_deliver_signal(sig_addr, signal, sig_op, pe);
     return;
   }
@@ -123,6 +154,24 @@ __device__ __forceinline__ void niin_putmem_signal_impl(
   }
 
   niin_putmem_signal_remote_fused(dstOffset, src, bytes, sig_addr, signal, pe);
+}
+
+__device__ __forceinline__ void niin_putmem_signal_impl(
+    void* dest, const void* src, size_t bytes,
+    uint64_t* sig_addr, uint64_t signal, int sig_op, int pe) {
+  if (niin_world_is_lsa_only() && (pe == niin_rank() || niin_peer_native_atomic())) {
+    void* target = dest;
+    if (pe != niin_rank()) {
+      target = niin_get_peer_ptr(niin_sym_offset(dest), pe);
+    }
+    niin_memcpy_to_peer_latency_path(target, src, bytes);
+    __threadfence_system();
+    niin_clear_lsa_store_pending();
+    niin_deliver_signal_lsa_fast(sig_addr, signal, sig_op, pe);
+    return;
+  }
+
+  niin_putmem_signal_slow(dest, src, bytes, sig_addr, signal, sig_op, pe);
 }
 
 // ---------------------------------------------------------------------------
@@ -208,8 +257,6 @@ __device__ __forceinline__ uint64_t nvshmem_signal_wait_until(
   do {
     val = *v;
   } while (!niin_cmp_eval_u(cmp, val, cmp_value));
-  // Acquire fence: data written before the signal must be visible
-  cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
   return val;
 }
 

@@ -204,9 +204,10 @@ __device__ __forceinline__ size_t niin_tma_block_id() {
 __device__ __forceinline__ bool niin_tma_smem_registered() {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
   if (niin_tma_policy() == NVSHMEMX_TMA_DISABLE) return false;
-  uintptr_t* bases = niin_g_ctx->tmaSmemBases;
+  niinContext const& ctx = niin_ctx();
+  uintptr_t* bases = ctx.tmaSmemBases;
   size_t blockId = niin_tma_block_id();
-  return bases != nullptr && blockId < niin_g_ctx->tmaSmemBasesLen && bases[blockId] != 0;
+  return bases != nullptr && blockId < ctx.tmaSmemBasesLen && bases[blockId] != 0;
 #else
   return false;
 #endif
@@ -216,7 +217,7 @@ __device__ __forceinline__ bool niin_tma_smem_registered() {
 // uniform across the grid, so a single scalar covers the whole table).
 __device__ __forceinline__ size_t niin_tma_smem_size() {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
-  size_t* p = niin_g_ctx->tmaSmemSize;
+  size_t* p = niin_ctx().tmaSmemSize;
   return p != nullptr ? *p : 0;
 #else
   return 0;
@@ -301,9 +302,10 @@ __device__ __forceinline__ void nvshmemx_give_smem(void* smem, size_t size) {
   // this CTA then uses load/store.
   if (!niin_tma_is_16b_aligned((size_t)(uintptr_t)smem)) return;
 
-  uintptr_t* bases = niin_g_ctx->tmaSmemBases;
+  niinContext const& ctx = niin_ctx();
+  uintptr_t* bases = ctx.tmaSmemBases;
   size_t blockId = niin_tma_block_id();
-  if (bases == nullptr || blockId >= niin_g_ctx->tmaSmemBasesLen) {
+  if (bases == nullptr || blockId >= ctx.tmaSmemBasesLen) {
     // Grid is larger than the registration table; this CTA cannot use TMA.
     return;
   }
@@ -313,7 +315,7 @@ __device__ __forceinline__ void nvshmemx_give_smem(void* smem, size_t size) {
 
   if (niin_tma_block_is_elected()) {
     bases[blockId] = (uintptr_t)smem;
-    size_t* sizeSlot = niin_g_ctx->tmaSmemSize;
+    size_t* sizeSlot = ctx.tmaSmemSize;
     if (sizeSlot != nullptr) *sizeSlot = size;
   }
 #else
@@ -329,9 +331,10 @@ __device__ __forceinline__ void nvshmemx_give_smem(void* smem, size_t size) {
 __device__ __forceinline__ void nvshmemx_release_smem() {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
   if (niin_tma_policy() == NVSHMEMX_TMA_DISABLE) return;
-  uintptr_t* bases = niin_g_ctx->tmaSmemBases;
+  niinContext const& ctx = niin_ctx();
+  uintptr_t* bases = ctx.tmaSmemBases;
   size_t blockId = niin_tma_block_id();
-  if (bases != nullptr && blockId < niin_g_ctx->tmaSmemBasesLen) {
+  if (bases != nullptr && blockId < ctx.tmaSmemBasesLen) {
     if (niin_tma_block_is_elected()) bases[blockId] = 0;
   }
 #endif
@@ -394,7 +397,7 @@ __device__ __forceinline__ int niin_tma_copy_global_shared(void* smemDst, const 
   if (!niin_tma_is_16b_aligned(bytes)) return -1;
   if (bytes > (size_t)UINT32_MAX) return -1;
 
-  uintptr_t base = niin_g_ctx->tmaSmemBases[niin_tma_block_id()];
+  uintptr_t base = niin_ctx().tmaSmemBases[niin_tma_block_id()];
   size_t smemSize = niin_tma_smem_size();
   constexpr size_t kReserve = (size_t)NIIN_SMEM_DATA_REGION_OFFSET;
   if (base == 0 || smemSize <= kReserve) return -1;
@@ -442,7 +445,7 @@ __device__ __forceinline__ int niin_tma_copy_global_global_single(void* gmemDst,
   if (!niin_tma_is_16b_aligned((size_t)(uintptr_t)gmemSrc)) return -1;
   if (!niin_tma_is_16b_aligned(bytes)) return -1;
 
-  uintptr_t base = niin_g_ctx->tmaSmemBases[niin_tma_block_id()];
+  uintptr_t base = niin_ctx().tmaSmemBases[niin_tma_block_id()];
   size_t smemSize = niin_tma_smem_size();
   constexpr size_t kReserve = (size_t)NIIN_SMEM_DATA_REGION_OFFSET;
   if (base == 0 || smemSize <= kReserve) return -1;
@@ -520,7 +523,7 @@ __device__ __forceinline__ int niin_tma_copy_global_global_block(void* gmemDst,
   if (!niin_tma_is_16b_aligned((size_t)(uintptr_t)gmemSrc)) return -1;
   if (!niin_tma_is_16b_aligned(bytes)) return -1;
 
-  uintptr_t base = niin_g_ctx->tmaSmemBases[niin_tma_block_id()];
+  uintptr_t base = niin_ctx().tmaSmemBases[niin_tma_block_id()];
   size_t smemSize = niin_tma_smem_size();
   constexpr size_t kReserve = (size_t)NIIN_SMEM_DATA_REGION_OFFSET;
   if (base == 0 || smemSize <= kReserve) return -1;

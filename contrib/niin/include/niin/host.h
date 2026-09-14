@@ -52,10 +52,14 @@ struct niinContext_host {
   ncclWindow_t heapWindow;
   void* heapBase;
   size_t heapSize;
+  void** peerHeapBaseP2p;
   int nodeRank;
   int nodeSize;
   bool peerNativeAtomic;  // Whether peer GPUs support native system-scope atomics
   bool forceSeparatePutSignal; // Force put+fence+signal instead of fused put_signal
+  unsigned int* ginPendingOps;  // Device scalar tracking unquieted GIN ops
+  unsigned int* lsaStorePending; // Device per-CTA flags for local/LSA stores
+  size_t lsaStorePendingLen;    // Entries in lsaStorePending
   // TMA state, owned by niinTmaEnable/niinTmaDisable. niinInit clears these, so
   // callers that manage a niinContext_host themselves get TMA off by default.
   int tmaPolicy;               // nvshmemx_tma_policy_t
@@ -149,14 +153,54 @@ inline ncclResult_t niinInit(ncclComm_t comm,
 
   hostCtx->heapBase = heapBuf;
   hostCtx->heapSize = heapSize;
+  hostCtx->peerHeapBaseP2p = nullptr;
   hostCtx->nodeRank = nodeRank;
   hostCtx->nodeSize = nodeSize;
+  hostCtx->ginPendingOps = nullptr;
+  hostCtx->lsaStorePending = nullptr;
+  hostCtx->lsaStorePendingLen = 0;
 
   // TMA is opt-in; niinTmaEnable() turns it on after this call.
   hostCtx->tmaPolicy = NVSHMEMX_TMA_DISABLE;
   hostCtx->tmaSmemBases = nullptr;
   hostCtx->tmaSmemBasesLen = 0;
   hostCtx->tmaSmemSize = nullptr;
+
+  return ncclSuccess;
+}
+
+inline void niinPendingStateDisable(niinContext_host* hostCtx) {
+  if (hostCtx->ginPendingOps != nullptr) cudaFree(hostCtx->ginPendingOps);
+  if (hostCtx->lsaStorePending != nullptr) cudaFree(hostCtx->lsaStorePending);
+  hostCtx->ginPendingOps = nullptr;
+  hostCtx->lsaStorePending = nullptr;
+  hostCtx->lsaStorePendingLen = 0;
+}
+
+inline ncclResult_t niinPendingStateEnable(niinContext_host* hostCtx) {
+  if (hostCtx->ginPendingOps == nullptr) {
+    cudaError_t e = cudaMalloc(&hostCtx->ginPendingOps, sizeof(unsigned int));
+    if (e == cudaSuccess) e = cudaMemset(hostCtx->ginPendingOps, 0, sizeof(unsigned int));
+    if (e != cudaSuccess) {
+      fprintf(stderr, "NIIN: CUDA error %s allocating pending GIN counter at %s:%d\n",
+              cudaGetErrorString(e), __FILE__, __LINE__);
+      niinPendingStateDisable(hostCtx);
+      return ncclInternalError;
+    }
+  }
+
+  if (hostCtx->lsaStorePending == nullptr) {
+    size_t pendingBytes = (size_t)NIIN_TMA_MAX_BLOCKS * sizeof(unsigned int);
+    cudaError_t e = cudaMalloc(&hostCtx->lsaStorePending, pendingBytes);
+    if (e == cudaSuccess) e = cudaMemset(hostCtx->lsaStorePending, 0, pendingBytes);
+    if (e != cudaSuccess) {
+      fprintf(stderr, "NIIN: CUDA error %s allocating LSA pending table at %s:%d\n",
+              cudaGetErrorString(e), __FILE__, __LINE__);
+      niinPendingStateDisable(hostCtx);
+      return ncclInternalError;
+    }
+    hostCtx->lsaStorePendingLen = NIIN_TMA_MAX_BLOCKS;
+  }
 
   return ncclSuccess;
 }
@@ -209,6 +253,63 @@ inline ncclResult_t niinTmaEnable(niinContext_host* hostCtx, nvshmemx_tma_policy
   return ncclSuccess;
 }
 
+inline ncclResult_t niinPublishContextCache(const niinContext* ctx) {
+#if NIIN_USE_DEVICE_CONTEXT_POINTER
+  (void)ctx;
+  return ncclSuccess;
+#else
+  NIIN_CHECK_CUDA(cudaMemcpyToSymbol(niin_g_ctx_constant, ctx, sizeof(niinContext),
+                                     0, cudaMemcpyHostToDevice));
+  return ncclSuccess;
+#endif
+}
+
+inline ncclResult_t niinRefreshContextCache(niinContext* devCtx) {
+#if NIIN_USE_DEVICE_CONTEXT_POINTER
+  (void)devCtx;
+  return ncclSuccess;
+#else
+  niinContext ctx;
+  NIIN_CHECK_CUDA(cudaMemcpy(&ctx, devCtx, sizeof(niinContext), cudaMemcpyDeviceToHost));
+  return niinPublishContextCache(&ctx);
+#endif
+}
+
+inline ncclResult_t niinBuildPeerHeapBaseP2p(niinContext_host* hostCtx) {
+  const int nRanks = hostCtx->devComm.nRanks;
+  if (nRanks <= 0) return ncclSuccess;
+
+  void** peerHeapBaseP2pHost = static_cast<void**>(calloc(static_cast<size_t>(nRanks), sizeof(void*)));
+  if (peerHeapBaseP2pHost == nullptr) return ncclInternalError;
+
+  ncclResult_t result = ncclSuccess;
+  for (int pe = 0; pe < nRanks; pe++) {
+    result = ncclGetPeerDevicePointer(hostCtx->heapWindow, 0, pe, &peerHeapBaseP2pHost[pe]);
+    if (result != ncclSuccess) break;
+  }
+
+  void** peerHeapBaseP2p = nullptr;
+  if (result == ncclSuccess) {
+    cudaError_t e = cudaMalloc(&peerHeapBaseP2p, static_cast<size_t>(nRanks) * sizeof(void*));
+    if (e == cudaSuccess) {
+      e = cudaMemcpy(peerHeapBaseP2p, peerHeapBaseP2pHost,
+                     static_cast<size_t>(nRanks) * sizeof(void*),
+                     cudaMemcpyHostToDevice);
+    }
+    if (e != cudaSuccess) {
+      fprintf(stderr, "NIIN: CUDA error %s building peer heap table at %s:%d\n",
+              cudaGetErrorString(e), __FILE__, __LINE__);
+      if (peerHeapBaseP2p != nullptr) cudaFree(peerHeapBaseP2p);
+      result = ncclInternalError;
+    }
+  }
+
+  free(peerHeapBaseP2pHost);
+  if (result != ncclSuccess) return result;
+  hostCtx->peerHeapBaseP2p = peerHeapBaseP2p;
+  return ncclSuccess;
+}
+
 // niinCommit: host-side initialization — phase 2 (copy to device).
 //
 // Must be called AFTER ncclGroupEnd() so that NCCL collective results are
@@ -219,8 +320,11 @@ inline ncclResult_t niinTmaEnable(niinContext_host* hostCtx, nvshmemx_tma_policy
 //   devCtx  - [OUT] Device pointer to niinContext (must be cudaMalloc'd)
 //
 // Returns ncclSuccess on success.
-inline ncclResult_t niinCommit(const niinContext_host* hostCtx,
+inline ncclResult_t niinCommit(niinContext_host* hostCtx,
                                niinContext* devCtx) {
+  NIIN_CHECK_NCCL(niinPendingStateEnable(hostCtx));
+  NIIN_CHECK_NCCL(niinBuildPeerHeapBaseP2p(hostCtx));
+
   // Copy devComm to device memory
   ncclDevComm* d_devComm;
   NIIN_CHECK_CUDA(cudaMalloc(&d_devComm, sizeof(ncclDevComm)));
@@ -230,20 +334,32 @@ inline ncclResult_t niinCommit(const niinContext_host* hostCtx,
   // Build and copy niinContext to device
   niinContext ctx;
   ctx.comm = d_devComm;
+  ctx.commValue = hostCtx->devComm;
   ctx.heapWindow = hostCtx->heapWindow;
   ctx.heapBase = hostCtx->heapBase;
   ctx.heapSize = hostCtx->heapSize;
+  ctx.peerHeapBaseP2p = hostCtx->peerHeapBaseP2p;
+  ctx.rank = hostCtx->devComm.rank;
+  ctx.nRanks = hostCtx->devComm.nRanks;
+  ctx.lsaRank = hostCtx->devComm.lsaRank;
+  ctx.lsaSize = hostCtx->devComm.lsaSize;
+  ctx.ginConnectionCount = hostCtx->devComm.ginConnectionCount;
+  ctx.worldIsLsaOnly = hostCtx->devComm.lsaSize == hostCtx->devComm.nRanks;
   ctx.nodeRank = hostCtx->nodeRank;
   ctx.nodeSize = hostCtx->nodeSize;
   ctx.gpunetioAtomicContext = nullptr;
   ctx.peerNativeAtomic = hostCtx->peerNativeAtomic;
   ctx.forceSeparatePutSignal = hostCtx->forceSeparatePutSignal;
+  ctx.ginPendingOps = hostCtx->ginPendingOps;
+  ctx.lsaStorePending = hostCtx->lsaStorePending;
+  ctx.lsaStorePendingLen = hostCtx->lsaStorePendingLen;
   ctx.tmaPolicy = hostCtx->tmaPolicy;
   ctx.tmaSmemBases = hostCtx->tmaSmemBases;
   ctx.tmaSmemBasesLen = hostCtx->tmaSmemBasesLen;
   ctx.tmaSmemSize = hostCtx->tmaSmemSize;
 
   NIIN_CHECK_CUDA(cudaMemcpy(devCtx, &ctx, sizeof(niinContext), cudaMemcpyHostToDevice));
+  NIIN_CHECK_NCCL(niinPublishContextCache(&ctx));
 
   return ncclSuccess;
 }
@@ -274,6 +390,9 @@ inline ncclResult_t niinFinalize(ncclComm_t comm, niinContext* devCtx) {
 
   // Free the device-side devComm copy
   cudaFree((void*)ctx.comm);
+  cudaFree(ctx.peerHeapBaseP2p);
+  cudaFree(ctx.ginPendingOps);
+  cudaFree(ctx.lsaStorePending);
 
   // Deregister the window (best-effort)
   ncclCommWindowDeregister(comm, ctx.heapWindow);

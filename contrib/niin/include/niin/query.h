@@ -12,18 +12,18 @@
 
 // Device-only query helpers (used by device-side nvshmem_* implementations)
 __device__ __forceinline__ int niin_device_my_pe() {
-  return niin_comm().rank;
+  return niin_rank();
 }
 
 __device__ __forceinline__ int niin_device_n_pes() {
-  return niin_comm().nRanks;
+  return niin_n_ranks();
 }
 
 // nvshmem_my_pe: returns this PE's rank in TEAM_WORLD
 // __host__ __device__ — on device reads from niin_g_ctx, on host reads from global state
 __host__ __device__ __forceinline__ int nvshmem_my_pe() {
 #ifdef __CUDA_ARCH__
-  return niin_comm().rank;
+  return niin_rank();
 #else
   // Host implementation provided by nvshmem_host.h via niin::detail::state()
   // We can't call it here (circular include), so return from the extern state.
@@ -34,7 +34,7 @@ __host__ __device__ __forceinline__ int nvshmem_my_pe() {
 
 __host__ __device__ __forceinline__ int nvshmem_n_pes() {
 #ifdef __CUDA_ARCH__
-  return niin_comm().nRanks;
+  return niin_n_ranks();
 #else
   extern int niin_host_n_pes();
   return niin_host_n_pes();
@@ -62,14 +62,13 @@ __host__ __device__ __forceinline__ void* nvshmem_ptr(void* ptr, int pe) {
 // Team queries — all predefined teams supported on device
 __host__ __device__ __forceinline__ int nvshmem_team_my_pe(nvshmem_team_t team) {
 #ifdef __CUDA_ARCH__
-  ncclDevComm const& c = niin_comm();
   switch (team) {
-    case NVSHMEM_TEAM_WORLD:           return c.rank;
-    case NVSHMEM_TEAM_SHARED:          return niin_g_ctx->nodeRank;
-    case NVSHMEMX_TEAM_NODE:           return niin_g_ctx->nodeRank;
-    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return c.rank / niin_g_ctx->nodeSize;
+    case NVSHMEM_TEAM_WORLD:           return niin_rank();
+    case NVSHMEM_TEAM_SHARED:          return niin_ctx().nodeRank;
+    case NVSHMEMX_TEAM_NODE:           return niin_ctx().nodeRank;
+    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return niin_rank() / niin_ctx().nodeSize;
     case NVSHMEMI_TEAM_SAME_GPU:       return 0;                    // always rank 0 (size=1)
-    case NVSHMEMI_TEAM_GPU_LEADERS:    return c.rank;               // same as WORLD
+    case NVSHMEMI_TEAM_GPU_LEADERS:    return niin_rank();          // same as WORLD
     case NVSHMEM_TEAM_INVALID:         return -1;
     default: return -1;  // unknown team
   }
@@ -81,14 +80,13 @@ __host__ __device__ __forceinline__ int nvshmem_team_my_pe(nvshmem_team_t team) 
 
 __host__ __device__ __forceinline__ int nvshmem_team_n_pes(nvshmem_team_t team) {
 #ifdef __CUDA_ARCH__
-  ncclDevComm const& c = niin_comm();
   switch (team) {
-    case NVSHMEM_TEAM_WORLD:           return c.nRanks;
-    case NVSHMEM_TEAM_SHARED:          return niin_g_ctx->nodeSize;
-    case NVSHMEMX_TEAM_NODE:           return niin_g_ctx->nodeSize;
-    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return (c.nRanks + niin_g_ctx->nodeSize - 1) / niin_g_ctx->nodeSize;
+    case NVSHMEM_TEAM_WORLD:           return niin_n_ranks();
+    case NVSHMEM_TEAM_SHARED:          return niin_ctx().nodeSize;
+    case NVSHMEMX_TEAM_NODE:           return niin_ctx().nodeSize;
+    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return (niin_n_ranks() + niin_ctx().nodeSize - 1) / niin_ctx().nodeSize;
     case NVSHMEMI_TEAM_SAME_GPU:       return 1;
-    case NVSHMEMI_TEAM_GPU_LEADERS:    return c.nRanks;             // same as WORLD
+    case NVSHMEMI_TEAM_GPU_LEADERS:    return niin_n_ranks();       // same as WORLD
     case NVSHMEM_TEAM_INVALID:         return -1;
     default: return -1;  // unknown team
   }

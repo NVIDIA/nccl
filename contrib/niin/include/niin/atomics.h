@@ -34,6 +34,58 @@ __device__ __forceinline__ T niin_atomicAdd(T* addr, T val) {
 }
 
 template<typename T>
+__device__ __forceinline__ void niin_atomicAddNoReturn(T* addr, T val) {
+  static_assert(sizeof(T) == 4 || sizeof(T) == 8, "niin_atomicAddNoReturn: unsupported type size");
+  if constexpr (sizeof(T) == 4) {
+    (void)atomicAdd((unsigned int*)addr, *(unsigned int*)&val);
+  } else {
+    (void)atomicAdd((unsigned long long*)addr, *(unsigned long long*)&val);
+  }
+}
+
+template<typename T>
+__device__ __forceinline__ T niin_atomicAddSystem(T* addr, T val) {
+  static_assert(sizeof(T) == 4 || sizeof(T) == 8, "niin_atomicAddSystem: unsupported type size");
+  if constexpr (sizeof(T) == 4) {
+    unsigned int r = atomicAdd_system((unsigned int*)addr, *(unsigned int*)&val);
+    T result; memcpy(&result, &r, 4); return result;
+  } else {
+    unsigned long long r = atomicAdd_system((unsigned long long*)addr, *(unsigned long long*)&val);
+    T result; memcpy(&result, &r, 8); return result;
+  }
+}
+
+template<typename T>
+__device__ __forceinline__ void niin_atomicAddSystemNoReturn(T* addr, T val) {
+  static_assert(sizeof(T) == 4 || sizeof(T) == 8, "niin_atomicAddSystemNoReturn: unsupported type size");
+  if constexpr (sizeof(T) == 4) {
+    (void)atomicAdd_system((unsigned int*)addr, *(unsigned int*)&val);
+  } else {
+    (void)atomicAdd_system((unsigned long long*)addr, *(unsigned long long*)&val);
+  }
+}
+
+template<typename T>
+NIIN_NOINLINE_DEVICE void niin_atomic_add_slow(T* dest, T value, int pe, size_t offset) {
+  const niinGpunetioAtomicContext* atomicContext = niin_gpunetio_atomic_context();
+  if (niin_gpunetio_proxy_atomic_active(atomicContext)) {
+    if (niin_gpunetio_atomic_add_try(atomicContext, offset, value, pe)) return;
+    NIIN_NOT_IMPLEMENTED_VOID("nvshmem_atomic_add (proxy)");
+    return;
+  }
+  if (pe == nvshmem_my_pe()) {
+    niin_atomicAddNoReturn(dest, value);
+    return;
+  }
+  if (niin_is_lsa_peer(pe)) {
+    niin_atomicAddSystemNoReturn((T*)niin_get_peer_ptr(offset, pe), value);
+    return;
+  }
+  if (niin_gpunetio_atomic_add_try(atomicContext, offset, value, pe)) return;
+  NIIN_NOT_IMPLEMENTED_VOID("nvshmem_atomic_add (network)");
+}
+
+template<typename T>
 __device__ __forceinline__ T niin_atomicCAS(T* addr, T cmp, T val) {
   static_assert(sizeof(T) == 4 || sizeof(T) == 8, "niin_atomicCAS: unsupported type size");
   if constexpr (sizeof(T) == 4) {
@@ -112,7 +164,7 @@ __device__ __forceinline__ TYPE nvshmem_##TYPENAME##_atomic_fetch_add(        \
   if (pe == nvshmem_my_pe())                                                  \
     return niin_atomicAdd(dest, value);                                       \
   if (niin_is_lsa_peer(pe))                                                   \
-    return niin_atomicAdd((TYPE*)niin_get_peer_ptr(offset, pe), value);       \
+    return niin_atomicAddSystem((TYPE*)niin_get_peer_ptr(offset, pe), value); \
   TYPE previous;                                                              \
   if (niin_gpunetio_atomic_fetch_add_try(atomicContext,                       \
                                          offset, value, pe, &previous))       \
@@ -129,25 +181,15 @@ NIIN_AMO_STANDARD_TYPES(NIIN_DEFINE_ATOMIC_FETCH_ADD)
 #define NIIN_DEFINE_ATOMIC_ADD(TYPENAME, TYPE)                                \
 __device__ __forceinline__ void nvshmem_##TYPENAME##_atomic_add(              \
     TYPE* dest, TYPE value, int pe) {                                         \
-  const niinGpunetioAtomicContext* atomicContext = niin_gpunetio_atomic_context(); \
   size_t offset = niin_sym_offset(dest);                                      \
-  if (niin_gpunetio_proxy_atomic_active(atomicContext)) {                     \
-    if (niin_gpunetio_atomic_add_try(atomicContext, offset, value, pe)) return; \
-    NIIN_NOT_IMPLEMENTED_VOID("nvshmem_" #TYPENAME "_atomic_add (proxy)");  \
-    return;                                                                    \
-  }                                                                             \
-  if (pe == nvshmem_my_pe()) {                                                \
-    (void)niin_atomicAdd(dest, value);                                        \
+  if (niin_world_is_lsa_only()) {                                             \
+    if (pe == niin_rank())                                                    \
+      niin_atomicAddNoReturn(dest, value);                                    \
+    else                                                                      \
+      niin_atomicAddSystemNoReturn((TYPE*)niin_get_peer_ptr(offset, pe), value); \
     return;                                                                    \
   }                                                                            \
-  if (niin_is_lsa_peer(pe)) {                                                 \
-    (void)niin_atomicAdd((TYPE*)niin_get_peer_ptr(offset, pe), value);        \
-    return;                                                                    \
-  }                                                                            \
-  if (niin_gpunetio_atomic_add_try(atomicContext, offset,                     \
-                                   value, pe))                                 \
-    return;                                                                    \
-  NIIN_NOT_IMPLEMENTED_VOID("nvshmem_" #TYPENAME "_atomic_add (network)");  \
+  niin_atomic_add_slow(dest, value, pe, offset);                              \
 }
 
 NIIN_AMO_STANDARD_TYPES(NIIN_DEFINE_ATOMIC_ADD)
@@ -273,24 +315,15 @@ NIIN_AMO_STANDARD_TYPES(NIIN_DEFINE_ATOMIC_SET)
 #define NIIN_DEFINE_ATOMIC_INC(TYPENAME, TYPE)                                \
 __device__ __forceinline__ void nvshmem_##TYPENAME##_atomic_inc(              \
     TYPE* dest, int pe) {                                                     \
-  const niinGpunetioAtomicContext* atomicContext = niin_gpunetio_atomic_context(); \
   size_t offset = niin_sym_offset(dest);                                      \
-  if (niin_gpunetio_proxy_atomic_active(atomicContext)) {                     \
-    if (niin_gpunetio_atomic_inc_try<TYPE>(atomicContext, offset, pe)) return; \
-    NIIN_NOT_IMPLEMENTED_VOID("nvshmem_" #TYPENAME "_atomic_inc (proxy)");  \
-    return;                                                                    \
-  }                                                                             \
-  if (pe == nvshmem_my_pe()) {                                                \
-    (void)niin_atomicAdd(dest, (TYPE)1);                                      \
+  if (niin_world_is_lsa_only()) {                                             \
+    if (pe == niin_rank())                                                    \
+      niin_atomicAddNoReturn(dest, (TYPE)1);                                  \
+    else                                                                      \
+      niin_atomicAddSystemNoReturn((TYPE*)niin_get_peer_ptr(offset, pe), (TYPE)1); \
     return;                                                                    \
   }                                                                            \
-  if (niin_is_lsa_peer(pe)) {                                                 \
-    (void)niin_atomicAdd((TYPE*)niin_get_peer_ptr(offset, pe), (TYPE)1);      \
-    return;                                                                    \
-  }                                                                            \
-  if (niin_gpunetio_atomic_inc_try<TYPE>(atomicContext, offset, pe))          \
-    return;                                                                    \
-  NIIN_NOT_IMPLEMENTED_VOID("nvshmem_" #TYPENAME "_atomic_inc (network)");  \
+  niin_atomic_add_slow(dest, (TYPE)1, pe, offset);                            \
 }
 
 NIIN_AMO_STANDARD_TYPES(NIIN_DEFINE_ATOMIC_INC)
@@ -310,7 +343,7 @@ __device__ __forceinline__ TYPE nvshmem_##TYPENAME##_atomic_fetch_inc(        \
   if (pe == nvshmem_my_pe())                                                  \
     return niin_atomicAdd(dest, (TYPE)1);                                     \
   if (niin_is_lsa_peer(pe))                                                   \
-    return niin_atomicAdd((TYPE*)niin_get_peer_ptr(offset, pe), (TYPE)1);     \
+    return niin_atomicAddSystem((TYPE*)niin_get_peer_ptr(offset, pe), (TYPE)1); \
   TYPE previous;                                                              \
   if (niin_gpunetio_atomic_fetch_inc_try(atomicContext,                       \
                                          offset, pe, &previous))              \

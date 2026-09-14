@@ -149,7 +149,7 @@ __device__ __forceinline__ void niin_gin_barrier_all() {
   int pe = niin_device_my_pe();
   int npes = niin_device_n_pes();
   ncclDevComm const& comm = niin_comm();
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_collective_context_index());
   ncclTeam world = ncclTeamWorld(comm);
 
   // Use a dedicated signal in the heap for barrier (last 64 bytes)

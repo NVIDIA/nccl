@@ -37,6 +37,7 @@
 #include <unistd.h>
 
 #include "niin/host.h"
+#include "niin/sync.h"
 
 #ifdef NIIN_HAS_MPI
 #include <mpi.h>
@@ -139,22 +140,6 @@ inline bool parseForceSeparatePutSignal() {
     return true;
   }
   return false;
-}
-
-// GIN contexts own independent network queue-pair pools.  Four contexts are
-// a lightweight default, while applications with many concurrent CTAs can
-// select a larger count without changing source.
-inline int parseGinContextCount() {
-  const char* env = getenv("NIIN_GIN_CONTEXT_COUNT");
-  if (env == nullptr || env[0] == '\0') return 4;
-
-  char* end = nullptr;
-  const long value = strtol(env, &end, 10);
-  if (end == env || *end != '\0' || value < 1 || value > INT_MAX) {
-    fprintf(stderr, "NIIN: NIIN_GIN_CONTEXT_COUNT must be a positive integer\n");
-    return 4;
-  }
-  return static_cast<int>(value);
 }
 
 // Detect rank/nRanks from common MPI/PMI environment variables.
@@ -445,13 +430,12 @@ inline int initCommon(ncclComm_t comm) {
     s.hostCtx.peerNativeAtomic = (nativeAtomic != 0);
   }
   s.hostCtx.forceSeparatePutSignal = parseForceSeparatePutSignal();
-  const int ginContextCount = parseGinContextCount();
 
   // Two-phase init
   ncclGroupStart();
   r = niinInit(comm, s.heapBase, s.heapSize, &s.hostCtx, s.ginAvail,
-               /*ginContextIndex=*/0, /*barrierCount=*/1,
-               /*ginSignalCount=*/0, ginContextCount, s.nodeRank, s.nodeSize);
+               /*barrierCount=*/1, /*ginSignalCount=*/0,
+               /*ginContextCount=*/0, s.nodeRank, s.nodeSize);
   ncclGroupEnd();
   if (r != ncclSuccess) return -1;
 
@@ -891,7 +875,14 @@ inline void niin_host_fence() {
 }
 
 inline void niin_host_quiet() {
+  auto& s = niin::detail::state();
+  // Wait for in-flight kernels to retire first -- they may still be issuing puts.
   niin_host_fence();
+  if (!s.initialized || !s.ginAvail) return;
+  // A put can still be in flight on a GIN context after the kernel that issued it
+  // has retired, so cudaDeviceSynchronize() alone does not complete it.
+  niin_quiet_kernel<><<<1, 1, 0, s.stream>>>();
+  cudaStreamSynchronize(s.stream);
 }
 
 // ---------------------------------------------------------------------------

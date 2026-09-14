@@ -1082,8 +1082,11 @@ int main() {
   NCCLCHECK(ncclGroupStart());
   for (int i = 0; i < nPes; i++) {
     CUDACHECK(cudaSetDevice(i));
+    // niinInit takes enableGin before the GIN tuning args; passing only three
+    // trailing values silently bound 0 to enableGin and disabled GIN entirely.
     NCCLCHECK(niinInit(comms[i], heapBufs[i], heapSize, &hostCtxs[i],
-                        /*ginContextIndex=*/0, /*barrierCount=*/1, /*ginSignalCount=*/0));
+                        /*enableGin=*/true, /*barrierCount=*/1,
+                        /*ginSignalCount=*/0));
   }
   NCCLCHECK(ncclGroupEnd());
 

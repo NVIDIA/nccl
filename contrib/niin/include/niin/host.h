@@ -11,6 +11,14 @@
 #include <nccl.h>
 #include <nccl_device.h>
 #include <cuda_runtime.h>
+#include <cstdio>
+#include <cstdlib>
+#include <climits>
+
+// Host helpers construct and copy the device context but do not need the
+// device-side accessor definitions in niin/context.h.  Include the stable ABI
+// directly so this header remains self-contained for low-level users.
+#include "niin/context_abi.h"
 
 #ifndef NIIN_CHECK_NCCL
 #define NIIN_CHECK_NCCL(cmd) do {                                             \
@@ -42,12 +50,32 @@ struct niinContext_host {
   ncclWindow_t heapWindow;
   void* heapBase;
   size_t heapSize;
-  int ginContextIndex;
   int nodeRank;
   int nodeSize;
   bool peerNativeAtomic;  // Whether peer GPUs support native system-scope atomics
   bool forceSeparatePutSignal; // Force put+fence+signal instead of fused put_signal
 };
+
+// Default number of GIN contexts to request. Each context is one QP per peer,
+// so this is the number of QPs NIIN round-robins operations across. NCCL rounds
+// it up to a multiple of the connection count, so the effective value can be
+// higher on multi-NIC nodes.
+#define NIIN_DEFAULT_NUM_QPS 4
+
+// Read the QP count from NIIN_NUM_QPS. Anything unparseable or < 1 warns and
+// falls back to the default.
+inline int niinParseNumQps() {
+  const char* env = getenv("NIIN_NUM_QPS");
+  if (env == nullptr || env[0] == '\0') return NIIN_DEFAULT_NUM_QPS;
+
+  char* end = nullptr;
+  const long value = strtol(env, &end, 10);
+  if (end == env || *end != '\0' || value < 1 || value > INT_MAX) {
+    fprintf(stderr, "NIIN: NIIN_NUM_QPS must be a positive integer\n");
+    return NIIN_DEFAULT_NUM_QPS;
+  }
+  return static_cast<int>(value);
+}
 
 // niinInit: host-side initialization — phase 1 (NCCL collective calls).
 //
@@ -62,12 +90,11 @@ struct niinContext_host {
 //                aligned to NCCL_WIN_REQUIRED_ALIGNMENT and same size on all ranks)
 //   heapSize   - Size of heapBuf in bytes
 //   hostCtx    - [OUT] Host-side staging struct to populate
-//   ginContextIndex - Which GIN context index to use (default 0)
 //   barrierCount    - Number of barrier sessions to request (default 1)
 //   ginSignalCount  - Number of GIN signals to request (default 0)
-//   ginContextCount - Number of GIN contexts to provision (default 4). Device
-//                     operations select one by CTA index so concurrent CTAs
-//                     use independent GIN queues.
+//   ginContextCount - Number of GIN contexts (QPs per peer) to provision. 0
+//                     takes the value from NIIN_NUM_QPS, else the default.
+//                     Device operations round-robin over them per operation.
 //
 // Returns ncclSuccess on success.
 inline ncclResult_t niinInit(ncclComm_t comm,
@@ -75,10 +102,9 @@ inline ncclResult_t niinInit(ncclComm_t comm,
                              size_t heapSize,
                              niinContext_host* hostCtx,
                              bool enableGin = true,
-                             int ginContextIndex = 0,
                              int barrierCount = 1,
                              int ginSignalCount = 0,
-                             int ginContextCount = 4,
+                             int ginContextCount = 0,
                              int nodeRank = 0,
                              int nodeSize = 1) {
   // Register the symmetric heap as a window
@@ -103,7 +129,7 @@ inline ncclResult_t niinInit(ncclComm_t comm,
     // world-GIN barrier handle rather than the legacy hybrid handle.
     reqs.worldGinBarrierCount = barrierCount;
     reqs.ginForceEnable = true;
-    reqs.ginContextCount = ginContextCount;
+    reqs.ginContextCount = ginContextCount > 0 ? ginContextCount : niinParseNumQps();
     reqs.ginSignalCount = ginSignalCount + barrierCount;
     reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
   } else {
@@ -115,7 +141,6 @@ inline ncclResult_t niinInit(ncclComm_t comm,
 
   hostCtx->heapBase = heapBuf;
   hostCtx->heapSize = heapSize;
-  hostCtx->ginContextIndex = ginContextIndex;
   hostCtx->nodeRank = nodeRank;
   hostCtx->nodeSize = nodeSize;
 
@@ -146,9 +171,9 @@ inline ncclResult_t niinCommit(const niinContext_host* hostCtx,
   ctx.heapWindow = hostCtx->heapWindow;
   ctx.heapBase = hostCtx->heapBase;
   ctx.heapSize = hostCtx->heapSize;
-  ctx.ginContextIndex = hostCtx->ginContextIndex;
   ctx.nodeRank = hostCtx->nodeRank;
   ctx.nodeSize = hostCtx->nodeSize;
+  ctx.gpunetioAtomicContext = nullptr;
   ctx.peerNativeAtomic = hostCtx->peerNativeAtomic;
   ctx.forceSeparatePutSignal = hostCtx->forceSeparatePutSignal;
 

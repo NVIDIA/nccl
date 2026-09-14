@@ -82,14 +82,15 @@ __device__ __forceinline__ void niin_memcpy_from_peer(
 }
 
 // Helper: GIN put (network path for arbitrary data)
-__device__ __forceinline__ void niin_gin_put(size_t dstOffset, const void* src, size_t bytes, int pe) {
+NIIN_NOINLINE_DEVICE void niin_gin_put(size_t dstOffset, const void* src, size_t bytes, int pe,
+                                             int ctx = -1) {
   if (!niin_has_gin()) {
     NIIN_NOT_IMPLEMENTED_VOID("nvshmem_put (network without GIN)");
     return;
   }
   ncclDevComm const& comm = niin_comm();
   ncclTeam world = ncclTeamWorld(comm);
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_context_or_next(ctx));
   // For GIN put, both src and dst must be in registered windows.
   // src is in our local heap, dst is at dstOffset in peer's heap.
   gin.put(
@@ -100,14 +101,15 @@ __device__ __forceinline__ void niin_gin_put(size_t dstOffset, const void* src, 
 }
 
 // Helper: GIN get (network path for block data into the symmetric heap)
-__device__ __forceinline__ void niin_gin_get(void* dest, size_t srcOffset, size_t bytes, int pe) {
+NIIN_NOINLINE_DEVICE void niin_gin_get(void* dest, size_t srcOffset, size_t bytes, int pe,
+                                             int ctx = -1) {
   if (!niin_has_gin()) {
     NIIN_NOT_IMPLEMENTED_VOID("nvshmem_get (network without GIN)");
     return;
   }
   ncclDevComm const& comm = niin_comm();
   ncclTeam world = ncclTeamWorld(comm);
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_context_or_next(ctx));
   gin.get(
     world, pe,
     niin_heap_window(), srcOffset,
@@ -118,14 +120,14 @@ __device__ __forceinline__ void niin_gin_get(void* dest, size_t srcOffset, size_
 
 // Helper: GIN putValue (network path for small values <= 8 bytes)
 template<typename T>
-__device__ __forceinline__ void niin_gin_put_value(size_t dstOffset, T value, int pe) {
+NIIN_NOINLINE_DEVICE void niin_gin_put_value(size_t dstOffset, T value, int pe, int ctx = -1) {
   if (!niin_has_gin()) {
     NIIN_NOT_IMPLEMENTED_VOID("nvshmem_p (network without GIN)");
     return;
   }
   ncclDevComm const& comm = niin_comm();
   ncclTeam world = ncclTeamWorld(comm);
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_context_or_next(ctx));
   gin.putValue<T>(
     world, pe,
     niin_heap_window(), dstOffset, value

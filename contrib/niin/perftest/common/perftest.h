@@ -50,6 +50,9 @@ static size_t warmup_iters = 50;
 static size_t threads_per_block = 256;
 static size_t num_blocks = 4;
 static size_t max_size_log = 0;
+// Used only by atomic perftests.  Keep the upstream spelling so scripts can
+// select the same operation with -a/--atomic_op.
+static const char* atomic_op = "inc";
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing (matching NVSHMEM perftest conventions)
@@ -63,11 +66,12 @@ static void read_args(int argc, char** argv) {
     {"warmup",     required_argument, 0, 'w'},
     {"threads",    required_argument, 0, 't'},
     {"blocks",     required_argument, 0, 'n'},
+    {"atomic_op",  required_argument, 0, 'a'},
     {"help",       no_argument,       0, 'h'},
     {0, 0, 0, 0}
   };
   int c, option_index = 0;
-  while ((c = getopt_long(argc, argv, "b:e:f:i:w:t:n:h", long_options, &option_index)) != -1) {
+  while ((c = getopt_long(argc, argv, "b:e:f:i:w:t:n:a:h", long_options, &option_index)) != -1) {
     switch (c) {
       case 'b': min_size = atol(optarg); break;
       case 'e': max_size = atol(optarg); break;
@@ -76,6 +80,7 @@ static void read_args(int argc, char** argv) {
       case 'w': warmup_iters = atol(optarg); break;
       case 't': threads_per_block = atol(optarg); break;
       case 'n': num_blocks = atol(optarg); break;
+      case 'a': atomic_op = optarg; break;
       case 'h':
         printf("Usage: [options]\n"
                "  -b, --min_size <bytes>    Minimum message size (default: 4)\n"
@@ -84,10 +89,15 @@ static void read_args(int argc, char** argv) {
                "  -i, --iters <n>           Iterations (default: 200)\n"
                "  -w, --warmup <n>          Warmup iterations (default: 50)\n"
                "  -t, --threads <n>         Threads per block (default: 256)\n"
-               "  -n, --blocks <n>          Number of blocks (default: 4)\n");
+               "  -n, --blocks <n>          Number of blocks (default: 4)\n"
+               "  -a, --atomic_op <op>      Atomic operation (atomic tests only)\n");
         exit(0);
       default: break;
     }
+  }
+  if (step_factor < 2) {
+    fprintf(stderr, "--step must be at least 2\n");
+    exit(1);
   }
   // Compute log2 of max_size for table allocation
   size_t tmp = max_size;

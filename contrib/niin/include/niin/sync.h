@@ -15,17 +15,40 @@ static __device__ unsigned long long niin_test_any_cursor = 0;
 // ---------------------------------------------------------------------------
 // Device-side fence/quiet implementations
 // ---------------------------------------------------------------------------
+// Complete every context. A thread cannot know which QPs carried its own
+// operations once selection is per operation, and the on-stream and host paths
+// complete work issued by other threads entirely.
+__device__ __forceinline__ void niin_device_drain_all_contexts() {
+  ncclDevComm const& comm = niin_comm();
+  if (comm.ginConnectionCount == 0) return;
+  uint32_t nCtx = niin_gin_context_count();
+  for (uint32_t ctx = 0; ctx < nCtx; ctx++) {
+    ncclGin gin(comm, (int)ctx);
+    gin.flush(ncclCoopThread{});
+  }
+}
+
+// Operations rotate across QPs, and two QPs are not ordered against each other
+// at the receiving NIC, so ordering an earlier put ahead of a later one means
+// completing it. fence therefore drains the same contexts quiet does. That also
+// covers the optional GPUNetIO atomic sidecar, which is an independent network
+// domain a GPU memory fence cannot order a pending GIN put against.
 __device__ __forceinline__ void niin_device_fence() {
+  niin_device_drain_all_contexts();
   __threadfence_system();
 }
 
 __device__ __forceinline__ void niin_device_quiet() {
-  ncclDevComm const& comm = niin_comm();
-  if (comm.ginConnectionCount > 0) {
-    ncclGin gin(comm, niin_gin_context_index());
-    gin.flush(ncclCoopThread{});
-  }
+  niin_device_drain_all_contexts();
   __threadfence_system();
+}
+
+// Kernel form of quiet for host-side paths. Templated so each translation unit
+// including NIIN gets its own weak instantiation rather than a duplicate symbol
+// at link time.
+template<int = 0>
+__global__ void niin_quiet_kernel() {
+  niin_device_quiet();
 }
 
 // ---------------------------------------------------------------------------

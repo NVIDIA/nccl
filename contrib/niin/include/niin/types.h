@@ -72,7 +72,8 @@ typedef int nvshmem_team_t;
   X(int64,       int64_t)          \
   X(uint32,      uint32_t)        \
   X(uint64,      uint64_t)        \
-  X(size,        size_t)
+  X(size,        size_t)          \
+  X(ptrdiff,     ptrdiff_t)
 
 // Types valid for bitwise AMOs (and, or, xor)
 #define NIIN_AMO_BITWISE_TYPES(X) \

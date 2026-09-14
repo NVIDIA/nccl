@@ -19,9 +19,10 @@
 //   5. All threads: use nvshmem_* functions as normal
 //   6. Host: nvshmem_finalize()
 //
-// Unsupported operations (scalar network gets, most collectives, network
-// atomics) invoke NIIN_NOT_IMPLEMENTED behavior, controlled by
-// NIIN_ON_NOT_IMPLEMENTED.
+// Unsupported operations (scalar network gets and most collectives) invoke
+// NIIN_NOT_IMPLEMENTED behavior, controlled by NIIN_ON_NOT_IMPLEMENTED.
+// Network AMOs retain that behavior unless an application explicitly binds
+// NIIN's optional atomic-only GPUNetIO provider.
 
 #ifndef NVSHMEM_H_NIIN_
 #define NVSHMEM_H_NIIN_
@@ -43,6 +44,10 @@
 
 // Host-side helpers (niinInit, niinCommit, niinFinalize — low-level API)
 #include "niin/host.h"
+// Optional NIIN-owned atomic providers. Applications opt in by linking the
+// separate library.  Its proxy host API is exposed through this header only
+// when that library was built with NIIN_GPUNETIO_SRQ_PROXY_ATOMICS_ENABLE.
+#include "niin/gpunetio/host.h"
 
 // Team management (split, translate, destroy)
 #include "niin/teams.h"

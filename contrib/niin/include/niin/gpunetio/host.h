@@ -25,6 +25,14 @@
 struct niinContext;
 struct niinGpunetioAtomicHostContext;
 
+// NIIN brings the provider up itself during nvshmem_init(), so these entry
+// points are declared weak: an application that does not link the provider
+// archive still links, and NIIN sees a null symbol and leaves network AMOs
+// fail-closed exactly as before.
+#ifndef NIIN_GPUNETIO_WEAK
+#define NIIN_GPUNETIO_WEAK __attribute__((weak))
+#endif
+
 // The host provider deliberately has a small, independent configuration
 // surface.  It must not select, inspect, or modify a GIN context: existing
 // NIIN RMA and signaling continue to use GIN exactly as before.
@@ -73,7 +81,7 @@ struct niinGpunetioAtomicOptions {
 // `heapBase`/`heapBytes` must name NIIN's existing symmetric heap. NIIN
 // registers it directly with this provider only for remote atomic access; no
 // GPUNetIO put/get/RMA operation is exposed or implemented here.
-ncclResult_t niinGpunetioAtomicInit(
+NIIN_GPUNETIO_WEAK ncclResult_t niinGpunetioAtomicInit(
     ncclComm_t comm, void* heapBase, size_t heapBytes,
     const struct niinGpunetioAtomicOptions* options,
     struct niinGpunetioAtomicHostContext** out);
@@ -82,18 +90,18 @@ ncclResult_t niinGpunetioAtomicInit(
 // niinCommit(). This copies only NIIN's private atomic context pointer into
 // `deviceContext`; it leaves its ncclDevComm, GIN context, window, and all
 // existing RMA/signaling state untouched.
-ncclResult_t niinGpunetioAtomicBind(struct niinGpunetioAtomicHostContext* provider,
+NIIN_GPUNETIO_WEAK ncclResult_t niinGpunetioAtomicBind(struct niinGpunetioAtomicHostContext* provider,
                                     struct niinContext* deviceContext);
 
 // Make one bounded forward-progress pass for a future supported GPUNetIO CPU
 // doorbell configuration. Current direct-provider initialization rejects that
 // configuration, so this is retained only as a diagnostics/future-extension
 // hook.
-ncclResult_t niinGpunetioAtomicProgress(struct niinGpunetioAtomicHostContext* provider);
+NIIN_GPUNETIO_WEAK ncclResult_t niinGpunetioAtomicProgress(struct niinGpunetioAtomicHostContext* provider);
 
 // Destroy the NIIN-owned QPs, private registrations, response ring, and
 // device export. Call after all kernels using the provider have completed and
 // before niinFinalize() destroys the device context / NCCL communicator.
-ncclResult_t niinGpunetioAtomicFinalize(struct niinGpunetioAtomicHostContext* provider);
+NIIN_GPUNETIO_WEAK ncclResult_t niinGpunetioAtomicFinalize(struct niinGpunetioAtomicHostContext* provider);
 
 #endif  // NIIN_GPUNETIO_HOST_H_

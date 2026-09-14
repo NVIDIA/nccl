@@ -20,6 +20,8 @@
 // directly so this header remains self-contained for low-level users.
 #include "niin/context_abi.h"
 
+#include "niin/context.h"
+
 #ifndef NIIN_CHECK_NCCL
 #define NIIN_CHECK_NCCL(cmd) do {                                             \
   ncclResult_t r = (cmd);                                                     \
@@ -54,6 +56,12 @@ struct niinContext_host {
   int nodeSize;
   bool peerNativeAtomic;  // Whether peer GPUs support native system-scope atomics
   bool forceSeparatePutSignal; // Force put+fence+signal instead of fused put_signal
+  // TMA state, owned by niinTmaEnable/niinTmaDisable. niinInit clears these, so
+  // callers that manage a niinContext_host themselves get TMA off by default.
+  int tmaPolicy;               // nvshmemx_tma_policy_t
+  uintptr_t* tmaSmemBases;     // Device array of per-CTA registered smem bases
+  size_t tmaSmemBasesLen;      // Entries in tmaSmemBases
+  size_t* tmaSmemSize;         // Device scalar holding the given smem size
 };
 
 // Default number of GIN contexts to request. Each context is one QP per peer,
@@ -144,6 +152,60 @@ inline ncclResult_t niinInit(ncclComm_t comm,
   hostCtx->nodeRank = nodeRank;
   hostCtx->nodeSize = nodeSize;
 
+  // TMA is opt-in; niinTmaEnable() turns it on after this call.
+  hostCtx->tmaPolicy = NVSHMEMX_TMA_DISABLE;
+  hostCtx->tmaSmemBases = nullptr;
+  hostCtx->tmaSmemBasesLen = 0;
+  hostCtx->tmaSmemSize = nullptr;
+
+  return ncclSuccess;
+}
+
+// niinTmaDisable: release the tables allocated by niinTmaEnable. Safe to call
+// when TMA was never enabled.
+inline void niinTmaDisable(niinContext_host* hostCtx) {
+  if (hostCtx->tmaSmemBases != nullptr) cudaFree(hostCtx->tmaSmemBases);
+  if (hostCtx->tmaSmemSize != nullptr) cudaFree(hostCtx->tmaSmemSize);
+  hostCtx->tmaSmemBases = nullptr;
+  hostCtx->tmaSmemSize = nullptr;
+  hostCtx->tmaSmemBasesLen = 0;
+  hostCtx->tmaPolicy = NVSHMEMX_TMA_DISABLE;
+}
+
+// niinTmaEnable: allocate the per-CTA TMA registration tables.
+//
+// Call between niinInit() and niinCommit(). Once enabled, kernels that call
+// nvshmemx_give_smem() route their LSA put/get traffic through cp.async.bulk.
+// Requires compute capability 9.0 or newer; the caller is responsible for
+// checking that (nvshmem_init() does so from NVSHMEM_TMA_POLICY).
+//
+// Arguments:
+//   hostCtx - Host-side staging struct populated by niinInit
+//   policy  - NVSHMEMX_TMA_ENABLE or NVSHMEMX_TMA_FORCE; DISABLE is a no-op
+//
+// Returns ncclSuccess on success; leaves TMA off on failure.
+inline ncclResult_t niinTmaEnable(niinContext_host* hostCtx, nvshmemx_tma_policy_t policy) {
+  if (policy == NVSHMEMX_TMA_DISABLE) return ncclSuccess;
+
+  // niinInit() left these null; clear them again so a partial allocation below
+  // is never mistaken for a live table.
+  hostCtx->tmaSmemBases = nullptr;
+  hostCtx->tmaSmemSize = nullptr;
+
+  size_t basesBytes = (size_t)NIIN_TMA_MAX_BLOCKS * sizeof(uintptr_t);
+  cudaError_t e = cudaMalloc(&hostCtx->tmaSmemBases, basesBytes);
+  if (e == cudaSuccess) e = cudaMemset(hostCtx->tmaSmemBases, 0, basesBytes);
+  if (e == cudaSuccess) e = cudaMalloc(&hostCtx->tmaSmemSize, sizeof(size_t));
+  if (e == cudaSuccess) e = cudaMemset(hostCtx->tmaSmemSize, 0, sizeof(size_t));
+  if (e != cudaSuccess) {
+    fprintf(stderr, "NIIN: CUDA error %s allocating TMA tables at %s:%d\n",
+            cudaGetErrorString(e), __FILE__, __LINE__);
+    niinTmaDisable(hostCtx);
+    return ncclInternalError;
+  }
+
+  hostCtx->tmaSmemBasesLen = NIIN_TMA_MAX_BLOCKS;
+  hostCtx->tmaPolicy = policy;
   return ncclSuccess;
 }
 
@@ -176,6 +238,10 @@ inline ncclResult_t niinCommit(const niinContext_host* hostCtx,
   ctx.gpunetioAtomicContext = nullptr;
   ctx.peerNativeAtomic = hostCtx->peerNativeAtomic;
   ctx.forceSeparatePutSignal = hostCtx->forceSeparatePutSignal;
+  ctx.tmaPolicy = hostCtx->tmaPolicy;
+  ctx.tmaSmemBases = hostCtx->tmaSmemBases;
+  ctx.tmaSmemBasesLen = hostCtx->tmaSmemBasesLen;
+  ctx.tmaSmemSize = hostCtx->tmaSmemSize;
 
   NIIN_CHECK_CUDA(cudaMemcpy(devCtx, &ctx, sizeof(niinContext), cudaMemcpyHostToDevice));
 

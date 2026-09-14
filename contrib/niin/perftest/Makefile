@@ -70,8 +70,9 @@ $(ATOMIC_TARGET): $(SRCDIR)/shmem_atomic_bw.cu common/perftest.h $(GPUNETIO_ATOM
 	  echo "Pass GPUNETIO_HOME=/path/to/unmodified/gpunetio-open"; \
 	  exit 1; \
 	fi
-	$(NVCC) $(NVCUFLAGS) -DNIIN_GPUNETIO_ENABLE=1 $(INCLUDES) -I $(GPUNETIO_HOME)/include $< -o $@ \
-	  $(GPUNETIO_ATOMICS_LIB) $(LDFLAGS) $(IBVERBS_LIBRARY) $(IBVERBS_RPATH) -ldl -lpthread
+	$(NVCC) $(NVCUFLAGS) $(INCLUDES) $< -o $@ \
+	  -Xlinker --whole-archive $(GPUNETIO_ATOMICS_LIB) -Xlinker --no-whole-archive \
+	  $(LDFLAGS) $(IBVERBS_LIBRARY) $(IBVERBS_RPATH) -ldl -lpthread
 
 $(BUILDDIR)/%: $(SRCDIR)/%.cu common/perftest.h | $(BUILDDIR)
 	$(NVCC) $(NVCUFLAGS) $(INCLUDES) $< -o $@ $(LDFLAGS)

@@ -29,6 +29,10 @@ struct niinContext {
   const struct niinGpunetioAtomicContext* gpunetioAtomicContext;
   bool peerNativeAtomic;         // True if peer GPUs support native system-scope atomics
   bool forceSeparatePutSignal;   // Force put+fence+signal instead of fused put_signal
+  int tmaPolicy;                 // nvshmemx_tma_policy_t for the LSA put/get paths
+  uintptr_t* tmaSmemBases;       // Per-CTA shared-memory base registered by give_smem
+  size_t tmaSmemBasesLen;        // Number of entries in tmaSmemBases
+  size_t* tmaSmemSize;           // Shared-memory size given by every CTA (single scalar)
 };
 
 #endif  // NIIN_CONTEXT_ABI_H_

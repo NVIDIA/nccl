@@ -87,10 +87,6 @@ bool parseAtomicOp(const char* name, AtomicOp* op) {
   std::exit(1);
 }
 
-void checkProvider(ncclResult_t result, const char* what) {
-  if (result != ncclSuccess) providerCheck(result, what);
-}
-
 template <AtomicOp Op>
 __global__ void atomicBwKernel(uint64_t* data, size_t elements, int peer, int iterations) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
@@ -277,16 +273,21 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  niinGpunetioAtomicOptions options = NIIN_GPUNETIO_ATOMIC_OPTIONS_INITIALIZER;
-  niinGpunetioAtomicHostContext* provider = nullptr;
-  checkProvider(niinGpunetioAtomicInit(state.comm, state.heapBase, state.heapSize, &options, &provider),
-                "niinGpunetioAtomicInit");
-  checkProvider(niinGpunetioAtomicBind(provider, state.devCtx), "niinGpunetioAtomicBind");
+  // nvshmem_init() brings the provider up and binds it; this test only needs
+  // to confirm it is actually there before reporting network AMO numbers.
+  if (state.gpunetioAtomics == nullptr) {
+    if (mype == 0) {
+      std::fprintf(stderr,
+                   "shmem_atomic_bw: no network atomic provider was bound. Link the NIIN "
+                   "GPUNetIO provider and leave NIIN_GPUNETIO_ATOMICS unset (or =1 to see why)\n");
+    }
+    finalize_wrapper();
+    return 1;
+  }
 
   uint64_t* data = static_cast<uint64_t*>(nvshmem_malloc(max_size));
   if (data == nullptr) {
     if (mype == 0) std::fprintf(stderr, "shmem_atomic_bw: nvshmem_malloc(%zu) failed\n", max_size);
-    checkProvider(niinGpunetioAtomicFinalize(provider), "niinGpunetioAtomicFinalize");
     finalize_wrapper();
     return 1;
   }
@@ -355,7 +356,6 @@ int main(int argc, char* argv[]) {
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));
   free_tables(tables, 3);
-  checkProvider(niinGpunetioAtomicFinalize(provider), "niinGpunetioAtomicFinalize");
   finalize_wrapper();
   return 0;
 }

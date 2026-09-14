@@ -77,11 +77,18 @@ __device__ __forceinline__ void niin_coop_copy(
     d[j] = s[j];
 }
 
-// Cooperative put: all threads copy src -> peer dest via NVLink
+// Cooperative put: all threads copy src -> peer dest via NVLink.
+// SCOPE tells the TMA path whether the caller is a warp or a whole CTA; when
+// this CTA has lent NIIN shared memory the copy goes out over cp.async.bulk
+// instead of the cooperative int4 loop. niin_tma_try_copy returns -1 for every
+// transfer TMA cannot take, and it does so uniformly across the threadgroup,
+// so either all threads take the TMA path or none do.
+template<int SCOPE, bool BLOCKING = true>
 __device__ __forceinline__ void niin_coop_put(
     void* dest, const void* src, size_t bytes, int pe,
     int tid, int nthreads, int ctx = -1) {
   if (pe == niin_device_my_pe()) {
+    if (niin_tma_try_copy<SCOPE, BLOCKING>(dest, src, bytes) == 0) return;
     niin_coop_copy(dest, src, bytes, tid, nthreads);
     return;
   }
@@ -89,6 +96,7 @@ __device__ __forceinline__ void niin_coop_put(
   size_t offset = niin_sym_offset(dest);
   if (niin_is_lsa_peer(pe)) {
     void* peerDst = niin_get_peer_ptr(offset, pe);
+    if (niin_tma_try_copy<SCOPE, BLOCKING>(peerDst, src, bytes) == 0) return;
     niin_coop_copy(peerDst, src, bytes, tid, nthreads);
     return;
   }
@@ -98,11 +106,15 @@ __device__ __forceinline__ void niin_coop_put(
     niin_gin_put(offset, src, bytes, pe, ctx);
 }
 
-// Cooperative get: all threads copy peer src -> local dest via NVLink
+// Cooperative get: all threads copy peer src -> local dest via NVLink.
+// Takes the TMA path on the same terms as niin_coop_put; a destination in
+// shared memory routes straight into smem instead of staging through it.
+template<int SCOPE>
 __device__ __forceinline__ void niin_coop_get(
     void* dest, const void* src, size_t bytes, int pe,
     int tid, int nthreads, int ctx = -1) {
   if (pe == niin_device_my_pe()) {
+    if (niin_tma_try_copy<SCOPE>(dest, src, bytes) == 0) return;
     niin_coop_copy(dest, src, bytes, tid, nthreads);
     return;
   }
@@ -110,6 +122,7 @@ __device__ __forceinline__ void niin_coop_get(
   size_t offset = niin_sym_offset(src);
   if (niin_is_lsa_peer(pe)) {
     const void* peerSrc = niin_get_peer_ptr(offset, pe);
+    if (niin_tma_try_copy<SCOPE>(dest, peerSrc, bytes) == 0) return;
     niin_coop_copy(dest, peerSrc, bytes, tid, nthreads);
     return;
   }
@@ -125,8 +138,8 @@ __device__ __forceinline__ void niin_coop_get(
 #define NIIN_DEFINE_PUT_WARP(TYPENAME, TYPE)                                   \
 __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_warp(               \
     TYPE* dest, const TYPE* src, size_t nelems, int pe) {                     \
-  niin_coop_put(dest, src, nelems * sizeof(TYPE), pe,                         \
-                nccl::utility::lane(), 32);                                    \
+  niin_coop_put<NIIN_TMA_WARP>(dest, src, nelems * sizeof(TYPE), pe,           \
+                               nccl::utility::lane(), 32);                     \
   __syncwarp();                                                                \
 }
 
@@ -136,8 +149,8 @@ NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_PUT_WARP)
 #define NIIN_DEFINE_PUT_BLOCK(TYPENAME, TYPE)                                  \
 __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_block(              \
     TYPE* dest, const TYPE* src, size_t nelems, int pe) {                     \
-  niin_coop_put(dest, src, nelems * sizeof(TYPE), pe,                         \
-                threadIdx.x, blockDim.x);                                      \
+  niin_coop_put<NIIN_TMA_BLOCK>(dest, src, nelems * sizeof(TYPE), pe,          \
+                                threadIdx.x, blockDim.x);                      \
   __syncthreads();                                                             \
 }
 
@@ -150,8 +163,8 @@ NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_PUT_BLOCK)
 #define NIIN_DEFINE_GET_WARP(TYPENAME, TYPE)                                   \
 __device__ __forceinline__ void nvshmemx_##TYPENAME##_get_warp(               \
     TYPE* dest, const TYPE* src, size_t nelems, int pe) {                     \
-  niin_coop_get(dest, src, nelems * sizeof(TYPE), pe,                         \
-                nccl::utility::lane(), 32);                                    \
+  niin_coop_get<NIIN_TMA_WARP>(dest, src, nelems * sizeof(TYPE), pe,           \
+                               nccl::utility::lane(), 32);                     \
   __syncwarp();                                                                \
 }
 
@@ -161,8 +174,8 @@ NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_GET_WARP)
 #define NIIN_DEFINE_GET_BLOCK(TYPENAME, TYPE)                                  \
 __device__ __forceinline__ void nvshmemx_##TYPENAME##_get_block(              \
     TYPE* dest, const TYPE* src, size_t nelems, int pe) {                     \
-  niin_coop_get(dest, src, nelems * sizeof(TYPE), pe,                         \
-                threadIdx.x, blockDim.x);                                      \
+  niin_coop_get<NIIN_TMA_BLOCK>(dest, src, nelems * sizeof(TYPE), pe,          \
+                                threadIdx.x, blockDim.x);                      \
   __syncthreads();                                                             \
 }
 
@@ -175,8 +188,8 @@ NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_GET_BLOCK)
 #define NIIN_DEFINE_PUT_SIZED_WARP(SIZE, NBYTES)                               \
 __device__ __forceinline__ void nvshmemx_put##SIZE##_warp(                    \
     void* dest, const void* src, size_t nelems, int pe) {                     \
-  niin_coop_put(dest, src, nelems * NBYTES, pe,                               \
-                nccl::utility::lane(), 32);                                    \
+  niin_coop_put<NIIN_TMA_WARP>(dest, src, nelems * NBYTES, pe,                 \
+                               nccl::utility::lane(), 32);                     \
   __syncwarp();                                                                \
 }
 
@@ -186,8 +199,8 @@ NIIN_SIZED_RMA(NIIN_DEFINE_PUT_SIZED_WARP)
 #define NIIN_DEFINE_PUT_SIZED_BLOCK(SIZE, NBYTES)                              \
 __device__ __forceinline__ void nvshmemx_put##SIZE##_block(                   \
     void* dest, const void* src, size_t nelems, int pe) {                     \
-  niin_coop_put(dest, src, nelems * NBYTES, pe,                               \
-                threadIdx.x, blockDim.x);                                      \
+  niin_coop_put<NIIN_TMA_BLOCK>(dest, src, nelems * NBYTES, pe,                \
+                                threadIdx.x, blockDim.x);                      \
   __syncthreads();                                                             \
 }
 
@@ -197,8 +210,8 @@ NIIN_SIZED_RMA(NIIN_DEFINE_PUT_SIZED_BLOCK)
 #define NIIN_DEFINE_GET_SIZED_WARP(SIZE, NBYTES)                               \
 __device__ __forceinline__ void nvshmemx_get##SIZE##_warp(                    \
     void* dest, const void* src, size_t nelems, int pe) {                     \
-  niin_coop_get(dest, src, nelems * NBYTES, pe,                               \
-                nccl::utility::lane(), 32);                                    \
+  niin_coop_get<NIIN_TMA_WARP>(dest, src, nelems * NBYTES, pe,                 \
+                               nccl::utility::lane(), 32);                     \
   __syncwarp();                                                                \
 }
 
@@ -208,8 +221,8 @@ NIIN_SIZED_RMA(NIIN_DEFINE_GET_SIZED_WARP)
 #define NIIN_DEFINE_GET_SIZED_BLOCK(SIZE, NBYTES)                              \
 __device__ __forceinline__ void nvshmemx_get##SIZE##_block(                   \
     void* dest, const void* src, size_t nelems, int pe) {                     \
-  niin_coop_get(dest, src, nelems * NBYTES, pe,                               \
-                threadIdx.x, blockDim.x);                                      \
+  niin_coop_get<NIIN_TMA_BLOCK>(dest, src, nelems * NBYTES, pe,                \
+                                threadIdx.x, blockDim.x);                      \
   __syncthreads();                                                             \
 }
 
@@ -220,19 +233,19 @@ NIIN_SIZED_RMA(NIIN_DEFINE_GET_SIZED_BLOCK)
 // putmem/getmem warp/block
 // ===========================================================================
 __device__ __forceinline__ void nvshmemx_putmem_warp(void* dest, const void* src, size_t bytes, int pe) {
-  niin_coop_put(dest, src, bytes, pe, nccl::utility::lane(), 32);
+  niin_coop_put<NIIN_TMA_WARP>(dest, src, bytes, pe, nccl::utility::lane(), 32);
   __syncwarp();
 }
 __device__ __forceinline__ void nvshmemx_putmem_block(void* dest, const void* src, size_t bytes, int pe) {
-  niin_coop_put(dest, src, bytes, pe, threadIdx.x, blockDim.x);
+  niin_coop_put<NIIN_TMA_BLOCK>(dest, src, bytes, pe, threadIdx.x, blockDim.x);
   __syncthreads();
 }
 __device__ __forceinline__ void nvshmemx_getmem_warp(void* dest, const void* src, size_t bytes, int pe) {
-  niin_coop_get(dest, src, bytes, pe, nccl::utility::lane(), 32);
+  niin_coop_get<NIIN_TMA_WARP>(dest, src, bytes, pe, nccl::utility::lane(), 32);
   __syncwarp();
 }
 __device__ __forceinline__ void nvshmemx_getmem_block(void* dest, const void* src, size_t bytes, int pe) {
-  niin_coop_get(dest, src, bytes, pe, threadIdx.x, blockDim.x);
+  niin_coop_get<NIIN_TMA_BLOCK>(dest, src, bytes, pe, threadIdx.x, blockDim.x);
   __syncthreads();
 }
 
@@ -242,7 +255,9 @@ __device__ __forceinline__ void nvshmemx_getmem_block(void* dest, const void* sr
 #define NIIN_DEFINE_PUT_NBI_WARP(TYPENAME, TYPE)                               \
 __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_nbi_warp(           \
     TYPE* dest, const TYPE* src, size_t nelems, int pe) {                     \
-  nvshmemx_##TYPENAME##_put_warp(dest, src, nelems, pe);                      \
+  niin_coop_put<NIIN_TMA_WARP, false>(dest, src, nelems * sizeof(TYPE), pe,    \
+                                      nccl::utility::lane(), 32);              \
+  __syncwarp();                                                                \
 }
 
 NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_PUT_NBI_WARP)
@@ -251,7 +266,9 @@ NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_PUT_NBI_WARP)
 #define NIIN_DEFINE_PUT_NBI_BLOCK(TYPENAME, TYPE)                              \
 __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_nbi_block(          \
     TYPE* dest, const TYPE* src, size_t nelems, int pe) {                     \
-  nvshmemx_##TYPENAME##_put_block(dest, src, nelems, pe);                     \
+  niin_coop_put<NIIN_TMA_BLOCK, false>(dest, src, nelems * sizeof(TYPE), pe,   \
+                                       threadIdx.x, blockDim.x);               \
+  __syncthreads();                                                             \
 }
 
 NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_PUT_NBI_BLOCK)
@@ -277,10 +294,12 @@ NIIN_STANDARD_RMA_TYPES(NIIN_DEFINE_GET_NBI_BLOCK)
 
 // NBI putmem/getmem warp/block
 __device__ __forceinline__ void nvshmemx_putmem_nbi_warp(void* dest, const void* src, size_t bytes, int pe) {
-  nvshmemx_putmem_warp(dest, src, bytes, pe);
+  niin_coop_put<NIIN_TMA_WARP, false>(dest, src, bytes, pe, nccl::utility::lane(), 32);
+  __syncwarp();
 }
 __device__ __forceinline__ void nvshmemx_putmem_nbi_block(void* dest, const void* src, size_t bytes, int pe) {
-  nvshmemx_putmem_block(dest, src, bytes, pe);
+  niin_coop_put<NIIN_TMA_BLOCK, false>(dest, src, bytes, pe, threadIdx.x, blockDim.x);
+  __syncthreads();
 }
 __device__ __forceinline__ void nvshmemx_getmem_nbi_warp(void* dest, const void* src, size_t bytes, int pe) {
   nvshmemx_getmem_warp(dest, src, bytes, pe);
@@ -293,7 +312,7 @@ __device__ __forceinline__ void nvshmemx_getmem_nbi_block(void* dest, const void
 #define NIIN_DEFINE_PUT_SIZED_NBI_WARP(SIZE, NBYTES)                           \
 __device__ __forceinline__ void nvshmemx_put##SIZE##_nbi_warp(                \
     void* dest, const void* src, size_t nelems, int pe) {                     \
-  nvshmemx_put##SIZE##_warp(dest, src, nelems, pe);                           \
+  nvshmemx_putmem_nbi_warp(dest, src, nelems * NBYTES, pe);                    \
 }
 
 NIIN_SIZED_RMA(NIIN_DEFINE_PUT_SIZED_NBI_WARP)
@@ -302,7 +321,7 @@ NIIN_SIZED_RMA(NIIN_DEFINE_PUT_SIZED_NBI_WARP)
 #define NIIN_DEFINE_PUT_SIZED_NBI_BLOCK(SIZE, NBYTES)                          \
 __device__ __forceinline__ void nvshmemx_put##SIZE##_nbi_block(               \
     void* dest, const void* src, size_t nelems, int pe) {                     \
-  nvshmemx_put##SIZE##_block(dest, src, nelems, pe);                          \
+  nvshmemx_putmem_nbi_block(dest, src, nelems * NBYTES, pe);                   \
 }
 
 NIIN_SIZED_RMA(NIIN_DEFINE_PUT_SIZED_NBI_BLOCK)
@@ -387,8 +406,8 @@ __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_signal_warp(        \
   if (nccl::utility::lane() == 0 && !lsa) ctx = niin_gin_next_context();       \
   __syncwarp();                                                                \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system); \
-  niin_coop_put(dest, src, nelems * sizeof(TYPE), pe,                         \
-                nccl::utility::lane(), 32, ctx);                               \
+  niin_coop_put<NIIN_TMA_WARP>(dest, src, nelems * sizeof(TYPE), pe,           \
+                               nccl::utility::lane(), 32, ctx);                \
   if (ctx >= 0) niin_gin_flush_thread(ctx);                                    \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system); \
   __syncwarp();                                                                \
@@ -413,8 +432,8 @@ __device__ __forceinline__ void nvshmemx_##TYPENAME##_put_signal_block(       \
   if (threadIdx.x == 0 && !lsa) ctx = niin_gin_next_context();                 \
   __syncthreads();                                                             \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system); \
-  niin_coop_put(dest, src, nelems * sizeof(TYPE), pe,                         \
-                threadIdx.x, blockDim.x, ctx);                                 \
+  niin_coop_put<NIIN_TMA_BLOCK>(dest, src, nelems * sizeof(TYPE), pe,          \
+                                threadIdx.x, blockDim.x, ctx);                 \
   if (ctx >= 0) niin_gin_flush_thread(ctx);                                    \
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system); \
   __syncthreads();                                                             \
@@ -437,7 +456,7 @@ __device__ __forceinline__ void nvshmemx_putmem_signal_warp(
   if (nccl::utility::lane() == 0 && !lsa) ctx = niin_gin_next_context();
   __syncwarp();
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
-  niin_coop_put(dest, src, bytes, pe, nccl::utility::lane(), 32, ctx);
+  niin_coop_put<NIIN_TMA_WARP>(dest, src, bytes, pe, nccl::utility::lane(), 32, ctx);
   if (ctx >= 0) niin_gin_flush_thread(ctx);
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
   __syncwarp();
@@ -455,7 +474,7 @@ __device__ __forceinline__ void nvshmemx_putmem_signal_block(
   if (threadIdx.x == 0 && !lsa) ctx = niin_gin_next_context();
   __syncthreads();
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
-  niin_coop_put(dest, src, bytes, pe, threadIdx.x, blockDim.x, ctx);
+  niin_coop_put<NIIN_TMA_BLOCK>(dest, src, bytes, pe, threadIdx.x, blockDim.x, ctx);
   if (ctx >= 0) niin_gin_flush_thread(ctx);
   if (!lsa) cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
   __syncthreads();

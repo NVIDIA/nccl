@@ -9,6 +9,7 @@
 #define NIIN_SYNC_H_
 
 #include "niin/context.h"
+#include "niin/tma.h"
 
 static __device__ unsigned long long niin_test_any_cursor = 0;
 
@@ -22,23 +23,46 @@ __device__ __forceinline__ void niin_device_drain_all_contexts() {
   ncclDevComm const& comm = niin_comm();
   if (comm.ginConnectionCount == 0) return;
   uint32_t nCtx = niin_gin_context_count();
+  if (nCtx == 1) {  // the common single-QP case: one flush, no loop
+    ncclGin gin(comm, 0);
+    gin.flush(ncclCoopThread{});
+    return;
+  }
   for (uint32_t ctx = 0; ctx < nCtx; ctx++) {
     ncclGin gin(comm, (int)ctx);
     gin.flush(ncclCoopThread{});
   }
 }
 
-// Operations rotate across QPs, and two QPs are not ordered against each other
-// at the receiving NIC, so ordering an earlier put ahead of a later one means
-// completing it. fence therefore drains the same contexts quiet does. That also
-// covers the optional GPUNetIO atomic sidecar, which is an independent network
-// domain a GPU memory fence cannot order a pending GIN put against.
+// fence orders operations; it does not have to complete them. On a single GIN
+// context the transport already provides that ordering: every operation goes to
+// the same RC QP per peer, and an RC QP processes its work queue in order, so
+// consecutive puts to a PE land in order with no completion wait. A local
+// memory fence is then all fence owes the caller.
+//
+// Completion is only needed when something outside that one queue can reorder
+// against it:
+//   - several contexts, because operations rotate across QPs and two QPs are
+//     unordered against each other at the receiving NIC;
+//   - a bound GPUNetIO atomic sidecar, whose QPs are a separate network domain
+//     from GIN, so a pending put is not ordered against a following AMO.
+// Either of those turns fence into the same all-contexts drain quiet does.
+__device__ __forceinline__ bool niin_fence_needs_completion() {
+  if (niin_gin_context_count() > 1) return true;
+  return niin_gpunetio_atomic_context() != nullptr;
+}
+
 __device__ __forceinline__ void niin_device_fence() {
-  niin_device_drain_all_contexts();
+  // Drain this thread's TMA bulk ops first. Unlike the context drain below this
+  // is not gated on connectivity: in a mixed topology, TMA puts to LSA peers
+  // are invisible to GIN, so a fence after a TMA put must order it either way.
+  niin_tma_drain_if_registered();
+  if (niin_fence_needs_completion()) niin_device_drain_all_contexts();
   __threadfence_system();
 }
 
 __device__ __forceinline__ void niin_device_quiet() {
+  niin_tma_drain_if_registered();
   niin_device_drain_all_contexts();
   __threadfence_system();
 }

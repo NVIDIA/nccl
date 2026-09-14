@@ -36,6 +36,7 @@
 #include "niin/types.h"
 #include "niin/context.h"
 #include "niin/query.h"
+#include "niin/tma.h"
 #include "niin/rma.h"
 #include "niin/signaling.h"
 #include "niin/sync.h"

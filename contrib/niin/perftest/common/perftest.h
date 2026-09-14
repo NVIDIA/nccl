@@ -19,6 +19,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <getopt.h>
+#include <strings.h>  // strcasecmp
 
 #include "nvshmem.h"
 #include "nvshmemx.h"
@@ -53,6 +54,23 @@ static size_t max_size_log = 0;
 // Used only by atomic perftests.  Keep the upstream spelling so scripts can
 // select the same operation with -a/--atomic_op.
 static const char* atomic_op = "inc";
+
+// ---------------------------------------------------------------------------
+// TMA
+// ---------------------------------------------------------------------------
+
+// Dynamic shared memory to request per CTA so kernels can register it with
+// nvshmemx_give_smem(). Returns 0 unless NVSHMEM_TMA_POLICY asks for TMA, so a
+// default run allocates no extra shared memory and keeps its usual occupancy.
+//
+// NVSHMEMX_SMEM_MINIMUM (32 KB) stays under the 48 KB cap on dynamic shared
+// memory, so no cudaFuncSetAttribute opt-in is needed.
+static size_t tma_smem_bytes() {
+  const char* env = getenv("NVSHMEM_TMA_POLICY");
+  if (env == nullptr) return 0;
+  if (strcasecmp(env, "ENABLE") != 0 && strcasecmp(env, "FORCE") != 0) return 0;
+  return (size_t)nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM);
+}
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing (matching NVSHMEM perftest conventions)

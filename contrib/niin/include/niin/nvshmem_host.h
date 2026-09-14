@@ -32,6 +32,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <limits.h>
+#include <strings.h>  // strcasecmp, for NVSHMEM_TMA_POLICY parsing
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -101,6 +102,7 @@ struct GlobalState {
   bool hostRmaAvail; // Whether host RMA (ncclPutSignal) is available
   bool ginAvail;     // Whether this communicator supports GIN device resources
   void* barrierScratch; // Scratch buffer for host-side barrier (separate from heap)
+  struct niinGpunetioAtomicHostContext* gpunetioAtomics; // Network AMO provider, when enabled
 };
 
 inline GlobalState& state() {
@@ -140,6 +142,100 @@ inline bool parseForceSeparatePutSignal() {
     return true;
   }
   return false;
+}
+
+// Parse NVSHMEM_TMA_POLICY, matching NVSHMEM's DISABLE/ENABLE/FORCE spelling.
+// Unrecognized values fall back to DISABLE with a diagnostic, as NVSHMEM does.
+inline nvshmemx_tma_policy_t parseTmaPolicy() {
+  const char* env = getenv("NVSHMEM_TMA_POLICY");
+  if (env == nullptr) return NVSHMEMX_TMA_DISABLE;
+  if (strcasecmp(env, "ENABLE") == 0) return NVSHMEMX_TMA_ENABLE;
+  if (strcasecmp(env, "FORCE") == 0) return NVSHMEMX_TMA_FORCE;
+  if (strcasecmp(env, "DISABLE") == 0) return NVSHMEMX_TMA_DISABLE;
+  fprintf(stderr, "NIIN: invalid NVSHMEM_TMA_POLICY value \"%s\"; using DISABLE\n", env);
+  return NVSHMEMX_TMA_DISABLE;
+}
+
+// Resolve the requested TMA policy against the current device's compute
+// capability. TMA needs sm_90 or newer: FORCE reports failure there, ENABLE
+// degrades to DISABLE with a warning. Returns false when init should fail.
+inline bool resolveTmaPolicy(nvshmemx_tma_policy_t* policy) {
+  if (*policy == NVSHMEMX_TMA_DISABLE) return true;
+
+  int dev = 0;
+  cudaGetDevice(&dev);
+  int capMajor = 0, capMinor = 0;
+  cudaDeviceGetAttribute(&capMajor, cudaDevAttrComputeCapabilityMajor, dev);
+  cudaDeviceGetAttribute(&capMinor, cudaDevAttrComputeCapabilityMinor, dev);
+  if (capMajor >= 9) return true;
+
+  if (*policy == NVSHMEMX_TMA_FORCE) {
+    fprintf(stderr, "NIIN: NVSHMEM_TMA_POLICY=FORCE requires sm_90 or newer; "
+                    "device %d is sm_%d%d\n", dev, capMajor, capMinor);
+    return false;
+  }
+  fprintf(stderr, "NIIN: NVSHMEM_TMA_POLICY=ENABLE requires sm_90 or newer; "
+                  "device %d is sm_%d%d, disabling TMA\n", dev, capMajor, capMinor);
+  *policy = NVSHMEMX_TMA_DISABLE;
+  return true;
+}
+
+// NIIN_GPUNETIO_ATOMICS selects how hard NIIN tries to bring up the network
+// AMO provider: 0 disables it, 1 requires it and reports why it did not come
+// up, and the default enables it whenever the provider is linked and the
+// fabric supports it.
+inline int parseGpunetioAtomicsMode() {
+  const char* env = getenv("NIIN_GPUNETIO_ATOMICS");
+  if (env == nullptr || env[0] == '\0') return -1;
+  if (strcmp(env, "0") == 0) return 0;
+  if (strcmp(env, "1") == 0) return 1;
+  fprintf(stderr, "NIIN: NIIN_GPUNETIO_ATOMICS must be 0 or 1\n");
+  return -1;
+}
+
+// Bring up the network atomic provider. Its initialization is collective and
+// all-gathers QP metadata internally, so every PE has to agree before any of
+// them enters it: a PE that bailed out early while the others proceeded would
+// hang them. Agree first, then initialize.
+inline void enableGpunetioAtomics(GlobalState& s) {
+  s.gpunetioAtomics = nullptr;
+  const int mode = parseGpunetioAtomicsMode();
+  if (mode == 0) return;
+
+  const bool linked = (niinGpunetioAtomicInit != nullptr && niinGpunetioAtomicBind != nullptr &&
+                       niinGpunetioAtomicFinalize != nullptr);
+  // Network AMOs only mean something when some peer is off this LSA domain.
+  int local = (linked && s.nRanks > s.lsaSize) ? 1 : 0;
+
+  int agreed = local;
+  if (s.nRanks > 1) {
+    int* dev = static_cast<int*>(s.barrierScratch);
+    if (dev == nullptr) return;
+    if (cudaMemcpy(dev, &local, sizeof(int), cudaMemcpyHostToDevice) != cudaSuccess) return;
+    if (ncclAllReduce(dev, dev, 1, ncclInt, ncclMin, s.comm, s.stream) != ncclSuccess) return;
+    if (cudaStreamSynchronize(s.stream) != cudaSuccess) return;
+    if (cudaMemcpy(&agreed, dev, sizeof(int), cudaMemcpyDeviceToHost) != cudaSuccess) return;
+  }
+  if (agreed == 0) {
+    if (mode == 1 && s.rank == 0) {
+      fprintf(stderr, "NIIN: NIIN_GPUNETIO_ATOMICS=1 but the provider is %s\n",
+              linked ? "unusable on this job's topology" : "not linked into this application");
+    }
+    return;
+  }
+
+  niinGpunetioAtomicOptions options = NIIN_GPUNETIO_ATOMIC_OPTIONS_INITIALIZER;
+  struct niinGpunetioAtomicHostContext* provider = nullptr;
+  ncclResult_t r = niinGpunetioAtomicInit(s.comm, s.heapBase, s.heapSize, &options, &provider);
+  if (r == ncclSuccess) r = niinGpunetioAtomicBind(provider, s.devCtx);
+  if (r != ncclSuccess) {
+    if (provider != nullptr) niinGpunetioAtomicFinalize(provider);
+    if (mode == 1 && s.rank == 0)
+      fprintf(stderr, "NIIN: network atomic provider unavailable (%s); network AMOs stay unimplemented\n",
+              ncclGetErrorString(r));
+    return;
+  }
+  s.gpunetioAtomics = provider;
 }
 
 // Detect rank/nRanks from common MPI/PMI environment variables.
@@ -439,6 +535,14 @@ inline int initCommon(ncclComm_t comm) {
   ncclGroupEnd();
   if (r != ncclSuccess) return -1;
 
+  // TMA registration tables, if the policy asks for them. niinInit left the
+  // context with TMA off, so a DISABLE policy needs nothing further.
+  {
+    nvshmemx_tma_policy_t policy = parseTmaPolicy();
+    if (!resolveTmaPolicy(&policy)) return -1;
+    if (niinTmaEnable(&s.hostCtx, policy) != ncclSuccess) return -1;
+  }
+
   r = niinCommit(&s.hostCtx, s.devCtx);
   if (r != ncclSuccess) return -1;
 
@@ -468,6 +572,11 @@ inline int initCommon(ncclComm_t comm) {
   // Initialize predefined teams
   niin::teams::initPredefined(s.rank, s.nRanks, s.lsaRank, s.lsaSize,
                               s.nodeRank, s.nodeSize);
+
+  // Network AMOs are on by default wherever the provider can come up. A
+  // failure here leaves them fail-closed, exactly as before the provider
+  // existed, rather than failing initialization.
+  enableGpunetioAtomics(s);
 
   s.initialized = true;
   return 0;
@@ -563,10 +672,18 @@ inline void nvshmem_finalize(void) {
   cudaSetDevice(s.cudaDev);
   cudaDeviceSynchronize();
 
+  // Tear the atomic provider down while its device context and the NCCL
+  // communicator it all-gathered over are both still alive.
+  if (s.gpunetioAtomics != nullptr) {
+    niinGpunetioAtomicFinalize(s.gpunetioAtomics);
+    s.gpunetioAtomics = nullptr;
+  }
+
   ncclGroupStart();
   niinFinalize(s.comm, s.devCtx);
   ncclGroupEnd();
 
+  niinTmaDisable(&s.hostCtx);
   cudaFree(s.devCtx);
   cudaFree(s.barrierScratch);
   ncclMemFree(s.heapBase);

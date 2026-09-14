@@ -16,6 +16,7 @@ NVSHMEM_HOST_LIB := $(LIBDIR)/libnvshmem_host.so
 NVSHMEM_LIB := $(LIBDIR)/libnvshmem.so
 GPUNETIO_ATOMICS_LIB := $(LIBDIR)/libniin_gpunetio_atomics.a
 NCCL_HEADER_LINKS := $(INCDIR)/nccl.h $(INCDIR)/nccl_device.h $(INCDIR)/nccl_device
+GPUNETIO_HEADER_LINK := $(INCDIR)/gpunetio
 # Required when GPUNETIO_HOME names an NCCL-vendored provider but NCCL_HOME is
 # an install/build prefix rather than the matching source checkout.
 NCCL_SOURCE_ROOT ?= $(NCCL_HOME)
@@ -45,10 +46,10 @@ ifneq ($(strip $(GPUNETIO_CUDA_ARCHITECTURES)),)
 GPUNETIO_CUDA_ARCHITECTURES_CMAKE_ARG := -DCMAKE_CUDA_ARCHITECTURES="$(GPUNETIO_CUDA_ARCHITECTURES)"
 endif
 
-.PHONY: all clean gpunetio-atomics gpunetio-atomics-if-available
+.PHONY: all clean gpunetio-atomics
 
-all: $(NCCL_HEADER_LINKS) $(NVSHMEM_HOST_LIB) $(NVSHMEM_LIB) $(NCCL_RUNTIME_LIB) \
-     gpunetio-atomics-if-available
+all: $(NCCL_HEADER_LINKS) $(GPUNETIO_HEADER_LINK) $(NVSHMEM_HOST_LIB) $(NVSHMEM_LIB) \
+     $(NCCL_RUNTIME_LIB) gpunetio-atomics
 
 $(INCDIR)/nccl.h:
 	@if [ ! -e "$(NCCL_INCLUDE)/nccl.h" ]; then \
@@ -86,16 +87,24 @@ $(NVSHMEM_HOST_LIB) $(NCCL_RUNTIME_LIB):
 $(NVSHMEM_LIB): $(NVSHMEM_HOST_LIB)
 	ln -sfn "$(notdir $(NVSHMEM_HOST_LIB))" "$@"
 
-# Built as part of `all` whenever a GPUNetIO tree is reachable. Building NIIN
-# against an NCCL install prefix instead of a source checkout is the one case
-# where it is skipped, so `all` degrades to a notice rather than an error.
-gpunetio-atomics-if-available:
-	@if [ -d "$(GPUNETIO_HOME)" ]; then \
-	  $(MAKE) gpunetio-atomics; \
-	else \
-	  echo "Skipping NIIN GPUNetIO atomics: no GPUNetIO sources at $(GPUNETIO_HOME)"; \
-	  echo "Pass GPUNETIO_HOME=/path/to/gpunetio-open or NCCL_SOURCE_ROOT=/path/to/nccl to build it."; \
+# The device side of the atomic provider is header-only. Linking the GPUNetIO
+# include tree into NIIN's own include/ means `-I$(NIIN_HOME)/include` is enough
+# for a CUDA consumer to get it, with no extra include path and no define.
+#
+# NCCL ships those sources, so a missing tree means NCCL_HOME/NCCL_SOURCE_ROOT
+# points somewhere that is not an NCCL source checkout. That is a build
+# configuration error, not a supported configuration: failing here beats
+# shipping a NIIN whose network atomics are quietly unimplemented.
+$(GPUNETIO_HEADER_LINK):
+	@if [ ! -d "$(GPUNETIO_HOME)/include" ]; then \
+	  echo "GPUNetIO sources not found: $(GPUNETIO_HOME)/include"; \
+	  echo "NIIN builds from an NCCL source checkout. Pass NCCL_SOURCE_ROOT=/path/to/nccl"; \
+	  echo "(or GPUNETIO_HOME=/path/to/gpunetio-open) when NCCL_HOME is a build or install prefix."; \
+	  exit 1; \
 	fi
+	@mkdir -p "$(INCDIR)"
+	ln -sfn "$(abspath $(GPUNETIO_HOME)/include)" "$@"
+	@echo "NIIN GPUNetIO device headers: $@"
 
 gpunetio-atomics:
 	@if [ ! -d "$(GPUNETIO_HOME)" ]; then \
@@ -115,4 +124,4 @@ gpunetio-atomics:
 
 clean:
 	rm -f "$(NVSHMEM_HOST_LIB)" "$(NVSHMEM_LIB)" "$(GPUNETIO_ATOMICS_LIB)" \
-	  "$(NCCL_RUNTIME_LIB)" $(NCCL_HEADER_LINKS)
+	  "$(NCCL_RUNTIME_LIB)" "$(GPUNETIO_HEADER_LINK)" $(NCCL_HEADER_LINKS)

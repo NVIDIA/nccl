@@ -117,6 +117,11 @@ __device__ __forceinline__ bool niin_force_separate_put_signal() {
   return niin_g_ctx->forceSeparatePutSignal;
 }
 
+// TMA policy selected at initialization (NVSHMEM_TMA_POLICY).
+__device__ __forceinline__ int niin_tma_policy() {
+  return niin_g_ctx->tmaPolicy;
+}
+
 // Get a peer pointer for an LSA peer at the given symmetric offset.
 __device__ __forceinline__ void* niin_get_peer_ptr(size_t offset, int pe) {
   return ncclGetPeerPointer(niin_heap_window(), offset, pe);

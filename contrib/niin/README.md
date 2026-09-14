@@ -128,6 +128,7 @@ contrib/niin/include/
     types.h              # NVSHMEM constants, X-macro type generation
     context.h            # niinContext struct, __device__ global, helpers
     query.h              # nvshmem_my_pe, nvshmem_n_pes, nvshmem_ptr (__host__ __device__)
+    tma.h                # TMA-backed RMA (give_smem/release_smem, cp.async.bulk)
     rma.h                # All put/get variants (typed, sized, mem, nbi, strided)
     signaling.h          # put_signal, signal_fetch, signal_wait_until
     sync.h               # fence, quiet, wait_until, test (+ all/any/some + vector)
@@ -249,8 +250,13 @@ GIN path drives the whole descriptor from one context.
 Two QPs are not ordered against each other at the receiving NIC, so ordering an
 earlier put ahead of a later one means completing it:
 
-- **`nvshmem_fence()` and `nvshmem_quiet()`** drain every context. Both are
-  O(contexts) per call, which is what per-operation rotation costs.
+- **`nvshmem_quiet()`** drains every context: it has to complete operations,
+  and after rotation a thread's operations can be on any of them.
+- **`nvshmem_fence()`** only orders, so on a single context it is a local
+  memory fence with no completion wait -- one RC QP per peer already delivers
+  that PE's operations in order. It falls back to quiet's drain when there is
+  more than one context, or when the GPUNetIO atomic sidecar is bound, since
+  its QPs are a separate network domain from GIN.
 - **Barriers** run on context 0 on every PE: GIN barrier signals are
   per-context state, so a barrier only converges if all PEs drive it from the
   same index. The barrier drains the rotating contexts before synchronizing.
@@ -300,6 +306,96 @@ signal` by setting `NIIN_PUT_SIGNAL_MODE=separate` (aliases: `split`,
 `fence_signal`). The default `auto` mode keeps fused signaling where safe and
 uses the split path where peer pointer atomics are not reliable.
 
+### TMA (Tensor Memory Accelerator)
+
+NIIN implements NVSHMEM's TMA feature: an application lends a slice of its CTA
+shared memory to the runtime, and NIIN's LSA (NVLink) put/get paths then move
+data with `cp.async.bulk` instead of vectorized load/store. TMA is off by
+default and requires sm_90 or newer.
+
+Enable it with `NVSHMEM_TMA_POLICY=ENABLE` (or `FORCE`), then register shared
+memory inside the kernel:
+
+```cpp
+// int4 element type pins the dynamic shared memory base to 16-byte alignment.
+extern __shared__ int4 smem[];
+
+__global__ void my_kernel(float *dst, const float *src, int nelem, int peer) {
+    nvshmemx_give_smem(smem, nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM));
+    __syncthreads();                 // required: publishes the registration
+
+    nvshmemx_float_put_block(dst, src, nelem, peer);   // goes out over TMA
+    nvshmem_quiet();
+
+    nvshmemx_release_smem();         // required before the kernel returns
+    __syncthreads();
+}
+
+// Host: size the launch from the same query.
+int smemBytes = nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM);
+my_kernel<<<grid, 128, smemBytes>>>(dst, src, nelem, peer);
+```
+
+`nvshmemx_ask_smem(NVSHMEMX_SMEM_RECOMMENDED)` returns 64 KB, which exceeds the
+48 KB default cap on dynamic shared memory. Launching with that much requires
+opting in first:
+
+```cpp
+cudaFuncSetAttribute(my_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                     nvshmemx_ask_smem(NVSHMEMX_SMEM_RECOMMENDED));
+```
+
+#### Routing
+
+The route is chosen from where the local buffer lives. NIIN reserves
+`NIIN_SMEM_DATA_REGION_OFFSET` (512) bytes at the base of the registered buffer
+for mbarriers; staging tiles occupy the remainder.
+
+| Local buffer | Route | Notes |
+|---|---|---|
+| Shared memory (put source) | `smem -> peer gmem` | Direct `cp.async.bulk`, no staging |
+| Shared memory (get destination) | `peer gmem -> smem` | Direct `cp.async.bulk` with an mbarrier |
+| Global memory, thread/warp scope | Staged through the tile | Single issuer, one chunk at a time |
+| Global memory, block scope | Staged, double-buffered | Warp-specialized load/store warps; needs at least two full warps |
+
+Routing is opportunistic. A transfer that TMA cannot take falls back to the
+regular vectorized load/store path, so the put/get contract is unchanged either
+way. TMA is skipped when any of these hold:
+
+- Source or destination is not 16-byte aligned, or the size is not a multiple of 16
+- Either buffer is in local (stack) memory, which the TMA engine cannot address
+- The CTA never called `nvshmemx_give_smem()`, or its buffer was smaller than
+  `nvshmemx_ask_smem(NVSHMEMX_SMEM_BARRIERS_ONLY)`, or the buffer was not 16-byte aligned
+- The CTA's linear block id is at or beyond `NIIN_TMA_MAX_BLOCKS` (4096)
+- Block-scoped staging in a CTA with fewer than two full warps
+- The target PE is reached over GIN rather than LSA
+
+`nvshmem_fence()` and `nvshmem_quiet()` drain the calling thread's outstanding
+bulk group before their usual ordering work, so TMA-initiated transfers are
+ordered alongside the load/store and GIN paths.
+
+#### Caveats inherited from NVSHMEM
+
+- **A put sourced from shared memory needs a proxy fence.** After writing the
+  staging buffer with ordinary stores, issue `fence.proxy.async.shared::cta`
+  (NIIN exposes `niin_tma_fence_proxy_async_shared_cta()`, a no-op below sm_90)
+  before the put, or the TMA engine may read stale data. One fence covers a run
+  of puts as long as the source is not rewritten in between.
+- **The staging tile and its mbarriers are per-CTA state.** At most one
+  thread-scoped staged transfer may be in flight per CTA. Two threads of the
+  same CTA issuing `nvshmem_putmem()` concurrently would corrupt each other's
+  staging; use the warp or block variants for multi-threaded transfers.
+- **`give_smem` must be followed by a synchronization** before any RMA, and
+  every CTA that calls it must call `nvshmemx_release_smem()` before returning.
+  A stale registration would send a later kernel down the TMA path through a
+  dangling shared-memory pointer.
+- **The warp and block APIs require a converged threadgroup.** Electing the
+  issuing thread uses `elect.sync`/`__shfl_sync` over the full warp, so
+  `nvshmemx_*_warp` must be called with all 32 lanes active and
+  `nvshmemx_*_block` with the whole CTA. That is already NVSHMEM's contract for
+  those APIs; without TMA, NIIN's cooperative copy happened to tolerate partial
+  groups.
+
 ## API Coverage
 
 ### Host-Side API
@@ -321,7 +417,7 @@ uses the split path where peer pointer atomics are not reliable.
 | `nvshmem_ptr(ptr, pe)` | Full | Host and device; nullptr for non-LSA peers |
 | `nvshmem_barrier_all()` | Full | Host: ncclAllReduce barrier; Device: ncclBarrierSession |
 | `nvshmem_sync_all()` | Full | Alias for barrier_all |
-| `nvshmem_fence()` | Full | Host: cudaDeviceSynchronize; Device: drains every GIN context + `__threadfence_system()`, since operations rotate across QPs |
+| `nvshmem_fence()` | Full | Host: cudaDeviceSynchronize; Device: `__threadfence_system()` on a single GIN context, drains every context once they rotate |
 | `nvshmem_quiet()` | Full | Host: `cudaDeviceSynchronize` then an all-contexts GIN drain (a put can outlive the kernel that issued it); Device: drains every GIN context + threadfence |
 | `nvshmem_info_get_name()` | Full | Returns "NIIN (NVSHMEM Implemented In NCCL)" |
 | `nvshmem_info_get_version()` | Full | Reports 3.0 |
@@ -398,6 +494,22 @@ extend this support safely.
 
 All typed variants are generated via X-macros for 24 standard RMA types: `float`, `double`, `char`, `schar`, `short`, `int`, `long`, `longlong`, `uchar`, `ushort`, `uint`, `ulong`, `ulonglong`, `int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64`, `size`, `ptrdiff`.
 
+### TMA Shared-Memory Registration
+
+Off by default; set `NVSHMEM_TMA_POLICY=ENABLE` and use sm_90 or newer. See
+[TMA (Tensor Memory Accelerator)](#tma-tensor-memory-accelerator) for routing
+rules and caveats.
+
+| NVSHMEM API | NIIN Status | Notes |
+|---|---|---|
+| `nvshmemx_ask_smem(flag)` | Full | Host and device; 64 KB / 32 KB / barriers-only |
+| `nvshmemx_give_smem(ptr, size)` | Full | Per-CTA registration, up to 4096 CTAs |
+| `nvshmemx_release_smem()` | Full | |
+| `NVSHMEM_TMA_POLICY` | Full | `DISABLE` (default), `ENABLE`, `FORCE` |
+| TMA-backed put/get over LSA | Full | smem->gmem, gmem->smem, and staged gmem->gmem |
+| TMA-backed put/get over GIN | N/A | Network transfers go through GIN, not `cp.async.bulk` |
+| `nvshmemx_flush()` | Not impl | NIIN's nbi RMA is already blocking, so source buffers are reusable on return |
+
 ### Device-Side Signaling
 
 | NVSHMEM API | LSA | Network | Notes |
@@ -413,7 +525,7 @@ All typed variants are generated via X-macros for 24 standard RMA types: `float`
 
 | NVSHMEM API | NIIN Status | Notes |
 |---|---|---|
-| `nvshmem_fence()` | Full | All-contexts GIN drain + `__threadfence_system()`; ordering across rotating QPs means completing the earlier operation. Not a collective barrier |
+| `nvshmem_fence()` | Full | `__threadfence_system()` alone on a single GIN context, where the RC QP already orders that PE's operations; an all-contexts drain once operations rotate across QPs or the atomic sidecar is bound. Not a collective barrier |
 | `nvshmem_quiet()` | Full | All-contexts GIN drain + `__threadfence_system()` |
 | `nvshmem_barrier_all()` | Full | All-contexts `ncclGinBarrierSession` (world team) with acquire/release ordering and a `Put\|Get` fence, so barrier_all implies quiet as NVSHMEM requires |
 | `nvshmem_sync_all()` | Full | Collective synchronization; currently uses the same NCCL barrier path as barrier_all |
@@ -432,7 +544,7 @@ Wait/test operations are generated for 13 types: `short`, `int`, `long`, `longlo
 
 | NVSHMEM API | LSA | Network | Notes |
 |---|---|---|---|
-| `nvshmem_<TYPE>_atomic_fetch_add()` | Full | Optional native | Requires the NIIN GPUNetIO provider to be bound at init; not a GIN op |
+| `nvshmem_<TYPE>_atomic_fetch_add()` | Full | Optional native | Enabled by default when the provider is linked; not a GIN op |
 | `nvshmem_<TYPE>_atomic_add()` | Full | Optional native | Same provider |
 | `nvshmem_<TYPE>_atomic_compare_swap()` | Full | Optional native | Same provider |
 | `nvshmem_<TYPE>_atomic_swap()` | Full | Optional native | Same provider |
@@ -449,7 +561,25 @@ Bitwise AMO types (7): `uint`, `ulong`, `ulonglong`, `int32`, `int64`, `uint32`,
 
 GIN does not expose atomic operations, so the provider in
 [`gpunetio/`](gpunetio/README.md) creates NIIN-owned atomic-only QPs and a
-separate remote-atomic registration of the symmetric heap. On systems without
+separate remote-atomic registration of the symmetric heap. The device half is header-only and compiled in by default: `make -C
+contrib/niin` links the GPUNetIO include tree into `$NIIN_HOME/include`, so
+`-I$NIIN_HOME/include` is all a CUDA consumer needs -- no define, no extra
+include path. Compile with `NIIN_GPUNETIO_ENABLE=0` to opt out and leave
+network AMOs unimplemented.
+
+NCCL ships the GPUNetIO sources, so NIIN builds from an NCCL source checkout.
+Building against a build or install prefix fails with a message naming
+`NCCL_SOURCE_ROOT` rather than quietly producing a NIIN whose network atomics
+are unimplemented.
+
+The host half stays a separate object, `lib/libniin_gpunetio_atomics.a`, which
+the same `make` builds. Link it and `nvshmem_init()` brings the provider up and
+binds it automatically whenever the job has peers outside the LSA domain, so
+network AMOs work with no application change; `NIIN_GPUNETIO_ATOMICS=0` turns it
+off and `=1` reports why it did not come up. Its entry points are weak symbols,
+so an application that does not link the archive is unaffected and network AMOs
+stay fail-closed -- and because NIIN references them weakly, link the archive
+with `-Wl,--whole-archive`. On systems without
 NIC atomic support, and for operations the NIC cannot express such as
 floating-point atomics, a GDRCopy-based implementation is available.
 
@@ -556,8 +686,8 @@ handler. The behavior is controlled at compile time by defining
 | One NCCL PE per GPU | Multi-process-per-GPU NVSHMEM use cases are not represented | `NVSHMEMI_TEAM_SAME_GPU` is always a single-PE team. |
 | No arbitrary NVSHMEM team creation | Applications cannot create teams with arbitrary PE membership, layouts, or team-specific contexts | NIIN represents predefined teams plus constrained host-side strided/2D split teams only. User-created teams are not available to device APIs. |
 | NCCL memory/window model | Symmetric allocations come from one NCCL-registered heap | Set `NVSHMEM_SYMMETRIC_SIZE` before initialization when a larger heap is required. |
-| NCCL device transport constraints | API support depends on whether the target PE is LSA-accessible or reachable through GIN | Block gets use GIN; scalar network gets remain unimplemented. Network integral AMOs require NIIN's optional native GPUNetIO provider; network floating AMOs remain experimental because GIN has no AMO API. |
-| Performance is not yet tuned | Supported APIs are currently optimized for correctness first | Expect performance to change as NIIN's NCCL-backed paths and launch heuristics are tuned. The main knob available today is `NIIN_NUM_QPS`; see [Multi-QP (GIN contexts)](#multi-qp-gin-contexts). |
+| NCCL device transport constraints | API support depends on whether the target PE is LSA-accessible or reachable through GIN | Block gets use GIN; scalar network gets remain unimplemented. Network integral AMOs require NIIN's optional native GPUNetIO provider; network floating AMOs remain experimental because GIN has no AMO API. TMA applies to the LSA path only. |
+| Performance is not yet tuned | Supported APIs are currently optimized for correctness first | Expect performance to change as NIIN's NCCL-backed paths and launch heuristics are tuned. The main knobs available today are `NIIN_NUM_QPS` (see [Multi-QP (GIN contexts)](#multi-qp-gin-contexts)) and `NVSHMEM_TMA_POLICY` (see [TMA (Tensor Memory Accelerator)](#tma-tensor-memory-accelerator)). |
 
 ### Cannot be implemented with current NCCL APIs
 
@@ -571,13 +701,15 @@ handler. The behavior is controlled at compile time by defining
 | Feature | Notes |
 |---|---|
 | Scalar network get (`nvshmem_<TYPE>_g`) | Block gets use GIN; scalar get returns a value directly and has no symmetric destination buffer |
-| Tile put/get APIs | Not part of NIIN's current supported RMA subset |
+| Tile put/get APIs (`nvshmemx::tile_put`/`tile_get`) | Not part of NIIN's current supported RMA subset. Unrelated to the TMA APIs, which are supported |
+| `nvshmemx_flush()` | NIIN's non-blocking RMA is already blocking, so source buffers are reusable when a put returns |
 
 ### Not yet implemented (could be added)
 
 | Feature | Notes |
 |---|---|
 | Device-side custom (user-created) team query | Device supports all 6 predefined teams but not `team_split_strided` results |
+| TMA for GIN transfers | TMA covers LSA peers; network transfers still go through GIN |
 
 ### NCCL infrastructure limitations (non-API-surface)
 
@@ -610,6 +742,7 @@ by NIIN.
 |---|---|
 | `NVSHMEM_SYMMETRIC_SIZE` | Symmetric heap size; default is `256M`; supports K/M/G suffixes |
 | `NVSHMEM_MAX_CTAS` | Maximum CTAs for NIIN's internal host on-stream block RMA launch heuristic; default is `16` |
+| `NVSHMEM_TMA_POLICY` | TMA usage for LSA put/get: `DISABLE` (default), `ENABLE`, `FORCE`. `ENABLE` below sm_90 warns and disables; `FORCE` below sm_90 fails initialization |
 
 NIIN also provides the NIIN-specific `NIIN_PUT_SIGNAL_MODE` variable to select
 put-signal routing: `auto`, `separate`, `split`, or `fence_signal`.
@@ -666,7 +799,7 @@ across QPs independently of the grid, so the CTA count does not have to track
 the QP count.
 ### Functional tests (`contrib/niin/test/niin_test.cu`)
 
-Multi-GPU test using 2 GPUs via the low-level `niinInit`/`niinCommit` API. 24 test categories, 109 checks:
+Multi-GPU test using 2 GPUs via the low-level `niinInit`/`niinCommit` API. 30 test categories, 121 checks:
 
 | Test | What it validates |
 |---|---|
@@ -694,6 +827,12 @@ Multi-GPU test using 2 GPUs via the low-level `niinInit`/`niinCommit` API. 24 te
 | Odd-size block put | 1000 bytes (not multiple of 16), exercises tail handling |
 | Block get | `nvshmemx_int_get_block()` 256 ints cooperative get cross-GPU |
 | Misaligned block get | 999 bytes at +5 byte offset cross-GPU |
+| TMA block put (64KB) | `nvshmemx_int_put_block()` with registered smem — double-buffered staging |
+| TMA thread put (8KB) | `nvshmem_int_put()` with registered smem — single-issuer staging |
+| TMA put from shared memory | Block put whose source is the registered smem tile |
+| TMA get into shared memory | `nvshmemx_int_get_block()` landing directly in smem |
+| TMA unaligned fallback | 1000 bytes at +3 with smem registered — must fall back and still be correct |
+| nvshmemx_ask_smem | Host-side sizing query returns ordered, self-consistent values |
 | Team operations | `team_split_strided`, `team_split_2d`, `team_translate_pe`, `team_destroy` |
 | Stream-based RMA | `nvshmemx_int_put_on_stream()`, `nvshmemx_int_p_on_stream()` |
 
@@ -711,6 +850,10 @@ nvcc contrib/niin/test/niin_test.cu -o niin_test \
 
 ./niin_test    # requires >= 2 GPUs
 ```
+
+The TMA tests enable TMA automatically when the GPUs are sm_90 or newer. Below
+that they still run and cover the load/store fallback, since `give_smem` is
+inert there.
 
 ### NVSHMEM-compatible API test
 

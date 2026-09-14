@@ -1014,10 +1014,11 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
         CUCHECK(cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)resources->buffers[p], dmaBufSize,
                                               CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
                                               getHandleForAddressRangeFlags(resources->useGdr)));
-        NCCLCHECK(proxyState->ncclNet->regMrDmaBuf(resources->netSendComm, resources->buffers[p],
+        ncclResult_t dmaBufRegRes = proxyState->ncclNet->regMrDmaBuf(resources->netSendComm, resources->buffers[p],
                                                    resources->buffSizes[p], type, 0ULL, dmabuf_fd,
-                                                   &resources->mhandles[p]));
-        (void)close(dmabuf_fd);
+                                                   &resources->mhandles[p]);
+        (void)close(dmabuf_fd);  // close the DMA-BUF fd whether or not registration succeeded
+        NCCLCHECK(dmaBufRegRes);
       } else // FALL-THROUGH to nv_peermem GDR path
 #endif
       {
@@ -1187,10 +1188,11 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
         CUCHECK(cuMemGetHandleForAddressRange((void*)&dmabuf_fd, (CUdeviceptr)resources->buffers[p], dmaBufSize,
                                               CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
                                               getHandleForAddressRangeFlags(resources->useGdr)));
-        NCCLCHECK(proxyState->ncclNet->regMrDmaBuf(resources->netRecvComm, resources->buffers[p],
+        ncclResult_t dmaBufRegRes = proxyState->ncclNet->regMrDmaBuf(resources->netRecvComm, resources->buffers[p],
                                                    resources->buffSizes[p], type, 0ULL, dmabuf_fd,
-                                                   &resources->mhandles[p]));
-        (void)close(dmabuf_fd);
+                                                   &resources->mhandles[p]);
+        (void)close(dmabuf_fd);  // close the DMA-BUF fd whether or not registration succeeded
+        NCCLCHECK(dmaBufRegRes);
       } else // FALL-THROUGH to nv_peermem GDR path
 #endif
       {

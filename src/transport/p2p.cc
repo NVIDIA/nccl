@@ -291,8 +291,9 @@ ncclResult_t ncclP2pImportShareableBuffer(struct ncclComm* comm, int peer, size_
       NCCLCHECK(ncclProxyClientGetFdBlocking(comm, peer, &cuDesc->data, &fd));
       INFO(NCCL_P2P, "UDS converted handle 0x%lx to fd %lld on remote peer %d", *(uint64_t*)&cuDesc->data,
            (long long)fd, peer);
-      CUCHECK(cuMemImportFromShareableHandle(&handle, (void*)(uintptr_t)fd, type));
-      SYSCHECK(ncclIpcFdClose(fd), "close");
+      CUresult p2pImportRes = cuMemImportFromShareableHandle(&handle, (void*)(uintptr_t)fd, type);
+      SYSCHECK(ncclIpcFdClose(fd), "close");  // close the UDS fd whether or not the import succeeded
+      CUCHECK(p2pImportRes);
     } else {
       CUCHECK(cuMemImportFromShareableHandle(&handle, cuDesc, type));
     }

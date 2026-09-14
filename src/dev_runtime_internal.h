@@ -33,7 +33,6 @@ struct ncclDevrTeam {
 };
 
 // Non-static functions in dev_runtime.cc also called from cft_dev_runtime.cc:
-int computeLsaSize(struct ncclComm* comm);
 ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool multimem, bool counted, bool wantsLeUc,
                            bool wantsLeMc, struct ncclDevrTeam** outTeam, bool* needBarrier);
 ncclResult_t findCommAndHostWindowFromDeviceWindow(ncclWindow_t devWindow, ncclComm_t* foundComm,

@@ -27,6 +27,11 @@ ncclResult_t ncclRmaProxyPutBuildOp(struct ncclComm* comm, struct ncclRmaProxyCt
                                     bool persistent, struct ncclDevrWindow* srcWin, size_t srcOff,
                                     struct ncclDevrWindow* peerWin, size_t peerOff, size_t size, int peer,
                                     int signalIdx, ncclSignalMode_t signalMode, struct ncclRmaPutSignalOp* op) {
+  // validate that the given peer is on this context's rail
+  int railPeer;
+  NCCLCHECK(ncclRmaProxyWorldToPeer(rmaProxyCtx, peer, &railPeer));
+  TRACE(NCCL_COLL, "Rank %d ctx %d worldRank %d railPeer %d", comm->rank, ctx, peer, railPeer);
+
   op->srcOff = ncclDevrGetWinOffset(srcWin) + srcOff;
   // Data-window MR handles are stored per rmaComm (rmaHostWins[0..rmaCommCount)), so
   // index them by collCommIdx. The signal handle below uses rmaProxyCtx's own buffer.

@@ -917,6 +917,12 @@ bool ncclHierCeAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRe
     TRACE(NCCL_TUNING, "Skipping hierarchical CE collective: RMA proxy not available");
     return false;
   }
+  // Hierarchical CE AlltoAll talks to every rank, so it needs world connectivity.
+  if (coll == ncclFuncAlltoAll && comm->rmaBaseStride != 1) {
+    TRACE(NCCL_TUNING, "Skipping hierarchical CE AlltoAll: requires world connectivity (RMA base stride %d)",
+          comm->rmaBaseStride);
+    return false;
+  }
   // Need registered windows for both send and recv buffers
   if (winRegType != ncclSymSendRegRecvReg) {
     TRACE(NCCL_TUNING, "Skipping hierarchical CE collective: window registration type %d not supported", winRegType);

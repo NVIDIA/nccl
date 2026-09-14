@@ -108,6 +108,8 @@ struct ncclDevCommCompat {
 // Check if GIN resources have been requested as part of `reqs`.
 bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
 
+int computeLsaSize(struct ncclComm* comm);
+
 // Check if there is only one LSA team. This function uses the cached value of comm or computes the
 // value from the comm topology.
 bool ncclDevrIsOneLsaTeam(struct ncclComm* comm);

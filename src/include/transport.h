@@ -65,6 +65,7 @@ struct ncclPeerInfo {
   uint64_t supportedGinTypeBitMask;
   bool crossNicSupport;
   bool rmaPluginAvailable;
+  int rmaRankStride;
   bool cuMemGdrSupport;
   int mloPart; // MLOPart partition index, or -1 if not an MLOPart GPU
   int cudaDriverVersion;

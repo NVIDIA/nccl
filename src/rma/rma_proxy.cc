@@ -25,6 +25,35 @@ extern int64_t ncclParamIbDataDirect();
 
 NCCL_PARAM(RmaProxyDumpSignal, "RMA_PROXY_DUMP_SIGNAL", -1);
 NCCL_PARAM(RmaProxyQueueSize, "RMA_PROXY_QUEUE_SIZE", -1);
+
+// world / rail-peer indexing conversion
+ncclResult_t ncclRmaProxyWorldToPeer(const struct ncclRmaProxyCtx* ctx, int worldRank, int* peer) {
+  struct ncclComm* comm = ctx->comm;
+  if (worldRank < 0 || worldRank >= comm->nRanks) {
+    WARN("Rank %d cannot map world rank %d to RMA rail peer (nRanks=%d)", comm->rank, worldRank, comm->nRanks);
+    return ncclInvalidArgument;
+  }
+  if (ctx->ctxStride <= 0 || (worldRank - comm->rank) % ctx->ctxStride != 0) {
+    WARN("Rank %d cannot reach world rank %d on this RMA context: addresses world ranks at stride %d only", comm->rank,
+         worldRank, ctx->ctxStride);
+    return ncclInvalidArgument;
+  }
+  int railPeer = (int)idivFast32((uint32_t)worldRank, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32);
+  int nPeers = (int)idivFast32((uint32_t)comm->nRanks, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32);
+  if (railPeer >= nPeers) {
+    WARN("Rank %d mapped world rank %d to rail peer %d, which is out of range (nPeers=%d)", comm->rank, worldRank,
+         railPeer, nPeers);
+    return ncclInternalError;
+  }
+  *peer = railPeer;
+  return ncclSuccess;
+}
+
+int ncclRmaProxyPeerToWorld(struct ncclComm* comm, int peer) {
+  return peer * comm->rmaBaseStride +
+         (int)imodFast32((uint32_t)comm->rank, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32);
+}
+
 // Default total number of internal RMA contexts provisioned for hierarchical CE
 // collectives. The contexts are distributed round-robin across the available
 // physical RMA communicators.
@@ -209,13 +238,13 @@ static ncclResult_t ncclRmaProxyCtxAllocGraph(struct ncclComm* comm, ncclRma_t* 
   return ncclSuccess;
 }
 
-ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, ncclNetProperties_t props,
+ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, int rankStride, ncclNetProperties_t props,
                                        int collCommIdx, void** outRmaProxyCtx) {
   ncclResult_t ret = ncclSuccess;
   // Get the RMA plugin interface
   ncclRma_t* rmaComm = (ncclRma_t*)comm->rmaState.rmaProxyState.ncclRma;
 
-  ncclRmaConfig_t config = {1, comm->config.trafficClass, 1};
+  ncclRmaConfig_t config = {1, comm->config.trafficClass, rankStride};
 
   // Allocate the RMA proxy context
   struct ncclRmaProxyCtx* rmaProxyCtx = nullptr;
@@ -226,6 +255,8 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, nc
   rmaProxyCtx->props = props;
   // rmaComm (NIC) this context uses for its data-window MR handle lookups.
   rmaProxyCtx->collCommIdx = collCommIdx;
+  rmaProxyCtx->ctxStride = comm->rmaBaseStride * rankStride;
+
   NCCLCHECKGOTO(rmaComm->createContext(collComm, &config, &rmaProxyCtx->rmaCtx), ret, fail);
 
   NCCLCHECKGOTO(ncclRmaProxyCtxAlloc(comm, rmaComm, rmaProxyCtx), ret, fail);
@@ -443,8 +474,15 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
   rmaProxyState->rmaCommCount = rmaCommCount;
 
   NCCLCHECKGOTO(ncclCalloc(&allHandles, (size_t)comm->nRanks * NCCL_NET_HANDLE_MAXSIZE), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&handles, comm->nRanks), ret, fail);
-  for (int r = 0; r < comm->nRanks; r++) handles[r] = allHandles + r * NCCL_NET_HANDLE_MAXSIZE;
+  // Loop over peers (rail-mates) only: we only connect to the specified rail's subset of handles, not every NIC (allHandles)
+  int nPeers, myPeer;
+  nPeers = (int)idivFast32((uint32_t)comm->nRanks, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32);
+  myPeer = (int)idivFast32((uint32_t)comm->rank, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32);
+  NCCLCHECKGOTO(ncclCalloc(&handles, nPeers), ret, fail);
+  for (int peer = 0; peer < nPeers; peer++) {
+    // Select each railmate's handle by its WORLD rank; handles[] points into allHandles[].
+    handles[peer] = allHandles + (size_t)ncclRmaProxyPeerToWorld(comm, peer) * NCCL_NET_HANDLE_MAXSIZE;
+  }
 
   for (int n = 0; n < rmaCommCount; n++) {
     void* listenComm;
@@ -452,7 +490,7 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
                                                  allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank, &listenComm),
                   ret, fail);
     NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
-    NCCLCHECKGOTO(rmaProxyState->ncclRma->connect(comm->netContext, handles, comm->nRanks, comm->rank, listenComm,
+    NCCLCHECKGOTO(rmaProxyState->ncclRma->connect(comm->netContext, handles, nPeers, myPeer, listenComm,
                                                   rmaProxyState->rmaComms + n),
                   ret, fail);
     NCCLCHECKGOTO(rmaProxyState->ncclRma->getProperties(localRmaDevs[n], &rmaProxyState->props[n]), ret, fail);
@@ -472,13 +510,27 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
   rmaProxyState->numIntCtx = ncclRmaWantInternalCtx(comm) ? ncclNumRmaIntCtx() : 0;
   rmaProxyState->rmaProxyCtxCount = comm->config.numRmaCtx + rmaProxyState->numIntCtx;
   NCCLCHECK(ncclCalloc(&rmaProxyState->rmaProxyCtxs, rmaProxyState->rmaProxyCtxCount));
-  for (int n = 0; n < rmaProxyState->rmaProxyCtxCount; n++) {
-    // Both ranges map round-robin to the physical RMA communicators; the
-    // internal range lands NCCL_RMA_INT_CTX_PER_NIC contexts on each.
-    int collCommIdx = (n < comm->config.numRmaCtx ? n : n - comm->config.numRmaCtx) % rmaProxyState->rmaCommCount;
-    NCCLCHECKGOTO(ncclRmaProxyCreateContext(comm, rmaProxyState->rmaComms[collCommIdx],
+
+  int userRankStride;
+  userRankStride =
+    comm->config.numRmaCtx > 0 ?
+      (int)idivFast32((uint32_t)comm->rmaUserCtxStride, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32) :
+      1;
+  // USER CONTEXTS: use rankStride=(userStride / baseStride)
+  for (int n = 0; n < comm->config.numRmaCtx; n++) {
+    int collCommIdx = n % rmaProxyState->rmaCommCount;
+    NCCLCHECKGOTO(ncclRmaProxyCreateContext(comm, rmaProxyState->rmaComms[collCommIdx], userRankStride,
                                             rmaProxyState->props[collCommIdx], collCommIdx,
                                             &rmaProxyState->rmaProxyCtxs[n]),
+                  ret, fail);
+  }
+
+  // INTERNAL CONTEXTS: use rankStride=1 (full rail); don't want NCCL_RMA_RANK_STRIDE affecting NCCL's own algorithms
+  for (int n = 0; n < rmaProxyState->numIntCtx; n++) {
+    int collCommIdx = n % rmaProxyState->rmaCommCount;
+    NCCLCHECKGOTO(ncclRmaProxyCreateContext(comm, rmaProxyState->rmaComms[collCommIdx], /*rankStride=*/1,
+                                            rmaProxyState->props[collCommIdx], collCommIdx,
+                                            &rmaProxyState->rmaProxyCtxs[comm->config.numRmaCtx + n]),
                   ret, fail);
   }
 
@@ -487,8 +539,11 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
   rmaProxyState->thread = std::thread(ncclRmaProxyProgressThread, rmaProxyState);
   ncclSetThreadName(rmaProxyState->thread, "NCCL RMA PPrg%2d", comm->cudaDev);
 
-  INFO(NCCL_INIT, "Rank %d ncclRmaProxyConnectOnce: rmaCommCount %d rmaProxyCtxCount:%d", comm->rank, rmaCommCount,
-       rmaProxyState->rmaProxyCtxCount);
+  INFO(NCCL_INIT,
+       "Rank %d ncclRmaProxyConnectOnce: rmaCommCount %d rmaProxyCtxCount:%d baseStride %d rail(nPeers %d myPeer %d) "
+       "userCtxStride %d userRankStride %d",
+       comm->rank, rmaCommCount, rmaProxyState->rmaProxyCtxCount, comm->rmaBaseStride, nPeers, myPeer,
+       comm->rmaUserCtxStride, userRankStride);
 
 exit:
   if (ret == ncclSuccess) rmaProxyState->connected = true;
@@ -554,6 +609,12 @@ ncclResult_t dumpRmaProxyState(struct ncclRmaProxyState* rmaProxyState) {
       printf("    rmaCollComms: %p\n", ctx->rmaCollComm);
       if (ctx && ctx->comm) {
         printf("    nRanks: %d, myRank: %d\n", ctx->comm->nRanks, ctx->comm->rank);
+        printf("    rail: num_ranks_on_rail %d, my_index_on_rail %d, baseStride %d, ctxStride %d\n",
+               (int)idivFast32((uint32_t)ctx->comm->nRanks, (uint32_t)ctx->comm->rmaBaseStride,
+                               ctx->comm->rmaBaseStride_rcp32),
+               (int)idivFast32((uint32_t)ctx->comm->rank, (uint32_t)ctx->comm->rmaBaseStride,
+                               ctx->comm->rmaBaseStride_rcp32),
+               ctx->comm->rmaBaseStride, ctx->ctxStride);
         printf("    queueSize: %zu\n", ctx->queueSize);
         // dump per-peer information
         for (int peer = 0; peer < ctx->comm->nRanks; peer++) {

@@ -68,6 +68,8 @@ NCCL_PARAM(CollnetEnable, "COLLNET_ENABLE", NCCL_CONFIG_UNDEF_INT);
 NCCL_PARAM(NvlsChannels, "NVLS_NCHANNELS", NCCL_CONFIG_UNDEF_INT);
 NCCL_PARAM(NumRmaCtx, "NUM_RMA_CTX", NCCL_CONFIG_UNDEF_INT);
 NCCL_PARAM(RmaEagerInit, "RMA_EAGER_INIT", NCCL_CONFIG_UNDEF_INT);
+// temporary override for the RMA-context stride
+NCCL_PARAM(RmaRankStride, "RMA_RANK_STRIDE", NCCL_CONFIG_UNDEF_INT);
 NCCL_PARAM(MaxP2pPeers, "P2P_MAX_PEERS", NCCL_CONFIG_UNDEF_INT);
 NCCL_PARAM(SetCpuStackSize, "SET_CPU_STACK_SIZE", 1);
 NCCL_PARAM(MultiRankGpuEnable, "MULTI_RANK_GPU_ENABLE", 0);
@@ -977,6 +979,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
     info->supportedGinTypeBitMask |= BIT(comm->sharedRes->ginState.backends[i].ginType);
   }
   info->rmaPluginAvailable = (comm->rmaState.rmaProxyState.ncclRma != nullptr);
+  info->rmaRankStride = (int)ncclParamRmaRankStride();
 
   return ncclSuccess;
 }
@@ -1929,10 +1932,67 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       comm->globalGinSupport = NCCL_GIN_CONNECTION_RAIL;
     }
   }
-  comm->globalRmaProxySupport = globalRmaPluginSupport && globalCrossNicSupport && comm->cuMemGdrSupport;
+
+  // Resolve host-RMA network strides for rail and non-rail cases.
+  comm->rmaBaseStride = 0;
+  comm->rmaBaseStride_rcp32 = 0;
+  comm->rmaUserCtxStride = 0;
+
+  // baseStride calculation
+  if (globalRmaPluginSupport && comm->cuMemGdrSupport) {
+    if (globalCrossNicSupport) {
+      // if crossNice enabled, we can reach any other rank. So the baseStride is 1.
+      comm->rmaBaseStride = 1;
+    } else if (comm->contiguousRanksPerHost != INT_MAX) {
+      comm->rmaBaseStride = comm->contiguousRanksPerHost;
+    }
+  }
+  if (comm->rmaBaseStride > 0) comm->rmaBaseStride_rcp32 = idivRcp32((uint32_t)comm->rmaBaseStride);
+  // host RMA only makes sense when we have a nonzero baseStride
+  comm->globalRmaProxySupport = (comm->rmaBaseStride != 0);
+
+  // contextStride calculation
+  {
+    int defaultUserStride = globalCrossNicSupport ? 1 : computeLsaSize(comm);
+    int64_t envUserStride = ncclParamRmaRankStride();
+    comm->rmaUserCtxStride =
+      envUserStride != NCCL_CONFIG_UNDEF_INT ?
+        (int)envUserStride :
+        defaultUserStride;      // contextStride is either set by environment variable OR comes from default
+
+    if (comm->globalRmaProxySupport && comm->config.numRmaCtx > 0) {
+      if (comm->rmaUserCtxStride <= 0 || comm->nRanks % comm->rmaUserCtxStride != 0 ||
+          comm->rmaUserCtxStride % comm->rmaBaseStride != 0) {
+        WARN("Invalid RMA user context stride %d (nRanks=%d, baseStride=%d)", comm->rmaUserCtxStride, comm->nRanks,
+             comm->rmaBaseStride);
+        ret = ncclInvalidArgument;
+        goto fail;
+      }
+
+      // Same NCCL_RMA_RANK_STRIDE on every rank (carried in AllGather1 peerInfo).
+      // The default (env unset) is computed locally from already-agreed state.
+      for (int i = 0; i < comm->nRanks; i++) {
+        if (comm->peerInfo[i].rmaRankStride != comm->peerInfo[comm->rank].rmaRankStride) {
+          WARN("RMA_RANK_STRIDE mismatch: rank %d has %d, rank %d has %d", comm->rank,
+               comm->peerInfo[comm->rank].rmaRankStride, i, comm->peerInfo[i].rmaRankStride);
+          ret = ncclInvalidArgument;
+          goto fail;
+        }
+      }
+    }
+
+    // at this point in the code, we now have a validated Base Stride (comm->rmaBaseStride) and User/Context Stride (comm->rmaUserCtxStride)!
+    INFO(NCCL_INIT,
+         "Rank %d RMA strides: baseStride %d userCtxStride %d defaultUserStride %d networkRmaSupport %d "
+         "(crossNic %d contiguousRanksPerHost %d numRmaCtx %d)",
+         comm->rank, comm->rmaBaseStride, comm->rmaUserCtxStride, defaultUserStride, comm->globalRmaProxySupport,
+         globalCrossNicSupport, comm->contiguousRanksPerHost, comm->config.numRmaCtx);
+  }
+
   isOneLsaTeams = ncclDevrIsOneLsaTeam(comm);
   comm->symmetricSupport = comm->isAllCudaP2p && ncclParamWinEnable() && ncclCuMemEnable() &&
                            (comm->globalGinSupport != NCCL_GIN_CONNECTION_NONE || isOneLsaTeams);
+
   comm->hostRmaSupport =
     comm->config.numRmaCtx > 0 && comm->symmetricSupport && (isOneLsaTeams || comm->globalRmaProxySupport);
   if (!comm->symmetricSupport || comm->globalGinSupport == NCCL_GIN_CONNECTION_NONE) {

@@ -864,6 +864,11 @@ struct ncclComm {
   ncclGinConnectionType_t globalGinSupport;
   bool globalRmaProxySupport;
   bool hostRmaSupport;
+
+  int rmaBaseStride;      // determined by NIC
+  uint32_t rmaBaseStride_rcp32; // idivRcp32(rmaBaseStride) for idivFast32 on the proxy hot path
+  int rmaUserCtxStride;   // determined by NVLD/user environment variable
+
   int childCount;
 
   struct ncclDevrState devrState; // The symmetric runtime state

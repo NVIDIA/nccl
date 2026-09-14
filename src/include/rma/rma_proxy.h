@@ -116,13 +116,20 @@ struct ncclRmaProxyCtx {
   // Index into rmaComms / rmaHostWins used for this context's data-window handles.
   int collCommIdx;
 
+  //---------Rail addressing---------
+  // Peer-indexing is only used for (1) connect() in ncclRmaProxyConnectOnce (2) iput/iputSignal in ncclRmaProxyIssuePutSignal (3) iput in ncclRmaProxyFlushNicGpuPath
+  // Rail size is comm->nRanks / comm->rmaBaseStride; this rank's rail index is comm->rank / comm->rmaBaseStride.
+
+  // Stride in global rank index between peers this context can address
+  int ctxStride;
+
   //---------Non-graph descriptor queues and synchronization---------
 
   // Lock-free circular buffer for pending Descs
-  size_t queueSize;  // Power of 2 size for pending queue
-  struct ncclRmaProxyDesc** circularBuffers;  // Lock-free circular buffer per peer
-  uint32_t* pis;  // Producer Indices per peer
-  uint32_t* cis;  // Consumer Indices per peer
+  size_t queueSize; // Power of 2 size for pending queue
+  struct ncclRmaProxyDesc** circularBuffers; // Lock-free circular buffer per peer
+  uint32_t* pis; // Producer Indices per peer
+  uint32_t* cis; // Consumer Indices per peer
 
   // Per-rank inProgressQueues: Descs with issued network operations waiting for completion
   struct ncclIntruQueue<struct ncclRmaProxyDesc, &ncclRmaProxyDesc::next>* inProgressQueues;
@@ -188,10 +195,10 @@ struct ncclRmaProxyState {
   // [0, numRmaCtx) followed by NCCL-internal contexts [numRmaCtx, numRmaCtx +
   // numIntCtx) used by the hierarchical CE collectives' rail step. numIntCtx is
   // 0 unless the internal-context guard holds (see ncclRmaProxyConnectOnce).
-  int rmaProxyCtxCount;       // total = numRmaCtx + numIntCtx
-  int numIntCtx;              // count of internal contexts (NCCL_RMA_INT_CTX_PER_NIC * rmaCommCount, or 0)
+  int rmaProxyCtxCount; // total = numRmaCtx + numIntCtx
+  int numIntCtx; // count of internal contexts (NCCL_RMA_INT_CTX_PER_NIC * rmaCommCount, or 0)
   void** rmaProxyCtxs;
-  int rmaProgress;         // RMA progress is enabled
+  int rmaProgress; // RMA progress is enabled
   std::thread thread;
   std::mutex mutex;
   std::condition_variable cond;
@@ -211,8 +218,14 @@ ncclResult_t ncclRmaProxyFinalize(struct ncclComm* comm);
 // collectives: zero-CTA policy, a multi-clique (non-single-LSA) comm, > 1 node.
 bool ncclRmaWantInternalCtx(struct ncclComm* comm);
 
+// Rail-related helper functions
+// world-indexing -> peer-indexing
+ncclResult_t ncclRmaProxyWorldToPeer(const struct ncclRmaProxyCtx* ctx, int worldRank, int* peer);
+// peer-indexing -> world-indexing
+int ncclRmaProxyPeerToWorld(struct ncclComm* comm, int peer);
+
 // RMA Proxy context management
-ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, ncclNetProperties_t props,
+ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, int rankStride, ncclNetProperties_t props,
                                        int collCommIdx, void** outRmaProxyCtx);
 ncclResult_t ncclRmaProxyDestroyContext(ncclRma_t* rmaComm, void* rmaProxyCtx);
 ncclResult_t ncclRmaProxyProgress(ncclRma_t* ncclRma, void* rmaProxyCtx);

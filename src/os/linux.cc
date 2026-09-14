@@ -715,9 +715,10 @@ ncclResult_t ncclOsGetBcmLinks(const char* busId, int* nlinks, char** peers) {
       NCCLCHECKGOTO(ncclRealloc(peers, (*nlinks) * BUSID_SIZE, ((*nlinks) + 1) * BUSID_SIZE), ret, exit);
       memcpy((*peers) + BUSID_SIZE * (*nlinks)++, file->d_name, BUSID_SIZE);
     }
-exit:
-    closedir(dir);  // also on the realloc failure path
   }
+
+exit:
+  if (dir) closedir(dir);  // also on the realloc failure path
 
   return ret;
 }

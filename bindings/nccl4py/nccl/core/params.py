@@ -5,8 +5,8 @@
 
 """NCCL parameter access.
 
-:py:data:`params` — read-only mapping of NCCL parameter names to their values.
-:py:func:`dump_params` — print parameters to stdout.
+:py:data:`params` -- read-only mapping of NCCL parameter names to their values.
+:py:func:`dump_params` -- print parameters to stdout.
 """
 
 from __future__ import annotations

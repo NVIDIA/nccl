@@ -2,13 +2,13 @@
 
 Three session types:
 
-  * :class:`LsaBarrierSession` — LSA-only (intra-node, NVLink/peer-access).
-  * :class:`GinBarrierSession` — GIN-only (inter-node, network).
-  * :class:`BarrierSession`    — hybrid (LSA inner + GIN outer).
+  * :class:`LsaBarrierSession` -- LSA-only (intra-node, NVLink/peer-access).
+  * :class:`GinBarrierSession` -- GIN-only (inter-node, network).
+  * :class:`BarrierSession`    -- hybrid (LSA inner + GIN outer).
 
 Construct via the module-level factories:
 
-  * Explicit — caller supplies the team and barrier handle::
+  * Explicit -- caller supplies the team and barrier handle::
 
         sess = barrier.lsa_session(coop, dev_comm, team, lsa_handle, index=0)
         sess = barrier.gin_session(coop, gin, dev_comm, team, gin_handle,
@@ -16,7 +16,7 @@ Construct via the module-level factories:
         sess = barrier.hybrid_session(coop, inner_team, outer_team, gin,
                                        lsa_handle, gin_handle, index=0)
 
-  * DevComm-derived — team and handle pulled from ``dev_comm``::
+  * DevComm-derived -- team and handle pulled from ``dev_comm``::
 
         sess = barrier.lsa_default(coop, dev_comm, index=0)
         sess = barrier.world_gin(coop, gin, dev_comm, index=0)
@@ -60,7 +60,7 @@ from .handles import (
 from .types import MemoryOrder, GinFenceLevel
 
 
-# Session storage alignment. Conservatively chosen — covers ncclCoopAny
+# Session storage alignment. Conservatively chosen -- covers ncclCoopAny
 # (ptr-aligned) and any wider fields any future session struct might add.
 _SESSION_ALIGN = 16
 
@@ -100,7 +100,7 @@ def _zero_multimem_handle() -> ncclMultimemHandle:
 
 @cute.native_struct
 class LsaBarrierSession:
-    """LSA (Load/Store Accessible) barrier session — intra-node, peer-access
+    """LSA (Load/Store Accessible) barrier session -- intra-node, peer-access
     based. Constructed via :func:`lsa_session`."""
 
     ptr: _LLVMPtrType
@@ -178,7 +178,7 @@ def lsa_session(
 
 @cute.native_struct
 class GinBarrierSession:
-    """GIN (network) barrier session — inter-node. Constructed via
+    """GIN (network) barrier session -- inter-node. Constructed via
     :func:`gin_session`. Only ``sync`` is supported."""
 
     ptr: _LLVMPtrType
@@ -258,7 +258,7 @@ def gin_session(
 
 @cute.native_struct
 class BarrierSession:
-    """Hybrid barrier — LSA inner stage + GIN outer stage. Constructed
+    """Hybrid barrier -- LSA inner stage + GIN outer stage. Constructed
     via :func:`hybrid_session`. Only ``sync`` is supported."""
 
     ptr: _LLVMPtrType

@@ -125,7 +125,7 @@ class Window:
 
         Args:
             offset: Byte offset within the window.
-            mm_handle: Multimem handle covering this window —
+            mm_handle: Multimem handle covering this window --
                 :py:attr:`DevComm.lsa_multimem`, or one passed in from the
                 host for a non-LSA team.
 

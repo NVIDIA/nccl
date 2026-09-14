@@ -172,6 +172,7 @@ __device__ __forceinline__ void niin_gin_barrier_all() {
   *bar_sig = epoch + 1;
 }
 
+#ifndef NIIN_HAS_NVSHMEMX_BLOCK_COLLECTIVES
 __device__ __forceinline__ void nvshmemx_barrier_all_block() {
   cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
   __syncthreads();
@@ -184,6 +185,7 @@ __device__ __forceinline__ void nvshmemx_barrier_all_block() {
   __syncthreads();
   cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
 }
+#endif
 
 __device__ __forceinline__ void nvshmemx_barrier_all_warp() {
   cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);

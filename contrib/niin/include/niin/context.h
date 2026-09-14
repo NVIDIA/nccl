@@ -20,12 +20,22 @@ struct niinContext {
   void* heapBase;                // Local base pointer of the heap
   size_t heapSize;               // Size of the symmetric heap
   int ginContextIndex;           // Which GIN context index to use
+  int nodeRank;                  // Rank among PEs on this physical node
+  int nodeSize;                  // Number of PEs on this physical node
   bool peerNativeAtomic;         // True if peer GPUs support native system-scope atomics
   bool forceSeparatePutSignal;   // Force put+fence+signal instead of fused put_signal
 };
 
 // Device-side global context pointer used by the header-only device API.
-__device__ niinContext* niin_g_ctx;
+// Relocatable device code lets `inline` coalesce this header-defined variable
+// across consumer translation units. Whole-program CUDA compilation cannot use
+// an externally linked inline device variable, so a single-TU consumer gets an
+// internal definition instead.
+#if defined(__CUDACC_RDC__)
+inline __device__ niinContext* niin_g_ctx;
+#else
+static __device__ niinContext* niin_g_ctx;
+#endif
 
 // ---------------------------------------------------------------------------
 // Internal helpers for accessing context fields
@@ -48,7 +58,12 @@ __device__ __forceinline__ size_t niin_heap_size() {
 }
 
 __device__ __forceinline__ int niin_gin_context_index() {
-  return niin_g_ctx->ginContextIndex;
+  // A GIN context owns its queue pairs.  Spread independent CTAs across the
+  // contexts provisioned at initialization rather than making every CTA
+  // contend for context zero.  The base index preserves the explicit
+  // ginContextIndex argument for low-level users.
+  const int count = static_cast<int>(niin_comm().ginContextCount);
+  return count > 0 ? (niin_g_ctx->ginContextIndex + static_cast<int>(blockIdx.x)) % count : 0;
 }
 
 __device__ __forceinline__ bool niin_has_gin() {

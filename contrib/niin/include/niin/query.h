@@ -65,9 +65,9 @@ __host__ __device__ __forceinline__ int nvshmem_team_my_pe(nvshmem_team_t team) 
   ncclDevComm const& c = niin_comm();
   switch (team) {
     case NVSHMEM_TEAM_WORLD:           return c.rank;
-    case NVSHMEM_TEAM_SHARED:          return c.lsaRank;
-    case NVSHMEMX_TEAM_NODE:           return c.lsaRank;
-    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return c.rank / c.lsaSize;  // rail rank
+    case NVSHMEM_TEAM_SHARED:          return niin_g_ctx->nodeRank;
+    case NVSHMEMX_TEAM_NODE:           return niin_g_ctx->nodeRank;
+    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return c.rank / niin_g_ctx->nodeSize;
     case NVSHMEMI_TEAM_SAME_GPU:       return 0;                    // always rank 0 (size=1)
     case NVSHMEMI_TEAM_GPU_LEADERS:    return c.rank;               // same as WORLD
     case NVSHMEM_TEAM_INVALID:         return -1;
@@ -84,9 +84,9 @@ __host__ __device__ __forceinline__ int nvshmem_team_n_pes(nvshmem_team_t team) 
   ncclDevComm const& c = niin_comm();
   switch (team) {
     case NVSHMEM_TEAM_WORLD:           return c.nRanks;
-    case NVSHMEM_TEAM_SHARED:          return c.lsaSize;
-    case NVSHMEMX_TEAM_NODE:           return c.lsaSize;
-    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return (c.nRanks + c.lsaSize - 1) / c.lsaSize; // num nodes
+    case NVSHMEM_TEAM_SHARED:          return niin_g_ctx->nodeSize;
+    case NVSHMEMX_TEAM_NODE:           return niin_g_ctx->nodeSize;
+    case NVSHMEMX_TEAM_SAME_MYPE_NODE: return (c.nRanks + niin_g_ctx->nodeSize - 1) / niin_g_ctx->nodeSize;
     case NVSHMEMI_TEAM_SAME_GPU:       return 1;
     case NVSHMEMI_TEAM_GPU_LEADERS:    return c.nRanks;             // same as WORLD
     case NVSHMEM_TEAM_INVALID:         return -1;

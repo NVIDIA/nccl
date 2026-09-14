@@ -43,6 +43,8 @@ struct niinContext_host {
   void* heapBase;
   size_t heapSize;
   int ginContextIndex;
+  int nodeRank;
+  int nodeSize;
   bool peerNativeAtomic;  // Whether peer GPUs support native system-scope atomics
   bool forceSeparatePutSignal; // Force put+fence+signal instead of fused put_signal
 };
@@ -63,6 +65,9 @@ struct niinContext_host {
 //   ginContextIndex - Which GIN context index to use (default 0)
 //   barrierCount    - Number of barrier sessions to request (default 1)
 //   ginSignalCount  - Number of GIN signals to request (default 0)
+//   ginContextCount - Number of GIN contexts to provision (default 4). Device
+//                     operations select one by CTA index so concurrent CTAs
+//                     use independent GIN queues.
 //
 // Returns ncclSuccess on success.
 inline ncclResult_t niinInit(ncclComm_t comm,
@@ -72,18 +77,33 @@ inline ncclResult_t niinInit(ncclComm_t comm,
                              bool enableGin = true,
                              int ginContextIndex = 0,
                              int barrierCount = 1,
-                             int ginSignalCount = 0) {
+                             int ginSignalCount = 0,
+                             int ginContextCount = 4,
+                             int nodeRank = 0,
+                             int nodeSize = 1) {
   // Register the symmetric heap as a window
+  // The NVSHMEM heap contains both RMA payloads and signal locations.  GIN
+  // requires strict ordering for a window whose remote signal makes a prior
+  // payload visible to an independent consumer CTA.
   NIIN_CHECK_NCCL(ncclCommWindowRegister(comm, heapBuf, heapSize,
                                           &hostCtx->heapWindow,
-                                          NCCL_WIN_COLL_SYMMETRIC));
+                                          NCCL_WIN_COLL_SYMMETRIC |
+                                          NCCL_WIN_STRICT_ORDERING));
 
   // Create a device communicator with GIN resources
   ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
   if (enableGin) {
+    // barrierCount provisions the hybrid LSA+GIN barrier.  NIIN selects the
+    // cheaper pure-LSA path when every PE is local, so provision that handle
+    // as well.  Without it, a same-node communicator has an empty
+    // devComm.lsaBarrier even though the device wrapper selects it.
+    reqs.lsaBarrierCount = barrierCount;
     reqs.barrierCount = barrierCount;
+    // Device barriers fence every GIN context, which uses the dedicated
+    // world-GIN barrier handle rather than the legacy hybrid handle.
+    reqs.worldGinBarrierCount = barrierCount;
     reqs.ginForceEnable = true;
-    reqs.ginContextCount = 1;
+    reqs.ginContextCount = ginContextCount;
     reqs.ginSignalCount = ginSignalCount + barrierCount;
     reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
   } else {
@@ -96,6 +116,8 @@ inline ncclResult_t niinInit(ncclComm_t comm,
   hostCtx->heapBase = heapBuf;
   hostCtx->heapSize = heapSize;
   hostCtx->ginContextIndex = ginContextIndex;
+  hostCtx->nodeRank = nodeRank;
+  hostCtx->nodeSize = nodeSize;
 
   return ncclSuccess;
 }
@@ -125,6 +147,8 @@ inline ncclResult_t niinCommit(const niinContext_host* hostCtx,
   ctx.heapBase = hostCtx->heapBase;
   ctx.heapSize = hostCtx->heapSize;
   ctx.ginContextIndex = hostCtx->ginContextIndex;
+  ctx.nodeRank = hostCtx->nodeRank;
+  ctx.nodeSize = hostCtx->nodeSize;
   ctx.peerNativeAtomic = hostCtx->peerNativeAtomic;
   ctx.forceSeparatePutSignal = hostCtx->forceSeparatePutSignal;
 

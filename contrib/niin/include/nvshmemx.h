@@ -61,11 +61,67 @@ inline int nvshmemx_quiet_on_stream(cudaStream_t stream) {
   return cudaGetLastError() == cudaSuccess ? 0 : -1;
 }
 
-inline int nvshmemx_barrier_all_on_stream(cudaStream_t stream) {
+namespace niin {
+namespace detail {
+
+// NIIN has one NCCL communicator today: the world communicator.  Do not use
+// it for a subset team: ranks outside that team would not participate and the
+// collective could hang.  Per-team NCCL communicators will be needed before
+// supporting stream collectives on non-WORLD teams.
+inline bool host_stream_collective_team_is_supported(nvshmem_team_t team) {
+  return state().initialized && team == NVSHMEM_TEAM_WORLD;
+}
+
+inline int host_stream_collective_status(ncclResult_t result) {
+  return result == ncclSuccess ? 0 : -1;
+}
+
+}  // namespace detail
+}  // namespace niin
+
+inline void nvshmemx_barrier_all_on_stream(cudaStream_t stream) {
   auto& s = niin::detail::state();
-  if (!s.initialized) return -1;
-  ncclAllReduce(s.barrierScratch, s.barrierScratch, 1, ncclInt32, ncclSum, s.comm, stream);
-  return 0;
+  if (!s.initialized) return;
+  (void)ncclAllReduce(s.barrierScratch, s.barrierScratch, 1, ncclInt32, ncclSum,
+                      s.comm, stream);
+}
+
+inline void nvshmemx_sync_all_on_stream(cudaStream_t stream) {
+  nvshmemx_barrier_all_on_stream(stream);
+}
+
+// ---------------------------------------------------------------------------
+// Stream-ordered host collectives.
+//
+// These map directly to the world NCCL communicator and therefore preserve
+// ordering with prior and subsequent work on the supplied CUDA stream.  They
+// deliberately do not synchronize the stream.
+// ---------------------------------------------------------------------------
+#define NIIN_DEFINE_REDUCE_ON_STREAM(TYPENAME, TYPE, NCCL_TYPE, OPNAME, NCCL_OP) \
+inline int nvshmemx_##TYPENAME##_##OPNAME##_reduce_on_stream(                  \
+    nvshmem_team_t team, TYPE* dest, const TYPE* src, size_t nreduce,          \
+    cudaStream_t stream) {                                                      \
+  if (!niin::detail::host_stream_collective_team_is_supported(team)) return -1; \
+  auto& s = niin::detail::state();                                              \
+  return niin::detail::host_stream_collective_status(                           \
+      ncclAllReduce(src, dest, nreduce, NCCL_TYPE, nccl##NCCL_OP, s.comm, stream)); \
+}
+
+NIIN_DEFINE_REDUCE_ON_STREAM(int32, int32_t, ncclInt32, sum, Sum)
+NIIN_DEFINE_REDUCE_ON_STREAM(int32, int32_t, ncclInt32, min, Min)
+NIIN_DEFINE_REDUCE_ON_STREAM(int32, int32_t, ncclInt32, max, Max)
+NIIN_DEFINE_REDUCE_ON_STREAM(int64, int64_t, ncclInt64, sum, Sum)
+NIIN_DEFINE_REDUCE_ON_STREAM(int64, int64_t, ncclInt64, min, Min)
+NIIN_DEFINE_REDUCE_ON_STREAM(int64, int64_t, ncclInt64, max, Max)
+#undef NIIN_DEFINE_REDUCE_ON_STREAM
+
+inline int nvshmemx_alltoallmem_on_stream(nvshmem_team_t team, void* dest,
+                                          const void* src, size_t nelems,
+                                          cudaStream_t stream) {
+  if (!niin::detail::host_stream_collective_team_is_supported(team)) return -1;
+  auto& s = niin::detail::state();
+  return niin::detail::host_stream_collective_status(
+      ncclAlltoAll(src, dest, nelems, ncclChar, s.comm, stream));
 }
 
 // ---------------------------------------------------------------------------

@@ -11,11 +11,12 @@
 // barrier, finalize) implemented on top of NCCL. Uses a global singleton
 // to match NVSHMEM's implicit-global-state programming model.
 //
-// For multi-PE operation, launch with mpirun and call:
-//   nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr)
-// or use NVSHMEMX_INIT_WITH_UNIQUEID after distributing a unique ID with the
-// application's bootstrap mechanism. nvshmem_init() can also auto-detect
-// rank/size metadata from supported launchers.
+// For multi-PE operation, nvshmem_init() auto-detects supported launcher
+// rank/size metadata and distributes an NCCL unique ID through a small record
+// in a shared bootstrap directory. Alternatively, launch with MPI and call
+// nvshmemx_init_attr(NVSHMEMX_INIT_WITH_MPI_COMM, &attr), or use
+// NVSHMEMX_INIT_WITH_UNIQUEID after distributing a unique ID with the
+// application's bootstrap mechanism.
 //
 // For single-PE operation (testing), just call nvshmem_init().
 
@@ -24,9 +25,16 @@
 
 #include <nccl.h>
 #include <cuda_runtime.h>
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "niin/host.h"
 
@@ -48,6 +56,16 @@
 namespace niin {
 namespace detail {
 
+// Publish the device context from device code rather than through the CUDA
+// runtime's host-side symbol lookup.  The latter is not reliable for an
+// externally-owned RDC device symbol in every consumer module: a successful
+// NIIN host initialization can otherwise leave the consumer kernel's
+// niin_g_ctx null.  This kernel and all device API wrappers resolve the same
+// device-link symbol.
+static __global__ void publishDeviceContext(niinContext* ctx) {
+  niin_g_ctx = ctx;
+}
+
 // Free-list heap block
 struct HeapBlock {
   size_t offset;
@@ -67,6 +85,8 @@ struct GlobalState {
   int nRanks;
   int lsaRank;
   int lsaSize;
+  int nodeRank;
+  int nodeSize;
   int cudaDev;
   void* heapBase;
   size_t heapSize;
@@ -121,6 +141,22 @@ inline bool parseForceSeparatePutSignal() {
   return false;
 }
 
+// GIN contexts own independent network queue-pair pools.  Four contexts are
+// a lightweight default, while applications with many concurrent CTAs can
+// select a larger count without changing source.
+inline int parseGinContextCount() {
+  const char* env = getenv("NIIN_GIN_CONTEXT_COUNT");
+  if (env == nullptr || env[0] == '\0') return 4;
+
+  char* end = nullptr;
+  const long value = strtol(env, &end, 10);
+  if (end == env || *end != '\0' || value < 1 || value > INT_MAX) {
+    fprintf(stderr, "NIIN: NIIN_GIN_CONTEXT_COUNT must be a positive integer\n");
+    return 4;
+  }
+  return static_cast<int>(value);
+}
+
 // Detect rank/nRanks from common MPI/PMI environment variables.
 // Returns true if detection succeeded.
 inline bool detectRankFromEnv(int* rank, int* nRanks) {
@@ -143,9 +179,171 @@ inline bool detectRankFromEnv(int* rank, int* nRanks) {
   return false;
 }
 
-// Detect which local GPU to use. Tries LOCAL_RANK-style env vars, falls back
-// to rank % deviceCount.
-inline int detectLocalDevice(int rank) {
+// Generate a launcher-scoped path in a shared filesystem.  A caller can set
+// NIIN_BOOTSTRAP_DIR and/or NIIN_BOOTSTRAP_ID to override the defaults.  The
+// HOME fallback is appropriate for the common Slurm configuration where home
+// directories are shared between allocated nodes.
+inline bool bootstrapPath(char* path, size_t pathSize) {
+  char directory[PATH_MAX];
+  const char* configuredDirectory = getenv("NIIN_BOOTSTRAP_DIR");
+  if (configuredDirectory != nullptr && configuredDirectory[0] != '\0') {
+    if (snprintf(directory, sizeof(directory), "%s", configuredDirectory) >=
+        static_cast<int>(sizeof(directory))) {
+      fprintf(stderr, "NIIN: NIIN_BOOTSTRAP_DIR is too long\n");
+      return false;
+    }
+  } else {
+    const char* home = getenv("HOME");
+    if (home == nullptr || home[0] == '\0' ||
+        snprintf(directory, sizeof(directory), "%s/.niin", home) >=
+          static_cast<int>(sizeof(directory))) {
+      fprintf(stderr, "NIIN: set NIIN_BOOTSTRAP_DIR to a shared directory\n");
+      return false;
+    }
+  }
+
+  if (mkdir(directory, 0700) != 0 && errno != EEXIST) {
+    fprintf(stderr, "NIIN: cannot create bootstrap directory %s: %s\n",
+            directory, strerror(errno));
+    return false;
+  }
+
+  char generatedId[128];
+  const char* id = getenv("NIIN_BOOTSTRAP_ID");
+  if (id == nullptr || id[0] == '\0') {
+    const char* jobId = getenv("SLURM_JOB_ID");
+    if (jobId == nullptr || jobId[0] == '\0') jobId = getenv("PMI_JOBID");
+    if (jobId == nullptr || jobId[0] == '\0') jobId = getenv("PMIX_NAMESPACE");
+    if (jobId == nullptr || jobId[0] == '\0') {
+      fprintf(stderr, "NIIN: set NIIN_BOOTSTRAP_ID when the launcher has no job ID\n");
+      return false;
+    }
+    const char* stepId = getenv("SLURM_STEP_ID");
+    if (snprintf(generatedId, sizeof(generatedId), "%s.%s", jobId,
+                 stepId != nullptr ? stepId : "0") >= static_cast<int>(sizeof(generatedId))) {
+      fprintf(stderr, "NIIN: launcher bootstrap ID is too long\n");
+      return false;
+    }
+    id = generatedId;
+  }
+
+  for (const char* c = id; *c != '\0'; ++c) {
+    const bool safe = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                      (*c >= '0' && *c <= '9') || *c == '.' || *c == '_' || *c == '-';
+    if (!safe) {
+      fprintf(stderr, "NIIN: NIIN bootstrap ID contains an unsafe character\n");
+      return false;
+    }
+  }
+
+  if (snprintf(path, pathSize, "%s/niin-bootstrap-%s", directory, id) >=
+      static_cast<int>(pathSize)) {
+    fprintf(stderr, "NIIN: bootstrap path is too long\n");
+    return false;
+  }
+  return true;
+}
+
+inline bool writeBootstrapRecord(int fd, const void* buffer, size_t size) {
+  const char* cursor = static_cast<const char*>(buffer);
+  while (size > 0) {
+    ssize_t written = write(fd, cursor, size);
+    if (written < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    cursor += written;
+    size -= static_cast<size_t>(written);
+  }
+  return true;
+}
+
+inline bool readBootstrapRecord(int fd, void* buffer, size_t size) {
+  char* cursor = static_cast<char*>(buffer);
+  while (size > 0) {
+    ssize_t readCount = read(fd, cursor, size);
+    if (readCount < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    if (readCount == 0) return false;
+    cursor += readCount;
+    size -= static_cast<size_t>(readCount);
+  }
+  return true;
+}
+
+struct BootstrapRecord {
+  uint64_t magic;
+  int nRanks;
+  ncclUniqueId id;
+};
+
+constexpr uint64_t NIIN_BOOTSTRAP_MAGIC = UINT64_C(0x4e49494e424f4f54);
+
+// Distribute an NCCL unique ID without requiring the application to initialize
+// MPI.  Rank zero publishes one small record atomically; other ranks wait for
+// it and validate the expected world size before joining the communicator.
+inline int bootstrapUniqueId(int rank, int nRanks, ncclUniqueId* id,
+                             char* path, size_t pathSize) {
+  if (!bootstrapPath(path, pathSize)) return -1;
+
+  if (rank == 0) {
+    ncclResult_t result = ncclGetUniqueId(id);
+    if (result != ncclSuccess) {
+      fprintf(stderr, "NIIN: ncclGetUniqueId failed: %s\n", ncclGetErrorString(result));
+      return -1;
+    }
+
+    const int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
+      fprintf(stderr, "NIIN: cannot create bootstrap record %s: %s\n", path, strerror(errno));
+      return -1;
+    }
+    const BootstrapRecord record = {NIIN_BOOTSTRAP_MAGIC, nRanks, *id};
+    const bool written = writeBootstrapRecord(fd, &record, sizeof(record)) && fsync(fd) == 0;
+    close(fd);
+    if (!written) {
+      fprintf(stderr, "NIIN: cannot write bootstrap record %s: %s\n", path, strerror(errno));
+      unlink(path);
+      return -1;
+    }
+    return 0;
+  }
+
+  constexpr int kRetries = 6000;  // 60 seconds at 10 ms per attempt.
+  for (int attempt = 0; attempt < kRetries; ++attempt) {
+    const int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+      if (errno == ENOENT) {
+        usleep(10000);
+        continue;
+      }
+      fprintf(stderr, "NIIN: cannot open bootstrap record %s: %s\n", path, strerror(errno));
+      return -1;
+    }
+    BootstrapRecord record = {};
+    const bool readOk = readBootstrapRecord(fd, &record, sizeof(record));
+    close(fd);
+    if (!readOk) {
+      usleep(10000);
+      continue;
+    }
+    if (record.magic != NIIN_BOOTSTRAP_MAGIC || record.nRanks != nRanks) {
+      fprintf(stderr, "NIIN: bootstrap record %s does not match this job\n", path);
+      return -1;
+    }
+    *id = record.id;
+    return 0;
+  }
+
+  fprintf(stderr, "NIIN: timed out waiting for bootstrap record %s\n", path);
+  return -1;
+}
+
+// Detect this PE's rank on its physical node. Tries LOCAL_RANK-style env
+// vars, falling back to rank % deviceCount.
+inline int detectLocalRank(int rank) {
   const char* localRankEnvs[] = {
     "OMPI_COMM_WORLD_LOCAL_RANK",
     "MPI_LOCALRANKID",
@@ -159,6 +357,26 @@ inline int detectLocalDevice(int rank) {
   int nDevs;
   cudaGetDeviceCount(&nDevs);
   return nDevs > 0 ? rank % nDevs : 0;
+}
+
+inline int detectLocalDevice(int rank) {
+  return detectLocalRank(rank);
+}
+
+inline int detectNodeSize() {
+  const char* localSizeEnvs[] = {
+    "OMPI_COMM_WORLD_LOCAL_SIZE",
+    "MPI_LOCALNRANKS",
+    "SLURM_NTASKS_PER_NODE",
+  };
+  for (const char* env : localSizeEnvs) {
+    const char* value = getenv(env);
+    if (value == nullptr || value[0] == '\0') continue;
+    char* end = nullptr;
+    const long size = strtol(value, &end, 10);
+    if (end != value && size > 0 && size <= INT_MAX) return static_cast<int>(size);
+  }
+  return 1;
 }
 
 // Common init logic shared by nvshmem_init() and nvshmemx_init_attr()
@@ -227,27 +445,45 @@ inline int initCommon(ncclComm_t comm) {
     s.hostCtx.peerNativeAtomic = (nativeAtomic != 0);
   }
   s.hostCtx.forceSeparatePutSignal = parseForceSeparatePutSignal();
+  const int ginContextCount = parseGinContextCount();
 
   // Two-phase init
   ncclGroupStart();
-  r = niinInit(comm, s.heapBase, s.heapSize, &s.hostCtx, s.ginAvail);
+  r = niinInit(comm, s.heapBase, s.heapSize, &s.hostCtx, s.ginAvail,
+               /*ginContextIndex=*/0, /*barrierCount=*/1,
+               /*ginSignalCount=*/0, ginContextCount, s.nodeRank, s.nodeSize);
   ncclGroupEnd();
   if (r != ncclSuccess) return -1;
 
   r = niinCommit(&s.hostCtx, s.devCtx);
   if (r != ncclSuccess) return -1;
 
-  // Set the __device__ global so kernels don't need manual context setup.
-  // niin_g_ctx is declared in niin/context.h.
-  niinContext* devCtxPtr = s.devCtx;
-  cudaMemcpyToSymbol(niin_g_ctx, &devCtxPtr, sizeof(niinContext*));
+  // Publish the context used by every device-side NIIN wrapper.  Do this in a
+  // device kernel so the update resolves through the same RDC symbol as a
+  // consumer kernel, including consumers that own the external context
+  // symbol.  Check completion here: proceeding with a null context turns a
+  // setup failure into an unrelated illegal memory access in the consumer.
+  publishDeviceContext<<<1, 1>>>(s.devCtx);
+  cudaError_t cudaResult = cudaGetLastError();
+  if (cudaResult != cudaSuccess) {
+    fprintf(stderr, "NIIN: device-context publication launch failed: %s\n",
+            cudaGetErrorString(cudaResult));
+    return -1;
+  }
+  cudaResult = cudaDeviceSynchronize();
+  if (cudaResult != cudaSuccess) {
+    fprintf(stderr, "NIIN: device-context publication failed: %s\n",
+            cudaGetErrorString(cudaResult));
+    return -1;
+  }
 
   // Extract LSA info from the devComm
   s.lsaRank = s.hostCtx.devComm.lsaRank;
   s.lsaSize = s.hostCtx.devComm.lsaSize;
 
   // Initialize predefined teams
-  niin::teams::initPredefined(s.rank, s.nRanks, s.lsaRank, s.lsaSize);
+  niin::teams::initPredefined(s.rank, s.nRanks, s.lsaRank, s.lsaSize,
+                              s.nodeRank, s.nodeSize);
 
   s.initialized = true;
   return 0;
@@ -262,7 +498,6 @@ inline int initCommon(ncclComm_t comm) {
 // ---------------------------------------------------------------------------
 #define NIIN_KERNEL_INIT()                        \
   do {                                             \
-    extern __device__ niinContext* niin_g_ctx;      \
     if (threadIdx.x == 0)                          \
       niin_g_ctx = niin::detail::state().devCtx;   \
     __syncthreads();                               \
@@ -271,8 +506,12 @@ inline int initCommon(ncclComm_t comm) {
 // This doesn't work directly because devCtx is a host variable. The actual
 // approach: pass devCtx as a kernel argument. We provide a helper:
 __device__ inline void niin_set_context(niinContext* ctx) {
-  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  if (threadIdx.x == 0) {
+    niin_g_ctx = ctx;
+    cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_device);
+  }
   __syncthreads();
+  cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_device);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,9 +519,9 @@ __device__ inline void niin_set_context(niinContext* ctx) {
 // ---------------------------------------------------------------------------
 
 // nvshmem_init: initialize NIIN with auto-detected rank/size.
-// Multi-PE: detects rank from supported launcher metadata and bootstraps
-// ncclUniqueId via MPI_Bcast when NIIN_HAS_MPI is available. Single-PE
-// fallback otherwise.
+// Multi-PE: detects rank from supported launcher metadata and bootstraps the
+// NCCL unique ID internally.  This preserves the ordinary NVSHMEM contract:
+// an application can call nvshmem_init() directly without initializing MPI.
 inline int nvshmem_init(void) {
   auto& s = niin::detail::state();
   if (s.initialized) {
@@ -293,7 +532,9 @@ inline int nvshmem_init(void) {
   int rank = 0, nRanks = 1;
   bool multiPE = niin::detail::detectRankFromEnv(&rank, &nRanks);
 
-  int localDev = niin::detail::detectLocalDevice(rank);
+  s.nodeRank = niin::detail::detectLocalRank(rank);
+  s.nodeSize = niin::detail::detectNodeSize();
+  int localDev = s.nodeRank;
   cudaSetDevice(localDev);
   s.cudaDev = localDev;
 
@@ -303,23 +544,28 @@ inline int nvshmem_init(void) {
 
   ncclComm_t comm;
   if (multiPE && nRanks > 1) {
-#ifdef NIIN_HAS_MPI
-    // Use MPI for ncclUniqueId distribution
     ncclUniqueId id;
-    if (rank == 0) ncclGetUniqueId(&id);
-    MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD);
-    ncclCommInitRankConfig(&comm, nRanks, id, rank, &config);
-#else
-    fprintf(stderr, "NIIN: multi-PE detected (rank=%d nRanks=%d) but NIIN_HAS_MPI not defined. "
-            "Use nvshmemx_init_attr() with MPI or compile with -DNIIN_HAS_MPI.\n",
-            rank, nRanks);
-    return -1;
-#endif
+    char bootstrapFile[PATH_MAX];
+    if (niin::detail::bootstrapUniqueId(rank, nRanks, &id, bootstrapFile,
+                                        sizeof(bootstrapFile)) != 0) {
+      return -1;
+    }
+    const ncclResult_t result = ncclCommInitRankConfig(&comm, nRanks, id, rank, &config);
+    if (rank == 0) unlink(bootstrapFile);
+    if (result != ncclSuccess) {
+      fprintf(stderr, "NIIN: ncclCommInitRankConfig failed: %s\n", ncclGetErrorString(result));
+      return -1;
+    }
   } else {
     // Single-PE mode
     ncclUniqueId id;
-    ncclGetUniqueId(&id);
-    ncclCommInitRankConfig(&comm, 1, id, 0, &config);
+    ncclResult_t result = ncclGetUniqueId(&id);
+    if (result == ncclSuccess) result = ncclCommInitRankConfig(&comm, 1, id, 0, &config);
+    if (result != ncclSuccess) {
+      fprintf(stderr, "NIIN: single-PE communicator initialization failed: %s\n",
+              ncclGetErrorString(result));
+      return -1;
+    }
   }
 
   return niin::detail::initCommon(comm);
@@ -417,7 +663,9 @@ inline int nvshmemx_init_attr(unsigned int flags, nvshmemx_init_attr_t* attr) {
 
     int rank = attr->args.uid_args.myrank;
     int nRanks = attr->args.uid_args.nranks;
-    int localDev = niin::detail::detectLocalDevice(rank);
+    s.nodeRank = niin::detail::detectLocalRank(rank);
+    s.nodeSize = niin::detail::detectNodeSize();
+    int localDev = s.nodeRank;
     cudaSetDevice(localDev);
     s.cudaDev = localDev;
 
@@ -439,7 +687,9 @@ inline int nvshmemx_init_attr(unsigned int flags, nvshmemx_init_attr_t* attr) {
     MPI_Comm_rank(mpi_comm, &rank);
     MPI_Comm_size(mpi_comm, &nRanks);
 
-    int localDev = niin::detail::detectLocalDevice(rank);
+    s.nodeRank = niin::detail::detectLocalRank(rank);
+    s.nodeSize = niin::detail::detectNodeSize();
+    int localDev = s.nodeRank;
     cudaSetDevice(localDev);
     s.cudaDev = localDev;
 

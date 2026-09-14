@@ -59,6 +59,10 @@ int main() {
 
 - NCCL 2.29+ with device API support for windows, GIN, and barriers
 - CUDA 12.2+ with `--expt-relaxed-constexpr` and C++17
+- A shared filesystem for multi-PE `nvshmem_init()` (the default is
+  `$HOME/.niin`; set `NIIN_BOOTSTRAP_DIR` when home is not shared). The
+  launcher must provide rank and size metadata plus a job ID, or set
+  `NIIN_BOOTSTRAP_ID` explicitly.
 - MPI for multi-PE applications that call `nvshmemx_init_attr()` with
   `NVSHMEMX_INIT_WITH_MPI_COMM`; compile those applications with `-DNIIN_HAS_MPI`.
   UID-based initialization can use the application's own bootstrap mechanism.
@@ -88,6 +92,10 @@ nvcc my_app.cu -o my_app \
     --expt-relaxed-constexpr -std=c++17 -arch=sm_89
 ```
 
+For device code spanning multiple CUDA translation units, compile those units
+with `-rdc=true` and perform one device link. This lets NIIN share its device
+context across the consumer's translation units.
+
 Set the runtime library path or link with an rpath:
 
 ```bash
@@ -99,6 +107,9 @@ NVSHMEM functions are compiled from NIIN's headers into the application's CUDA
 translation units. During `nvshmem_init()`/`nvshmemx_init_attr()`, NIIN creates
 the NCCL device communicator and symmetric heap state, then publishes the device
 context pointer to NIIN's `__device__` global with `cudaMemcpyToSymbol`.
+Multi-translation-unit CUDA applications must use relocatable device code
+(`-rdc=true` or CMake CUDA separable compilation); a single-TU non-RDC program
+is supported as well.
 
 ## Source Layout
 
@@ -129,12 +140,16 @@ contrib/niin/include/
 
 `nvshmem_init()` performs the following:
 
-1. Detects rank and world size from an MPI communicator or supported launcher-provided rank metadata. Falls back to single-PE mode if none found.
+1. Detects rank and world size from supported launcher-provided metadata. Falls back to single-PE mode if none is found.
 2. Selects the local GPU from launcher-provided local rank metadata or `rank % nDevices`.
-3. Creates an NCCL communicator (`ncclCommInitRank` for multi-PE with MPI, `ncclCommInitAll` for single-PE).
-4. Allocates the symmetric heap via `ncclMemAlloc` (default 256 MB, configurable via `NVSHMEM_SYMMETRIC_SIZE`).
-5. Registers the heap as an NCCL window (`ncclCommWindowRegister`) and creates a device communicator (`ncclDevCommCreate`) with GIN resources.
-6. Sets NIIN's `__device__` global context pointer via `cudaMemcpyToSymbol` so all subsequent kernel launches have access to the NIIN context automatically.
+3. For multi-PE jobs, has PE 0 publish an NCCL unique ID in a small record in
+   `NIIN_BOOTSTRAP_DIR` (default `$HOME/.niin`) and waits for it on the other
+   PEs. The record name is derived from the Slurm, PMI, or PMIx job ID; set
+   `NIIN_BOOTSTRAP_ID` to override it. This needs no MPI initialization.
+4. Creates an NCCL communicator with `ncclCommInitRankConfig`.
+5. Allocates the symmetric heap via `ncclMemAlloc` (default 256 MB, configurable via `NVSHMEM_SYMMETRIC_SIZE`).
+6. Registers the heap as an NCCL window (`ncclCommWindowRegister`) and creates a device communicator (`ncclDevCommCreate`) with GIN resources.
+7. Sets NIIN's `__device__` global context pointer via `cudaMemcpyToSymbol` so all subsequent kernel launches have access to the NIIN context automatically.
 
 For multi-PE with MPI, use:
 
@@ -211,7 +226,7 @@ uses the split path where peer pointer atomics are not reliable.
 
 | NVSHMEM API | NIIN Status | Notes |
 |---|---|---|
-| `nvshmem_init()` | Full | Auto-detects rank metadata; single-PE fallback |
+| `nvshmem_init()` | Full | Auto-detects launcher metadata and self-bootstraps multi-PE jobs through a shared directory; single-PE fallback |
 | `nvshmemx_init_attr(MPI_COMM)` | Full | Requires `-DNIIN_HAS_MPI` |
 | `nvshmemx_init_attr(UNIQUEID)` | Full | Uses `nvshmemx_get_uniqueid()` and caller-distributed UID |
 | `nvshmem_finalize()` | Full | |
@@ -230,7 +245,8 @@ uses the split path where peer pointer atomics are not reliable.
 | `nvshmem_quiet()` | Full | Host: same as fence (`cudaDeviceSynchronize`); Device: GIN flush + threadfence |
 | `nvshmem_info_get_name()` | Full | Returns "NIIN (NVSHMEM Implemented In NCCL)" |
 | `nvshmem_info_get_version()` | Full | Reports 3.0 |
-| `nvshmemx_barrier_all_on_stream()` | Full | |
+| `nvshmemx_barrier_all_on_stream()` | WORLD only | Stream-ordered NCCL world barrier |
+| `nvshmemx_sync_all_on_stream()` | WORLD only | Stream-ordered NCCL world sync |
 | `nvshmemx_quiet_on_stream()` | Full | Stream-ordered device quiet kernel: GIN flush + `__threadfence_system()` |
 | `nvshmemx_collective_launch()` | Stub | Redirects to cudaLaunchKernel |
 | `nvshmemx_cumodule_init/finalize()` | Stub | No-op (compatibility) |
@@ -238,14 +254,19 @@ uses the split path where peer pointer atomics are not reliable.
 
 ### Host Stream-Ordered APIs (`nvshmemx.h`)
 
-All `nvshmemx_*_on_stream` variants are implemented. These APIs match
-NVSHMEM's host on-stream contract: callers provide a `cudaStream_t`, but do not
-choose grid or CTA geometry. NIIN owns the internal launch geometry; block
-put/get and put-signal fallbacks use a size-based number of eight-warp CTAs for
-self and LSA transfers, capped by `NVSHMEM_MAX_CTAS`, so the LSA path can use
-the cooperative block RMA implementation. Non-LSA GIN transfers remain
-single-CTA until NIIN can assign independent GIN contexts per CTA. Scalar,
-strided, signal, and wait wrappers use compact control kernels.
+The supported `nvshmemx_*_on_stream` variants below match NVSHMEM's host
+on-stream contract: callers provide a `cudaStream_t`, but do not choose grid or
+CTA geometry. NIIN owns the internal launch geometry; block put/get and
+put-signal fallbacks use a size-based number of eight-warp CTAs for self and
+LSA transfers, capped by `NVSHMEM_MAX_CTAS`, so the LSA path can use the
+cooperative block RMA implementation. Non-LSA GIN transfers remain single-CTA
+until NIIN can assign independent GIN contexts per CTA. Scalar, strided,
+signal, and wait wrappers use compact control kernels.
+
+NIIN currently owns one host NCCL communicator, for `NVSHMEM_TEAM_WORLD`.
+The host collectives below reject non-WORLD teams rather than issue a partial
+collective on that communicator; per-team NCCL communicators are required to
+extend this support safely.
 
 | NVSHMEM API | NIIN Status | Notes |
 |---|---|---|
@@ -262,6 +283,8 @@ strided, signal, and wait wrappers use compact control kernels.
 | `nvshmemx_<TYPE>_wait_until_on_stream()` | Full | 13 wait types |
 | `nvshmemx_<TYPE>_wait_until_all_on_stream()` | Full | 13 wait types |
 | `nvshmemx_<TYPE>_wait_until_all_vector_on_stream()` | Full | 13 wait types |
+| `nvshmemx_int32/int64_<sum/min/max>_reduce_on_stream()` | WORLD only | NCCL AllReduce |
+| `nvshmemx_alltoallmem_on_stream()` | WORLD only | NCCL AlltoAll, byte count |
 
 ### Device-Side Query
 
@@ -369,6 +392,8 @@ All `nvshmemx_*_warp` and `nvshmemx_*_block` variants are implemented with coope
 | `nvshmemx_<TYPE>_iget_warp/block()` | Full | 24 typed strided |
 | `nvshmemx_<TYPE>_put_signal_warp/block()` | Full | 24 typed + putmem |
 | `nvshmemx_<TYPE>_put_signal_nbi_warp/block()` | Full | 24 typed + putmem |
+| `nvshmemx_sync_all_block()` | Full | One matching CTA collective per PE at a time |
+| `nvshmemx_barrier_all_block()` | Full | CTA release/acquire ordering; one matching CTA collective per PE at a time |
 
 ### Team Management
 
@@ -437,7 +462,7 @@ handler. The behavior is controlled at compile time by defining
 | Limitation | Impact | Notes |
 |---|---|---|
 | Unsupported NVSHMEM-specific environment variables are not interpreted | NVSHMEM transport, bootstrap, affinity, debug, and tuning variables do not configure NIIN | NIIN honors only the NVSHMEM-named variables listed in [Environment and Runtime Configuration](#environment-and-runtime-configuration). Use NCCL environment variables such as `NCCL_DEBUG`, `NCCL_IB_HCA`, `NCCL_IB_DISABLE`, `NCCL_P2P_DISABLE`, and `NCCL_SHM_DISABLE` for NCCL runtime behavior. |
-| No standalone NVSHMEM bootstrap runtime | Multi-PE setup is driven by MPI, UID-based initialization, or launcher-provided rank metadata | Use `nvshmemx_init_attr(...MPI_COMM...)` with `-DNIIN_HAS_MPI`, or use `nvshmemx_get_uniqueid()` with `NVSHMEMX_INIT_WITH_UNIQUEID` and an application-provided bootstrap. |
+| `nvshmem_init()` bootstrap needs shared storage | Normal multi-PE initialization cannot proceed if `$HOME/.niin` is not shared | Set `NIIN_BOOTSTRAP_DIR` to a job-writable shared directory. The launcher must set rank/size and a job ID, or set `NIIN_BOOTSTRAP_ID` explicitly. MPI and caller-managed UNIQUEID initialization remain available alternatives. |
 | One NCCL PE per GPU | Multi-process-per-GPU NVSHMEM use cases are not represented | `NVSHMEMI_TEAM_SAME_GPU` is always a single-PE team. |
 | No arbitrary NVSHMEM team creation | Applications cannot create teams with arbitrary PE membership, layouts, or team-specific contexts | NIIN represents predefined teams plus constrained host-side strided/2D split teams only. User-created teams are not available to device APIs. |
 | NCCL memory/window model | Symmetric allocations come from one NCCL-registered heap | Set `NVSHMEM_SYMMETRIC_SIZE` before initialization when a larger heap is required. |

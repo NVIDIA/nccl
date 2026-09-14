@@ -25,6 +25,7 @@ installed `nvidia-nccl-cuXX` wheel.
 | `05_barriers.py` | All three barrier session types, both factory forms, all fence levels | ≥2 | GIN network, 2.31.0+ for the `Gin` factories |
 | `06_resource_buffers.py` | The five `resource_buffer_*` address translations | ≥2, one node | peer access, multicast |
 | `07_compile_with_fake_args.py` | Compile with type-only arguments before creating NCCL resources, then invoke with real resources | **exactly 2** | GIN network |
+| `08_reduce_copy.py` | Device-side `ReduceCopy`: `lsa_reduce_sum` across registered windows into each rank's local buffer | ≥2, one node | peer access |
 
 "Exactly 2" means the example hardcodes a rank 0 → rank 1 transfer and
 rejects any other count rather than idling the extra ranks.
@@ -45,6 +46,7 @@ mpirun -n 2 -N 1 python 04_gin_ops.py           # two nodes, one rank each
 mpirun -n 2 -N 1 python 05_barriers.py          # two nodes, one rank each
 mpirun -n 8      python 06_resource_buffers.py  # one node, all GPUs
 mpirun -n 2 -N 1 python 07_compile_with_fake_args.py  # two nodes, one rank each
+mpirun -n 8      python 08_reduce_copy.py      # one node, all GPUs
 ```
 
 `-n 8` stands for however many GPUs the node has; the one-node examples

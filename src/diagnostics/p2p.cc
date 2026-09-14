@@ -94,18 +94,47 @@ struct ncclDiagP2pMapping {
   int peerAccessDev;
 };
 
-static ncclResult_t ncclDiagP2pBuildRankSet(struct ncclComm* comm, int** ranks, int* rank, int* nRanks) {
+static ncclResult_t ncclDiagP2pBuildRankSet(struct ncclComm* comm, int** ranks, int* rank, int* nRanks,
+                                             bool* ranksOwned) {
+  *ranksOwned = false;
+
   // The topology is fused over the local ranks normally and over the MNNVL clique when MNNVL is active. Cross-clique
   // P2P expands that set to every rank in the same NVLink fabric domain.
   if (!comm->p2pCrossClique) {
-    *ranks = comm->MNNVL ? comm->clique.ranks : comm->localRankToRank;
-    *rank = comm->MNNVL ? comm->cliqueRank : comm->localRank;
-    *nRanks = comm->MNNVL ? comm->clique.size : comm->localRanks;
-    return ncclSuccess;
+    if (comm->MNNVL) {
+      *ranks = comm->clique.ranks;
+      *rank = comm->cliqueRank;
+      *nRanks = comm->clique.size;
+      return ncclSuccess;
+    }
+
+    // Keep same-host peers visible to diagnostics even when isolated shared-memory
+    // namespaces caused topology discovery to place them in different local nodes.
+    uint64_t hostHash = comm->peerInfo[comm->rank].hostHash;
+    int count = 0;
+    for (int peer = 0; peer < comm->nRanks; peer++) {
+      if (comm->peerInfo[peer].hostHash == hostHash) count++;
+    }
+
+    NCCLCHECK(ncclCalloc(ranks, count));
+    *ranksOwned = true;
+    *rank = -1;
+    *nRanks = count;
+
+    int slot = 0;
+    for (int peer = 0; peer < comm->nRanks; peer++) {
+      if (comm->peerInfo[peer].hostHash != hostHash) continue;
+      (*ranks)[slot] = peer;
+      if (peer == comm->rank) *rank = slot;
+      slot++;
+    }
+
+    return *rank >= 0 && slot == *nRanks ? ncclSuccess : ncclInternalError;
   }
 
   if (comm->nvlDomainSize <= 0) return ncclInternalError;
   NCCLCHECK(ncclCalloc(ranks, comm->nvlDomainSize));
+  *ranksOwned = true;
   *rank = -1;
   *nRanks = comm->nvlDomainSize;
   int slot = 0;
@@ -391,6 +420,23 @@ static void ncclDiagP2pReportGroupFailures(struct ncclComm* comm, const int* ran
   }
 }
 
+static ncclResult_t ncclDiagP2pCheckTopo(struct ncclComm* comm, int srcRank, int dstRank, int* p2p, int* read,
+                                             int* intermediateRank, bool* shmIsolation) {
+  *shmIsolation = false;
+
+  NCCLCHECK(ncclTopoCheckP2p(comm, comm->topo, srcRank, dstRank, p2p, read, intermediateRank, nullptr));
+
+  if (!*p2p) {
+    const struct ncclPeerInfo* srcInfo = comm->peerInfo + srcRank;
+    const struct ncclPeerInfo* dstInfo = comm->peerInfo + dstRank;
+    if (srcInfo->hostHash == dstInfo->hostHash && srcInfo->shmDev != dstInfo->shmDev) {
+      *shmIsolation = true;
+    }
+  }
+
+  return ncclSuccess;
+}
+
 static void ncclDiagP2pDiscoverLocalEdges(struct ncclComm* comm, const int* ranks, int rank, int nRanks,
                                           struct ncclDiagP2pEdgeInfo* edgeMatrix,
                                           struct ncclDiagP2pEdgeResult* allResults, int* outPeers, int* outPeerCount) {
@@ -407,8 +453,9 @@ static void ncclDiagP2pDiscoverLocalEdges(struct ncclComm* comm, const int* rank
     if (dst == comm->rank) continue;
 
     int intermediateRank = -1;
+    bool shmIsolation = false;
     ncclResult_t topoRet =
-      ncclTopoCheckP2p(comm, comm->topo, comm->rank, dst, &edge->p2p, &edge->read, &intermediateRank, nullptr);
+      ncclDiagP2pCheckTopo(comm, comm->rank, dst, &edge->p2p, &edge->read, &intermediateRank, &shmIsolation);
     if (topoRet != ncclSuccess) {
       edge->p2p = 0;
       edge->read = 0;
@@ -417,6 +464,14 @@ static void ncclDiagP2pDiscoverLocalEdges(struct ncclComm* comm, const int* rank
       INFO(NCCL_INIT, "Diagnostics P2P topo check failed srcRank=%d dstRank=%d result=%d", comm->rank, dst, topoRet);
       continue;
     }
+
+    if (!edge->p2p && shmIsolation) {
+      INFO(NCCL_INIT,
+           "Diagnostics P2P skipped srcRank=%d dstRank=%d reason=shmIsolation srcShmDev=%ld dstShmDev=%ld",
+           comm->rank, dst, (long)comm->peerInfo[comm->rank].shmDev, (long)comm->peerInfo[dst].shmDev);
+      continue;
+    }
+
     if (edge->p2p && intermediateRank != -1) {
       edge->p2p = 0;
       result->reason = ncclDiagP2pReasonIndirect;
@@ -622,6 +677,7 @@ ncclResult_t ncclDiagP2pRun(struct ncclComm* comm) {
   int* p2pRanks = nullptr;
   int p2pRank = -1;
   int p2pNRanks = 0;
+  bool p2pRanksOwned = false;
   struct ncclDiagP2pEdgeInfo* edgeMatrix = nullptr;
   ncclResult_t* setupResults = nullptr;
   struct ncclDiagP2pSummary* summaries = nullptr;
@@ -671,7 +727,8 @@ ncclResult_t ncclDiagP2pRun(struct ncclComm* comm) {
   }
 
   NCCLCHECKGOTO(ncclCalloc(&setupResults, comm->nRanks), ret, fail);
-  NCCLCHECKGOTO(ncclDiagP2pBuildRankSet(comm, &p2pRanks, &p2pRank, &p2pNRanks), setupRet, setup_complete);
+  NCCLCHECKGOTO(ncclDiagP2pBuildRankSet(comm, &p2pRanks, &p2pRank, &p2pNRanks, &p2pRanksOwned), setupRet,
+                setup_complete);
   NCCLCHECKGOTO(ncclCalloc(&summaries, comm->nRanks), setupRet, setup_complete);
   NCCLCHECKGOTO(ncclCalloc(&edgeMatrix, (size_t)p2pNRanks * p2pNRanks), setupRet, setup_complete);
   NCCLCHECKGOTO(ncclCalloc(&memDescs, p2pNRanks), setupRet, setup_complete);
@@ -939,7 +996,7 @@ fail:
                comm->rank, cleanupRet);
   }
   ret = runRet == ncclSuccess ? cleanupRet : runRet;
-  if (comm->p2pCrossClique) free(p2pRanks);
+  if (p2pRanksOwned) free(p2pRanks);
   free(edgeMatrix);
   free(setupResults);
   free(summaries);

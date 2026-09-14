@@ -41,6 +41,18 @@ Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be
 called once when creating a communicator and the Id should be distributed to all ranks in the
 communicator before calling ncclCommInitRank. *uniqueId* should point to a ncclUniqueId object allocated by the user.
 
+ncclSetEncryption
+-----------------
+
+.. c:function:: ncclResult_t ncclSetEncryption(const ncclEncryptionConfig_t* config)
+
+Configures process-global encryption for NCCL-owned TCP sockets. A configuration with ``mode`` set to
+:c:macro:`NCCL_ENCRYPTION_MODE_PSK` requests TLS encryption using the supplied PSK.
+
+Applications should call this function before :c:func:`ncclGetUniqueId` or any other NCCL operation that may create
+network connections. All processes that communicate with each other must use the same PSK and keep it unchanged for the
+job. See :ref:`setup-label` for build requirements, traffic coverage, and operational guidance.
+
 ncclCommInitRank
 ----------------
 

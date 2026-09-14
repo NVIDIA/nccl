@@ -645,7 +645,7 @@ __device__ __forceinline__ int niin_tma_copy_global_global(void* gmemDst, const 
 // the reasons to fall back are uniform across a threadgroup, so a warp- or
 // block-scoped caller either takes the TMA path with every thread or none.
 template <int SCOPE, bool BLOCKING = true>
-__device__ __forceinline__ int niin_tma_try_copy(void* dst, const void* src, size_t bytes) {
+NIIN_NOINLINE_DEVICE int niin_tma_try_copy_enabled(void* dst, const void* src, size_t bytes) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
   if (!niin_tma_smem_registered()) return -1;
 
@@ -668,15 +668,33 @@ __device__ __forceinline__ int niin_tma_try_copy(void* dst, const void* src, siz
 #endif
 }
 
+template <int SCOPE, bool BLOCKING = true>
+__device__ __forceinline__ int niin_tma_try_copy(void* dst, const void* src, size_t bytes) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+  if (niin_tma_policy() == NVSHMEMX_TMA_DISABLE) return -1;
+  return niin_tma_try_copy_enabled<SCOPE, BLOCKING>(dst, src, bytes);
+#else
+  (void)dst; (void)src; (void)bytes;
+  return -1;
+#endif
+}
+
 // Drain every bulk op this thread has issued. Used by fence and quiet so that
 // TMA-initiated transfers are ordered and complete alongside the load/store and
 // GIN paths. A no-op when this CTA has no registered shared memory.
-__device__ __forceinline__ void niin_tma_drain_if_registered() {
+NIIN_NOINLINE_DEVICE void niin_tma_drain_registered_slow() {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
   if (niin_tma_smem_registered()) {
     niin_tma_bulk_commit_group();
     niin_tma_bulk_wait_group_0();
   }
+#endif
+}
+
+__device__ __forceinline__ void niin_tma_drain_if_registered() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
+  if (niin_tma_policy() == NVSHMEMX_TMA_DISABLE) return;
+  niin_tma_drain_registered_slow();
 #endif
 }
 

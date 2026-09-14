@@ -186,7 +186,7 @@ __device__ __forceinline__ void nvshmem_##TYPENAME##_atomic_add(              \
     if (pe == niin_rank())                                                    \
       niin_atomicAddNoReturn(dest, value);                                    \
     else                                                                      \
-      niin_atomicAddSystemNoReturn((TYPE*)niin_get_peer_ptr(offset, pe), value); \
+      niin_atomicAddSystemNoReturn((TYPE*)niin_get_peer_ptr_lsa_only(offset, pe), value); \
     return;                                                                    \
   }                                                                            \
   niin_atomic_add_slow(dest, value, pe, offset);                              \
@@ -320,7 +320,7 @@ __device__ __forceinline__ void nvshmem_##TYPENAME##_atomic_inc(              \
     if (pe == niin_rank())                                                    \
       niin_atomicAddNoReturn(dest, (TYPE)1);                                  \
     else                                                                      \
-      niin_atomicAddSystemNoReturn((TYPE*)niin_get_peer_ptr(offset, pe), (TYPE)1); \
+      niin_atomicAddSystemNoReturn((TYPE*)niin_get_peer_ptr_lsa_only(offset, pe), (TYPE)1); \
     return;                                                                    \
   }                                                                            \
   niin_atomic_add_slow(dest, (TYPE)1, pe, offset);                            \

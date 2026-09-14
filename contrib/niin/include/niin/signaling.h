@@ -40,13 +40,22 @@ NIIN_NOINLINE_DEVICE void niin_deliver_signal_remote_va(
 
 __device__ __forceinline__ void niin_deliver_signal(
     uint64_t* sig_addr, uint64_t signal, int sig_op, int pe, int ctx = -1) {
-  size_t sigOffset = niin_sym_offset(sig_addr);
   if (pe == niin_rank()) {
     if (sig_op == NVSHMEM_SIGNAL_SET) atomicExch((unsigned long long*)sig_addr, signal);
     else atomicAdd((unsigned long long*)sig_addr, signal);
     return;
   }
-  if ((niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) && niin_peer_native_atomic()) {
+  size_t sigOffset = niin_sym_offset(sig_addr);
+  if (niin_world_is_lsa_only() && niin_peer_native_atomic()) {
+    uint64_t* peerSig = (uint64_t*)niin_get_peer_ptr_lsa_only(sigOffset, pe);
+    if (sig_op == NVSHMEM_SIGNAL_SET) {
+      atomicExch_system((unsigned long long*)peerSig, signal);
+      return;
+    }
+    atomicAdd_system((unsigned long long*)peerSig, signal);
+    return;
+  }
+  if (niin_is_lsa_peer(pe) && niin_peer_native_atomic()) {
     uint64_t* peerSig = (uint64_t*)niin_get_peer_ptr(sigOffset, pe);
     if (sig_op == NVSHMEM_SIGNAL_SET) {
       atomicExch_system((unsigned long long*)peerSig, signal);
@@ -75,19 +84,27 @@ __device__ __forceinline__ void niin_memcpy_to_peer_latency_path(
   niin_memcpy_to_peer(dst, src, bytes);
 }
 
+__device__ __forceinline__ void niin_deliver_signal_lsa_target(
+    uint64_t* target, uint64_t signal, int sig_op, bool self) {
+  if (sig_op == NVSHMEM_SIGNAL_SET) {
+    *(volatile uint64_t*)target = signal;
+    return;
+  }
+  if (self) atomicAdd((unsigned long long*)target, signal);
+  else atomicAdd_system((unsigned long long*)target, signal);
+}
+
 __device__ __forceinline__ void niin_deliver_signal_lsa_fast(
     uint64_t* sig_addr, uint64_t signal, int sig_op, int pe) {
+  const bool self = pe == niin_rank();
   uint64_t* target = sig_addr;
-  if (pe != niin_rank()) {
-    target = (uint64_t*)niin_get_peer_ptr(niin_sym_offset(sig_addr), pe);
+  if (!self) {
+    size_t sigOffset = niin_sym_offset(sig_addr);
+    target = (uint64_t*)(niin_world_is_lsa_only()
+        ? niin_get_peer_ptr_lsa_only(sigOffset, pe)
+        : niin_get_peer_ptr(sigOffset, pe));
   }
-  if (sig_op == NVSHMEM_SIGNAL_SET) {
-    if (pe == niin_rank()) atomicExch((unsigned long long*)target, signal);
-    else atomicExch_system((unsigned long long*)target, signal);
-  } else {
-    if (pe == niin_rank()) atomicAdd((unsigned long long*)target, signal);
-    else atomicAdd_system((unsigned long long*)target, signal);
-  }
+  niin_deliver_signal_lsa_target(target, signal, sig_op, self);
 }
 
 // The GIN transport routines stay out of line. Inlining them expanded a full
@@ -159,15 +176,21 @@ NIIN_NOINLINE_DEVICE void niin_putmem_signal_slow(
 __device__ __forceinline__ void niin_putmem_signal_impl(
     void* dest, const void* src, size_t bytes,
     uint64_t* sig_addr, uint64_t signal, int sig_op, int pe) {
-  if (niin_world_is_lsa_only() && (pe == niin_rank() || niin_peer_native_atomic())) {
+  const int me = niin_rank();
+  const bool self = pe == me;
+  if (niin_world_is_lsa_only() && (self || niin_peer_native_atomic())) {
     void* target = dest;
-    if (pe != niin_rank()) {
-      target = niin_get_peer_ptr(niin_sym_offset(dest), pe);
+    uint64_t* sigTarget = sig_addr;
+    if (!self) {
+      size_t dstOffset = niin_sym_offset(dest);
+      size_t sigOffset = niin_sym_offset(sig_addr);
+      target = niin_get_peer_ptr_lsa_only(dstOffset, pe);
+      sigTarget = (uint64_t*)niin_get_peer_ptr_lsa_only(sigOffset, pe);
     }
     niin_memcpy_to_peer_latency_path(target, src, bytes);
     __threadfence_system();
     niin_clear_lsa_store_pending();
-    niin_deliver_signal_lsa_fast(sig_addr, signal, sig_op, pe);
+    niin_deliver_signal_lsa_target(sigTarget, signal, sig_op, self);
     return;
   }
 

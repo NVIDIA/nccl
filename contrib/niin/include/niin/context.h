@@ -190,6 +190,8 @@ __device__ __forceinline__ bool niin_has_gin_ops_pending() {
 __device__ __forceinline__ unsigned int niin_take_gin_ops_pending() {
   unsigned int* pending = niin_ctx().ginPendingOps;
   if (pending == nullptr) return niin_has_gin() ? 1u : 0u;
+  unsigned int old = *(volatile unsigned int*)pending;
+  if (old == 0u) return 0u;
   return atomicExch(pending, 0u);
 }
 
@@ -223,13 +225,24 @@ __device__ __forceinline__ int niin_tma_policy() {
 }
 
 // Get a peer pointer for an LSA peer at the given symmetric offset.
-__device__ __forceinline__ void* niin_get_peer_ptr(size_t offset, int pe) {
+__device__ __forceinline__ char* niin_get_peer_heap_base_p2p(int pe) {
   void** peerHeapBaseP2p = niin_peer_heap_base_p2p();
   if (peerHeapBaseP2p != nullptr) {
     auto base = (char*)__ldg((const unsigned long long*)peerHeapBaseP2p + pe);
-    if (base != nullptr) return base + offset;
+    if (base != nullptr) return base;
   }
+  return nullptr;
+}
+
+__device__ __forceinline__ void* niin_get_peer_ptr(size_t offset, int pe) {
+  char* base = niin_get_peer_heap_base_p2p(pe);
+  if (base != nullptr) return base + offset;
   return ncclGetPeerPointer(niin_heap_window(), offset, pe);
+}
+
+__device__ __forceinline__ void* niin_get_peer_ptr_lsa_only(size_t offset, int pe) {
+  auto base = (char*)__ldg((const unsigned long long*)niin_peer_heap_base_p2p() + pe);
+  return base + offset;
 }
 
 #endif // NIIN_CONTEXT_H_

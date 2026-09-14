@@ -33,6 +33,15 @@ typedef int nvshmem_team_t;
 #define NVSHMEMI_TEAM_GPU_LEADERS       5  // One PE per GPU (=WORLD in NCCL)
 #define NVSHMEM_TEAM_INVALID           (-1)
 
+// NVSHMEM qpair handles. NIIN currently ignores explicit qpair selection for
+// LSA and drains all GIN contexts for quiet, but exposes the types/constants so
+// code using nvshmemx_qp_quiet_* can build unchanged.
+typedef int nvshmemx_qp_handle_t;
+#define NVSHMEMX_QP_HOST     0
+#define NVSHMEMX_QP_DEFAULT  1
+#define NVSHMEMX_QP_ANY      0x7fffffff
+#define NVSHMEMX_QP_ALL      0x7fffffff
+
 // ---------------------------------------------------------------------------
 // TMA (Tensor Memory Accelerator) shared-memory registration
 //

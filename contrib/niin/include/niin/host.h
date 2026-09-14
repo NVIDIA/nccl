@@ -178,7 +178,17 @@ inline void niinPendingStateDisable(niinContext_host* hostCtx) {
 }
 
 inline ncclResult_t niinPendingStateEnable(niinContext_host* hostCtx) {
-  if (hostCtx->ginPendingOps == nullptr) {
+  if (hostCtx->devComm.ginConnectionCount == 0) {
+    if (hostCtx->ginPendingOps != nullptr) {
+      cudaError_t e = cudaFree(hostCtx->ginPendingOps);
+      if (e != cudaSuccess) {
+        fprintf(stderr, "NIIN: CUDA error %s freeing idle GIN counter at %s:%d\n",
+                cudaGetErrorString(e), __FILE__, __LINE__);
+        return ncclInternalError;
+      }
+      hostCtx->ginPendingOps = nullptr;
+    }
+  } else if (hostCtx->ginPendingOps == nullptr) {
     cudaError_t e = cudaMalloc(&hostCtx->ginPendingOps, sizeof(unsigned int));
     if (e == cudaSuccess) e = cudaMemset(hostCtx->ginPendingOps, 0, sizeof(unsigned int));
     if (e != cudaSuccess) {

@@ -1020,7 +1020,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinFlushTimeout(ncclGin_C* net, ncclCoopAny 
 
 #ifdef __CUDACC__
 template <unsigned beMask>
-NCCL_DEVICE_INLINE bool ncclGin_BackendMask<beMask>::flushesAllPutsOnAnySignal() const {
+NCCL_DEVICE_INLINE bool ncclGin_BackendMask<beMask>::_flushesAllPutsOnAnySignal() const {
   return ncclGinCall<ncclGinApi_FlushesAllPutsOnAnySignal>(this->_makeCtx());
 }
 #endif

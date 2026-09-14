@@ -112,7 +112,7 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(ncclGinFence
   }
 
   // Optimize for the auto-flush fence path.
-  if (this->outerDenseGinBar.present && this->gin.thing.flushesAllPutsOnAnySignal()) {
+  if (this->outerDenseGinBar.present && this->gin.thing._flushesAllPutsOnAnySignal()) {
     *needsLsaBarrier = this->innerLsaBar.present;
     *needsRailGinBarrier = this->outerRailGinBar.present;
     *needsDenseGinBarrier = false;

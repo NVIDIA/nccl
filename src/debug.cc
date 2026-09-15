@@ -78,6 +78,7 @@ DEFINE_NCCL_PARAM(ncclParamDebugLevel, ncclDebugLogLevel, NCCL_DEBUG, NCCL_LOG_N
                   NCCL_PARAM_FLAG_PUBLISHED | NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT,
                   ncclParamOneOf<ncclDebugLogLevel>(makeOptions(
                     makeOption("VERSION", NCCL_LOG_VERSION, "Prints NCCL version information only."),
+                    makeOption("ERROR", NCCL_LOG_ERROR, "Prints root-cause error messages only."),
                     makeOption("WARN", NCCL_LOG_WARN, "Prints error messages."),
                     makeOption("ATTN", NCCL_LOG_ATTN, "Prints error messages plus informational notices."),
                     makeOption("INFO", NCCL_LOG_INFO, "Prints debug information."),
@@ -89,13 +90,15 @@ DEFINE_NCCL_PARAM(ncclParamDebugLevels, uint32_t, NCCL_DEBUG_LEVELS, 0,
                   NCCL_PARAM_FLAG_PUBLISHED | NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT,
                   ncclParamBitsetOf<uint32_t>(makeOptions(
                     makeOption("VERSION", (1u << NCCL_LOG_VERSION), "Prints NCCL version information only."),
+                    makeOption("ERROR", (1u << NCCL_LOG_ERROR), "Prints root-cause error messages only."),
                     makeOption("WARN", (1u << NCCL_LOG_WARN), "Prints error messages."),
                     makeOption("ATTN", (1u << NCCL_LOG_ATTN), "Prints error messages plus informational notices."),
                     makeOption("INFO", (1u << NCCL_LOG_INFO), "Prints debug information."),
                     makeOption("ABORT", (1u << NCCL_LOG_ABORT), ""),
                     makeOption("TRACE", (1u << NCCL_LOG_TRACE), "Prints replayable trace information on all calls."),
-                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_WARN | 1u << NCCL_LOG_ATTN |
-                                      1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT | 1u << NCCL_LOG_TRACE),
+                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_ERROR | 1u << NCCL_LOG_WARN |
+                                      1u << NCCL_LOG_ATTN | 1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT |
+                                      1u << NCCL_LOG_TRACE),
                                "Prints all debug messages")), ',', true),
                   "Add comma-separated debug levels to NCCL_DEBUG.");
 
@@ -126,20 +129,23 @@ DEFINE_NCCL_PARAM(ncclParamDebugSubsys, uint64_t, NCCL_DEBUG_SUBSYS,
 
 DEFINE_NCCL_PARAM(ncclParamWarnEnableDebugInfo, bool, NCCL_WARN_ENABLE_DEBUG_INFO, false,
                   NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT, NCCL_PARAM_DEFAULT,
-                  "If enabled, the debug level will be set to INFO after a WARN level debug message is logged.");
+                  "If enabled, the debug level will be set to INFO after an ERROR or WARN level debug message "
+                  "is logged.");
 
 DEFINE_NCCL_PARAM(ncclParamDebugTimestampLevel, uint32_t, NCCL_DEBUG_TIMESTAMP_LEVELS,
-                  (1u << NCCL_LOG_WARN) | (1u << NCCL_LOG_ATTN),
+                  (1u << NCCL_LOG_ERROR) | (1u << NCCL_LOG_WARN) | (1u << NCCL_LOG_ATTN),
                   NCCL_PARAM_FLAG_PUBLISHED | NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT,
                   ncclParamBitsetOf<uint32_t>(makeOptions(
                     makeOption("VERSION", (1u << NCCL_LOG_VERSION), "NCCL version information"),
+                    makeOption("ERROR", (1u << NCCL_LOG_ERROR), "Root-cause error messages"),
                     makeOption("WARN", (1u << NCCL_LOG_WARN), "Error messages"),
                     makeOption("ATTN", (1u << NCCL_LOG_ATTN), "Informational notices"),
                     makeOption("INFO", (1u << NCCL_LOG_INFO), "Debug messages"),
                     makeOption("ABORT", (1u << NCCL_LOG_ABORT), ""),
                     makeOption("TRACE", (1u << NCCL_LOG_TRACE), "Replayable trace messages"),
-                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_WARN | 1u << NCCL_LOG_ATTN |
-                                      1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT | 1u << NCCL_LOG_TRACE),
+                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_ERROR | 1u << NCCL_LOG_WARN |
+                                      1u << NCCL_LOG_ATTN | 1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT |
+                                      1u << NCCL_LOG_TRACE),
                                "All messages")
                   )), "Set the log levels that include timestamps.");
 // clang-format on
@@ -176,13 +182,49 @@ static ncclResult_t getHostNameForLog(char* hostname, int maxlen, const char del
   return ncclSuccess;
 }
 
+// Short symbolic name for a result code, for use inside a log line. Deliberately not
+// ncclGetErrorString(), which returns user-facing prose; this is the identifier a reader greps for.
+static const char* ncclErrorSymbol(ncclResult_t code) {
+  switch (code) {
+  case ncclSuccess:
+    return "ncclSuccess";
+  case ncclUnhandledCudaError:
+    return "ncclUnhandledCudaError";
+  case ncclSystemError:
+    return "ncclSystemError";
+  case ncclInternalError:
+    return "ncclInternalError";
+  case ncclInvalidArgument:
+    return "ncclInvalidArgument";
+  case ncclInvalidUsage:
+    return "ncclInvalidUsage";
+  case ncclRemoteError:
+    return "ncclRemoteError";
+  case ncclInProgress:
+    return "ncclInProgress";
+  case ncclTimeout:
+    return "ncclTimeout";
+  default:
+    return "ncclUnknownError";
+  }
+}
+
 // Convert the legacy scalar setting to its logical inclusive level set.
 static uint32_t ncclDebugLevelToMask(ncclDebugLogLevel level) {
   if (level < NCCL_LOG_VERSION) return 0;
   uint32_t mask = 1u << NCCL_LOG_VERSION;
+  // ERROR and ATTN are appended to the enum for ABI compatibility, so their numeric values do not reflect
+  // their severity and they cannot take part in the >= comparisons below. ERROR is the most severe level:
+  // selecting it selects nothing else. Checked first because its value is greater than INFO's and would
+  // otherwise satisfy the ATTN test.
+  if (level == NCCL_LOG_ERROR) return mask | (1u << NCCL_LOG_ERROR);
   if (level >= NCCL_LOG_INFO) mask |= 1u << NCCL_LOG_ATTN;
   if (level == NCCL_LOG_ATTN) level = NCCL_LOG_WARN;
-  if (level >= NCCL_LOG_WARN) mask |= 1u << NCCL_LOG_WARN;
+  // Selecting WARN through the scalar also selects ERROR, so a job asking for warnings keeps seeing the
+  // sites that now log at ERROR instead. This applies to NCCL_DEBUG only: the bitset variables are a
+  // literal set of levels, and folding an implication into them would make "^ERROR" and "^WARN" unable to
+  // turn error output off.
+  if (level >= NCCL_LOG_WARN) mask |= (1u << NCCL_LOG_WARN) | (1u << NCCL_LOG_ERROR);
   if (level >= NCCL_LOG_INFO) mask |= 1u << NCCL_LOG_INFO;
   if (level >= NCCL_LOG_ABORT) mask |= 1u << NCCL_LOG_ABORT;
   if (level >= NCCL_LOG_TRACE) mask |= 1u << NCCL_LOG_TRACE;
@@ -199,12 +241,16 @@ static void ncclDebugInit() {
     ncclDebugFile = stdout;
   }
 
-  tempNcclDebugLevelMask = ncclDebugLevelToMask(ncclParamDebugLevel()) | ncclParamDebugLevels();
+  // Masked to the defined level bits. NCCL_DEBUG_LEVELS is user-settable and its negated form can
+  // otherwise compose to ~0u, which is NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED -- leaving the logger
+  // permanently "uninitialized", bypassing NCCL_DEBUG_SUBSYS and reopening NCCL_DEBUG_FILE per record.
+  tempNcclDebugLevelMask =
+    (ncclDebugLevelToMask(ncclParamDebugLevel()) | ncclParamDebugLevels()) & NCCL_DEBUG_LEVEL_MASK_DEFINED;
 
   ncclWarnSetDebugInfo.store(ncclParamWarnEnableDebugInfo(), std::memory_order_relaxed);
 
   // Determine which debug levels will have timestamps.
-  ncclDebugTimestampLevels = ncclParamDebugTimestampLevel();
+  ncclDebugTimestampLevels = ncclParamDebugTimestampLevel() & NCCL_DEBUG_LEVEL_MASK_DEFINED;
 
   // Store a copy of the timestamp format with space for the subseconds, if used.
   const char* tsFormat = ncclParamDebugTsFormat();
@@ -320,17 +366,23 @@ static void ncclDebugInit() {
   COMPILER_ATOMIC_STORE(&ncclDebugLevelMask, tempNcclDebugLevelMask, std::memory_order_release);
 }
 
-// Internal logging helper used by the INFO, WARN, ATTN and TRACE macros.
+// Internal logging helper used by the INFO, WARN, ATTN, ERR and TRACE macros.
+// `code` is the ncclResult_t recorded by ERR() at a root-cause site, or ncclSuccess when the call site did not
+// supply one (every level other than ERR).
 static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const char* file, const char* func, int line,
-                          const char* fmt, va_list vargs) {
-  if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) {
+                          ncclResult_t code, const char* fmt, va_list vargs) {
+  // NOWARN suppresses expected failures, which includes the ERR at their origin.
+  if (ncclDebugNoWarn != 0 && (level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR)) {
     level = NCCL_LOG_INFO;
     flags = ncclDebugNoWarn;
+    // The caller is suppressing an expected failure, so this is no longer an error origin. Dropping the
+    // code keeps a NOWARN-wrapped probe from being counted as a root cause by anything reading the code.
+    code = ncclSuccess;
   }
 
-  // Save the last error (WARN) as a human readable string. ATTN does not set lastError.
+  // Save the last error (ERROR or WARN) as a human readable string. ATTN does not set lastError.
   //
-  if (level == NCCL_LOG_WARN) {
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR) {
     std::lock_guard<std::mutex> lock(ncclDebugMutex);
     va_list vcopy;
     va_copy(vcopy, vargs);
@@ -356,12 +408,12 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
     return;
   }
 
-  // A WARN can turn on INFO for everything that follows. Hoisted out of the formatting branch
+  // An ERROR or WARN can turn on INFO for everything that follows. Hoisted out of the formatting branch
   // below, which a record delivered to a sink never reaches, so that the behavior is the same either way.
   // Held under ncclDebugMutex because this is a read-modify-write on a mask that ncclDebugInit() -- and
   // therefore ncclResetDebugInit() -- also writes under that mutex; unsynchronised, an escalation racing
   // a reset can swallow the reset's sentinel and the reset is silently lost.
-  if (level == NCCL_LOG_WARN && ncclWarnSetDebugInfo.load(std::memory_order_relaxed)) {
+  if ((level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR) && ncclWarnSetDebugInfo.load(std::memory_order_relaxed)) {
     std::lock_guard<std::mutex> lock(ncclDebugMutex);
     uint32_t mask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
     if (mask != NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED && mask != NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED) {
@@ -399,10 +451,7 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
       record.file = file;
       record.func = func;
       record.line = line;
-      // Reserved for the result code recorded at an error origin. Nothing sets one yet, so it is always
-      // ncclSuccess; the field is present from the first version of the record because a versioned struct
-      // cannot gain one later without forcing a v2 on every sink built against v1.
-      record.code = ncclSuccess;
+      record.code = code;
       record.format = fmt;
       record.message = message;
       record.hostname = hostname;
@@ -426,8 +475,8 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   char buffer[1024];
   size_t len = 0;
 
-  // WARN and ATTN messages come with an extra newline at the beginning.
-  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN) {
+  // ERROR, WARN and ATTN messages come with an extra newline at the beginning.
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN || level == NCCL_LOG_ERROR) {
     buffer[len++] = '\n';
   }
 
@@ -479,13 +528,26 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   const char* fileStr = file ? file : "<unknown>";
   const char* funcStr = func ? func : "<unknown>";
 
+  // A root-cause ERR() site names the error it is about to return; a plain WARN() renders exactly as
+  // before. The symbolic name is used rather than ncclGetErrorString(), whose strings are user-facing
+  // prose ending in "run with NCCL_DEBUG=INFO for details" -- unhelpful inside the line that IS the
+  // detail, and long enough to need a much larger buffer.
+  char codeBuf[32 + NCCL_ERROR_SYMBOL_MAXLEN];
+  const char* codeStr = "";
+  if (code != ncclSuccess) {
+    snprintf(codeBuf, sizeof(codeBuf), "[%s] ", ncclErrorSymbol(code));
+    codeStr = codeBuf;
+  }
+
   // Add level specific formatting. The format string from the call site is incorporated into this prefix.
-  if (level == NCCL_LOG_WARN) {
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR) {
+    const char* levelStr = (level == NCCL_LOG_ERROR) ? "ERROR" : "WARN";
     if (func && func[0]) {
-      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d (%s) NCCL WARN %s\n", cudaDev, fileStr, line,
-                      funcStr, fmt);
+      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d (%s) NCCL %s %s%s\n", cudaDev, fileStr, line,
+                      funcStr, levelStr, codeStr, fmt);
     } else {
-      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, fileStr, line, fmt);
+      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d NCCL %s %s%s\n", cudaDev, fileStr, line, levelStr,
+                      codeStr, fmt);
     }
   } else if (level == NCCL_LOG_ATTN) {
     if (func && func[0]) {
@@ -526,7 +588,16 @@ void ncclDebugLogInternal(ncclDebugLogLevel level, unsigned long flags, const ch
                           const char* fmt, ...) {
   va_list vargs;
   va_start(vargs, fmt);
-  ncclDebugLogV(level, flags, file, func, line, fmt, vargs);
+  ncclDebugLogV(level, flags, file, func, line, ncclSuccess, fmt, vargs);
+  va_end(vargs);
+}
+
+// Internal only logging function used by the ERR macro, for the site where an error originates.
+void ncclDebugLogErrorInternal(ncclResult_t code, unsigned long flags, const char* file, const char* func, int line,
+                               const char* fmt, ...) {
+  va_list vargs;
+  va_start(vargs, fmt);
+  ncclDebugLogV(NCCL_LOG_ERROR, flags, file, func, line, code, fmt, vargs);
   va_end(vargs);
 }
 
@@ -583,12 +654,12 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char* file
   va_start(vargs, fmt);
   const char* file = nullptr;
   const char* func = nullptr;
-  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN) {
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN || level == NCCL_LOG_ERROR) {
     file = filefunc;
   } else if (level == NCCL_LOG_TRACE) {
     func = filefunc;
   }
-  ncclDebugLogV(level, flags, file, func, line, fmt, vargs);
+  ncclDebugLogV(level, flags, file, func, line, ncclSuccess, fmt, vargs);
   va_end(vargs);
 }
 

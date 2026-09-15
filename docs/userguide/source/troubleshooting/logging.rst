@@ -38,7 +38,9 @@ NCCL supports several logging levels, from least to most verbose:
 +=========+============================================+=============================+
 | VERSION | Prints NCCL version at startup             | Verify installation         |
 +---------+--------------------------------------------+-----------------------------+
-| WARN    | Errors returned by NCCL                    | Production baseline         |
+| ERROR   | Errors at the site that detected them      | Root causes only            |
++---------+--------------------------------------------+-----------------------------+
+| WARN    | Errors returned by NCCL, including ERROR   | Production baseline         |
 +---------+--------------------------------------------+-----------------------------+
 | ATTN    | Noteworthy messages that are not errors    | Production diagnostics      |
 +---------+--------------------------------------------+-----------------------------+
@@ -46,6 +48,15 @@ NCCL supports several logging levels, from least to most verbose:
 +---------+--------------------------------------------+-----------------------------+
 | TRACE   | Replayable traces, plus CALL APIs          | Deep debugging / NCCL dev   |
 +---------+--------------------------------------------+-----------------------------+
+
+``ERROR`` (since 2.33) is more severe than ``WARN``: it marks the site where a failure was *detected*,
+as opposed to a ``WARN`` re-reporting one raised further down. ``NCCL_DEBUG=WARN`` includes ``ERROR``,
+so raising the severity of a message to ``ERROR`` never removes it from a ``WARN`` baseline.
+``NCCL_DEBUG=ERROR`` narrows the output to those origin sites alone.
+
+Conversion of call sites to ``ERROR`` is incremental. Not every root cause reports at ``ERROR`` yet, so
+``NCCL_DEBUG=ERROR`` should be read as "the subset of root causes NCCL can currently identify as such",
+not as "every error". Use ``NCCL_DEBUG=WARN`` when you need to be sure nothing is missed.
 
 Use ``NCCL_DEBUG=ATTN`` when diagnosing production jobs that need noteworthy
 operational notices without the volume of ``INFO`` output. It includes all
@@ -79,7 +90,26 @@ and emit their normal WARN output.
 
 Do not set ``NCCL_DEBUG=ATTN`` as a site-wide setting in a mixed-version
 deployment. NCCL versions before 2.32 do not recognize ``ATTN`` and fall back
-to no debug logging.
+to no debug logging. The same applies to ``NCCL_DEBUG=ERROR`` against versions
+before 2.33. To ask for root causes only while staying safe on older binaries,
+keep the scalar at a level they understand and add ``ERROR`` through
+``NCCL_DEBUG_LEVELS``, which they ignore:
+
+.. code:: shell
+
+    NCCL_DEBUG=VERSION NCCL_DEBUG_LEVELS=ERROR ./my_app
+
+On 2.33 that selects VERSION and ERROR. On older releases ``NCCL_DEBUG_LEVELS``
+is either absent or tolerates the unknown name, so they fall back to VERSION
+alone rather than to no logging at all.
+
+The implication only applies to the scalar ``NCCL_DEBUG``.
+``NCCL_DEBUG_LEVELS`` and ``NCCL_DEBUG_TIMESTAMP_LEVELS`` are literal sets of
+levels, so ``NCCL_DEBUG_LEVELS=WARN`` selects ``WARN`` alone; write
+``WARN,ERROR`` for both. Keeping them literal is what lets the caret form
+suppress error output: ``^ERROR`` turns origins off, and ``^WARN,ERROR``
+turns both off. Be aware that an existing ``^WARN`` now also admits ``ERROR``,
+since it means "every level except WARN" and ERROR is a new level.
 
 Example Output
 --------------
@@ -407,7 +437,7 @@ Control which log levels include timestamps using ``NCCL_DEBUG_TIMESTAMP_LEVELS`
     # Timestamps on everything except TRACE
     NCCL_DEBUG=TRACE NCCL_DEBUG_TIMESTAMP_LEVELS=^TRACE ./my_app
 
-By default, only WARN messages include timestamps.
+By default, ERROR, WARN and ATTN messages include timestamps.
 
 Common Debugging Scenarios
 ==========================

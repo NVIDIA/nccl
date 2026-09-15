@@ -15,7 +15,7 @@
   do { \
     cudaError_t err = cmd; \
     if (err != cudaSuccess) { \
-      WARN("Cuda failure '%s'", cudaGetErrorString(err)); \
+      ERR(ncclUnhandledCudaError, "Cuda failure '%s'", cudaGetErrorString(err)); \
       (void)cudaGetLastError(); \
       return ncclUnhandledCudaError; \
     } \
@@ -25,7 +25,7 @@
   do { \
     cudaError_t err = cmd; \
     if (err != cudaSuccess) { \
-      WARN("Cuda failure '%s'", cudaGetErrorString(err)); \
+      ERR(ncclUnhandledCudaError, "Cuda failure '%s'", cudaGetErrorString(err)); \
       (void)cudaGetLastError(); \
       RES = ncclUnhandledCudaError; \
       goto label; \

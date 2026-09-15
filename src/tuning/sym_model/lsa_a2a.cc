@@ -47,7 +47,6 @@ struct ncclSymkLsaA2AKernelTuningParameters {
   bool peakRankEfficiency;
   double ctaTroughLatUs;
   double ctaTroughPeakBw;
-  double rankLimitedPeakBw;
 };
 
 struct ncclSymkLsaA2AReduceScatterTuningParameters {
@@ -68,19 +67,8 @@ struct ncclSymkLsaA2AArchTuningParameters {
 static constexpr struct ncclSymkLsaA2AKernelTuningParameters reduceScatterParameters(
   double baseLatUs, double rankLatUs, double ctaBw, double smallChunkCtaBw, double reduceScalarCtaBw, double llCtaBw,
   double peakBw, bool peakRankEfficiency = false) {
-  return {baseLatUs,
-          rankLatUs,
-          ctaBw,
-          smallChunkCtaBw,
-          reduceScalarCtaBw,
-          llCtaBw,
-          peakBw,
-          {{1.0, 1.0}},
-          0.0,
-          peakRankEfficiency,
-          0.0,
-          0.0,
-          0.0};
+  return {baseLatUs,          rankLatUs, ctaBw, smallChunkCtaBw, reduceScalarCtaBw, llCtaBw, peakBw, {{1.0, 1.0}}, 0.0,
+          peakRankEfficiency, 0.0,       0.0};
 }
 
 // Each row owns CTA limits and fitted timing terms for one compute capability.
@@ -128,8 +116,8 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
    },
    {
      {7.1084, 0.1065, 15.87, 0.0, 0.0, 2.32, 250.0, {{0.99, 0.69}}, 0.0, false},
-     {7.4229, 0.1030, 27.46, 0.0, 0.0, 2.1932, 316.0699, {{1.0, 1.0}}, 3.3805, true},
-     {10.0618, 0.0679, 64.1577, 0.0, 0.0, 0.0, 671.6052, {{1.0, 1.0}}, 0.0, false, 12.1475, 639.6826, 585.7896},
+     {7.4229, 0.0439, 27.46, 0.0, 0.0, 2.1932, 316.0699, {{1.0, 1.0}}, 3.3805, true},
+     {10.0618, 0.0679, 64.1577, 0.0, 0.0, 0.0, 671.6052, {{1.0, 1.0}}, 0.0, false, 12.1475, 639.6826},
      {10.5902, 0.0563, 64.4810, 0.0, 0.0, 0.0, 650.4378, {{1.0, 1.0}}, 0.0, false},
      {8.2723, 0.0623, 51.55, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
      {8.3313, 0.0561, 50.83, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
@@ -335,9 +323,6 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
       if (tuning->ctaTroughLatUs < 0.0) return ncclSuccess;
       peakBandwidthGbps = std::min(peakBandwidthGbps, tuning->ctaTroughPeakBw);
       extraLatencyUs = tuning->ctaTroughLatUs;
-    }
-    if (tuning->rankLimitedPeakBw > 0.0 && activeCtas < nRanks) {
-      peakBandwidthGbps = std::min(peakBandwidthGbps, tuning->rankLimitedPeakBw);
     }
   }
   double ctaTransferTimeUs =

@@ -60,7 +60,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
     int retval; \
     SYSCHECKSYNC((statement), name, retval); \
     if (retval == -1) { \
-      WARN("Call to " name " failed: %s", strerror(errno)); \
+      ERR(ncclSystemError, "Call to " name " failed: %s", strerror(errno)); \
       return ncclSystemError; \
     } \
   } while (false)
@@ -80,7 +80,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
     int retval; \
     SYSCHECKSYNC((statement), name, retval); \
     if (retval == -1) { \
-      WARN("Call to " name " failed: %s", strerror(errno)); \
+      ERR(ncclSystemError, "Call to " name " failed: %s", strerror(errno)); \
       RES = ncclSystemError; \
       goto label; \
     } \
@@ -91,7 +91,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   do { \
     int retval = (statement); \
     if (retval != 0) { \
-      WARN("Call to " name " failed: %s", strerror(retval)); \
+      ERR(ncclSystemError, "Call to " name " failed: %s", strerror(retval)); \
       return ncclSystemError; \
     } \
   } while (0)
@@ -100,7 +100,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   do { \
     int retval = (statement); \
     if (retval != 0) { \
-      WARN("Call to " name " failed: %s", strerror(retval)); \
+      ERR(ncclSystemError, "Call to " name " failed: %s", strerror(retval)); \
       RES = ncclSystemError; \
       goto label; \
     } \
@@ -239,7 +239,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
     try { \
       (var) = std::thread(func, __VA_ARGS__); \
     } catch (const std::exception& e) { \
-      WARN("Thread creation failed: %s", e.what()); \
+      ERR(ncclSystemError, "Thread creation failed: %s", e.what()); \
       error_action; \
     } \
   } while (0)
@@ -259,7 +259,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   do { \
     (var) = new (std::nothrow) x{}; \
     if (!(var)) { \
-      WARN("Allocation failed"); \
+      ERR(ncclSystemError, "Allocation failed"); \
       return ncclSystemError; \
     } \
   } while (0)
@@ -268,7 +268,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
   do { \
     (var) = new (std::nothrow) x{}; \
     if (!(var)) { \
-      WARN("Allocation failed"); \
+      ERR(ncclSystemError, "Allocation failed"); \
       RES = ncclSystemError; \
       goto label; \
     } \

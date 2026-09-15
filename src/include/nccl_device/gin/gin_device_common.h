@@ -58,7 +58,7 @@ enum ncclGinOptFlags {
    ((NCCL_GIN_EFA_GDA_ENABLE) ? 1u : 0u) << (unsigned)NCCL_NET_DEVICE_GIN_EFA_GDA)
 
 #ifdef __CUDACC__
-// Resource sharing mode for a given ncclGin/ncclGin_C *instance*.
+// Resource sharing mode for a given ncclGin instance.
 // This mode is selected at construction time and is carried by the ncclGin
 // object, then copied into ncclGinCtx for each call. It is not stored as
 // persistent per-context state in the communicator (i.e., different ncclGin

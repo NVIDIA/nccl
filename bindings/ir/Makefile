@@ -9,7 +9,8 @@ include ../../makefiles/common.mk
 # LLVM IR generation
 
 # Source and target files
-LLVM_SRC := nccl_device_wrapper__impl.h
+LLVM_SRC := nccl_device_wrapper.cu
+LLVM_IMPL_HEADERS := impl/core.h impl/coop.h impl/gin.h impl/barrier.h impl/reduce_copy.h
 BUILDDIR ?= $(abspath ../../build)
 OBJDIR := $(BUILDDIR)/obj/llvm_ir
 LIBDIR := $(BUILDDIR)/lib
@@ -73,7 +74,7 @@ $(WRAPPER_HEADER): nccl_device_wrapper.h
 	@echo "Copying nccl_device_wrapper.h to build include..."
 	cp -f $< $@
 
-$(UNOPTIMIZED_BC): $(LLVM_SRC) nccl_device_wrapper.h util.h
+$(UNOPTIMIZED_BC): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(WRAPPER_HEADER) util.h
 	@mkdir -p $(OBJDIR)
 	@echo "Generating unoptimized LLVM bitcode..."
 	$(CLANG) $(CLANG_FLAGS) $(LLVM_SRC) -o $@
@@ -100,7 +101,7 @@ $(FINAL_BC): $(LLVM_IR_FILE)
 	@echo "Generating final bitcode from cleaned LLVM IR..."
 	$(LLVM_AS) $< -o $@
 
-llvm_ir: $(FINAL_BC) $(OPTIMIZED_BC) $(WRAPPER_HEADER)
+llvm_ir: $(FINAL_BC)
 	@echo "LLVM IR and bitcode generated successfully:"
 	@echo "  C++ Standard: $(BITCODE_CXX_STD)"
 	@echo "  GPU Architecture: $(BITCODE_LIB_ARCH)"
@@ -111,7 +112,7 @@ llvm_ir: $(FINAL_BC) $(OPTIMIZED_BC) $(WRAPPER_HEADER)
 	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
 
 # LTO IR generation
-$(FINAL_LTO_IR): $(LLVM_SRC) $(WRAPPER_HEADER) util.h
+$(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(WRAPPER_HEADER) util.h
 	@mkdir -p $(LIBDIR)
 	@echo "Generating LTO IR..."
 	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
@@ -120,7 +121,7 @@ $(FINAL_LTO_IR): $(LLVM_SRC) $(WRAPPER_HEADER) util.h
 		-D__NCCL_DEVICE_LTOIR_LIB__ \
 		-o $@ $(LLVM_SRC)
 
-ltoir: $(FINAL_LTO_IR) $(WRAPPER_HEADER)
+ltoir: $(FINAL_LTO_IR)
 	@echo "LTO IR generated successfully:"
 	@echo "  C++ Standard: $(LTO_IR_CXX_STD)"
 	@echo "  GPU Architecture: $(LTO_IR_ARCH)"

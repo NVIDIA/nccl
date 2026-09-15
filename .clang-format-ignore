@@ -16,6 +16,7 @@ build/**
 
 # ignore all other directories to avoid accidentally reformatting them
 bindings/**
+!bindings/ir/**
 contrib/**
 cmake/**
 docs/**

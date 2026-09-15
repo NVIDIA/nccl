@@ -191,7 +191,7 @@ class ncclCoopAny:
 
 @cute.native_struct
 class ncclGin_C:
-    """``struct ncclGin_C`` (src/include/nccl_device/gin.h).
+    """``struct ncclGin_C`` (bindings/ir/nccl_device_wrapper.h).
 
     The bitfield triple ``{nConnections:8, connectionId:8, _ginBackend:8}``
     is represented as a single ``Uint32`` ``flags`` field; padding fields

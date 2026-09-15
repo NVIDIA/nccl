@@ -8,7 +8,14 @@
 # LLVM IR generation for NCCL device APIs
 
 # Source and output configuration
-set(LLVM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper__impl.h)
+set(LLVM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.cu)
+set(LLVM_IMPL_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/core.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/coop.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/gin.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/barrier.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/reduce_copy.h
+)
 set(OBJDIR ${CMAKE_BINARY_DIR}/obj/llvm_ir)
 set(LIBDIR ${CMAKE_BINARY_DIR}/lib)
 set(INCLUDEDIR ${CMAKE_BINARY_DIR}/include)
@@ -95,7 +102,8 @@ add_custom_command(
     OUTPUT ${UNOPTIMIZED_BC}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${OBJDIR}
     COMMAND ${CLANG_EXECUTABLE} ${CLANG_FLAGS} ${LLVM_SRC} -o ${UNOPTIMIZED_BC}
-    DEPENDS ${LLVM_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.h ${CMAKE_CURRENT_SOURCE_DIR}/util.h
+    DEPENDS ${LLVM_SRC} ${LLVM_IMPL_HEADERS} ${WRAPPER_HEADER}
+            ${CMAKE_CURRENT_SOURCE_DIR}/util.h
     COMMENT "Generating unoptimized LLVM bitcode..."
     VERBATIM
 )
@@ -141,7 +149,7 @@ add_custom_command(
 
 # Custom target for LLVM IR generation
 add_custom_target(llvm_ir
-    DEPENDS ${FINAL_BC} ${OPTIMIZED_BC} ${WRAPPER_HEADER}
+    DEPENDS ${FINAL_BC}
     COMMENT "LLVM IR and bitcode generated successfully"
 )
 
@@ -179,14 +187,15 @@ add_custom_command(
         -D__NCCL_DEVICE_LTOIR_LIB__
         -o ${FINAL_LTO_IR}
         ${LLVM_SRC}
-    DEPENDS ${LLVM_SRC} ${WRAPPER_HEADER} ${CMAKE_CURRENT_SOURCE_DIR}/util.h
+    DEPENDS ${LLVM_SRC} ${LLVM_IMPL_HEADERS} ${WRAPPER_HEADER}
+            ${CMAKE_CURRENT_SOURCE_DIR}/util.h
     COMMENT "Generating LTO IR..."
     VERBATIM
 )
 
 # Custom target for LTO IR generation
 add_custom_target(ltoir
-    DEPENDS ${FINAL_LTO_IR} ${WRAPPER_HEADER}
+    DEPENDS ${FINAL_LTO_IR}
     COMMENT "LTO IR generated successfully"
 )
 

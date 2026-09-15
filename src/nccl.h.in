@@ -377,6 +377,87 @@ const char* pncclGetErrorString(ncclResult_t result);
 const char*  ncclGetLastError(ncclComm_t comm);
 const char* pncclGetLastError(ncclComm_t comm);
 
+/* One NCCL log record, delivered to a log sink as data rather than as a line of text.
+ *
+ * level    severity, carrying ncclDebugLogLevel values (NCCL_LOG_WARN, NCCL_LOG_INFO, ...)
+ * subSys   ncclDebugLogSubSys bits for the record
+ * file     source file of the call site, or NULL where the level does not record one
+ * func     enclosing function of the call site, or NULL
+ * line     source line of the call site, or 0
+ * code     result code when the record came from an error origin, otherwise ncclSuccess. Reserved: no
+ *          call site supplies one yet, so it is currently always ncclSuccess. It is part of the record
+ *          from the outset because a versioned struct cannot gain a field once a release has shipped it.
+ * format   the call site's format string, before its arguments are applied. A compile-time constant, so
+ *          it is stable across occurrences of the same event and can be used to key or group records
+ *          without parsing the message.
+ * message  format with the call site's arguments applied, without NCCL's timestamp/host/pid/rank prefix
+ *
+ * hostname NCCL's view of the host name
+ * pid      process id
+ * tid      thread id of the thread that logged the record
+ * cudaDev  CUDA device current on that thread, or 0 where NCCL does not query it
+ *
+ * Strings are owned by NCCL and are valid only for the duration of the onRecord call, so copy anything
+ * you retain.
+ */
+typedef struct {
+  int level;
+  unsigned long subSys;
+  const char* file;
+  const char* func;
+  int line;
+  ncclResult_t code;
+  const char* format;
+  const char* message;
+  const char* hostname;
+  int pid;
+  int tid;
+  int cudaDev;
+} ncclDebugLogRecord_v1_t;
+
+/* A destination for NCCL log records.
+ *
+ * name      identifies the sink in NCCL's own diagnostics
+ * init      called once when the sink is installed, before any record is delivered. Returns the sink's
+ *           context in *context, which NCCL passes back on every later call. May be NULL.
+ * onRecord  called for each record that passes the NCCL_DEBUG and NCCL_DEBUG_SUBSYS filters. May be
+ *           called concurrently on several threads, so it must do its own serialization. Required.
+ * finalize  called once when the sink is replaced or removed. NCCL does not call it at process exit --
+ *           a sink sits on a path every other thread uses, and tearing it down while they may still be
+ *           logging is worse than letting the process exit with it installed. May be NULL.
+ *
+ * No callback may call back into NCCL, and in particular none may log through NCCL: the sink is the
+ * destination of NCCL's log, so doing so re-enters the logger and can deadlock. For the same reason a
+ * sink is not handed ncclDebugLogger_t, unlike the other plugin interfaces.
+ */
+typedef struct {
+  const char* name;
+  ncclResult_t (*init)(void** context);
+  ncclResult_t (*onRecord)(void* context, const ncclDebugLogRecord_v1_t* record);
+  ncclResult_t (*finalize)(void* context);
+} ncclLogSink_v1_t;
+
+/* Routes NCCL's log records to a caller-supplied sink instead of NCCL_DEBUG_FILE, so an application can
+ * carry them into its own logging system without losing the severity, subsystem and call-site fields that
+ * writing to a file would flatten into text.
+ *
+ * The sink struct must outlive the registration. Passing NULL finalizes the current sink and restores the
+ * default file output. On return, no thread is inside the outgoing sink any more, so the caller may free
+ * its context or unload the library that provided it.
+ *
+ * There is one sink slot. Installing over a sink that is already registered returns ncclInvalidUsage and
+ * changes nothing -- the rejected sink is neither initialized nor finalized -- rather than silently
+ * displacing the incumbent. Pass NULL first if replacement is intended.
+ *
+ * NCCL_DEBUG_FILE is still honored and still created. It receives nothing while a sink is installed, and
+ * receives NCCL's output again if the sink is removed.
+ *
+ * Because it waits for in-flight dispatches, this call blocks for as long as the slowest one takes, and
+ * can be delayed indefinitely by continuous logging on a reader-preferring rwlock implementation. A sink
+ * whose onRecord can block -- a bounded queue with no consumer, say -- can therefore wedge it. */
+ncclResult_t  ncclSetDebugLogSink(const ncclLogSink_v1_t* sink);
+ncclResult_t pncclSetDebugLogSink(const ncclLogSink_v1_t* sink);
+
 #ifdef NCCL_OS_LINUX
   /* Reload environment variables that determine logging. */
   __attribute__ ((deprecated("ncclResetDebugInit is not supported as part of the NCCL API and will be removed in the future")))

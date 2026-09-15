@@ -16,6 +16,8 @@
 #include "param.h"
 #include "param/param.h"
 #include <mutex>
+#include <shared_mutex>
+#include <atomic>
 #include "os.h"
 #include "utils.h"
 #include "env.h"
@@ -29,15 +31,47 @@ static uint64_t ncclDebugTimestampMaxSubseconds;  // Max number of subseconds pl
 static int ncclDebugTimestampSubsecondDigits;     // Number of digits to display
 static int pid = -1;
 static char hostname[1024];
+static bool hostnameCached = false;
 thread_local int ncclDebugNoWarn = 0;
 char ncclLastError[1024] = ""; // Global string for the last error in human readable form
 uint64_t ncclDebugMask = 0;
 FILE* ncclDebugFile = stdout;
 static std::mutex ncclDebugMutex;
 static std::chrono::steady_clock::time_point ncclEpoch;
-static bool ncclWarnSetDebugInfo = false;
+// Published by ncclDebugInit() and read on the logging path without holding ncclDebugMutex, so that a
+// record that does not escalate anything does not have to take the lock to find that out.
+static std::atomic<bool> ncclWarnSetDebugInfo{false};
+// Optional caller-supplied destination for log records, installed by ncclSetDebugLogSink().
+//
+// Guarded by a reader/writer lock rather than ncclDebugMutex, and the read side is held across the whole
+// onRecord call. That is what makes removing a sink safe: the exclusive lock in ncclSetDebugLogSink()
+// cannot be taken until every in-flight dispatch has returned, so a sink's finalize() can never run while
+// another thread is still inside it.
+//
+// ncclDebugSinkPresent is a lock-free fast path for the common case of no sink at all, so a build that
+// never registers one pays one acquire load per record and nothing else.
+// std::shared_timed_mutex rather than std::shared_mutex: NCCL targets C++14 for CUDA < 13, and
+// std::shared_mutex is C++17. Same rule, and the same reason, as gin_host.h's devCommRwMutex.
+static std::shared_timed_mutex ncclDebugSinkLock;
+static std::atomic<bool> ncclDebugSinkPresent{false};
+static const ncclLogSink_v1_t* ncclDebugSink = nullptr;  // guarded by ncclDebugSinkLock
+static void* ncclDebugSinkCtx = nullptr;                 // guarded by ncclDebugSinkLock
 
 static thread_local int tid = -1;
+
+// Sets a flag for the duration of a sink callback, so that a sink which logs is not dispatched back into
+// itself. Scoped rather than a bare assignment so the flag is cleared even if the callback unwinds.
+namespace {
+struct SinkDispatchGuard {
+  bool& flag;
+  explicit SinkDispatchGuard(bool& f) : flag(f) {
+    flag = true;
+  }
+  ~SinkDispatchGuard() {
+    flag = false;
+  }
+};
+}  // namespace
 
 // clang-format off
 DEFINE_NCCL_PARAM(ncclParamDebugLevel, ncclDebugLogLevel, NCCL_DEBUG, NCCL_LOG_NONE,
@@ -167,7 +201,7 @@ static void ncclDebugInit() {
 
   tempNcclDebugLevelMask = ncclDebugLevelToMask(ncclParamDebugLevel()) | ncclParamDebugLevels();
 
-  ncclWarnSetDebugInfo = ncclParamWarnEnableDebugInfo();
+  ncclWarnSetDebugInfo.store(ncclParamWarnEnableDebugInfo(), std::memory_order_relaxed);
 
   // Determine which debug levels will have timestamps.
   ncclDebugTimestampLevels = ncclParamDebugTimestampLevel();
@@ -218,9 +252,16 @@ static void ncclDebugInit() {
     if (ncclDebugTimestampFormat[i] == '_') ncclDebugTimestampFormat[i] = ' ';
   }
 
-  // Cache pid and hostname
-  getHostNameForLog(hostname, 1024, '.');
+  // Re-read the pid on every init: it changes across fork(), and a launcher that forks and then calls
+  // ncclResetDebugInit() must expand NCCL_DEBUG_FILE's %p to its own pid. Caching it would make the child
+  // reopen the parent's file in "w" mode and truncate it.
   pid = ncclOsGetPid();
+  // The hostname, by contrast, is written once. It cannot change, and a log sink is handed this buffer
+  // without holding ncclDebugMutex, so rewriting it in place would race a deliberately lock-free reader.
+  if (!hostnameCached) {
+    getHostNameForLog(hostname, 1024, '.');
+    hostnameCached = true;
+  }
 
   /* Parse and expand the NCCL_DEBUG_FILE path and
    * then create the debug file. But don't bother unless the
@@ -288,6 +329,7 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   }
 
   // Save the last error (WARN) as a human readable string. ATTN does not set lastError.
+  //
   if (level == NCCL_LOG_WARN) {
     std::lock_guard<std::mutex> lock(ncclDebugMutex);
     va_list vcopy;
@@ -300,13 +342,82 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
     return;
   }
 
-  std::lock_guard<std::mutex> lock(ncclDebugMutex);
-  uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
-  if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED)
-    ncclDebugInit();
+  // Initialize the masks on the first record only. Double-checked so that steady-state logging does not
+  // take ncclDebugMutex here at all; the acquire load below pairs with the release store at the end of
+  // ncclDebugInit(), which also publishes ncclWarnSetDebugInfo, hostname, pid and the timestamp settings.
+  uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
+  if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED) {
+    std::lock_guard<std::mutex> lock(ncclDebugMutex);
+    levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
+    if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED)
+      ncclDebugInit();
+  }
   if (!ncclDebugShouldLog(level, flags, ncclDebugMask)) {
     return;
   }
+
+  // A WARN can turn on INFO for everything that follows. Hoisted out of the formatting branch
+  // below, which a record delivered to a sink never reaches, so that the behavior is the same either way.
+  // Held under ncclDebugMutex because this is a read-modify-write on a mask that ncclDebugInit() -- and
+  // therefore ncclResetDebugInit() -- also writes under that mutex; unsynchronised, an escalation racing
+  // a reset can swallow the reset's sentinel and the reset is silently lost.
+  if (level == NCCL_LOG_WARN && ncclWarnSetDebugInfo.load(std::memory_order_relaxed)) {
+    std::lock_guard<std::mutex> lock(ncclDebugMutex);
+    uint32_t mask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
+    if (mask != NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED && mask != NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED) {
+      COMPILER_ATOMIC_STORE(&ncclDebugLevelMask, mask | ncclDebugLevelToMask(NCCL_LOG_INFO), std::memory_order_release);
+    }
+  }
+
+  // A sink takes ownership of the record: it receives the message plus the structured fields that NCCL
+  // would otherwise flatten into the text of a log line, and NCCL does not write it to ncclDebugFile.
+  //
+  // The shared lock is held across onRecord so the sink cannot be finalized underneath it. It is a shared
+  // lock, so concurrent logging threads do not serialize on each other, and it is why a sink must not
+  // log: re-entering here on the same thread can deadlock against a waiting registration.
+  // inSinkDispatch guards against a sink that logs. Without it the record re-enters here, takes the
+  // shared lock recursively -- undefined behaviour, and a deadlock outright on a writer-preferring rwlock
+  // with a registration pending -- and recurses until the stack is exhausted. A re-entrant record falls
+  // through to the file instead of being lost.
+  static thread_local bool inSinkDispatch = false;
+  if (!inSinkDispatch && ncclDebugSinkPresent.load(std::memory_order_acquire)) {
+    std::shared_lock<std::shared_timed_mutex> sinkLock(ncclDebugSinkLock);
+    if (ncclDebugSink != nullptr) {
+      char message[sizeof(ncclLastError)];
+      va_list vcopy;
+      va_copy(vcopy, vargs);
+      (void)vsnprintf(message, sizeof(message), fmt, vcopy);
+      va_end(vcopy);
+
+      if (tid == -1) tid = ncclOsGetTid();
+      int sinkCudaDev = 0;
+      if (!(level == NCCL_LOG_TRACE && flags == NCCL_CALL)) (void)cudaGetDevice(&sinkCudaDev);
+
+      ncclDebugLogRecord_v1_t record;
+      record.level = (int)level;
+      record.subSys = flags;
+      record.file = file;
+      record.func = func;
+      record.line = line;
+      // Reserved for the result code recorded at an error origin. Nothing sets one yet, so it is always
+      // ncclSuccess; the field is present from the first version of the record because a versioned struct
+      // cannot gain one later without forcing a v2 on every sink built against v1.
+      record.code = ncclSuccess;
+      record.format = fmt;
+      record.message = message;
+      record.hostname = hostname;
+      record.pid = pid;
+      record.tid = tid;
+      record.cudaDev = sinkCudaDev;
+      {
+        SinkDispatchGuard guard(inSinkDispatch);
+        (void)ncclDebugSink->onRecord(ncclDebugSinkCtx, &record);
+      }
+      return;
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(ncclDebugMutex);
 
   if (tid == -1) {
     tid = ncclOsGetTid();
@@ -376,11 +487,6 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
     } else {
       len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, fileStr, line, fmt);
     }
-    if (ncclWarnSetDebugInfo) {
-      uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
-      COMPILER_ATOMIC_STORE(&ncclDebugLevelMask, levelMask | ncclDebugLevelToMask(NCCL_LOG_INFO),
-                            std::memory_order_release);
-    }
   } else if (level == NCCL_LOG_ATTN) {
     if (func && func[0]) {
       len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d (%s) NCCL ATTN %s\n", cudaDev, fileStr, line,
@@ -422,6 +528,50 @@ void ncclDebugLogInternal(ncclDebugLogLevel level, unsigned long flags, const ch
   va_start(vargs, fmt);
   ncclDebugLogV(level, flags, file, func, line, fmt, vargs);
   va_end(vargs);
+}
+
+/* Routes log records to a caller-supplied sink instead of ncclDebugFile. Passing NULL restores the
+ * default file output. See the contract on ncclLogSink_v1_t in nccl.h.
+ */
+NCCL_API(ncclResult_t, ncclSetDebugLogSink, const ncclLogSink_v1_t* sink);
+ncclResult_t ncclSetDebugLogSink(const ncclLogSink_v1_t* sink) {
+  if (sink != nullptr && sink->onRecord == nullptr) return ncclInvalidArgument;
+
+  const ncclLogSink_v1_t* previous = nullptr;
+  void* previousCtx = nullptr;
+
+  {
+    // Taking the lock exclusively waits for every in-flight onRecord to return, so once the swap
+    // completes no thread can still be inside the outgoing sink.
+    std::unique_lock<std::shared_timed_mutex> sinkLock(ncclDebugSinkLock);
+
+    // There is one sink slot and more than one possible claimant. Silently replacing the incumbent would
+    // run its finalize() and redirect its records with no indication to either party, so installing over
+    // a live sink is refused. Remove the current one with NULL first if replacement is intended.
+    //
+    // Tested before init() runs, so a refused registration really does change nothing: the rejected sink
+    // is never initialized and never finalized.
+    if (sink != nullptr && ncclDebugSink != nullptr) return ncclInvalidUsage;
+
+    void* context = nullptr;
+    if (sink != nullptr && sink->init != nullptr) {
+      // Running init() under the exclusive lock is safe precisely because this point is only reached
+      // with no sink installed: ncclDebugSinkPresent is false, so anything the sink logs while
+      // initializing takes the lock-free path to ncclDebugFile rather than re-entering this lock.
+      ncclResult_t res = sink->init(&context);
+      if (res != ncclSuccess) return res;
+    }
+
+    previous = ncclDebugSink;
+    previousCtx = ncclDebugSinkCtx;
+    ncclDebugSink = sink;
+    ncclDebugSinkCtx = context;
+    ncclDebugSinkPresent.store(sink != nullptr, std::memory_order_release);
+  }
+
+  // The outgoing sink is detached and drained, so finalize() runs outside the lock, where it may log.
+  if (previous != nullptr && previous->finalize != nullptr) (void)previous->finalize(previousCtx);
+  return ncclSuccess;
 }
 
 /* Exported ABI logging function exported to the dynamically loadable Net

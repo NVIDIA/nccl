@@ -490,4 +490,52 @@ For comprehensive debugging, capture everything to a separate file per process:
 
     NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=ALL NCCL_DEBUG_FILE=/tmp/nccl_%h_%p.log ./my_app
 
+Routing Logs Into an Application's Logging System
+=================================================
+
+``NCCL_DEBUG_FILE`` writes formatted text, so an application that wants NCCL's records in its own
+logging system has to re-parse the severity, subsystem and call site back out of each line. Since 2.33,
+:c:func:`ncclSetDebugLogSink` delivers those fields directly instead:
+
+.. code:: c++
+
+    static ncclResult_t myInit(void** context) {
+      *context = new MyLogger();
+      return ncclSuccess;
+    }
+
+    static ncclResult_t myOnRecord(void* context, const ncclDebugLogRecord_v1_t* r) {
+      static_cast<MyLogger*>(context)->record(toMySeverity(r->level), r->subSys, r->file, r->func,
+                                              r->line, r->code, r->format, r->message);
+      return ncclSuccess;
+    }
+
+    static ncclResult_t myFinalize(void* context) {
+      delete static_cast<MyLogger*>(context);
+      return ncclSuccess;
+    }
+
+    static const ncclLogSink_v1_t myLogSink = {"my-logger", myInit, myOnRecord, myFinalize};
+
+    // Install before the first NCCL call. The struct must outlive the registration.
+    ncclSetDebugLogSink(&myLogSink);
+
+The record also carries the attribution NCCL would otherwise print as a line prefix -- ``hostname``,
+``pid``, ``tid`` and ``cudaDev`` -- so a sink receiving records from many ranks and proxy threads can
+tell them apart. ``cudaDev`` is the device current on the logging thread and is not recoverable
+outside NCCL.
+
+``format`` is the call site's format string before its arguments are applied. Because it is a
+compile-time constant it is identical for every occurrence of the same event, which makes it a stable
+key for grouping or counting records without parsing ``message``.
+
+While a sink is installed NCCL does not write to ``NCCL_DEBUG_FILE`` or stdout; the sink owns the
+output. Passing ``NULL`` finalizes the current sink and restores the default.
+
+``NCCL_DEBUG`` and ``NCCL_DEBUG_SUBSYS`` still apply: the sink sees only records that pass them, so
+set ``NCCL_DEBUG=TRACE`` and ``NCCL_DEBUG_SUBSYS=ALL`` to receive everything and filter in the sink.
+
+The sink may be called concurrently from several threads and must do its own serialization. It must
+not call back into NCCL. Strings passed to it are valid only for the duration of the call.
+
 .. highlight:: c++

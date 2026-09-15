@@ -4230,7 +4230,7 @@ cdef class TeamRequirements:
 cdef _get_coll_config_dtype_offsets():
     cdef ncclCollConfig_t pod
     return _numpy.dtype({
-        'names': ['size_', 'magic', 'version', 'ext', 'min_ctas', 'max_ctas', 'nvls_ctas', 'cga_cluster_size', 'alg_selection', 'force_alg_selection', 'cta_policy', 'user_profiler_tag', 'launch_completion_event'],
+        'names': ['size_', 'magic', 'version', 'ext', 'min_ctas', 'max_ctas', 'nvls_ctas', 'cga_cluster_size', 'alg_selection', 'force_alg_selection', 'cta_policy', 'user_profiler_tag', 'launch_completion_event_handle'],
         'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32, _numpy.int32, _numpy.uint64, _numpy.intp],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
@@ -4473,12 +4473,12 @@ cdef class CollConfig:
         self._ptr[0].userProfilerTag = val
 
     @property
-    def launch_completion_event(self):
+    def launch_completion_event_handle(self):
         """int: """
         return <intptr_t>(self._ptr[0].launchCompletionEvent)
 
-    @launch_completion_event.setter
-    def launch_completion_event(self, val):
+    @launch_completion_event_handle.setter
+    def launch_completion_event_handle(self, val):
         if self._readonly:
             raise ValueError("This CollConfig instance is read-only")
         self._ptr[0].launchCompletionEvent = <cudaEvent_t><intptr_t>val

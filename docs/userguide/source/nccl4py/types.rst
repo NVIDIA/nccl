@@ -105,8 +105,8 @@ NCCLTeam
 Type aliases
 ============
 
-Aliases naming the argument types accepted by public methods. Each expands
-to a union of concrete types, so a value of any member type is accepted.
+Aliases naming value types accepted by the public API. Each expands to a
+union of concrete types, so a value of any member type is accepted.
 
 .. autodata:: NcclBufferSpec
    :annotation:
@@ -118,6 +118,9 @@ to a union of concrete types, so a value of any member type is accepted.
    :annotation:
 
 .. autodata:: NcclStreamSpec
+   :annotation:
+
+.. autodata:: NcclEventSpec
    :annotation:
 
 Exceptions

@@ -31,7 +31,7 @@ from nccl.core.constants import (
     CommSuspendFlag,
     WindowFlag,
 )
-from nccl.core.cuda import get_stream_ptr
+from nccl.core.cuda import get_event_ptr, get_stream_ptr
 from nccl.core.team import NCCLTeam
 from nccl.core.resources import (
     CommResource,
@@ -51,6 +51,7 @@ from nccl.core.typing import (
     NcclCftTeamMode,
     NcclCftCap,
     NcclStreamSpec,
+    NcclEventSpec,
     NcclScalarSpec,
     NcclInvalid,
     NcclCommMemStat,
@@ -327,10 +328,9 @@ class NCCLCollConfig(LowppSpec, lowpp_cls=_nccl_bindings.CollConfig):
     """Per-call configuration for a single collective.
 
     Accepted as the ``config`` argument of every collective on
-    :py:class:`Communicator`, tuning that one call. Fields left unset fall
-    back to the communicator's value, or to NCCL's own default. The same
-    configuration must be set on every rank; NCCL validates it only locally,
-    when the call is issued.
+    :py:class:`Communicator`, tuning that one call. The same configuration must
+    be set on every rank; NCCL validates it only locally, when the call is
+    issued.
 
     See Also:
         :c:type:`ncclCollConfig_t`
@@ -339,46 +339,90 @@ class NCCLCollConfig(LowppSpec, lowpp_cls=_nccl_bindings.CollConfig):
     min_ctas: int | None = None
     """Lower bound on channels/CTAs for this call. Also set by
     ``NCCL_MIN_CTAS``, which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.min_ctas`."""
+    :py:attr:`NCCLConfig.min_ctas`.
+
+    Available since NCCL 2.31.0.
+    """
 
     max_ctas: int | None = None
     """Upper bound on channels/CTAs for this call, clamped to the
     communicator's ``max_ctas``. Also set by ``NCCL_MAX_CTAS``, which takes
-    precedence. If unset, inherits :py:attr:`NCCLConfig.max_ctas`."""
+    precedence. If unset, inherits :py:attr:`NCCLConfig.max_ctas`.
+
+    Available since NCCL 2.31.0.
+    """
 
     nvls_ctas: int | None = None
     """NVLS-pool-specific channel cap for this call. Also set by
     ``NCCL_NVLS_NCHANNELS``, which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.nvls_ctas`."""
+    :py:attr:`NCCLConfig.nvls_ctas`.
+
+    Available since NCCL 2.31.0.
+    """
 
     cga_cluster_size: int | None = None
     """CUDA thread-block-cluster size (0-8, Hopper+). Inconsistent values
     within one group are undefined behavior. Also set by
     ``NCCL_CGA_CLUSTER_SIZE``, which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.cga_cluster_size`."""
+    :py:attr:`NCCLConfig.cga_cluster_size`.
+
+    Available since NCCL 2.31.0.
+    """
 
     alg_selection: str | None = None
     """Selection string filtering which algorithms this call may use, e.g.
     ``"ring"``, ``"tree,ring"``, ``"^symk"``. If unset or empty, NCCL selects
-    automatically."""
+    automatically.
+
+    Available since NCCL 2.31.0.
+    """
 
     force_alg_selection: bool | None = None
     """Whether an unsatisfiable :py:attr:`alg_selection` is an error rather
-    than a fallback to automatic selection. If unset, NCCL uses True."""
+    than a fallback to automatic selection. If unset, NCCL uses True.
+
+    Available since NCCL 2.31.0.
+    """
 
     cta_policy: CTAPolicy | None = None
     """CTA scheduling policy for this call. Also set by ``NCCL_CTA_POLICY``,
     which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.cta_policy`."""
+    :py:attr:`NCCLConfig.cta_policy`.
+
+    Available since NCCL 2.31.0.
+    """
 
     user_profiler_tag: int | None = None
     """Opaque value delivered verbatim to profiler plugins with this call's
     profiler events; does not affect execution. Values with the
-    most-significant bit set are reserved by NCCL. If unset, NCCL uses 0."""
+    most-significant bit set are reserved by NCCL. If unset, NCCL uses 0.
+
+    Available since NCCL 2.31.0.
+    """
+
+    launch_completion_event: NcclEventSpec | None = None
+    """Caller-owned, rank-local CUDA event recorded at collective kernel launch
+    completion. With CUDA versions earlier than 12.3, NCCL records the event
+    before the kernel launch instead. A ``cuda.core.Event`` created by
+    ``Device().create_event()`` has the required timing-disabled configuration;
+    events passed as integer handles must likewise have timing disabled.
+    Interprocess and interop events are unsupported. Either every rank passes
+    an event or none does, and at most one per communicator in a group. Keep it
+    alive through all queued waits and captured-graph executions. If unset,
+    NCCL records no event.
+
+    See Also:
+        :c:member:`ncclCollConfig_t.launchCompletionEvent`
+
+    Available since NCCL 2.32.0.
+    """
 
     vendor_options: tuple[VendorOption, ...] = ()
     """Vendor-specific options; ``(vendor_id, option_id)`` keys must be
-    unique."""
+    unique.
+
+    Available since NCCL 2.31.0.
+    """
 
     def __post_init__(self):
         _validate_vendor_options(self.vendor_options)
@@ -680,6 +724,7 @@ def _materialize_coll_config(
     # point of use rather than relying solely on construction-time validation.
     _validate_vendor_options(config.vendor_options)
     cfg = config._to_lowpp()
+    cfg.launch_completion_event_handle = get_event_ptr(config.launch_completion_event)
     keepalive: list[Any] = []
 
     nodes = []

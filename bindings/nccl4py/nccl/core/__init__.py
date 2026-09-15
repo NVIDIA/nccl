@@ -55,6 +55,7 @@ __all__ = [  # noqa: RUF022
     "NcclScalarSpec",
     "NcclDeviceSpec",
     "NcclStreamSpec",
+    "NcclEventSpec",
     # Exceptions
     "NcclInvalid",
     # Data type constants

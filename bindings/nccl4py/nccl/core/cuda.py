@@ -3,19 +3,20 @@
 #
 # See LICENSE.txt for more license information
 
-"""CUDA device and stream utilities for NCCL operations.
+"""CUDA device, stream, and event utilities for NCCL operations.
 
 This module provides context managers and helper functions for working with
-CUDA devices and streams in NCCL operations, including device context management
-and stream resolution. These helpers are used internally to translate user
-device/stream specifications into the concrete forms NCCL expects.
+CUDA devices, streams, and events in NCCL operations, including device context
+management and stream/event handle resolution. These helpers are used
+internally to translate user specifications into the concrete forms NCCL
+expects.
 """
 
 from __future__ import annotations
 
-from cuda.core import Device, Stream
+from cuda.core import Device, Event, Stream
 
-from nccl.core.typing import NcclDeviceSpec, NcclStreamSpec
+from nccl.core.typing import NcclDeviceSpec, NcclEventSpec, NcclStreamSpec
 
 
 class CudaDeviceContext:
@@ -90,35 +91,78 @@ def get_cuda_stream(
 
     Returns:
         Resolved cuda.core.Stream.
+
+    Raises:
+        TypeError: If ``stream`` is a boolean.
     """
+    if isinstance(stream, bool):
+        raise TypeError("stream must not be a bool")
     if stream is None:
         device = get_cuda_device(device)
         return device.default_stream
-    elif isinstance(stream, Stream):
+    if isinstance(stream, Stream):
         return stream
-    elif isinstance(stream, int):
+    if isinstance(stream, int):
         return Stream.from_handle(handle=stream)
-    else:
-        device = get_cuda_device(device)
-        return device.create_stream(stream)
+    device = get_cuda_device(device)
+    return device.create_stream(stream)
 
 
 def get_stream_ptr(stream: NcclStreamSpec | None = None) -> int:
-    """Resolves a stream specification to its raw stream handle (as int).
+    """Resolves a CUDA stream specification to an integer ``cudaStream_t`` handle.
 
     Args:
-        stream: A Stream instance, an integer stream handle, an object
-            implementing __cuda_stream__, or ``None`` to use the default
-            stream (handle 0).
+        stream: A ``cuda.core.Stream``, an object implementing
+            ``__cuda_stream__``, an integer ``cudaStream_t`` handle, or
+            ``None`` for the default stream (handle 0).
 
     Returns:
-        Raw CUDA stream handle as int. Returns 0 for the default stream.
+        The CUDA stream handle as an integer, or 0 for the default stream.
+
+    Raises:
+        TypeError: If ``stream`` is a boolean.
     """
+    if isinstance(stream, bool):
+        raise TypeError("stream must not be a bool")
     if stream is None:
         return 0
-    elif isinstance(stream, int):
+    if isinstance(stream, int):
         return stream
-    elif isinstance(stream, Stream):
+    if isinstance(stream, Stream):
         return int(stream.handle)
-    else:
-        return int(stream.__cuda_stream__()[1])
+    return int(stream.__cuda_stream__()[1])
+
+
+def get_event_ptr(event: NcclEventSpec | None = None) -> int:
+    """Resolves a CUDA event specification to an integer ``cudaEvent_t`` handle.
+
+    Args:
+        event: A ``cuda.core.Event``, a nonzero integer ``cudaEvent_t`` handle,
+            or ``None`` for no event. Convert other integer-convertible handle
+            objects explicitly with ``int()`` before passing them.
+
+    Returns:
+        The CUDA event handle as an integer, or 0 when no event is given.
+
+    Raises:
+        TypeError: If ``event`` is a boolean or is not a ``cuda.core.Event``
+            or ``int``.
+        RuntimeError: If ``event`` is a closed ``cuda.core.Event``.
+        ValueError: If ``event`` is an integer with value 0.
+    """
+    if event is None:
+        return 0
+    if isinstance(event, Event):
+        handle = int(event.handle)
+        if handle == 0:
+            raise RuntimeError("Event has been closed")
+        return handle
+    if isinstance(event, bool) or not isinstance(event, int):
+        raise TypeError(
+            "event must be a cuda.core.Event or a nonzero integer cudaEvent_t handle"
+        )
+    if event == 0:
+        raise ValueError(
+            "CUDA event has a null handle; initialize it before passing it to NCCL"
+        )
+    return event

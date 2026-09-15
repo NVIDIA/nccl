@@ -8,8 +8,7 @@
 #define _NCCL_IR_UTIL_H_
 
 // BF16 requires CUDA 11.0; FP8 requires CUDA 11.8.
-#define NCCL_IR_BF16_TYPES(F) \
-  F(BF16, __nv_bfloat16)
+#define NCCL_IR_BF16_TYPES(F) F(BF16, __nv_bfloat16)
 
 #define NCCL_IR_FP8_TYPES(F) \
   F(F8E4M3, __nv_fp8_e4m3) \
@@ -39,10 +38,8 @@
   NCCL_IR_BF16_TYPES(F) \
   NCCL_IR_FP8_TYPES(F)
 
-#define NCCL_IR_DEFINE_API_ALL_TYPES(func) \
-  NCCL_IR_TYPES(NCCL_IR_DEFINE_##func)
+#define NCCL_IR_DEFINE_API_ALL_TYPES(func) NCCL_IR_TYPES(NCCL_IR_DEFINE_##func)
 
-#define NCCL_IR_DEFINE_API_MULTIMEM_TYPES(func) \
-  NCCL_IR_MULTIMEM_TYPES(NCCL_IR_DEFINE_##func)
+#define NCCL_IR_DEFINE_API_MULTIMEM_TYPES(func) NCCL_IR_MULTIMEM_TYPES(NCCL_IR_DEFINE_##func)
 
 #endif // _NCCL_IR_UTIL_H_

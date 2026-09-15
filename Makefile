@@ -36,6 +36,11 @@ BUILDDIR ?= $(abspath ./build)
 ABSBUILDDIR := $(abspath $(BUILDDIR))
 TARGETS := src pkg nccl4py ir
 clean: ${TARGETS:%=%.clean}
+TEST_BUILD_DEPS := src.build
+ifneq ($(IR_GOALS),)
+TEST_BUILD_DEPS += ir-emit
+endif
+test.build: $(TEST_BUILD_DEPS)
 examples.build: src.build
 ir.build: src.build
 ir.llvm_ir: src.build
@@ -53,8 +58,9 @@ src.%:
 	${MAKE} -C src $* BUILDDIR=${ABSBUILDDIR}
 
 # Individual test sub-targets (test.perf.build, test.apitest.build, ...) need the
-# exported headers and libnccl from src.build, just like test.build does.
-test.%.build: src.build
+# exported headers and libnccl, just like test.build does. Build device IR
+# libraries only when the corresponding IR tests are enabled.
+test.%.build: $(TEST_BUILD_DEPS)
 	${MAKE} -C test $*.build BUILDDIR=${ABSBUILDDIR}
 
 examples: src.build

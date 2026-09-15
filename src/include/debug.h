@@ -77,7 +77,10 @@ void ncclDebugLogErrorInternal(ncclResult_t code, unsigned long flags, const cha
 
 // Let code temporarily downgrade WARN into INFO
 extern thread_local int ncclDebugNoWarn;
-extern char ncclLastError[];
+// Back ncclGetLastError() / ncclGetLastErrorCode(). Both read the one process-global record, which holds
+// the error raised most recently by any thread.
+const char* ncclLastErrorMessage();
+ncclResult_t ncclLastErrorResult();
 
 #define VERSION(...) ncclDebugLogInternal(NCCL_LOG_VERSION, NCCL_ALL, nullptr, nullptr, 0, __VA_ARGS__)
 #define WARN(...) ncclDebugLogInternal(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __func__, __LINE__, __VA_ARGS__)

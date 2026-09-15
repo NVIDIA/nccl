@@ -377,6 +377,13 @@ const char* pncclGetErrorString(ncclResult_t result);
 const char*  ncclGetLastError(ncclComm_t comm);
 const char* pncclGetLastError(ncclComm_t comm);
 
+/* Returns the result code that accompanied the error reported by ncclGetLastError. Both describe the last
+ * error raised anywhere in the process and are read separately, so they are a best-effort pair rather than
+ * an atomic snapshot. Returns ncclSuccess if no error has been recorded, or if that error came from a call
+ * site that did not name its code. */
+ncclResult_t  ncclGetLastErrorCode(ncclComm_t comm);
+ncclResult_t pncclGetLastErrorCode(ncclComm_t comm);
+
 /* One NCCL log record, delivered to a log sink as data rather than as a line of text.
  *
  * level    severity, carrying ncclDebugLogLevel values (NCCL_LOG_WARN, NCCL_LOG_INFO, ...)
@@ -384,9 +391,7 @@ const char* pncclGetLastError(ncclComm_t comm);
  * file     source file of the call site, or NULL where the level does not record one
  * func     enclosing function of the call site, or NULL
  * line     source line of the call site, or 0
- * code     result code when the record came from an error origin, otherwise ncclSuccess. Reserved: no
- *          call site supplies one yet, so it is currently always ncclSuccess. It is part of the record
- *          from the outset because a versioned struct cannot gain a field once a release has shipped it.
+ * code     result code when the record came from an error origin, otherwise ncclSuccess
  * format   the call site's format string, before its arguments are applied. A compile-time constant, so
  *          it is stable across occurrences of the same event and can be used to key or group records
  *          without parsing the message.

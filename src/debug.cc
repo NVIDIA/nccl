@@ -33,7 +33,24 @@ static int pid = -1;
 static char hostname[1024];
 static bool hostnameCached = false;
 thread_local int ncclDebugNoWarn = 0;
-char ncclLastError[1024] = ""; // Global string for the last error in human readable form
+// Global string for the last error in human readable form, and the result code of the last error
+// ORIGIN. These are two separate records, deliberately.
+//
+// Every WARN and ERROR updates the message, but only a record that actually names a code -- an ERR() at
+// an origin -- updates the code. NCCL reports a failure at the site that detects it and again at each
+// layer that propagates it out, and those re-reports are plain WARNs carrying no code. If they shared a
+// slot, the re-report would always land last and erase the origin's code, so the accessor would return
+// ncclSuccess for precisely the failure shape this is meant to describe.
+//
+// Each has its own ticket, taken before the mutex, so that concurrent failures resolve by which record
+// entered the logger later rather than by which thread won the mutex.
+static char ncclLastError[1024] = "";
+static std::atomic<uint64_t> ncclLastErrorSeq{0};
+static uint64_t ncclLastErrorWrittenSeq = 0;  // ticket of the record currently in ncclLastError
+// Read without ncclDebugMutex: that mutex is held across the write to ncclDebugFile, and reporting an
+// error must not be able to block behind another thread's log I/O.
+static std::atomic<ncclResult_t> ncclLastErrorCode{ncclSuccess};
+static uint64_t ncclLastErrorCodeSeq = 0;  // ticket of the record that set ncclLastErrorCode
 uint64_t ncclDebugMask = 0;
 FILE* ncclDebugFile = stdout;
 static std::mutex ncclDebugMutex;
@@ -382,12 +399,24 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
 
   // Save the last error (ERROR or WARN) as a human readable string. ATTN does not set lastError.
   //
+  // The ticket is taken here, before the mutex, so that the record kept is the one that entered the logger
+  // last rather than the one whose thread happened to win the mutex. Two threads failing at the same moment
+  // otherwise leave behind whichever reached the lock second, which need not be the later failure.
   if (level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR) {
+    uint64_t seq = ncclLastErrorSeq.fetch_add(1, std::memory_order_relaxed) + 1;
     std::lock_guard<std::mutex> lock(ncclDebugMutex);
-    va_list vcopy;
-    va_copy(vcopy, vargs);
-    (void)vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vcopy);
-    va_end(vcopy);
+    if (seq > ncclLastErrorWrittenSeq) {
+      va_list vcopy;
+      va_copy(vcopy, vargs);
+      (void)vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vcopy);
+      va_end(vcopy);
+      ncclLastErrorWrittenSeq = seq;
+    }
+    // Only an origin updates the code; see the declaration for why it is not kept with the message.
+    if (code != ncclSuccess && seq > ncclLastErrorCodeSeq) {
+      ncclLastErrorCodeSeq = seq;
+      ncclLastErrorCode.store(code, std::memory_order_relaxed);
+    }
   }
 
   if (!ncclDebugShouldLog(level, flags, ncclDebugMask)) {
@@ -581,6 +610,18 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   va_copy(vcopy, vargs);
   (void)vfprintf(ncclDebugFile, buffer, vcopy);
   va_end(vcopy);
+}
+
+// Backs ncclGetLastError(). Returns the process-global buffer itself, as it always has: a concurrent
+// error on another thread can overwrite it while the caller reads it.
+const char* ncclLastErrorMessage() {
+  return ncclLastError;
+}
+
+// Backs ncclGetLastErrorCode(). Returns the code of the last error ORIGIN, which is not necessarily the
+// error whose message ncclLastErrorMessage() returns -- a propagated report carries no code of its own.
+ncclResult_t ncclLastErrorResult() {
+  return ncclLastErrorCode.load(std::memory_order_relaxed);
 }
 
 // Internal only Common logging function used by the INFO, WARN, ATTN and TRACE macros

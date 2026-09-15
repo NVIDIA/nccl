@@ -122,10 +122,59 @@ ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP
   return ncclSuccess;
 }
 
+// Connect infos exchanged with a peer: the sender's connect masks toward the receiver, then the connect infos
+// of its recv channels followed by those of its send channels.
+struct p2pConnectMsg {
+  uint64_t recvMask;
+  uint64_t sendMask;
+  struct ncclConnect conn[2 * MAXCHANNELS];
+};
+
+static int p2pConnectMsgSize(int nconn) {
+  return (int)(offsetof(struct p2pConnectMsg, conn) + nconn * sizeof(struct ncclConnect));
+}
+
+static void p2pConnectMsgInit(struct ncclComm* comm, int peer, struct p2pConnectMsg* msg) {
+  msg->recvMask = comm->connectRecv[peer];
+  msg->sendMask = comm->connectSend[peer];
+}
+
+// The connections the peer opens to us must mirror the ones we open to it, otherwise its message does not have
+// the layout we expect (e.g. both ranks called ncclSend outside a group).
+static ncclResult_t p2pConnectMsgCheck(struct ncclComm* comm, int peer, struct p2pConnectMsg* msg) {
+  uint64_t recvMask = comm->connectRecv[peer];
+  uint64_t sendMask = comm->connectSend[peer];
+  if (msg->recvMask != sendMask || msg->sendMask != recvMask) {
+    WARN("Rank %d opens %d send and %d recv connections to rank %d, but rank %d opens %d send and %d recv connections "
+         "to rank %d; the connections each rank opens in one round must mirror the peer's (mismatched "
+         "ncclSend/ncclRecv calls)",
+         comm->rank, countOneBits(sendMask), countOneBits(recvMask), peer, peer, countOneBits(msg->sendMask),
+         countOneBits(msg->recvMask), comm->rank);
+    return ncclInvalidUsage;
+  }
+  return ncclSuccess;
+}
+
+// Forget the connectors that did not get connected, so that a later operation sets them up again
+static void p2pResetUnconnected(struct ncclComm* comm, int connIndex) {
+  for (int peer = 0; peer < comm->nRanks; peer++) {
+    for (int c = 0; c < MAXCHANNELS; c++) {
+      if (comm->connectSend[peer] & (1ULL << c)) {
+        struct ncclConnector* conn = comm->channels[c].peers[peer]->send + connIndex;
+        if (!conn->connected) conn->hasSeen = conn->p2pOnly = 0;
+      }
+      if (comm->connectRecv[peer] & (1ULL << c)) {
+        struct ncclConnector* conn = comm->channels[c].peers[peer]->recv + connIndex;
+        if (!conn->connected) conn->hasSeen = conn->p2pOnly = 0;
+      }
+    }
+  }
+}
+
 ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex) {
   // Stream used during transport setup; need for P2P pre-connect + CUDA Graph
   ncclResult_t ret = ncclSuccess;
-  struct ncclConnect** data; // Store intermediate send/recvData structs for connect
+  struct p2pConnectMsg** data; // Messages exchanged with the recv and send peer, and the connect infos inside
   struct ncclConnect** recvData = NULL; // Points to entries inside data for given recv connection within a channel
   struct ncclConnect** sendData = NULL; // Points to entries inside data for given send connection within a channel
   int done = 0;
@@ -155,18 +204,20 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     uint64_t recvMask = comm->connectRecv[recvPeer];
     uint64_t sendMask = comm->connectSend[sendPeer];
 
-    // Data[i] contains all ncclConnect information for all send and receive connections with a given send and recv
-    // peer
-    // This data is packed in the array based on the number of sendChannels and recvChannels connected with these peers
-    // The first N entries contain recvData, connection information for recv connections
-    // The next M entries contain sendData, connection information for send connections
-    // It's not guaranteed that each entry of data has the same number of total or send/recv specific connections
+    // data[p] holds the messages exchanged with the recv and send peer of this round (see p2pConnectMsg); the number
+    // of recv and send connections is not the same for every peer
     int p = i - (done + 1);
+    struct p2pConnectMsg* recvMsg = NULL; // Exchanged with recvPeer
+    struct p2pConnectMsg* sendMsg = NULL; // Exchanged with sendPeer; the same message when the peers are the same rank
     if (recvMask || sendMask) {
-      if (data[p] == NULL) NCCLCHECKGOTO(ncclCalloc(data + p, 2 * MAXCHANNELS), ret, fail);
-      else memset(data[p], 0, 2 * MAXCHANNELS * sizeof(struct ncclConnect));
+      if (data[p] == NULL) NCCLCHECKGOTO(ncclCalloc(data + p, 2), ret, fail);
+      else memset(data[p], 0, 2 * sizeof(struct p2pConnectMsg));
+      recvMsg = data[p];
+      sendMsg = sendPeer == recvPeer ? recvMsg : recvMsg + 1;
+      p2pConnectMsgInit(comm, recvPeer, recvMsg);
+      p2pConnectMsgInit(comm, sendPeer, sendMsg);
     }
-    recvData[p] = data[p];
+    recvData[p] = recvMsg ? recvMsg->conn : NULL;
     int sendChannels = 0, recvChannels = 0;
     int type;
     TIME_START(0);
@@ -178,7 +229,7 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     }
     TIME_STOP(0);
     TIME_START(1);
-    sendData[p] = recvData[p] + recvChannels;
+    sendData[p] = sendMsg == recvMsg ? recvData[p] + recvChannels : sendMsg->conn;
     for (int c = 0; c < MAXCHANNELS; c++) {
       if (sendMask & (1ULL << c)) {
         NCCLCHECKGOTO(selectTransport<1>(comm, graph, sendData[p] + sendChannels++, c, sendPeer, connIndex, &type), ret,
@@ -187,38 +238,35 @@ ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* 
     }
     TIME_STOP(1);
 
+    // Messages are received into the whole buffer since the peer's layout is only known once its header is checked
     TIME_START(2);
     if (sendPeer == recvPeer) {
       if (recvChannels + sendChannels) {
-        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag, data[p],
-                                    sizeof(struct ncclConnect) * (recvChannels + sendChannels)),
+        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag, recvMsg,
+                                    p2pConnectMsgSize(recvChannels + sendChannels)),
                       ret, fail);
-        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, recvPeer, bootstrapTag, data[p],
-                                    sizeof(struct ncclConnect) * (recvChannels + sendChannels)),
-                      ret, fail);
-        sendData[p] = data[p];
-        recvData[p] = data[p] + sendChannels;
+        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, recvPeer, bootstrapTag, recvMsg, sizeof(*recvMsg)), ret, fail);
+        NCCLCHECKGOTO(p2pConnectMsgCheck(comm, recvPeer, recvMsg), ret, fail);
+        // The peer's recv-side entries feed our send connectors and vice versa
+        sendData[p] = recvMsg->conn;
+        recvData[p] = recvMsg->conn + countOneBits(recvMsg->recvMask);
       }
     } else {
       if (recvChannels) {
-        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag, recvData[p],
-                                    sizeof(struct ncclConnect) * recvChannels),
+        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, recvPeer, bootstrapTag, recvMsg, p2pConnectMsgSize(recvChannels)),
                       ret, fail);
       }
       if (sendChannels) {
-        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, sendPeer, bootstrapTag, sendData[p],
-                                    sizeof(struct ncclConnect) * sendChannels),
+        NCCLCHECKGOTO(bootstrapSend(comm->bootstrap, sendPeer, bootstrapTag, sendMsg, p2pConnectMsgSize(sendChannels)),
                       ret, fail);
       }
       if (sendChannels) {
-        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, sendPeer, bootstrapTag, sendData[p],
-                                    sizeof(struct ncclConnect) * sendChannels),
-                      ret, fail);
+        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, sendPeer, bootstrapTag, sendMsg, sizeof(*sendMsg)), ret, fail);
+        NCCLCHECKGOTO(p2pConnectMsgCheck(comm, sendPeer, sendMsg), ret, fail);
       }
       if (recvChannels) {
-        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, recvPeer, bootstrapTag, recvData[p],
-                                    sizeof(struct ncclConnect) * recvChannels),
-                      ret, fail);
+        NCCLCHECKGOTO(bootstrapRecv(comm->bootstrap, recvPeer, bootstrapTag, recvMsg, sizeof(*recvMsg)), ret, fail);
+        NCCLCHECKGOTO(p2pConnectMsgCheck(comm, recvPeer, recvMsg), ret, fail);
       }
     }
     TIME_STOP(2);
@@ -365,6 +413,7 @@ exit:
                                     /*concurrent=*/false));
   return ret;
 fail:
+  p2pResetUnconnected(comm, connIndex);
   goto exit;
 }
 

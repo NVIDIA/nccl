@@ -8,9 +8,9 @@
  * specializations that target EFA via efa-dp-direct.
  *
  * Implemented: Put (data + signal/counter endpoints, signal-only via
- *              scratch buffer), PutValue (value staged through the
- *              per-endpoint slot pool), Get, Flush, GetSignalPtr,
- *              GetCounterPtr, ResetSignal, ResetCounter.
+ *              scratch buffer), PutValue (inline in 128-byte RDMA-write
+ *              WQEs), Get, Flush, GetSignalPtr, GetCounterPtr,
+ *              ResetSignal, ResetCounter.
  * Stub: FlushAsync, Wait.
  *************************************************************************/
 
@@ -129,7 +129,7 @@ NCCL_DEVICE_INLINE static void ringDoorbell(efa_cuda_qp* qp, uint64_t* submitted
   dbrung_ref.store(target, cuda::memory_order_release);
 }
 
-/* ── postRdmaOp: shared post path for Put, PutValue and Get ──────── */
+/* ── RDMA payload encoders ───────────────────────────────────────── */
 
 /* Put, signal, and Get operations transfer their payload through an SGE. */
 struct RdmaSgeEncoder {
@@ -166,35 +166,34 @@ struct PutValuePayloadEncoder {
  * the local poster (this `ep`), the target slot selects the remote tuple
  * (via the poster's [total_slots*nranks] target table).
  *
- * PutValue staging (pvSrcVal != nullptr): the caller posts from the
- * dedicated PutValue endpoint (pvdata), so each lane stages its value into
- * its own pool slot at pvSliceBase + (reserved SQ slot % sq_size) *
- * pvSlotSize and points the WR's SGE there. Put (pvSrcVal == nullptr) uses
- * the caller's fixed srcAddr/srcLkey. */
-template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op = EFA_GDA_RDMA_WRITE>
+ * PayloadEncoder runs after this lane's SQ slot is known and either attaches
+ * a local SGE or writes inline data into the WQE. */
+template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op = EFA_GDA_RDMA_WRITE, typename PayloadEncoder>
 NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah, uint16_t qpn,
-                                          uint32_t qkey, uint64_t srcAddr, uint32_t srcLkey, uint32_t writeBytes,
-                                          uint64_t dstAddr, uint32_t dstRkey,
-                                          uint32_t optFlags = ncclGinOptFlagsDefault, const void* pvSrcVal = nullptr,
-                                          uint32_t pvValBytes = 0, uint32_t pvLkey = 0, uint64_t pvSliceBase = 0,
-                                          uint32_t pvSlotSize = 0) {
+                                          uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
+                                          PayloadEncoder payloadEncoder, uint32_t optFlags = ncclGinOptFlagsDefault) {
   efa_cuda_qp* qp = (efa_cuda_qp*)ep->qp;
   uint64_t* submitted_count_ptr = &ep->submitted_count;
   uint64_t* local_cntr_ptr = ep->local_cntr_value;
   uint32_t sq_size_val = ep->sq_size;
 
-  /* Only the SGE differs for PutValue, so set_sge is deferred. */
-  efa_io_tx_wqe wr;
+  /* WQE staging buffer. Always the 128B form: the builder zeroes and the MMIO
+   * loop copies only the QP's negotiated wqe_size, but sizing the storage to
+   * the larger layout keeps one buffer valid for both 64B and 128B QPs. */
+  efa_io_tx_wqe_128 wr_storage;
+  uint16_t wqe_size = qp->sq.wr_ctx.wqe_size;
+
+  EfaCudaWrBuilder wr(&qp->sq.wr_ctx, (uint8_t*)&wr_storage);
   /* The opcode is the only thing that differs between a Put and a Get here: both
    * carry the RDMA address pair (dstAddr, dstRkey) and the local buffer in the SGE,
    * and the opcode decides which way the bytes move. A read therefore arrives with
    * the REMOTE source in the RDMA pair and the LOCAL destination in the SGE. */
   if NCCL_IF_CONSTEXPR (op == EFA_GDA_RDMA_READ) {
-    efa_cuda_init_rdma_read_wr(&wr, (uint16_t)threadIdx.x, dstRkey, dstAddr);
+    wr.init_rdma_read((uint64_t)threadIdx.x, dstRkey, dstAddr);
   } else {
-    efa_cuda_init_rdma_write_wr(&wr, (uint16_t)threadIdx.x, dstRkey, dstAddr);
+    wr.init_rdma_write((uint64_t)threadIdx.x, dstRkey, dstAddr);
   }
-  efa_cuda_wr_set_remote(&wr, ah, (uint32_t)qpn, qkey);
+  wr.set_remote(ah, (uint32_t)qpn, qkey);
   /* Tag the WQE as PPS-sensitive. GIN puts are small, high-rate writes, so
    * ask the NIC to optimize for packets-per-second (burst PPS) rather than
    * bandwidth. This sets the PROCESSING_HINTS field in the WQE meta
@@ -549,8 +548,8 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
         const uint16_t dQpn = dev->data.target_remote_qpns[dataIdx];
         const uint32_t dQkey = dev->data.target_qkey[dataIdx];
         for (size_t i = 0; i < nLeading; i++) {
-          postRdmaOp<mode>(&dev->data, dAh, dQpn, dQkey, absSrcAddr + i * cap, srcLkey, (uint32_t)cap,
-                           absDstAddr + i * cap, dstRkey, ncclGinOptFlagsDefault);
+          postRdmaOp<mode>(&dev->data, dAh, dQpn, dQkey, absDstAddr + i * cap, dstRkey,
+                           RdmaSgeEncoder{absSrcAddr + i * cap, srcLkey, (uint32_t)cap}, ncclGinOptFlagsDefault);
         }
         /* EFA SRD is unordered: the tail landing does not imply the leading
          * chunks landed. So when the tail announces completion (signal or
@@ -587,8 +586,8 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
        * addressed to the resolved target so the receiver's FI_REMOTE_WRITE
        * fires once. absSrcAddr/absDstAddr/writeBytes already point at the
        * payload or the scratch region per the hasPayload branch above. */
-      postRdmaOp<mode>(main_ep, main_ah, main_qpn, main_qkey, absSrcAddr, srcLkey, writeBytes, absDstAddr, dstRkey,
-                       optFlags);
+      postRdmaOp<mode>(main_ep, main_ah, main_qpn, main_qkey, absDstAddr, dstRkey,
+                       RdmaSgeEncoder{absSrcAddr, srcLkey, writeBytes}, optFlags);
 
       /* Remaining (signalCount - 1) signal increments: 0-byte writes to
        * the peer scratch region on the DATA endpoint, so the caller's
@@ -596,8 +595,9 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
        * signalCount > 1, which implies an INDEXED Add (and thus a
        * signal endpoint target). */
       for (uint32_t k = 1u; k < signalCount; k++) {
-        postRdmaOp<mode>(&dev->data, dataSigAh, dataSigQpn, dataSigQkey, dev->scratch_local_addr, dev->scratch_lkey, 0u,
-                         dev->scratch_remote_addrs[peer], dev->scratch_remote_rkeys[peer], optFlags);
+        postRdmaOp<mode>(&dev->data, dataSigAh, dataSigQpn, dataSigQkey, dev->scratch_remote_addrs[peer],
+                         dev->scratch_remote_rkeys[peer],
+                         RdmaSgeEncoder{dev->scratch_local_addr, dev->scratch_lkey, 0u}, optFlags);
       }
     }
   }
@@ -677,8 +677,8 @@ NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer, 
     uint64_t localAddr = absLocalAddr;
     do {
       const size_t chunk = (remaining > cap) ? cap : remaining;
-      postRdmaOp<mode, EFA_GDA_RDMA_READ>(&dev->data, ah, qpn, qkey, localAddr, localLkey, (uint32_t)chunk, remoteAddr,
-                                          remoteRkey, optFlags);
+      postRdmaOp<mode, EFA_GDA_RDMA_READ>(&dev->data, ah, qpn, qkey, remoteAddr, remoteRkey,
+                                          RdmaSgeEncoder{localAddr, localLkey, (uint32_t)chunk}, optFlags);
       remoteAddr += chunk;
       localAddr += chunk;
       remaining -= chunk;
@@ -753,24 +753,16 @@ NCCL_DEVICE_INLINE static void putValueImplMode(ncclGinCtx ctx, Coop coop, int p
     uint64_t absDstAddr = dstMh->peers[peer].remote_addr + dstOff;
     uint32_t dstRkey = dstMh->peers[peer].rkey;
 
-    /* Value write: stage srcVal into pvdata's pool and RDMA-write it to the
-     * destination. The arrival ticks the target sc EP's FI_REMOTE_WRITE once
-     * (signalled) or no signal (no-signal). */
-    postRdmaOp<mode>(ep, ah, qpn, qkey, /*srcAddr=*/0, /*srcLkey=*/0,
-                     /*writeBytes=*/(uint32_t)sizeof(T), absDstAddr, dstRkey,
-                     /*optFlags=*/ncclGinOptFlagsDefault,
-                     /*pvSrcVal=*/&srcVal, /*pvValBytes=*/(uint32_t)sizeof(T),
-                     /*pvLkey=*/dev->putvalue_lkey,
-                     /*pvSliceBase=*/ep->putvalue_slice_base,
-                     /*pvSlotSize=*/dev->putvalue_slot_size);
+    PutValuePayloadEncoder<T> payloadEncoder(srcVal);
+    postRdmaOp<mode>(ep, ah, qpn, qkey, absDstAddr, dstRkey, payloadEncoder, ncclGinOptFlagsDefault);
 
     /* Remaining (signalCount - 1) signal increments: 0-byte writes to
      * the peer scratch region on the DATA endpoint. The loop body is empty
      * unless signalCount > 1, which implies an INDEXED Add (and thus a
      * signal endpoint target). */
     for (uint32_t k = 1u; k < signalCount; k++) {
-      postRdmaOp<mode>(ep, ah, qpn, qkey, dev->scratch_local_addr, dev->scratch_lkey, 0u,
-                       dev->scratch_remote_addrs[peer], dev->scratch_remote_rkeys[peer]);
+      postRdmaOp<mode>(ep, ah, qpn, qkey, dev->scratch_remote_addrs[peer], dev->scratch_remote_rkeys[peer],
+                       RdmaSgeEncoder{dev->scratch_local_addr, dev->scratch_lkey, 0u});
     }
   }
   (void)hasDescriptor;

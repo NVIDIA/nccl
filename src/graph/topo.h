@@ -139,6 +139,8 @@ struct ncclTopoNode {
       int collSupport;
       int maxChannels;
       int localGpu;
+      // GPUs sharing this NIC, including those removed by transport-domain trimming.
+      int sharingGpuCount;
       int railId;
       int planeId;
     } net;

@@ -183,13 +183,16 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     // Extra threads simply idle in the stride loop; no correctness issue.
 
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
-      NCCLCHECKGOTO(backend->ncclGin->listen(backend->ginInstance, localGinDevs[commIdx % nLocalGinDevs],
+      int localGinDev = localGinDevs[commIdx % nLocalGinDevs];
+      NCCLCHECKGOTO(backend->ncclGin->listen(backend->ginInstance, localGinDev,
                                              allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank,
                                              &listenComms[backendIdx]),
                     ret, fail);
 
-      NCCLCHECKGOTO(backend->ncclGin->getProperties(localGinDevs[commIdx % nLocalGinDevs], backend->ginProps + commIdx),
-                    ret, fail);
+      NCCLCHECKGOTO(backend->ncclGin->getProperties(localGinDev, backend->ginProps + commIdx), ret, fail);
+
+      INFO(NCCL_INIT, "GIN connection map: rank %d cudaDev %d nvmlDev %d connection %d -> device %d (%s)", comm->rank,
+           comm->cudaDev, comm->nvmlDev, commIdx, localGinDev, backend->ginProps[commIdx].name);
 
       NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
 

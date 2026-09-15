@@ -17,12 +17,20 @@
 // Conform to pthread and NVTX standard
 #define NCCL_THREAD_NAMELEN 16
 
+// Upper bound on the length of a string ncclErrorSymbol() can return, so callers can size a buffer that
+// cannot truncate. The longest today is ncclUnhandledCudaError, at 22.
+#define NCCL_ERROR_SYMBOL_MAXLEN 24
+
 extern uint32_t ncclDebugLevelMask;
 extern uint64_t ncclDebugMask;
 extern FILE* ncclDebugFile;
 
 #define NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED (~0u)
 #define NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED (~1u)
+// Bits that correspond to a real level. The sentinels above live in the same word as a user-settable
+// mask, so a parsed mask is reduced to these bits before it is stored; otherwise a negated setting such
+// as NCCL_DEBUG_LEVELS=^ERROR can compose to ~0u and be mistaken for UNINITIALIZED.
+#define NCCL_DEBUG_LEVEL_MASK_DEFINED ((1u << (NCCL_LOG_ERROR + 1)) - 1)
 
 static inline bool ncclDebugShouldLog(int msgLevel, unsigned long flags, uint64_t mask) {
   uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
@@ -55,13 +63,36 @@ void ncclDebugLogInternal(ncclDebugLogLevel level, unsigned long flags, const ch
                           const char* fmt, ...);
 #endif
 
+#ifdef NCCL_OS_LINUX
+void ncclDebugLogErrorInternal(ncclResult_t code, unsigned long flags, const char* file, const char* func, int line,
+                               const char* fmt, ...) __attribute__((format(printf, 6, 7)));
+#elif defined(NCCL_OS_WINDOWS)
+void ncclDebugLogErrorInternal(ncclResult_t code, unsigned long flags, const char* file, const char* func, int line,
+                               const char* fmt, ...);
+#else
+/* Fallback so headers (e.g. alloc.h via checks.h) compile when OS is not set (e.g. unit tests with MPI). */
+void ncclDebugLogErrorInternal(ncclResult_t code, unsigned long flags, const char* file, const char* func, int line,
+                               const char* fmt, ...);
+#endif
+
 // Let code temporarily downgrade WARN into INFO
 extern thread_local int ncclDebugNoWarn;
-extern char ncclLastError[];
+// Back ncclGetLastError() / ncclGetLastErrorCode(). Both read the one process-global record, which holds
+// the error raised most recently by any thread.
+const char* ncclLastErrorMessage();
+ncclResult_t ncclLastErrorResult();
 
 #define VERSION(...) ncclDebugLogInternal(NCCL_LOG_VERSION, NCCL_ALL, nullptr, nullptr, 0, __VA_ARGS__)
 #define WARN(...) ncclDebugLogInternal(NCCL_LOG_WARN, NCCL_ALL, __FILE__, __func__, __LINE__, __VA_ARGS__)
 #define ATTN(...) ncclDebugLogInternal(NCCL_LOG_ATTN, NCCL_ALL, __FILE__, __func__, __LINE__, __VA_ARGS__)
+
+// Marks the site where an error ORIGINATES and carries the ncclResult_t that will be returned to the caller.
+// Logs at NCCL_LOG_ERROR, which NCCL_DEBUG=WARN includes, so WARN output still shows every message it did
+// before; NCCL_DEBUG=ERROR narrows it to root causes alone.
+//
+// Use ERR() at the root cause, WARN() when re-reporting an error raised further down, and ATTN() for a
+// noteworthy message that is not an error. Only ERR() and WARN() record ncclLastError.
+#define ERR(code, ...) ncclDebugLogErrorInternal((code), NCCL_ALL, __FILE__, __func__, __LINE__, __VA_ARGS__)
 
 #define NOWARN(EXPR, FLAGS) \
   do { \

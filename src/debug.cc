@@ -45,8 +45,8 @@ static std::atomic<bool> ncclWarnSetDebugInfo{false};
 //
 // Guarded by a reader/writer lock rather than ncclDebugMutex, and the read side is held across the whole
 // onRecord call. That is what makes removing a sink safe: the exclusive lock in ncclSetDebugLogSink()
-// cannot be taken until every in-flight dispatch has returned, so a sink's finalize() can never run while
-// another thread is still inside it.
+// cannot be taken until every in-flight dispatch has returned, so a sink's finalize() -- and, for a
+// plugin, the dlclose that follows it -- can never run while another thread is still inside it.
 //
 // ncclDebugSinkPresent is a lock-free fast path for the common case of no sink at all, so a build that
 // never registers one pays one acquire load per record and nothing else.
@@ -372,9 +372,9 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   // A sink takes ownership of the record: it receives the message plus the structured fields that NCCL
   // would otherwise flatten into the text of a log line, and NCCL does not write it to ncclDebugFile.
   //
-  // The shared lock is held across onRecord so the sink cannot be finalized underneath it. It is a shared
-  // lock, so concurrent logging threads do not serialize on each other, and it is why a sink must not
-  // log: re-entering here on the same thread can deadlock against a waiting registration.
+  // The shared lock is held across onRecord so the sink cannot be finalized or unloaded underneath it. It
+  // is a shared lock, so concurrent logging threads do not serialize on each other, and it is why a sink
+  // must not log: re-entering here on the same thread can deadlock against a waiting registration.
   // inSinkDispatch guards against a sink that logs. Without it the record re-enters here, takes the
   // shared lock recursively -- undefined behaviour, and a deadlock outright on a writer-preferring rwlock
   // with a registration pending -- and recurses until the stack is exhausted. A re-entrant record falls
@@ -545,9 +545,10 @@ ncclResult_t ncclSetDebugLogSink(const ncclLogSink_v1_t* sink) {
     // completes no thread can still be inside the outgoing sink.
     std::unique_lock<std::shared_timed_mutex> sinkLock(ncclDebugSinkLock);
 
-    // There is one sink slot and more than one possible claimant. Silently replacing the incumbent would
-    // run its finalize() and redirect its records with no indication to either party, so installing over
-    // a live sink is refused. Remove the current one with NULL first if replacement is intended.
+    // There is one sink slot and more than one possible claimant -- an application registering directly,
+    // and a log plugin loaded from NCCL_LOG_PLUGIN. Silently replacing the incumbent would run its
+    // finalize() and redirect its records with no indication to either party, so installing over a live
+    // sink is refused. Remove the current one with NULL first if replacement is intended.
     //
     // Tested before init() runs, so a refused registration really does change nothing: the rejected sink
     // is never initialized and never finalized.

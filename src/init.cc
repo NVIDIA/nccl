@@ -39,6 +39,7 @@
 #include "nvtx.h"
 #include "os.h"
 #include "env.h"
+#include "log.h"
 #include "rma/rma.h"
 #include "tuning.h"
 
@@ -190,6 +191,9 @@ static std::once_flag envInitOnceFlag;
 
 static void envInitOnceFunc() {
   NCCLCHECKGOTO(ncclEnvPluginInit(), envInitResult, exit);
+  // After the env plugin, so NCCL_LOG_PLUGIN can be supplied by it, and outside the logging path so a
+  // plugin that logs while initializing cannot re-enter the logger installing it.
+  NCCLCHECKGOTO(ncclLogPluginInit(), envInitResult, exit);
 exit:;
 }
 

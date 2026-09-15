@@ -651,6 +651,32 @@ Values accepted
 
 Plugin library name (e.g., ``/path/to/library/libfoo.so``), suffix (e.g., ``foo``), or "none".
 
+NCCL_LOG_PLUGIN
+---------------
+(since 2.33)
+
+The ``NCCL_LOG_PLUGIN`` variable can be used to let NCCL load an external log plugin, which receives
+NCCL's log records as structured data instead of NCCL writing them to ``NCCL_DEBUG_FILE``. Set it to
+either a library name or a suffix string to choose among multiple NCCL log plugins. This setting will
+cause NCCL to look for the log plugin library using the following strategy:
+ - If ``NCCL_LOG_PLUGIN`` is set to a library name, attempt loading that library (e.g.
+   ``NCCL_LOG_PLUGIN=/path/to/library/libfoo.so`` will cause NCCL to try to load ``/path/to/library/libfoo.so``);
+ - If ``NCCL_LOG_PLUGIN`` is set to a suffix string, attempt loading ``libnccl-log-<NCCL_LOG_PLUGIN>.so`` (e.g.
+   ``NCCL_LOG_PLUGIN=foo`` will cause NCCL to try to load ``libnccl-log-foo.so`` from the system library path);
+ - If ``NCCL_LOG_PLUGIN`` is set to "none", explicitly disable the external plugin.
+
+Unlike the other plugin variables, leaving ``NCCL_LOG_PLUGIN`` unset does not probe for a default
+``libnccl-log.so``: a log plugin takes over the output of every job that happens to have one installed,
+so it is loaded only when asked for by name.
+
+If the application has already registered a log sink with ``ncclSetDebugLogSink()``, the plugin is not
+loaded; the first claimant of the single sink slot keeps it.
+
+Values accepted
+^^^^^^^^^^^^^^^
+
+Plugin library name (e.g., ``/path/to/library/libfoo.so``), suffix (e.g., ``foo``), or "none".
+
 .. _NCCL_IGNORE_CPU_AFFINITY:
 
 NCCL_IGNORE_CPU_AFFINITY

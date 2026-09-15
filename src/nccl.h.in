@@ -447,7 +447,8 @@ typedef struct {
  *
  * There is one sink slot. Installing over a sink that is already registered returns ncclInvalidUsage and
  * changes nothing -- the rejected sink is neither initialized nor finalized -- rather than silently
- * displacing the incumbent. Pass NULL first if replacement is intended.
+ * displacing the incumbent; a log plugin named by NCCL_LOG_PLUGIN is the other possible claimant. Pass
+ * NULL first if replacement is intended.
  *
  * NCCL_DEBUG_FILE is still honored and still created. It receives nothing while a sink is installed, and
  * receives NCCL's output again if the sink is removed.

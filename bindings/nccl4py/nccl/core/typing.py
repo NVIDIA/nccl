@@ -26,6 +26,7 @@ __all__ = [
     "NcclGinType",
     "NcclGinConnectionType",
     "NcclHostCftMode",
+    "NcclNvlsHostMode",
     "NcclCftTeamMode",
     "NcclCftCap",
     "NcclCommMemStat",
@@ -206,6 +207,24 @@ class NcclHostCftMode(IntEnum):
     FALLBACK = 3
     """Try to create the logical endpoints; on error, disable host-side CFT
     instead of failing."""
+
+
+class NcclNvlsHostMode(IntFlag):
+    """Host-side NVLS mode, mirroring :c:type:`ncclNvlsHostMode_t`.
+
+    Set on :py:attr:`NCCLConfig.nvls_host_mode` to select which host NVLS
+    components the communicator uses. The two ``DISABLE_`` members combine;
+    leave the field unset for the library default.
+    """
+
+    ENABLE = 0
+    """Enable all host NVLS components."""
+    DISABLE_TRANSPORT = 1
+    """Disable the NVLS transport and the registered-buffer optimization."""
+    DISABLE_SYMMETRIC_MULTIMEM = 2
+    """Disable multimem in NCCL's symmetric kernels and copy-engine paths."""
+    DISABLE = 2147483647
+    """Disable all present and future host NVLS components."""
 
 
 class NcclCftTeamMode(IntEnum):

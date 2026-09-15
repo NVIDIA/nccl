@@ -35,5 +35,7 @@ ncclResult_t __attribute__((format(printf, 3, 4))) rasDiagnosticsReport(const st
                                                                         const char* tag, const char* fmt, ...);
 ncclResult_t rasDiagnosticsReportIncomplete(const struct rasDiagnosticsReporter* reporter, const char* checkName,
                                             const struct rasDiagnosticsRankHeader* rank, int gatheredRanks);
+ncclResult_t rasDiagnosticsReportTopologyNotReady(const struct rasDiagnosticsReporter* reporter, const char* checkName,
+                                                  const struct rasDiagnosticsRankHeader* rank, int unavailableRanks);
 
 #endif // NCCL_RAS_DIAGNOSTICS_CHECKS_COMMON_H_

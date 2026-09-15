@@ -149,7 +149,7 @@ __device__ __forceinline__ void niin_gin_barrier_all() {
   int pe = niin_device_my_pe();
   int npes = niin_device_n_pes();
   ncclDevComm const& comm = niin_comm();
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_collective_context_index());
   ncclTeam world = ncclTeamWorld(comm);
 
   // Use a dedicated signal in the heap for barrier (last 64 bytes)
@@ -172,6 +172,7 @@ __device__ __forceinline__ void niin_gin_barrier_all() {
   *bar_sig = epoch + 1;
 }
 
+#ifndef NIIN_HAS_NVSHMEMX_BLOCK_COLLECTIVES
 __device__ __forceinline__ void nvshmemx_barrier_all_block() {
   cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
   __syncthreads();
@@ -184,6 +185,7 @@ __device__ __forceinline__ void nvshmemx_barrier_all_block() {
   __syncthreads();
   cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
 }
+#endif
 
 __device__ __forceinline__ void nvshmemx_barrier_all_warp() {
   cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.31.2. Do not modify it directly.
+# This code was automatically generated with version 2.32.1. Do not modify it directly.
 
 
 # <<<< PREAMBLE CONTENT >>>>
@@ -257,6 +257,10 @@ cdef ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* simInfo) except?_NCCLRESUL
     return _nccl._ncclGroupSimulateEnd(simInfo)
 
 
+cdef ncclResult_t ncclSetEncryption(const ncclEncryptionConfig_t* config) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    return _nccl._ncclSetEncryption(config)
+
+
 cdef ncclResult_t ncclParamBind(ncclParamHandle_t* out, const char* key) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     return _nccl._ncclParamBind(out, key)
 
@@ -330,12 +334,12 @@ cdef ncclResult_t ncclGetLsaMultimemDevicePointer(ncclWindow_t window, size_t of
     return _nccl._ncclGetLsaMultimemDevicePointer(window, offset, outPtr)
 
 
-cdef ncclResult_t ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsaRank, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    return _nccl._ncclGetLsaDevicePointer(window, offset, lsaRank, outPtr)
-
-
 cdef ncclResult_t ncclGetMultimemDevicePointer(ncclWindow_t window, size_t offset, ncclMultimemHandle_t multimem, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
     return _nccl._ncclGetMultimemDevicePointer(window, offset, multimem, outPtr)
+
+
+cdef ncclResult_t ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsaRank, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    return _nccl._ncclGetLsaDevicePointer(window, offset, lsaRank, outPtr)
 
 
 cdef ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset, int peer, void** outPtr) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
@@ -370,16 +374,16 @@ cdef ncclTeam_t ncclTeamCftMultimem(ncclComm_t comm) except* nogil:
     return _nccl._ncclTeamCftMultimem(comm)
 
 
-cdef ncclTeam_t ncclTeamRail(ncclComm_t comm) except* nogil:
-    return _nccl._ncclTeamRail(comm)
-
-
 cdef int ncclTeamRankToWorld(ncclComm_t comm, ncclTeam_t team, int rank) except?-42 nogil:
     return _nccl._ncclTeamRankToWorld(comm, team, rank)
 
 
 cdef int ncclTeamRankToLsa(ncclComm_t comm, ncclTeam_t team, int rank) except?-42 nogil:
     return _nccl._ncclTeamRankToLsa(comm, team, rank)
+
+
+cdef ncclTeam_t ncclTeamRail(ncclComm_t comm) except* nogil:
+    return _nccl._ncclTeamRail(comm)
 
 
 cdef ncclResult_t ncclLsaBarrierCreateRequirement(ncclTeam_t team, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
@@ -390,9 +394,9 @@ cdef ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t te
     return _nccl._ncclGinBarrierCreateRequirement(comm, team, nBarriers, outHandle, outReq)
 
 
-cdef ncclResult_t ncclLLA2ACreateRequirement(int nBlocks, int nSlots, ncclLLA2AHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
-    return _nccl._ncclLLA2ACreateRequirement(nBlocks, nSlots, outHandle, outReq)
-
-
 cdef int ncclLLA2ACalcSlots(int maxElts, int maxEltSize) except?-42 nogil:
     return _nccl._ncclLLA2ACalcSlots(maxElts, maxEltSize)
+
+
+cdef ncclResult_t ncclLLA2ACreateRequirement(int nBlocks, int nSlots, ncclLLA2AHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) except?_NCCLRESULT_T_INTERNAL_LOADING_ERROR nogil:
+    return _nccl._ncclLLA2ACreateRequirement(nBlocks, nSlots, outHandle, outReq)

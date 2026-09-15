@@ -354,7 +354,7 @@ class RegisteredWindowHandle(CommResource):
             RuntimeError: If the window has been closed.
         """
         self._check_valid()
-        ptr = _nccl_bindings.get_multimem_device_pointer(self._window, offset, multimem._lowpp.ptr)
+        ptr = _nccl_bindings.get_multimem_device_pointer(self._window, offset, multimem._lowpp)
         return ptr if ptr != 0 else None
 
     def get_lsa_device_pointer(self, lsa_rank: int, offset: int = 0) -> int:
@@ -443,7 +443,7 @@ class RegisteredWindowHandle(CommResource):
         self._check_valid()
         team_lowpp = cft_team._to_lowpp()
         le_id, le_offset = _nccl_bindings.get_cft_device_le_info(
-            self._window, offset, peer_cft, team_lowpp.ptr
+            self._window, offset, peer_cft, team_lowpp
         )
         return CftLeInfo(le_id, le_offset)
 

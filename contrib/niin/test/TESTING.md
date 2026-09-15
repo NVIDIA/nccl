@@ -53,6 +53,7 @@ bash contrib/niin/test/run_all.sh --all
 | `HCA` | Auto-detected (first active mlx5) | IB HCA for loopback mode |
 | `GPU_PAIR` | `0,1` | Comma-separated GPU IDs to use |
 | `NP` | `2` | Number of MPI processes |
+| `NIIN_TEST_BLOCK_COLLECTIVES` | unset | Set to `1` only on a validated topology to run the block barrier remote-put visibility test; public block API compilation is always covered |
 | `RESULTS_DIR` | `contrib/niin/test/results/` | Generated output directory for CSV files; ignored by git |
 
 ## Choosing the Right GPU Pair
@@ -67,6 +68,14 @@ Look for `NODE` or `NV12`/`NV18` connections (not `SYS`).
 ```bash
 # Example: H100 NVL pair at GPU 0,3
 GPU_PAIR=0,3 bash contrib/niin/test/run_all.sh --p2p
+```
+
+To include the `nvshmemx_sync_all_block()` / `nvshmemx_barrier_all_block()`
+runtime visibility check, use a validated NVLink or GIN configuration:
+
+```bash
+NIIN_TEST_BLOCK_COLLECTIVES=1 GPU_PAIR=0,3 \
+  bash contrib/niin/test/run_all.sh --p2p --skip-perf
 ```
 
 **For IB loopback**: Any GPU pair works. The script disables P2P and routes through the HCA. Cross-NUMA is fine:

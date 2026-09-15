@@ -9,17 +9,23 @@
 #define NIIN_RMA_H_
 
 #include "niin/context.h"
+#include "niin/tma.h"
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 // Single-thread vectorized memcpy for LSA peer transfers.
+// When this CTA has lent NIIN shared memory (nvshmemx_give_smem) the transfer
+// goes out over TMA instead; niin_tma_try_copy reports -1 whenever TMA cannot
+// meet its alignment/size constraints, and we fall through to load/store.
 // Uses int4 (16-byte) loads/stores when src and dst have matching alignment
 // mod 16 (so a single head adjustment aligns both). Falls back to byte
 // copy when alignments differ.
 __device__ __forceinline__ void niin_memcpy_to_peer(
     void* __restrict__ dst, const void* __restrict__ src, size_t bytes) {
+  if (niin_tma_try_copy<NIIN_TMA_THREAD>(dst, src, bytes) == 0) return;
+
   char* d = static_cast<char*>(dst);
   const char* s = static_cast<const char*>(src);
   uintptr_t da = reinterpret_cast<uintptr_t>(d);
@@ -51,9 +57,12 @@ __device__ __forceinline__ void niin_memcpy_to_peer(
   for (size_t i = 0; i < bytes; i++) d[i] = s[i];
 }
 
-// Single-thread vectorized memcpy from an LSA peer.
+// Single-thread vectorized memcpy from an LSA peer. Takes the TMA path on the
+// same terms as niin_memcpy_to_peer.
 __device__ __forceinline__ void niin_memcpy_from_peer(
     void* __restrict__ dst, const void* __restrict__ src, size_t bytes) {
+  if (niin_tma_try_copy<NIIN_TMA_THREAD>(dst, src, bytes) == 0) return;
+
   char* d = static_cast<char*>(dst);
   const char* s = static_cast<const char*>(src);
   uintptr_t da = reinterpret_cast<uintptr_t>(d);
@@ -82,14 +91,15 @@ __device__ __forceinline__ void niin_memcpy_from_peer(
 }
 
 // Helper: GIN put (network path for arbitrary data)
-__device__ __forceinline__ void niin_gin_put(size_t dstOffset, const void* src, size_t bytes, int pe) {
+NIIN_NOINLINE_DEVICE void niin_gin_put(size_t dstOffset, const void* src, size_t bytes, int pe,
+                                             int ctx = -1) {
   if (!niin_has_gin()) {
     NIIN_NOT_IMPLEMENTED_VOID("nvshmem_put (network without GIN)");
     return;
   }
   ncclDevComm const& comm = niin_comm();
   ncclTeam world = ncclTeamWorld(comm);
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_context_or_next(ctx));
   // For GIN put, both src and dst must be in registered windows.
   // src is in our local heap, dst is at dstOffset in peer's heap.
   gin.put(
@@ -97,39 +107,44 @@ __device__ __forceinline__ void niin_gin_put(size_t dstOffset, const void* src, 
     niin_heap_window(), dstOffset,
     niin_heap_window(), niin_sym_offset(src), bytes
   );
+  niin_note_gin_op_pending();
 }
 
 // Helper: GIN get (network path for block data into the symmetric heap)
-__device__ __forceinline__ void niin_gin_get(void* dest, size_t srcOffset, size_t bytes, int pe) {
+NIIN_NOINLINE_DEVICE void niin_gin_get(void* dest, size_t srcOffset, size_t bytes, int pe,
+                                             int ctx = -1) {
   if (!niin_has_gin()) {
     NIIN_NOT_IMPLEMENTED_VOID("nvshmem_get (network without GIN)");
     return;
   }
   ncclDevComm const& comm = niin_comm();
   ncclTeam world = ncclTeamWorld(comm);
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_context_or_next(ctx));
   gin.get(
     world, pe,
     niin_heap_window(), srcOffset,
     niin_heap_window(), niin_sym_offset(dest), bytes
   );
+  niin_note_gin_op_pending();
   gin.flush(ncclCoopThread{});
+  niin_note_gin_op_complete();
 }
 
 // Helper: GIN putValue (network path for small values <= 8 bytes)
 template<typename T>
-__device__ __forceinline__ void niin_gin_put_value(size_t dstOffset, T value, int pe) {
+NIIN_NOINLINE_DEVICE void niin_gin_put_value(size_t dstOffset, T value, int pe, int ctx = -1) {
   if (!niin_has_gin()) {
     NIIN_NOT_IMPLEMENTED_VOID("nvshmem_p (network without GIN)");
     return;
   }
   ncclDevComm const& comm = niin_comm();
   ncclTeam world = ncclTeamWorld(comm);
-  ncclGin gin(comm, niin_gin_context_index());
+  ncclGin gin(comm, niin_gin_context_or_next(ctx));
   gin.putValue<T>(
     world, pe,
     niin_heap_window(), dstOffset, value
   );
+  niin_note_gin_op_pending();
 }
 
 // ---------------------------------------------------------------------------
@@ -140,10 +155,12 @@ __device__ __forceinline__ void nvshmem_##TYPENAME##_p(TYPE* dest, TYPE value, i
   size_t offset = niin_sym_offset(dest);                                      \
   if (pe == nvshmem_my_pe()) {                                                \
     *(volatile TYPE*)dest = value;                                             \
+    niin_note_lsa_store_pending();                                             \
     return;                                                                    \
   }                                                                            \
-  if (niin_is_lsa_peer(pe)) {                                                 \
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {                     \
     *(volatile TYPE*)niin_get_peer_ptr(offset, pe) = value;                   \
+    niin_note_lsa_store_pending();                                             \
     return;                                                                    \
   }                                                                            \
   if (sizeof(TYPE) <= 8) {                                                     \
@@ -165,7 +182,7 @@ __device__ __forceinline__ TYPE nvshmem_##TYPENAME##_g(const TYPE* src, int pe) 
     return *(volatile const TYPE*)src;                                         \
   }                                                                            \
   size_t offset = niin_sym_offset(src);                                       \
-  if (niin_is_lsa_peer(pe)) {                                                 \
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {                     \
     return *(volatile const TYPE*)niin_get_peer_ptr(offset, pe);              \
   }                                                                            \
   NIIN_NOT_IMPLEMENTED_RETURN("nvshmem_" #TYPENAME "_g (network)", (TYPE)0);  \
@@ -184,10 +201,12 @@ __device__ __forceinline__ void nvshmem_##TYPENAME##_put(TYPE* dest, const TYPE*
   size_t offset = niin_sym_offset(dest);                                      \
   if (pe == nvshmem_my_pe()) {                                                \
     niin_memcpy_to_peer(dest, src, bytes);                                    \
+    niin_note_lsa_store_pending();                                             \
     return;                                                                    \
   }                                                                            \
-  if (niin_is_lsa_peer(pe)) {                                                 \
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {                     \
     niin_memcpy_to_peer(niin_get_peer_ptr(offset, pe), src, bytes);           \
+    niin_note_lsa_store_pending();                                             \
     return;                                                                    \
   }                                                                            \
   niin_gin_put(offset, src, bytes, pe);                                       \
@@ -205,7 +224,7 @@ __device__ __forceinline__ void nvshmem_##TYPENAME##_get(TYPE* dest, const TYPE*
     return;                                                                    \
   }                                                                            \
   size_t offset = niin_sym_offset(src);                                       \
-  if (niin_is_lsa_peer(pe)) {                                                 \
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {                     \
     niin_memcpy_from_peer(dest, niin_get_peer_ptr(offset, pe), bytes);        \
     return;                                                                    \
   }                                                                            \
@@ -223,10 +242,12 @@ __device__ __forceinline__ void nvshmem_putmem(void* dest, const void* src,
   size_t offset = niin_sym_offset(dest);
   if (pe == nvshmem_my_pe()) {
     niin_memcpy_to_peer(dest, src, bytes);
+    niin_note_lsa_store_pending();
     return;
   }
-  if (niin_is_lsa_peer(pe)) {
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {
     niin_memcpy_to_peer(niin_get_peer_ptr(offset, pe), src, bytes);
+    niin_note_lsa_store_pending();
     return;
   }
   niin_gin_put(offset, src, bytes, pe);
@@ -239,7 +260,7 @@ __device__ __forceinline__ void nvshmem_getmem(void* dest, const void* src,
     return;
   }
   size_t offset = niin_sym_offset(src);
-  if (niin_is_lsa_peer(pe)) {
+  if (niin_world_is_lsa_only() || niin_is_lsa_peer(pe)) {
     niin_memcpy_from_peer(dest, niin_get_peer_ptr(offset, pe), bytes);
     return;
   }

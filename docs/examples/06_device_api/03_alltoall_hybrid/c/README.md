@@ -76,12 +76,10 @@ resources. This dual setup enables optimal communication for each peer type.
 ```cpp
 ncclDevComm devComm;
 ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-// LSA barriers enable direct memory access coordination for local peers
-reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;
-// GIN barriers enable cross-node synchronization over the network
-reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
+// Hybrid barriers coordinate both LSA and GIN peers across the world team
+reqs.barrierCount = NCCL_DEVICE_CTA_COUNT;
 // GIN signals provide completion notifications for asynchronous network operations
-reqs.ginSignalCount = 1;
+reqs.ginSignalCount = NCCL_DEVICE_CTA_COUNT;
 // Enable full GIN connectivity, i.e., connect each rank to all other ranks
 reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
 
@@ -115,7 +113,7 @@ ncclBarrierSession<ncclCoopCta> bar {
     gin,                        // GIN context for network coordination
     blockIdx.x                  // Barrier index: matches our CTA index
 };
-bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
+bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::None);
 ```
 
 ### Peer Classification (Device-side)
@@ -143,7 +141,7 @@ T* recvPtr = (T*)ncclGetLsaPointer(recvwin, recvoffset, lp);
 
 // Remote peers: network operations (GIN)
 gin.put(world, r, recvwin, recvoffset + world.rank * size,
-        sendwin, sendoffset + r * size, size, ncclGin_SignalInc{signalIndex});
+        sendwin, sendoffset + r * size, size, ncclGin_WeakSignalInc{signalIndex});
 ```
 
 ### Receiving CTA (Device-side)

@@ -8,17 +8,29 @@
 // Put bandwidth: measures NVLink store bandwidth using cooperative block puts.
 // Each block copies its chunk of data iter times with no inter-block sync.
 // Only a single __threadfence_system at the end to ensure visibility.
+//
+// Both kernels lend their dynamic shared memory to NIIN, so running with
+// NVSHMEM_TMA_POLICY=ENABLE on sm_90+ measures the TMA path instead of
+// vectorized stores. Without that variable tma_smem_bytes() is 0, give_smem is
+// inert, and the run is unchanged.
 
 #include "perftest.h"
 
 #define B_TO_GB (1000.0 * 1000.0 * 1000.0)
 #define MS_TO_S 1000.0
 
+// int4 element type pins the dynamic shared memory base to 16-byte alignment,
+// which nvshmemx_give_smem() requires.
+extern __shared__ int4 bw_smem[];
+
 // --- Kernels ---
 
 // Block-cooperative put: each block handles len/nblocks elements.
 // No inter-block sync — all blocks blast data independently.
-__global__ void bw_block(double* data_d, size_t len, int pe, int iter) {
+__global__ void bw_block(double* data_d, size_t len, int pe, int iter, size_t smem_bytes) {
+  nvshmemx_give_smem(bw_smem, smem_bytes);
+  __syncthreads();
+
   int peer = !pe;
   int bid = blockIdx.x;
   int nblocks = gridDim.x;
@@ -35,15 +47,22 @@ __global__ void bw_block(double* data_d, size_t len, int pe, int iter) {
   __syncthreads();
   if (threadIdx.x == 0) nvshmem_quiet();
   __syncthreads();
+
+  nvshmemx_release_smem();
+  __syncthreads();
 }
 
 // Thread-scope put: one thread per CTA puts the CTA's chunk.
-__global__ void bw_thread(double* data_d, size_t len, int pe, int iter) {
+__global__ void bw_thread(double* data_d, size_t len, int pe, int iter, size_t smem_bytes) {
+  nvshmemx_give_smem(bw_smem, smem_bytes);
+  __syncthreads();
+
   int peer = !pe;
   int bid = blockIdx.x;
   int nblocks = gridDim.x;
   size_t per_block = len / nblocks;
 
+  // One issuer per CTA: the thread-scoped TMA staging tile is per-CTA state.
   if (threadIdx.x == 0) {
     for (int i = 0; i < iter; i++) {
       nvshmem_double_put_nbi(data_d + bid * per_block,
@@ -52,6 +71,10 @@ __global__ void bw_thread(double* data_d, size_t len, int pe, int iter) {
     }
     nvshmem_quiet();
   }
+
+  __syncthreads();
+  nvshmemx_release_smem();
+  __syncthreads();
 }
 
 // --- Host ---
@@ -80,6 +103,8 @@ int main(int argc, char* argv[]) {
   uint64_t* h_size = (uint64_t*)h_tables[0];
   double* h_bw = (double*)h_tables[1];
 
+  size_t smem_bytes = tma_smem_bytes();
+
   cudaEvent_t start, stop;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&stop));
@@ -95,10 +120,10 @@ int main(int argc, char* argv[]) {
     h_size[idx] = size;
 
     if (!mype) {
-      bw_block<<<num_blocks, threads_per_block>>>(data_d, nelems, mype, skip);
+      bw_block<<<num_blocks, threads_per_block, smem_bytes>>>(data_d, nelems, mype, skip, smem_bytes);
       CUDA_CHECK(cudaDeviceSynchronize());
       CUDA_CHECK(cudaEventRecord(start));
-      bw_block<<<num_blocks, threads_per_block>>>(data_d, nelems, mype, iter);
+      bw_block<<<num_blocks, threads_per_block, smem_bytes>>>(data_d, nelems, mype, iter, smem_bytes);
       CUDA_CHECK(cudaEventRecord(stop));
       CUDA_CHECK(cudaEventSynchronize(stop));
       float ms;
@@ -120,10 +145,10 @@ int main(int argc, char* argv[]) {
     h_size[idx] = size;
 
     if (!mype) {
-      bw_thread<<<num_blocks, threads_per_block>>>(data_d, nelems, mype, skip);
+      bw_thread<<<num_blocks, threads_per_block, smem_bytes>>>(data_d, nelems, mype, skip, smem_bytes);
       CUDA_CHECK(cudaDeviceSynchronize());
       CUDA_CHECK(cudaEventRecord(start));
-      bw_thread<<<num_blocks, threads_per_block>>>(data_d, nelems, mype, iter);
+      bw_thread<<<num_blocks, threads_per_block, smem_bytes>>>(data_d, nelems, mype, iter, smem_bytes);
       CUDA_CHECK(cudaEventRecord(stop));
       CUDA_CHECK(cudaEventSynchronize(stop));
       float ms;

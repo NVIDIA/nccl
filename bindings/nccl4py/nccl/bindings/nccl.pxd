@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.31.2. Do not modify it directly.
+# This code was automatically generated with version 2.32.1. Do not modify it directly.
 
 
 
@@ -35,14 +35,18 @@ ctypedef cudaStream_t Stream
 
 ctypedef ncclResult_t _Result
 ctypedef ncclHostCftMode_t _HostCftMode
+ctypedef ncclNvlsHostMode_t _NvlsHostMode
 ctypedef ncclCommMemStat_t _CommMemStat
 ctypedef ncclRedOp_dummy_t _RedOpDummy
 ctypedef ncclRedOp_t _RedOp
 ctypedef ncclDataType_t _DataType
 ctypedef ncclScalarResidence_t _ScalarResidence
-ctypedef ncclGinType_t _GinType
+ctypedef ncclEncryptionMode_t _EncryptionMode
 ctypedef ncclGinConnectionType_t _GinConnectionType
+ctypedef ncclGinType_t _GinType
 ctypedef ncclCftTeamMode_t _CftTeamMode
+ctypedef ncclCftCap_t _CftCap
+ctypedef ncclGinSignalOp_t _GinSignalOp
 
 
 ###############################################################################
@@ -53,18 +57,18 @@ cpdef intptr_t mem_alloc(size_t size) except? 0
 cpdef mem_free(intptr_t ptr)
 cpdef int get_version() except? -1
 cpdef object get_unique_id()
-cpdef object comm_init_rank_config(int nranks, comm_id, int rank, intptr_t config)
+cpdef object comm_init_rank_config(int nranks, comm_id, int rank, config)
 cpdef object comm_init_rank(int nranks, comm_id, int rank)
 cpdef object comm_init_all(int ndev, devlist)
 cpdef comm_finalize(object comm)
 cpdef comm_destroy(object comm)
 cpdef comm_abort(object comm)
 cpdef comm_revoke(object comm, int revoke_flags)
-cpdef object comm_split(object comm, int color, int key, intptr_t config)
-cpdef object comm_shrink(object comm, exclude_ranks_list, int exclude_ranks_count, intptr_t config, int shrink_flags)
+cpdef object comm_split(object comm, int color, int key, config)
+cpdef object comm_shrink(object comm, exclude_ranks_list, int exclude_ranks_count, config, int shrink_flags)
 cpdef object comm_get_unique_id(object comm)
-cpdef object comm_grow(object comm, int n_ranks, intptr_t unique_id, int rank, intptr_t config)
-cpdef object comm_init_rank_scalable(int nranks, int myrank, int n_id, comm_ids, intptr_t config)
+cpdef object comm_grow(object comm, int n_ranks, unique_id, int rank, config)
+cpdef object comm_init_rank_scalable(int nranks, int myrank, int n_id, comm_ids, config)
 cpdef str get_error_string(int result)
 cpdef str get_last_error(object comm)
 cpdef int comm_get_async_error(object comm) except? -1
@@ -90,14 +94,14 @@ cpdef all_gather(intptr_t sendbuff, intptr_t recvbuff, size_t sendcount, int dat
 cpdef allto_all(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, object comm, intptr_t stream)
 cpdef gather(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream)
 cpdef scatter(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream)
-cpdef all_reduce_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int op, object comm, intptr_t stream, intptr_t config)
-cpdef broadcast_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream, intptr_t config)
-cpdef reduce_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int op, int root, object comm, intptr_t stream, intptr_t config)
-cpdef all_gather_config(intptr_t sendbuff, intptr_t recvbuff, size_t sendcount, int datatype, object comm, intptr_t stream, intptr_t config)
-cpdef reduce_scatter_config(intptr_t sendbuff, intptr_t recvbuff, size_t recvcount, int datatype, int op, object comm, intptr_t stream, intptr_t config)
-cpdef allto_all_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, object comm, intptr_t stream, intptr_t config)
-cpdef gather_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream, intptr_t config)
-cpdef scatter_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream, intptr_t config)
+cpdef all_reduce_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int op, object comm, intptr_t stream, config)
+cpdef broadcast_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream, config)
+cpdef reduce_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int op, int root, object comm, intptr_t stream, config)
+cpdef all_gather_config(intptr_t sendbuff, intptr_t recvbuff, size_t sendcount, int datatype, object comm, intptr_t stream, config)
+cpdef reduce_scatter_config(intptr_t sendbuff, intptr_t recvbuff, size_t recvcount, int datatype, int op, object comm, intptr_t stream, config)
+cpdef allto_all_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, object comm, intptr_t stream, config)
+cpdef gather_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream, config)
+cpdef scatter_config(intptr_t sendbuff, intptr_t recvbuff, size_t count, int datatype, int root, object comm, intptr_t stream, config)
 cpdef send(intptr_t sendbuff, size_t count, int datatype, int peer, object comm, intptr_t stream)
 cpdef recv(intptr_t recvbuff, size_t count, int datatype, int peer, object comm, intptr_t stream)
 cpdef put_signal(intptr_t localbuff, size_t count, int datatype, int peer, object peer_win, size_t peer_win_offset, int sig_idx, int ctx, unsigned int flags, object comm, intptr_t stream)
@@ -106,34 +110,35 @@ cpdef wait_signal(int n_desc, signal_descs, object comm, intptr_t stream)
 cpdef group_start()
 cpdef group_end()
 cpdef object group_simulate_end()
+cpdef set_encryption(config)
+cpdef void param_dump_all() except*
 cpdef object comm_query_properties(object comm)
-cpdef object dev_comm_create(object comm, intptr_t reqs)
-cpdef dev_comm_destroy(object comm, intptr_t dev_comm)
+cpdef object dev_comm_create(object comm, reqs)
+cpdef dev_comm_destroy(object comm, dev_comm)
 cpdef intptr_t get_lsa_multimem_device_pointer(object window, size_t offset) except? 0
-cpdef intptr_t get_lsa_device_pointer(object window, size_t offset, int lsa_rank) except? 0
 cpdef intptr_t get_multimem_device_pointer(object window, size_t offset, multimem) except? 0
+cpdef intptr_t get_lsa_device_pointer(object window, size_t offset, int lsa_rank) except? 0
 cpdef intptr_t get_peer_device_pointer(object window, size_t offset, int peer) except? 0
 cpdef tuple get_multimem_device_le_info(object window, size_t offset)
 cpdef tuple get_cft_device_le_info(object window, size_t offset, int peer_cft, cft_team)
 cpdef tuple get_peer_device_le_info(object window, size_t offset, int peer_world)
-cpdef lsa_barrier_create_requirement(team, int n_barriers, intptr_t out_handle, intptr_t out_req)
-cpdef gin_barrier_create_requirement(object comm, team, int n_barriers, intptr_t out_handle, intptr_t out_req)
-cpdef ll_a2a_create_requirement(int n_blocks, int n_slots, intptr_t out_handle, intptr_t out_req)
+cpdef int team_rank_to_world(object comm, team, int rank) except? -1
+cpdef int team_rank_to_lsa(object comm, team, int rank) except? -1
+cpdef lsa_barrier_create_requirement(team, int n_barriers, out_handle, out_req)
+cpdef gin_barrier_create_requirement(object comm, team, int n_barriers, out_handle, out_req)
+cpdef int ll_a2a_calc_slots(int max_elts, int max_elt_size) except? -1
+cpdef ll_a2a_create_requirement(int n_blocks, int n_slots, out_handle, out_req)
 
-# Hand-written: the team getters return ncclTeam_t by value, which cybind cannot
-# emit; the rank mappers return int rather than ncclResult_t.
+# Hand-written: the team getters return ncclTeam_t by value, which cybind cannot emit.
 cpdef object team_world(object comm)
 cpdef object team_lsa(object comm)
 cpdef object team_rail(object comm)
 cpdef object team_cft(object comm, int mode)
 cpdef object team_cft_multimem(object comm)
-cpdef int team_rank_to_world(object comm, intptr_t team, int rank)
-cpdef int team_rank_to_lsa(object comm, intptr_t team, int rank)
 
 # Hand-written: Param API (SKIP_LOWPP in nccl.cybind.yaml).
 cpdef str param_get_parameter(str key)
 cpdef list param_get_all_keys()
-cpdef param_dump_all()
 
 # Hand-written: not an NCCL entry point; reports the path of the loaded DSO.
 cpdef object get_library_path()

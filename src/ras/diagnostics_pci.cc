@@ -731,16 +731,6 @@ static bool rasDiagnosticsRdmaTopoPayloadValid(const struct rasDiagnosticsRdmaTo
   }
 }
 
-static ncclResult_t rasDiagnosticsPciReportTopologyNotReady(const struct rasDiagnosticsReporter* reporter,
-                                                            const char* check,
-                                                            const struct rasDiagnosticsRankHeader* startRank,
-                                                            int nRanks) {
-  return rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                              "%s: incomplete for comm 0x%lx because communicator topology was not ready on "
-                              "%d/%d ranks",
-                              check, startRank->commId.commHash, nRanks, startRank->commNRanks);
-}
-
 // Report rdma_topo results for ranks in one communicator, ignoring records that used another source.
 static ncclResult_t rasDiagnosticsRdmaTopoReportResults(const struct rasDiagnosticsReporter* reporter,
                                                         const char* records, size_t recordStride, int start, int end,
@@ -1320,7 +1310,7 @@ ncclResult_t rasDiagnosticsIommuSummarize(const struct rasDiagnosticsContext* ct
         ret, exit);
     }
     if (nTopologyNotReady > 0) {
-      NCCLCHECKGOTO(rasDiagnosticsPciReportTopologyNotReady(reporter, "IOMMU mode", startRank, nTopologyNotReady), ret,
+      NCCLCHECKGOTO(rasDiagnosticsReportTopologyNotReady(reporter, "IOMMU mode", startRank, nTopologyNotReady), ret,
                     exit);
     }
 
@@ -1632,7 +1622,7 @@ ncclResult_t rasDiagnosticsAtsSummarize(const struct rasDiagnosticsContext* ctx,
     }
 
     if (nTopologyNotReady > 0) {
-      NCCLCHECKGOTO(rasDiagnosticsPciReportTopologyNotReady(reporter, "ATS state", startRank, nTopologyNotReady), ret,
+      NCCLCHECKGOTO(rasDiagnosticsReportTopologyNotReady(reporter, "ATS state", startRank, nTopologyNotReady), ret,
                     exit);
     }
 

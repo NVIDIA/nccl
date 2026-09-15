@@ -27,6 +27,14 @@ Value of :py:attr:`NCCLConfig.host_cft_mode`.
 .. autoclass:: NcclHostCftMode
    :members:
 
+NcclNvlsHostMode
+----------------
+
+Value of :py:attr:`NCCLConfig.nvls_host_mode`.
+
+.. autoclass:: NcclNvlsHostMode
+   :members:
+
 NCCLCollConfig
 ==============
 

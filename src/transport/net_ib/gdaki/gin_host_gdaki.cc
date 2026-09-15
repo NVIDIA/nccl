@@ -583,6 +583,7 @@ destroy_verbs_qp_attr:
 }
 
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
+NCCL_PARAM(GinGdakiForceMcst, "GDAKI_FORCE_MCST", 0);
 
 ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void** outGinCtx,
                                        ncclNetDeviceHandle_t** outDevHandle) {
@@ -1033,7 +1034,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     gin_gdaki_gpu_ctx->last_visible_get = gdaki_ctx->last_visible_get + ctx_idx * nranks;
 
     // MCST is needed on pre-Hopper or on post-Hopper with Data Direct
-    bool use_mcst = preHopper || dataDirectNic;
+    bool use_mcst = ncclParamGinGdakiForceMcst() ? true : (preHopper || dataDirectNic);
     NCCLCHECKGOTO(ncclGinGdakiGPUContext_init(backendVersion, gin_gdaki_gpu_ctx_hd_mhandle->host_buf, ctx_idx,
                                               gin_gdaki_gpu_ctx->gdqp, gin_gdaki_gpu_ctx->companion_gdqp,
                                               gin_gdaki_gpu_ctx->counters_table, gin_gdaki_gpu_ctx->signals_table,

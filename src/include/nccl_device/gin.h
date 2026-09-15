@@ -501,7 +501,7 @@ struct ncclGin_BackendMask {
   NCCL_DEVICE_INLINE void resetSignal(ncclWindow_t signalWindow, size_t signalOffset) const;
 
   // True when the backend flushes all previously-received puts on any received signal, from any peer.
-  NCCL_DEVICE_INLINE bool flushesAllPutsOnAnySignal() const;
+  NCCL_DEVICE_INLINE bool _flushesAllPutsOnAnySignal() const;
 
   //////////////////////////////////////////////////////////////////////////////
   // internal:

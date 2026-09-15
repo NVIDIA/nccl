@@ -31,6 +31,7 @@
 NCCL_PARAM(Diagnostics, "RUN_DIAGNOSTICS", 0);
 
 #define CHILD_KILL_GRACE_SEC 2 // `timeout -k`: SIGKILL this long after the initial SIGTERM
+#define MPI_ENV_PATTERN "^(OMPI_|OPAL_|PMIX_|PMI_|PRTE_|PERFTEST_FORCE_MPI=)"
 
 // Runs `command` under `timeout` + `stdbuf -oL` and streams its combined output: the child stays
 // line-buffered, so `onLine` fires for each line as the child emits it (or for partial lines
@@ -43,8 +44,11 @@ int ncclDiagChildRunStream(const char* command, int timeoutSec, char* output, in
   if (command == nullptr || timeoutSec < 1) return -1;
 
   char wrapped[2048];
-  int n = snprintf(wrapped, sizeof(wrapped), "timeout -k %d %d stdbuf -oL %s </dev/null 2>&1", CHILD_KILL_GRACE_SEC,
-                   timeoutSec, command);
+  // Diagnostic tools run outside the parent rank's MPI/PMI session.
+  int n = snprintf(wrapped, sizeof(wrapped),
+                   "for __v in $(env | sed -nE '/" MPI_ENV_PATTERN "/s/=.*//p'); "
+                   "do unset \"$__v\"; done; timeout -k %d %d stdbuf -oL %s </dev/null 2>&1",
+                   CHILD_KILL_GRACE_SEC, timeoutSec, command);
   if (n < 0 || n >= (int)sizeof(wrapped)) return -1;
 
   FILE* stream = popen(wrapped, "r");

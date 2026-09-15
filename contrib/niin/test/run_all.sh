@@ -38,6 +38,9 @@ RUN_IB=false
 BUILD_ONLY=false
 SKIP_PERF=false
 SKIP_FUNC=false
+HOST_COLLECTIVES_NAME="host_collectives"
+HOST_COLLECTIVES_BUILD_FAILED=0
+HOST_COLLECTIVES_RUNTIME_FAILED=0
 
 # Auto-detect arch
 if [ -z "${ARCH:-}" ]; then
@@ -89,7 +92,8 @@ NVCC_FLAGS="
   -Xlinker -rpath,$NCCL_HOME/build/lib
   -Xlinker -rpath,$MPI_HOME/lib"
 
-MPI_RUN="mpirun -np $NP --allow-run-as-root"
+MPI_RUN="$MPI_HOME/bin/mpirun -np $NP --allow-run-as-root"
+TEST_LD_LIBRARY_PATH="$NCCL_HOME/build/lib:$MPI_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 BUILD_DIR="/tmp/niin_test_suite"
 
 # ===========================================================================
@@ -157,6 +161,7 @@ mkdir -p "$BUILD_DIR"
 
 # Discover NVSHMEM tests
 NVSHMEM_TESTS=()
+NIIN_TESTS=("$SCRIPT_DIR/host_collectives.cu")
 if [ -d "$NVSHMEM_HOME/test" ]; then
   for f in "$NVSHMEM_HOME"/test/device/query/*.cu \
            "$NVSHMEM_HOME"/test/device/sync/*.cu; do
@@ -173,7 +178,7 @@ fi
 # Build functional tests
 BUILT_FUNC=()
 echo "test,build_status,build_error" > "$RESULTS_DIR/build_results.csv"
-for src in "${NVSHMEM_TESTS[@]}"; do
+for src in "${NIIN_TESTS[@]}" "${NVSHMEM_TESTS[@]}"; do
   name=$(basename ${src%.cu})
   output=$(nvcc "$src" -o "$BUILD_DIR/$name" $NVCC_FLAGS 2>&1)
   if [ $? -eq 0 ]; then
@@ -184,10 +189,19 @@ for src in "${NVSHMEM_TESTS[@]}"; do
     echo -n "x"
     err=$(echo "$output" | head -1 | tr ',' ';' | cut -c1-200)
     echo "$name,FAIL,$err" >> "$RESULTS_DIR/build_results.csv"
+    if [ "$name" = "$HOST_COLLECTIVES_NAME" ]; then
+      HOST_COLLECTIVES_BUILD_FAILED=1
+    fi
   fi
 done
 echo
-echo "Built ${#BUILT_FUNC[@]} of ${#NVSHMEM_TESTS[@]} functional tests"
+TOTAL_FUNC_TESTS=$((${#NIIN_TESTS[@]} + ${#NVSHMEM_TESTS[@]}))
+echo "Built ${#BUILT_FUNC[@]} of ${TOTAL_FUNC_TESTS} functional tests"
+
+if [ "$HOST_COLLECTIVES_BUILD_FAILED" -ne 0 ]; then
+  echo "ERROR: required $HOST_COLLECTIVES_NAME build failed"
+  exit 1
+fi
 
 # Build perftests
 make -C "$NIIN_DIR/perftest" \
@@ -200,6 +214,11 @@ if $BUILD_ONLY; then
   exit 0
 fi
 
+if ! $SKIP_FUNC && [ "$NP" -lt 2 ]; then
+  echo "ERROR: $HOST_COLLECTIVES_NAME requires NP >= 2"
+  exit 1
+fi
+
 # ===========================================================================
 # Run functional tests
 # ===========================================================================
@@ -210,7 +229,8 @@ run_func_tests() {
 
   local pass=0 xpass=0 xfail=0 fail=0
   for name in "${BUILT_FUNC[@]}"; do
-    output=$(timeout $TIMEOUT_FUNC env CUDA_VISIBLE_DEVICES=$GPU_PAIR $env_prefix \
+    output=$(timeout $TIMEOUT_FUNC env CUDA_VISIBLE_DEVICES=$GPU_PAIR \
+             LD_LIBRARY_PATH="$TEST_LD_LIBRARY_PATH" $env_prefix \
              $MPI_RUN "$BUILD_DIR/$name" 2>&1)
     rc=$?
     errors=$(echo "$output" | grep -i "error\|incorrect\|FAIL\|trap\|Segmentation" | \
@@ -242,6 +262,10 @@ run_func_tests() {
         fail=$((fail+1))
       fi
     fi
+
+    if [ "$name" = "$HOST_COLLECTIVES_NAME" ] && { [ $rc -ne 0 ] || [ -n "$errors" ]; }; then
+      HOST_COLLECTIVES_RUNTIME_FAILED=1
+    fi
   done
 
   echo
@@ -261,7 +285,8 @@ run_perf_tests() {
   # Put latency
   if [ -f "$perf_dir/shmem_put_latency" ]; then
     echo "  put_latency..."
-    output=$(timeout $TIMEOUT_PERF env CUDA_VISIBLE_DEVICES=$GPU_PAIR $env_prefix \
+    output=$(timeout $TIMEOUT_PERF env CUDA_VISIBLE_DEVICES=$GPU_PAIR \
+             LD_LIBRARY_PATH="$TEST_LD_LIBRARY_PATH" $env_prefix \
              $MPI_RUN "$perf_dir/shmem_put_latency" -b 4 -e 65536 -i 200 -w 50 2>&1)
     scope=""
     echo "$output" | while IFS= read -r line; do
@@ -281,7 +306,8 @@ run_perf_tests() {
     local heap_env=""
     if [ "$mode" = "ib" ]; then heap_env="NVSHMEM_SYMMETRIC_SIZE=1073741824"; fi
     output=$(timeout $TIMEOUT_PERF env CUDA_VISIBLE_DEVICES=$GPU_PAIR \
-             NVSHMEM_SYMMETRIC_SIZE=1073741824 $env_prefix \
+             NVSHMEM_SYMMETRIC_SIZE=1073741824 \
+             LD_LIBRARY_PATH="$TEST_LD_LIBRARY_PATH" $env_prefix \
              $MPI_RUN "$perf_dir/shmem_put_bw" -b 1024 -e 67108864 -i 50 -w 10 -n 16 -t 256 2>&1)
     scope=""
     echo "$output" | while IFS= read -r line; do
@@ -298,7 +324,8 @@ run_perf_tests() {
   # Get latency
   if [ -f "$perf_dir/shmem_get_latency" ]; then
     echo "  get_latency..."
-    output=$(timeout $TIMEOUT_PERF env CUDA_VISIBLE_DEVICES=$GPU_PAIR $env_prefix \
+    output=$(timeout $TIMEOUT_PERF env CUDA_VISIBLE_DEVICES=$GPU_PAIR \
+             LD_LIBRARY_PATH="$TEST_LD_LIBRARY_PATH" $env_prefix \
              $MPI_RUN "$perf_dir/shmem_get_latency" -b 4 -e 65536 -i 200 -w 50 2>&1)
     scope=""
     echo "$output" | while IFS= read -r line; do
@@ -315,7 +342,8 @@ run_perf_tests() {
   # Put signal latency
   if [ -f "$perf_dir/shmem_put_signal_latency" ]; then
     echo "  put_signal_latency..."
-    output=$(timeout $TIMEOUT_PERF env CUDA_VISIBLE_DEVICES=$GPU_PAIR $env_prefix \
+    output=$(timeout $TIMEOUT_PERF env CUDA_VISIBLE_DEVICES=$GPU_PAIR \
+             LD_LIBRARY_PATH="$TEST_LD_LIBRARY_PATH" $env_prefix \
              $MPI_RUN "$perf_dir/shmem_put_signal_latency" -b 4 -e 65536 -i 200 -w 50 2>&1)
     scope=""
     echo "$output" | while IFS= read -r line; do
@@ -395,3 +423,8 @@ echo "Results in: $RESULTS_DIR/"
 ls -la "$RESULTS_DIR"/*.csv
 echo
 echo "=== Done ==="
+
+if [ "$HOST_COLLECTIVES_RUNTIME_FAILED" -ne 0 ]; then
+  echo "ERROR: required $HOST_COLLECTIVES_NAME runtime test failed"
+  exit 1
+fi

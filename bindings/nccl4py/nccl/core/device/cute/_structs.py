@@ -119,9 +119,9 @@ class ncclResourceWindow_vidmem:
 class DevCommValue:
     """By-value ABI mirror of ``struct ncclDevComm``.
 
-    Field order and types must stay synchronized with
-    ``nccl_device_expanded.h`` used to generate the low-level bindings. The
-    unpacked LLVM struct supplies the same natural padding as the C structure.
+    Field order and types must stay synchronized with ``struct ncclDevComm``
+    in ``nccl_device/impl/comm__types.h``. The unpacked LLVM struct supplies
+    the same natural padding as the C structure.
     """
 
     magic: cutlass.Uint32

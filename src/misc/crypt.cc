@@ -82,6 +82,7 @@ static constexpr const char* ncclCryptKdfParamInfo = "info";
   SYMBOL(SSL_SESSION_set1_master_key) \
   SYMBOL(SSL_SESSION_set_cipher) \
   SYMBOL(SSL_SESSION_set_protocol_version) \
+  SYMBOL(SSL_session_reused) \
   SYMBOL(SSL_set_accept_state) \
   SYMBOL(SSL_set_bio) \
   SYMBOL(SSL_set_connect_state) \
@@ -359,8 +360,9 @@ static ncclResult_t cryptInitLib() {
       goto fail;
     }
     ncclCryptOpenSsl.pfn_SSL_CTX_clear_options(contexts[i], SSL_OP_ALLOW_NO_DHE_KEX);
-    ncclCryptOpenSsl.pfn_SSL_CTX_set_verify(contexts[i], SSL_VERIFY_NONE, nullptr);
   }
+  ncclCryptOpenSsl.pfn_SSL_CTX_set_verify(ncclCryptClientCtx, SSL_VERIFY_PEER, nullptr);
+  ncclCryptOpenSsl.pfn_SSL_CTX_set_verify(ncclCryptServerCtx, SSL_VERIFY_NONE, nullptr);
   ncclCryptOpenSsl.pfn_SSL_CTX_set_psk_use_session_callback(ncclCryptClientCtx, cryptPskUseSession);
   ncclCryptOpenSsl.pfn_SSL_CTX_set_psk_find_session_callback(ncclCryptServerCtx, cryptPskFindSession);
   ncclCryptLibReady = true;
@@ -564,6 +566,15 @@ static ncclResult_t cryptHandshakeStep(struct ncclSocket* sock, bool* done) {
   ncclCryptOpenSsl.pfn_ERR_clear_error();
   int rc = ncclCryptOpenSsl.pfn_SSL_do_handshake(sock->crypto->ssl);
   if (rc == 1) {
+    // The client also offers a certificate handshake, so a server that ignored the PSK could otherwise
+    // complete one (the client's SSL_VERIFY_PEER, set in cryptInitLib, independently refuses any
+    // certificate). On both roles, only a handshake that used the PSK proves the peer holds the key.
+    if (ncclCryptOpenSsl.pfn_SSL_session_reused(sock->crypto->ssl) != 1) {
+      char line[SOCKET_NAME_MAXLEN + 1];
+      WARN("ncclCrypt: TLS handshake with %s did not use the pre-shared key; rejecting peer",
+           ncclSocketToString(&sock->addr, line));
+      return ncclRemoteError;
+    }
     sock->crypto->handshakeDone = true;
     *done = true;
     return ncclSuccess;

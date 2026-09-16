@@ -159,17 +159,23 @@ static ncclResult_t p2pConnectMsgCheck(struct ncclComm* comm, int peer, struct p
 static void p2pResetUnconnected(struct ncclComm* comm, int connIndex) {
   for (int peer = 0; peer < comm->nRanks; peer++) {
     for (int c = 0; c < MAXCHANNELS; c++) {
-      if (comm->connectSend[peer] & (1ULL << c)) {
-        struct ncclConnector* conn = comm->channels[c].peers[peer]->send + connIndex;
-        if (!conn->connected) conn->hasSeen = conn->p2pOnly = 0;
-      }
-      if (comm->connectRecv[peer] & (1ULL << c)) {
-        struct ncclConnector* conn = comm->channels[c].peers[peer]->recv + connIndex;
-        if (!conn->connected) conn->hasSeen = conn->p2pOnly = 0;
+      struct ncclConnector* conns[2] = {NULL, NULL};
+      if (comm->connectSend[peer] & (1ULL << c)) conns[0] = comm->channels[c].peers[peer]->send + connIndex;
+      if (comm->connectRecv[peer] & (1ULL << c)) conns[1] = comm->channels[c].peers[peer]->recv + connIndex;
+      for (int k = 0; k < 2; k++) {
+        struct ncclConnector* conn = conns[k];
+        if (conn == NULL || conn->connected) continue;
+        if (conn->transportComm) {
+          (void)conn->transportComm->free(comm, conn);
+          conn->transportResources = NULL;
+          conn->transportComm = NULL;
+        }
+        conn->hasSeen = conn->p2pOnly = 0;
       }
     }
   }
 }
+
 
 ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex) {
   // Stream used during transport setup; need for P2P pre-connect + CUDA Graph

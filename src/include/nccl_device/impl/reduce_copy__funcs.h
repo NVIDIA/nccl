@@ -301,6 +301,107 @@ NCCL_DEVICE_INLINE void ncclLsaCopy(Coop coop, T* srcPtr, ncclWindow_t window, s
   ncclLsaCopy<T, Coop, IntCount, UNROLL>(coop, srcPtr, dst, count, devComm);
 }
 
+// [ID 4.1T] LSA TMA Copy: 1 local source -> N destinations (with custom dstLambda calculation)
+template <typename T, typename Coop, typename DstLambda, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count,
+                                       char* smemPtr) {
+  static_assert(std::is_same<Coop, ncclCoopThread>::value || std::is_same<Coop, ncclCoopWarp>::value ||
+                  std::is_same<Coop, ncclCoopCta>::value,
+                "ncclLsaCopyTma requires ncclCoopThread, ncclCoopWarp, or ncclCoopCta");
+  static_assert(16 % sizeof(T) == 0, "ncclLsaCopyTma requires a type whose size divides the 16-byte TMA pack");
+#if NCCL_DEVICE_DEBUG_CHECKS
+  if ((count * sizeof(T)) % 16 != 0) {
+    if (coop.thread_rank() == 0) {
+      assert(false && "ncclLsaCopyTma: count * sizeof(T) is not a multiple of 16; copy refused");
+    }
+    return;
+  }
+  if (coop.thread_rank() == 0) {
+    assert(nccl::utility::getAlignment(smemPtr, 16) == 0 &&
+           "ncclLsaCopyTma: smem staging buffer is not 16-byte aligned");
+    if (count > 0) {
+      assert(nccl::utility::getAlignment(srcPtr, 16) == 0 && "ncclLsaCopyTma: source is not 16-byte aligned");
+      // every destination is checked since each remote dst is independently calculated
+      for (int dstIdx = 0; dstIdx < nDst; dstIdx++) {
+        assert(nccl::utility::getAlignment(dstLambda(dstIdx), 16) == 0 &&
+               "ncclLsaCopyTma: destination is not 16-byte aligned");
+      }
+    }
+  }
+#endif
+#if __CUDA_ARCH__ >= 1000
+  nccl::utility::lsaCopyTma<SmemBytesTotal, T, IntCount, Coop, DstLambda>(coop, srcPtr, dstLambda, nDst, count,
+                                                                          smemPtr);
+#else
+  assert(false && "ncclLsaCopyTma requires sm100+");
+#endif
+}
+
+// [ID 4.2Ta] LSA TMA Copy: 1 local source -> N destinations (with ncclSymPtr)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclSymPtr<T> dst, IntCount count, ncclTeam team,
+                                       char* smemPtr) {
+  static_assert(std::is_same<Coop, ncclCoopThread>::value || std::is_same<Coop, ncclCoopWarp>::value ||
+                  std::is_same<Coop, ncclCoopCta>::value,
+                "ncclLsaCopyTma requires ncclCoopThread, ncclCoopWarp, or ncclCoopCta");
+  static_assert(16 % sizeof(T) == 0, "ncclLsaCopyTma requires a type whose size divides the 16-byte TMA pack");
+#if NCCL_DEVICE_DEBUG_CHECKS
+  if ((count * sizeof(T)) % 16 != 0) {
+    if (coop.thread_rank() == 0) {
+      assert(false && "ncclLsaCopyTma: count * sizeof(T) is not a multiple of 16; copy refused");
+    }
+    return;
+  }
+#endif
+  auto dstLambda = [=] __device__(int i) -> T* { return dst.peerPtr(team, i); };
+
+#if NCCL_DEVICE_DEBUG_CHECKS
+  if (coop.thread_rank() == 0) {
+    assert(nccl::utility::getAlignment(smemPtr, 16) == 0 &&
+           "ncclLsaCopyTma: smem staging buffer is not 16-byte aligned");
+    if (count > 0 && team.nRanks > 0) {
+      assert(nccl::utility::getAlignment(srcPtr, 16) == 0 && "ncclLsaCopyTma: source is not 16-byte aligned");
+      // unlike 4.1T, we only need to check the first pointer for dst
+      assert(nccl::utility::getAlignment(dstLambda(0), 16) == 0 &&
+             "ncclLsaCopyTma: destination is not 16-byte aligned");
+    }
+  }
+#endif
+#if __CUDA_ARCH__ >= 1000
+  nccl::utility::lsaCopyTma<SmemBytesTotal, T, IntCount, Coop, decltype(dstLambda)>(coop, srcPtr, dstLambda,
+                                                                                    team.nRanks, count, smemPtr);
+#else
+  assert(false && "ncclLsaCopyTma requires sm100+");
+#endif
+}
+
+// [ID 4.2Tb] LSA TMA Copy: 1 local source -> N destinations (with ncclDevComm_t)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclSymPtr<T> dst, IntCount count, ncclDevComm_t devComm,
+                                       char* smemPtr) {
+  ncclTeam team = ncclTeamLsa(devComm);
+
+  ncclLsaCopyTma<T, Coop, IntCount, SmemBytesTotal>(coop, srcPtr, dst, count, team, smemPtr);
+}
+
+// [ID 4.2Tc] LSA TMA Copy: 1 local source -> N destinations (with ncclWindow_t + ncclTeam)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclWindow_t window, size_t offset, IntCount count,
+                                       ncclTeam team, char* smemPtr) {
+  ncclSymPtr<T> dst{window, offset};
+
+  ncclLsaCopyTma<T, Coop, IntCount, SmemBytesTotal>(coop, srcPtr, dst, count, team, smemPtr);
+}
+
+// [ID 4.2Td] LSA TMA Copy: 1 local source -> N destinations (with ncclWindow_t + ncclDevComm_t)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclWindow_t window, size_t offset, IntCount count,
+                                       ncclDevComm_t devComm, char* smemPtr) {
+  ncclSymPtr<T> dst{window, offset};
+
+  ncclLsaCopyTma<T, Coop, IntCount, SmemBytesTotal>(coop, srcPtr, dst, count, devComm, smemPtr);
+}
+
 // [ID 4.3a] Multimem Copy: 1 local source -> 1 multimem destination (with ncclSymPtr)
 template <typename T, typename Coop, typename IntCount, int UNROLL>
 NCCL_DEVICE_INLINE void ncclMultimemCopy(Coop coop, T* srcPtr, ncclSymPtr<T> dst, IntCount count,
@@ -760,6 +861,46 @@ NCCL_DEVICE_INLINE void ncclLsaCopy(Coop, T*, ncclWindow_t, size_t, IntCount, nc
 // 4.2d] LSA Copy (with window + offset + devComm)
 template <typename T, typename Coop, typename IntCount, int UNROLL>
 NCCL_DEVICE_INLINE void ncclLsaCopy(Coop, T*, ncclWindow_t, size_t, IntCount, ncclDevComm_t) {
+  static_assert(nccl::utility::always_false<T>::value,
+                "NCCL device API reduce/Copy functions require device side lambdas, please use '--extended-lambda' as "
+                "compilation flag to enable that API.");
+}
+
+// 4.1T] LSA TMA Copy (lambda-based)
+template <typename T, typename Coop, typename DstLambda, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, DstLambda, int, IntCount, char*) {
+  static_assert(nccl::utility::always_false<T>::value,
+                "NCCL device API reduce/Copy functions require device side lambdas, please use '--extended-lambda' as "
+                "compilation flag to enable that API.");
+}
+
+// 4.2Ta] LSA TMA Copy (with ncclSymPtr + team)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclSymPtr<T>, IntCount, ncclTeam, char*) {
+  static_assert(nccl::utility::always_false<T>::value,
+                "NCCL device API reduce/Copy functions require device side lambdas, please use '--extended-lambda' as "
+                "compilation flag to enable that API.");
+}
+
+// 4.2Tb] LSA TMA Copy (with ncclSymPtr + devComm)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclSymPtr<T>, IntCount, ncclDevComm_t, char*) {
+  static_assert(nccl::utility::always_false<T>::value,
+                "NCCL device API reduce/Copy functions require device side lambdas, please use '--extended-lambda' as "
+                "compilation flag to enable that API.");
+}
+
+// 4.2Tc] LSA TMA Copy (with window + offset + team)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclWindow_t, size_t, IntCount, ncclTeam, char*) {
+  static_assert(nccl::utility::always_false<T>::value,
+                "NCCL device API reduce/Copy functions require device side lambdas, please use '--extended-lambda' as "
+                "compilation flag to enable that API.");
+}
+
+// 4.2Td] LSA TMA Copy (with window + offset + devComm)
+template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclWindow_t, size_t, IntCount, ncclDevComm_t, char*) {
   static_assert(nccl::utility::always_false<T>::value,
                 "NCCL device API reduce/Copy functions require device side lambdas, please use '--extended-lambda' as "
                 "compilation flag to enable that API.");

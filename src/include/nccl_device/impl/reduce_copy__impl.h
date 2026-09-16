@@ -13,7 +13,26 @@
 #include "vector__types.h"
 #include "vector__funcs.h"
 #include "../coop.h"
+#include <cassert>
 #include <type_traits>
+
+#ifndef NCCL_DEVICE_DEBUG_CHECKS
+#define NCCL_DEVICE_DEBUG_CHECKS 0
+#endif
+
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13010
+// including <cuda/barrier>/<cuda/ptx> can fail unless <cuda/std/ranges> is included. workaround introduced in src/device/symmetric/primitives.cuh
+#include <cuda/std/ranges>
+#endif
+
+#if __CUDA_ARCH__ >= 1000
+// These CCCL headers are needed for the TMA load/store API (sm100+)
+#include <cuda/barrier>
+#include <cuda/ptx>
+#include <utility>
+
+namespace ptx = cuda::ptx;
+#endif
 
 #if defined(__CUDACC__) && defined(__CUDACC_EXTENDED_LAMBDA__)
 
@@ -190,9 +209,9 @@ struct ReduceCopyLoopParams {
   IntCount totalPacks;
   IntCount packsPerIteration;
   int effectiveUnrollPacks;
-  IntCount numFullChunks;  // Number of unchecked rounds
-  IntCount remainingPacks;  // Number of packs in checked round
-  IntCount processedElts;  // Number of elements processed (full packs only)
+  IntCount numFullChunks; // Number of unchecked rounds
+  IntCount remainingPacks; // Number of packs in checked round
+  IntCount processedElts; // Number of elements processed (full packs only)
 
   NCCL_DEVICE_INLINE ReduceCopyLoopParams(IntCount count, int coopSize, int stride) {
     if NCCL_IF_CONSTEXPR (Pack::Count > 0) {
@@ -365,7 +384,7 @@ NCCL_DEVICE_INLINE void reduceCopy(Coop coop, SrcLambda srcLambda, int nSrc, Dst
     // Check individual pointer alignment for Pack4 (always 4-byte alignment requirement)
     // getAlignment returns bytes to next aligned address (0 = already aligned)
     using Pack4 = nccl::utility::EltPackForBytes<T, 4>;
-    constexpr unsigned pack4Align = 4;  // Pack4 always requires 4-byte alignment
+    constexpr unsigned pack4Align = 4; // Pack4 always requires 4-byte alignment
     bool srcAligned4 = (srcPtrAfter16 == nullptr) || (nccl::utility::getAlignment(srcPtrAfter16, pack4Align) == 0);
     bool dstAligned4 = (dstPtrAfter16 == nullptr) || (nccl::utility::getAlignment(dstPtrAfter16, pack4Align) == 0);
 
@@ -401,6 +420,91 @@ NCCL_DEVICE_INLINE void reduceCopy(Coop coop, SrcLambda srcLambda, int nSrc, Dst
                                                                              redOp, scalarRemainder);
   }
 }
+
+#if __CUDA_ARCH__ >= 1000
+// TMA-based Copy (Broadcast) Loop (sm100+ only). SmemBytesTotal is the size of the caller's staging
+// buffer for the whole coop. It is split into as many 16B-aligned [data tile][mbarrier] slots as
+// fit (each at least 32B). Extra warps stay idle and rejoin at coop.sync().
+template <int SmemBytesTotal, typename T, typename IntCount, typename Coop, typename DstLambda>
+NCCL_DEVICE_INLINE void lsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count, char* smemPtr) {
+  using Pack = EltPackForBytes<T, 16>;
+  using Bar = cuda::barrier<cuda::thread_scope_block>;
+  constexpr int warpSize = 32;
+  constexpr int barFootprint = (int)((sizeof(Bar) + 15) & ~size_t(15)); // rounds sizeof(Bar) up to a multiple of 16
+  constexpr int minSlotBytes = barFootprint + 16;
+
+  static_assert(SmemBytesTotal >= minSlotBytes, "SmemBytesTotal must be at least 32 bytes");
+
+  const IntCount totalPacks = safeDiv<IntCount>(count, Pack::Count);
+  const int nWarps = (coop.size() + warpSize - 1) / warpSize;
+  const int laneId = coop.thread_rank() % warpSize;
+  const int groupId = coop.thread_rank() / warpSize;
+
+  // We try to use as many warps as we can to get a minSlotBytes slice
+  const int nActiveWarps = (nWarps < SmemBytesTotal / minSlotBytes) ? nWarps : (SmemBytesTotal / minSlotBytes);
+  const int smemBytesPerWarp = (SmemBytesTotal / nActiveWarps) & ~15;
+  const size_t tileSize = (size_t)(smemBytesPerWarp - barFootprint);
+  const IntCount packsPerWarpTile = (IntCount)(tileSize / sizeof(Pack));
+  const IntCount packsPerIter = (IntCount)nActiveWarps * packsPerWarpTile;
+
+  if (groupId < nActiveWarps && laneId == 0) {
+    char* slot = smemPtr + groupId * smemBytesPerWarp;
+    Pack* tmaBuff = reinterpret_cast<Pack*>(slot);
+    Bar* tmaBar = reinterpret_cast<Bar*>(slot + tileSize);
+    init(tmaBar, 1);
+
+    Pack* srcPack = (Pack*)srcPtr;
+    // nBytes should always be a multiple of 16
+    auto loadTile = [&](IntCount packIdx, size_t nBytes) {
+      cuda::device::memcpy_async_tx(tmaBuff, srcPack + packIdx, cuda::aligned_size_t<16>(nBytes), *tmaBar);
+      typename Bar::arrival_token token = cuda::device::barrier_arrive_tx(*tmaBar, 1, nBytes);
+      tmaBar->wait(std::move(token));
+    };
+    auto storeTile = [&](IntCount packIdx, size_t nBytes) {
+      NVCC_PRAGMA_UNROLL(4)
+      for (int dstIdx = 0; dstIdx < nDst; dstIdx++) {
+        Pack* dstPtr = (Pack*)dstLambda(dstIdx);
+        ptx::cp_async_bulk(ptx::space_global, ptx::space_shared, dstPtr + packIdx, tmaBuff, nBytes);
+      }
+      ptx::cp_async_bulk_commit_group();
+      ptx::cp_async_bulk_wait_group_read(ptx::n32_t<0>());
+    };
+
+    IntCount basePackIdx = 0;
+    IntCount groupBasePackIdx = groupId * packsPerWarpTile;
+
+    // PHASE 1: bulk load GMEM -> SMEM, then wait for it to land.
+    if (packsPerIter <= totalPacks) {
+      loadTile(groupBasePackIdx, tileSize);
+    }
+
+    // PHASE 2: bulk store SMEM -> peer GMEM for each destination, then wait for the buffer to drain.
+    while (basePackIdx + packsPerIter <= totalPacks) {
+      storeTile(groupBasePackIdx, tileSize);
+
+      basePackIdx += packsPerIter;
+      groupBasePackIdx += packsPerIter;
+      if (basePackIdx + packsPerIter > totalPacks) break;
+
+      loadTile(groupBasePackIdx, tileSize); // (back to) PHASE 1 for the next tile
+    }
+
+    // PHASE 3: at the end the tail warp may be less than packsPerIter. In that case only a
+    // prefix of the active warps participate, and the last of those transfers "avail" packs.
+    const IntCount tailPacks = totalPacks - basePackIdx;
+    const IntCount myTailOffset = (IntCount)groupId * packsPerWarpTile;
+    if (myTailOffset < tailPacks) {
+      const IntCount avail = tailPacks - myTailOffset;
+      const IntCount myTailPacks = (avail < packsPerWarpTile) ? avail : packsPerWarpTile;
+      const size_t tailBytes = (size_t)myTailPacks * sizeof(Pack);
+
+      loadTile(groupBasePackIdx, tailBytes);
+      storeTile(groupBasePackIdx, tailBytes);
+    }
+  }
+  coop.sync();
+}
+#endif // __CUDA_ARCH__ >= 1000
 
 } // namespace utility
 } // namespace nccl

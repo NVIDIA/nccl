@@ -412,13 +412,13 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist) {
   return ret;
 }
 
-ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
-  using real_t = ncclResult_t (*)(const ncclComm_t, void*, size_t, void**);
+ncclResult_t ncclCommRegister(ncclComm_t comm, void* buff, size_t size, void** handle) {
+  using real_t = ncclResult_t (*)(ncclComm_t, void*, size_t, void**);
   static real_t real_ncclCommRegister = nullptr;
   NCCLCHECK(resolveRealFunction("ncclCommRegister", &real_ncclCommRegister));
 
-  ncclComm_t realComm = const_cast<ncclComm_t>(comm);
-  ncclResult_t ret = g_commHandles.toReal(const_cast<ncclComm_t>(comm), &realComm);
+  ncclComm_t realComm = comm;
+  ncclResult_t ret = g_commHandles.toReal(comm, &realComm);
   if (ret != ncclSuccess) return ret;
   void* realHandle = nullptr;
   ret = real_ncclCommRegister(realComm, buff, size, &realHandle);
@@ -433,32 +433,32 @@ ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, vo
     delete params;
     return ncclSystemError;
   }
-  g_regHandles[synthHandle].synthComm = const_cast<ncclComm_t>(comm);
-  g_commHandles[const_cast<ncclComm_t>(comm)].registrations[params->sequence] = synthHandle;
+  g_regHandles[synthHandle].synthComm = comm;
+  g_commHandles[comm].registrations[params->sequence] = synthHandle;
   *handle = synthHandle;
   return ret;
 }
 
-ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle) {
-  using real_t = ncclResult_t (*)(const ncclComm_t, void*);
+ncclResult_t ncclCommDeregister(ncclComm_t comm, void* handle) {
+  using real_t = ncclResult_t (*)(ncclComm_t, void*);
   static real_t real_ncclCommDeregister = nullptr;
   NCCLCHECK(resolveRealFunction("ncclCommDeregister", &real_ncclCommDeregister));
 
-  ncclComm_t realComm = const_cast<ncclComm_t>(comm);
-  ncclResult_t ret = g_commHandles.toReal(const_cast<ncclComm_t>(comm), &realComm);
+  ncclComm_t realComm = comm;
+  ncclResult_t ret = g_commHandles.toReal(comm, &realComm);
   if (ret != ncclSuccess) return ret;
   void* realHandle = handle;
   const RegHandleEntry* entry = nullptr;
   if (g_regHandles.checkHandle(handle)) {
     NCCLCHECK(g_regHandles.find(handle, &entry));
   }
-  if (entry != nullptr && entry->synthComm != const_cast<ncclComm_t>(comm)) return ncclInvalidArgument;
+  if (entry != nullptr && entry->synthComm != comm) return ncclInvalidArgument;
   uint64_t sequence = (entry != nullptr && entry->config != nullptr) ? entry->config->sequence : 0;
   ret = g_regHandles.toReal(handle, &realHandle);
   if (ret != ncclSuccess) return ret;
   ret = real_ncclCommDeregister(realComm, realHandle);
   if (ret == ncclSuccess && realHandle != nullptr) {
-    if (sequence != 0) g_commHandles[const_cast<ncclComm_t>(comm)].registrations.erase(sequence);
+    if (sequence != 0) g_commHandles[comm].registrations.erase(sequence);
     g_regHandles.remove(handle);
   }
   return ret;

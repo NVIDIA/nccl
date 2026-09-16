@@ -69,8 +69,8 @@ struct ncclRegCache {
 };
 
 ncclResult_t ncclRegCleanup(struct ncclComm* comm);
-ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
-ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg* handle);
+ncclResult_t ncclCommGraphRegister(ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t ncclCommGraphDeregister(ncclComm_t comm, struct ncclReg* handle);
 ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid);
 
 #endif

@@ -27,7 +27,7 @@ ncclResult_t ncclRmaSocketProxyInit(void** ctx, uint64_t commId, ncclDebugLogger
     ncclRmaSocketProxyRefCount++;
     return ncclSuccess;
   }
-  if (ncclGdrCopy == NULL) ncclGdrCopy = ncclGdrInit();
+  // ncclGdrCopy was initialized during comm init. If it is not available, it means that GDRCopy is not supported/enabled.
   if (ncclGdrCopy == NULL) {
     WARN("RMA/Socket : rma_socket requires GDRCopy; and GDR Copy is not available");
     return ncclInternalError;
@@ -349,7 +349,7 @@ static ncclResult_t ncclRmaSocketProxyValidatePutArgs(void* rmaCtx, int context,
 
   memset(args, 0, sizeof(*args));
   args->ctx = ctx;
-  args->srcType = NCCL_PTR_HOST;  // Default for signal-only requests
+  args->srcType = NCCL_PTR_HOST; // Default for signal-only requests
 
   if (size > 0) {
     if (!ncclRmaSocketProxySupportedPtrType(srcHandle->type) || !ncclRmaSocketProxySupportedPtrType(dstHandle->type)) {
@@ -634,25 +634,25 @@ ncclResult_t ncclRmaSocketProxyFinalize(void* ctx) {
 
 ncclRma_t ncclRmaSocketProxy = {
   "RMA_SOCKET_PROXY",
-  ncclRmaSocketProxyInit,               // rma_socket.cc
-  ncclRmaSocketProxyDevices,            // rma_socket.cc
-  ncclRmaSocketProxyGetRmaProperties,   // rma_socket.cc
-  ncclRmaSocketProxyGetProperties,      // rma_socket.cc
-  ncclRmaSocketProxyListen,             // rma_socket.cc
-  ncclRmaSocketProxyConnect,            // rma_socket_setup.cc
-  ncclRmaSocketProxyCreateContext,      // rma_socket_setup.cc
-  ncclRmaSocketProxyRegMrSym,           // rma_socket_mem.cc
-  ncclRmaSocketProxyRegMrSymDmaBuf,     // rma_socket_mem.cc
-  ncclRmaSocketProxyDeregMrSym,         // rma_socket_mem.cc
-  ncclRmaSocketProxyDestroyContext,     // rma_socket_setup.cc
-  ncclRmaSocketProxyCloseColl,          // rma_socket_setup.cc
-  ncclRmaSocketProxyCloseListen,        // rma_socket.cc
-  ncclRmaSocketProxyIPut,               // rma_socket.cc
-  ncclRmaSocketProxyIPutSignal,         // rma_socket.cc
-  ncclRmaSocketProxyIGet,               // rma_socket.cc
-  ncclRmaSocketProxyIFlush,             // rma_socket.cc
-  ncclRmaSocketProxyTest,               // rma_socket.cc
-  ncclRmaSocketProxyProgress,           // rma_socket.cc
-  ncclRmaSocketProxyQueryLastError,     // rma_socket.cc
-  ncclRmaSocketProxyFinalize            // rma_socket.cc
+  ncclRmaSocketProxyInit, // rma_socket.cc
+  ncclRmaSocketProxyDevices, // rma_socket.cc
+  ncclRmaSocketProxyGetRmaProperties, // rma_socket.cc
+  ncclRmaSocketProxyGetProperties, // rma_socket.cc
+  ncclRmaSocketProxyListen, // rma_socket.cc
+  ncclRmaSocketProxyConnect, // rma_socket_setup.cc
+  ncclRmaSocketProxyCreateContext, // rma_socket_setup.cc
+  ncclRmaSocketProxyRegMrSym, // rma_socket_mem.cc
+  ncclRmaSocketProxyRegMrSymDmaBuf, // rma_socket_mem.cc
+  ncclRmaSocketProxyDeregMrSym, // rma_socket_mem.cc
+  ncclRmaSocketProxyDestroyContext, // rma_socket_setup.cc
+  ncclRmaSocketProxyCloseColl, // rma_socket_setup.cc
+  ncclRmaSocketProxyCloseListen, // rma_socket.cc
+  ncclRmaSocketProxyIPut, // rma_socket.cc
+  ncclRmaSocketProxyIPutSignal, // rma_socket.cc
+  ncclRmaSocketProxyIGet, // rma_socket.cc
+  ncclRmaSocketProxyIFlush, // rma_socket.cc
+  ncclRmaSocketProxyTest, // rma_socket.cc
+  ncclRmaSocketProxyProgress, // rma_socket.cc
+  ncclRmaSocketProxyQueryLastError, // rma_socket.cc
+  ncclRmaSocketProxyFinalize // rma_socket.cc
 };

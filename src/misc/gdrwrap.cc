@@ -129,7 +129,7 @@ static int ncclGdrCudaError(CUresult status, const char* call) {
 }
 
 static int ncclGdrDmaBufSupported() {
-#if defined(NCCL_OS_LINUX) && CUDA_VERSION >= 11070
+#if defined(NCCL_OS_LINUX) && CUDA_VERSION >= 13030
   int driverVersion = 0;
   if (ncclCudaLibraryInit() != ncclSuccess) return 0;
   if (ncclCudaDriverVersion(&driverVersion) != ncclSuccess || driverVersion < 13030) return 0;
@@ -148,11 +148,21 @@ static int ncclGdrDmaBufSupported() {
   if (deviceCount == 0) return 0;
   for (int cudaDev = 0; cudaDev < deviceCount; ++cudaDev) {
     CUdevice dev;
-    int supported = 0;
+    int dmaBufSupported = 0;
+    int dmaBufMmapSupported = 0;
     if (CUPFN(cuDeviceGet(&dev, cudaDev)) != CUDA_SUCCESS) return 0;
-    if (CUPFN(cuDeviceGetAttribute(&supported, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, dev)) != CUDA_SUCCESS) return 0;
-    if (!supported) {
+    if (CUPFN(cuDeviceGetAttribute(&dmaBufSupported, CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, dev)) != CUDA_SUCCESS)
+      return 0;
+    if (!dmaBufSupported) {
       INFO(NCCL_INIT, "NCCL internal DMA-BUF mmap backend disabled: CUDA device %d does not support DMA-BUF", cudaDev);
+      return 0;
+    }
+    if (CUPFN(cuDeviceGetAttribute(&dmaBufMmapSupported, CU_DEVICE_ATTRIBUTE_DMA_BUF_MMAP_SUPPORTED, dev)) !=
+        CUDA_SUCCESS)
+      return 0;
+    if (!dmaBufMmapSupported) {
+      INFO(NCCL_INIT, "NCCL internal DMA-BUF mmap backend disabled: CUDA device %d does not support DMA-BUF mmap",
+           cudaDev);
       return 0;
     }
   }
@@ -176,7 +186,7 @@ static int ncclGdrDmaBufClose(gdr_t g) {
 }
 
 static int ncclGdrDmaBufPin(gdr_t g, unsigned long addr, size_t size, uint32_t flags, gdr_mh_t* handle) {
-#if defined(NCCL_OS_LINUX) && CUDA_VERSION >= 11070
+#if defined(NCCL_OS_LINUX) && CUDA_VERSION >= 13030
   if (handle == nullptr) return EINVAL;
   if (g == nullptr) return EINVAL;
   *handle = ncclGdrDmaBufHandleFromMapping(nullptr);
@@ -196,6 +206,7 @@ static int ncclGdrDmaBufPin(gdr_t g, unsigned long addr, size_t size, uint32_t f
   int deviceOrdinal = -1;
   CUdevice dev;
   int dmabufSupported = 0;
+  int dmabufMmapSupported = 0;
   int coherent = 0;
   int fd = -1;
   CUcontext ctx = nullptr;
@@ -217,6 +228,11 @@ static int ncclGdrDmaBufPin(gdr_t g, unsigned long addr, size_t size, uint32_t f
   if (status != CUDA_SUCCESS)
     return ncclGdrCudaError(status, "cuDeviceGetAttribute(CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED)");
   if (!dmabufSupported) return ENOTSUP;
+
+  status = CUPFN(cuDeviceGetAttribute(&dmabufMmapSupported, CU_DEVICE_ATTRIBUTE_DMA_BUF_MMAP_SUPPORTED, dev));
+  if (status != CUDA_SUCCESS)
+    return ncclGdrCudaError(status, "cuDeviceGetAttribute(CU_DEVICE_ATTRIBUTE_DMA_BUF_MMAP_SUPPORTED)");
+  if (!dmabufMmapSupported) return ENOTSUP;
 
   status =
     CUPFN(cuDeviceGetAttribute(&coherent, CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES, dev));

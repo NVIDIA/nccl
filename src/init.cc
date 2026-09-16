@@ -925,7 +925,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->shmDev = statbuf.st_dev;
 #endif
   info->busId = comm->busId;
-  CUCHECK(cuDeviceGetUuid((CUuuid*)&info->gpuUuid, (CUdevice)comm->cudaDev));
+  CUCHECK(cuDeviceGetUuid((CUuuid*)&info->gpuUuid, currentDev));
 
   NCCLCHECK(ncclGpuGdrSupport(comm, &info->gdrSupport));
   NCCLCHECK(ncclGpuCftSupport(comm, &info->gpuCftSupport, &info->gpuCftMulticastSupport, &info->gpuCftCountedSupport));

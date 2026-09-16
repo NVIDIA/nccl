@@ -209,12 +209,16 @@ static ncclResult_t symSchedEnqueueKernelTask(
     struct ncclTaskTuningInfo* taskInfo
   ) {
   int symKernelId = taskInfo->tuningOut.symKernelId;
-  int maxChannels = taskInfo->tuningOut.maxChannels;
+  // Symmetric selections never populate tuningOut.maxChannels (ncclTuningGetChannels only runs
+  // for algo/proto picks), so the channel budget comes from nChannels like the legacy scheduler.
+  int maxChannels = taskInfo->tuningOut.nChannels;
   struct ncclSymSchedKernelTaskQueue* tail = nullptr;
   struct ncclSymSchedKernelTaskQueue* subQueue = streamPlan->kernelTaskQueues;
+  // LL kernels do not support grouping, so each LL task gets its own subQueue.
+  bool isLLKernel = ((1 << symKernelId) & ncclSymkLLKernelMask()) != 0;
 
   while (subQueue != nullptr) {
-    if (subQueue->symKernelId == symKernelId) {
+    if (!isLLKernel && subQueue->symKernelId == symKernelId) {
       ncclIntruQueueEnqueue(&subQueue->taskQueue, taskInfo);
       if (maxChannels > subQueue->maxChannels) subQueue->maxChannels = maxChannels;
       return ncclSuccess;
@@ -395,11 +399,6 @@ static ncclResult_t symSchedBuildKernelPlan(
     }
     memcpy(workBufPtr + workIndex, &devWork, sizeof(struct ncclSymkDevWork));
     workIndex++;
-    if (curChannel == totalChannels) {
-      WARN("symSchedBuildKernelPlan ran out of channel space (totalChannels=%d, nWorks=%d, workIndex=%d)",
-           totalChannels, nWorks, workIndex);
-      goto fail;
-    }
   }
   if (remainCell < cellPerChannel) curChannel++;
 
@@ -554,6 +553,8 @@ static ncclResult_t symSchedLaunchKernel(
     launchConfig.attrs = launchAttrs;
     launchConfig.numAttrs = attrs;
     launchConfig.hStream = launchStream;
+    INFO(NCCL_COLL, "symSchedLaunchKernel grid=(%u,%u,%u) block=(%u,%u,%u) smem=%d launchAttrs=%p numAttrs=%d launchStream=%p fn=%p",
+         grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, (void*)launchAttrs, attrs, (void*)launchStream, (void*)fn);
     CUCHECKGOTO(cuLaunchKernelEx(&launchConfig, fn, nullptr, extra), ret, do_return);
 #endif
   } else {

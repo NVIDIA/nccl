@@ -292,12 +292,14 @@ ncclResult_t ncclPrepareTasksAndCollPreconnectFunc(struct ncclAsyncJob* job_) {
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTaskPrepareJobFunc(struct ncclAsyncJob* job_) {
+static ncclResult_t ncclTaskPrepareAndSchedJobFunc(struct ncclAsyncJob* job_) {
   struct ncclTaskPrepareJob* job = (struct ncclTaskPrepareJob*)job_;
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (!job_->isThreadMain && ncclOsCpuCount(comm->cpuAffinity)) ncclOsSetAffinity(comm->cpuAffinity);
   NCCLCHECK(ncclTaskPrepare(comm, job->simInfo));
+  // A simulation only estimates tuner cost, so nothing is scheduled or launched.
+  if (job->simInfo == nullptr) NCCLCHECK(ncclTaskSchedule(comm, &comm->classifiedTaskQueues));
   return ncclSuccess;
 }
 
@@ -963,6 +965,7 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
   ncclIntruQueueConstruct(&asyncMgmtTaskJobs);
   ncclIntruQueueConstruct(&asyncPrepareJobs);
   ncclIntruQueueConstruct(&asyncScheduleJobs);
+  INFO(NCCL_COLL, "groupLaunchEnqueueRearch");
 
   NCCLCHECKGOTO(groupValidateLaunchCompletionEvents(groupCommHeadMain[ncclGroupTaskTypeRawTask]), ret, fail);
 
@@ -1000,7 +1003,7 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
     do {
       struct ncclTaskPrepareJob* job;
       NEW_NOTHROW_GOTO(job, ncclTaskPrepareJob, ret, fail);
-      job->base.func = ncclTaskPrepareJobFunc;
+      job->base.func = ncclTaskPrepareAndSchedJobFunc;
       job->base.destructor = ncclTaskPrepareJobFree;
       job->base.state = ncclGroupJobRunning;
       job->base.abortFlag = comm->abortFlag;
@@ -1020,12 +1023,6 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
       if (prepareJob->destructor) prepareJob->destructor((void*)prepareJob);
     }
     cliqueHead = comm;
-  }
-  // Schedule and launch tasks. Scheduler and launcher module of the enqueue framework
-  // is not yet implemented and falls back to the legacy launcher: a single phased
-  // doLaunches over the clique, run here on the user's thread.
-  if (!simInfo && groupCommHeadMain[ncclGroupTaskTypeRawTask] != nullptr) {
-    NCCLCHECKGOTO(doLaunches(groupCommHeadMain[ncclGroupTaskTypeRawTask], ncclGroupTaskTypeRawTask), ret, fail);
   }
 
   if (destroyFlag) {

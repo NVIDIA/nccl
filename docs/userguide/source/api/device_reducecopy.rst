@@ -282,6 +282,9 @@ All Copy variants copy from one source to N destinations. See :ref:`common templ
 <device_api_reducecopy_common_params>`. Invocation as for
 :ref:`ncclLsaReduceSum <ncclLsaReduceSum-window-devComm>`; for Copy, the source is local to the invoking rank.
 
+On SM 10.0 and later (Blackwell), :ref:`ncclLsaCopyTma <ncclLsaCopyTma-window-devComm>` is a Tensor Memory Accelerator
+(TMA) implementation of the same LSA copy. It stages user data through a caller-provided shared memory buffer.
+
 .. _ncclLsaCopy-window-devComm:
 
 .. cpp:function:: template<typename T, typename Coop, typename IntCount, int UNROLL> void ncclLsaCopy(Coop coop, T* srcPtr, ncclWindow_t window, size_t offset, IntCount count, ncclDevComm_t devComm)
@@ -336,6 +339,89 @@ All Copy variants copy from one source to N destinations. See :ref:`common templ
    For shared requirements (invocation model, memory, alignment), see the :ref:`introduction <device_api_reducecopy>`.
 
    Same as :ref:`above <ncclLsaCopy-symptr-devComm>`, except the user passes *team* explicitly instead of *devComm*.
+
+**TMA copy (ncclLsaCopyTma)** — Same LSA copy as :ref:`ncclLsaCopy <ncclLsaCopy-window-devComm>`, implemented with
+the Tensor Memory Accelerator. Compile and launch the kernel for SM 10.0+ (``__CUDA_ARCH__ >= 1000``). Pass a
+compile time staging-buffer size of *SmemBytesTotal* and a pointer to that buffer.
+
+.. _device_api_reducecopy_tma_requirements:
+
+**Requirements (caller must guarantee).** Violating these is undefined behavior.
+
+* **Architecture:** Device code must be compiled and the kernel launched on SM 10.0 or later. On older architectures
+  the call is a no op.
+* **Coop:** *Coop* must be ``ncclCoopThread``, ``ncclCoopWarp``, or ``ncclCoopCta``.
+* **Element type:** ``sizeof(T)`` must divide 16 (the TMA transfer unit). This holds for the types listed under
+  :ref:`common template parameters <device_api_reducecopy_common_params>`.
+* **Count:** ``count * sizeof(T)`` must be a multiple of 16.
+* **Alignment:** *srcPtr*, every destination, and *smemPtr* must be 16-byte aligned. Window and ``ncclSymPtr``
+  destinations satisfy this for all peers at once, since a window offset has the same alignment on every LSA peer.
+  For a custom destination lambda there is no such guarantee — each pointer it returns must be 16-byte aligned on
+  its own.
+* **Shared memory:** *SmemBytesTotal* must be at least 32 bytes (16 bytes of staging data plus a 16-byte mbarrier)
+  and must not exceed the number of shared-memory bytes the kernel actually provides at *smemPtr*. The launch must
+  reserve at least *SmemBytesTotal* bytes of dynamic shared memory when *smemPtr* is dynamic ``__shared__``.
+
+.. _ncclLsaCopyTma-window-devComm:
+
+.. cpp:function:: template<typename T, typename Coop, typename IntCount, int SmemBytesTotal> void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclWindow_t window, size_t offset, IntCount count, ncclDevComm_t devComm, char* smemPtr)
+
+   For shared requirements (invocation model, memory), see the :ref:`introduction <device_api_reducecopy>`. For TMA
+   architecture, coop, alignment, count, and shared-memory requirements, see
+   :ref:`above <device_api_reducecopy_tma_requirements>`.
+
+   Copies from local *srcPtr* into the symmetric buffer at *window* + *offset* on all :ref:`LSA <device_api_lsa>`
+   peers, staging through *smemPtr*. Pass *devComm* (the device communicator). *srcPtr*, *window*, *offset*, and
+   *count* are as for :ref:`ncclLsaCopy <ncclLsaCopy-window-devComm>`. *smemPtr* is the start of *SmemBytesTotal*
+   bytes of 16-byte-aligned shared memory owned by the caller. Barrier usage: synchronize before and after when using
+   remote memory (see :ref:`ncclLsaReduceSum <ncclLsaReduceSum-window-devComm>`).
+
+   Example — differs from :ref:`ncclLsaCopy <ncclLsaCopy-window-devComm>` only in the staging buffer. Device side:
+
+   .. code-block:: cpp
+
+      constexpr int smemBytes = 16 << 10;  // 16 KiB staging for the whole CTA
+      extern __shared__ char smemScratch[];
+      ncclLsaCopyTma<T, ncclCoopCta, size_t, smemBytes>(ctaCoop, srcPtr, recvwin, dstOffset, count, devComm,
+                                                        smemScratch);
+
+   Host side, which must reserve the same byte count:
+
+   .. code-block:: cpp
+
+      cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smemBytes);
+      kernel<<<grid, block, smemBytes, stream>>>(...);
+
+.. _ncclLsaCopyTma-window-team:
+
+.. cpp:function:: template<typename T, typename Coop, typename IntCount, int SmemBytesTotal> void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclWindow_t window, size_t offset, IntCount count, ncclTeam team, char* smemPtr)
+
+   For shared requirements (invocation model, memory), see the :ref:`introduction <device_api_reducecopy>`. For TMA
+   requirements, see :ref:`above <device_api_reducecopy_tma_requirements>`.
+
+   Same as :ref:`above <ncclLsaCopyTma-window-devComm>`, except the user passes *team* explicitly (e.g.
+   ``ncclTeamLsa(devComm)``) instead of *devComm*.
+
+.. _ncclLsaCopyTma-symptr-devComm:
+
+.. cpp:function:: template<typename T, typename Coop, typename IntCount, int SmemBytesTotal> void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclSymPtr<T> dst, IntCount count, ncclDevComm_t devComm, char* smemPtr)
+
+   For shared requirements (invocation model, memory), see the :ref:`introduction <device_api_reducecopy>`. For TMA
+   requirements, see :ref:`above <device_api_reducecopy_tma_requirements>`.
+
+   Same as :ref:`above <ncclLsaCopyTma-window-devComm>`, but the destination is given by symmetric pointer *dst*
+   instead of (window, offset). *srcPtr*, *count*, *devComm*, and *smemPtr* are as for
+   :ref:`ncclLsaCopyTma <ncclLsaCopyTma-window-devComm>`. You can construct *dst* with 0 offset and use
+   ``dst + elementOffset`` for element-based indexing.
+
+.. _ncclLsaCopyTma-symptr-team:
+
+.. cpp:function:: template<typename T, typename Coop, typename IntCount, int SmemBytesTotal> void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclSymPtr<T> dst, IntCount count, ncclTeam team, char* smemPtr)
+
+   For shared requirements (invocation model, memory), see the :ref:`introduction <device_api_reducecopy>`. For TMA
+   requirements, see :ref:`above <device_api_reducecopy_tma_requirements>`.
+
+   Same as :ref:`above <ncclLsaCopyTma-symptr-devComm>`, except the user passes *team* explicitly instead of *devComm*.
 
 .. _ncclLocalCopy-strided:
 
@@ -634,6 +720,32 @@ Use a source lambda that maps index *i* to the *i*-th *other* rank and pass *nSr
    Same as :ref:`ncclLsaCopy <ncclLsaCopy-window-team>`, but the destination layout is given by *dstLambda*(index)
    returning ``T*`` for each of *nDst* destinations. *srcPtr* is the local source; *coop* and *count* as for
    :ref:`ncclLsaCopy <ncclLsaCopy-window-team>`. *dstLambda* is called with indices 0 to *nDst* − 1.
+
+.. _ncclLsaCopyTma-lambda:
+
+.. cpp:function:: template<typename T, typename Coop, typename DstLambda, typename IntCount, int SmemBytesTotal> void ncclLsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count, char* smemPtr)
+
+   For shared requirements (invocation model, memory), see the :ref:`introduction <device_api_reducecopy>`. For TMA
+   architecture, coop, alignment, count, and shared-memory requirements, see
+   :ref:`TMA copy requirements <device_api_reducecopy_tma_requirements>`. For the lambda itself, see
+   :ref:`Conditions for the lambda <device_api_reducecopy_lambda>`.
+
+   Same as :ref:`ncclLsaCopy <ncclLsaCopy-lambda>` for the destination layout, but implemented with TMA as
+   :ref:`ncclLsaCopyTma <ncclLsaCopyTma-window-team>`. *dstLambda*(index) returns ``T*`` for each of *nDst*
+   destinations. Each destination pointer is independent and must itself be 16-byte aligned. *srcPtr* is the local
+   source; *smemPtr* is the staging buffer; *coop* and *count* are as for
+   :ref:`ncclLsaCopyTma <ncclLsaCopyTma-window-team>`. *dstLambda* is called with indices 0 to *nDst* − 1.
+
+   Example:
+
+   .. code-block:: cpp
+
+      ncclTeam team = ncclTeamLsa(devComm);
+      auto dstLambda = [=] __device__ (int i) -> T* {
+        return (T*)ncclGetLsaPointer(recvwin, dstOffset, i);
+      };
+      ncclLsaCopyTma<T, ncclCoopCta, decltype(dstLambda), size_t, smemBytes>(
+        ctaCoop, srcPtr, dstLambda, team.nRanks, count, smemScratch);
 
 .. _ncclLocalCopy-lambda:
 

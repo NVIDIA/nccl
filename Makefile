@@ -6,6 +6,14 @@
 #
 .PHONY: all clean ir-emit
 
+# Every goal in this Makefile recurses into a sub-directory, and several of
+# those sub-makes write to shared locations (build/include, build/lib,
+# build/test/gtest.a, build/test/os, ...). Run the top-level goals serially so
+# two sub-makes never race on those files, e.g.
+# `make -j test.perf.build test.apitest.build`. Each sub-make still runs its
+# own recipes in parallel with the -j setting passed down through the jobserver.
+.NOTPARALLEL:
+
 EMIT_LLVM_IR ?= 0
 NCCL_EMIT_LTO_IR ?= 0
 
@@ -43,6 +51,11 @@ ${BUILDDIR}/%.txt: %.txt
 
 src.%:
 	${MAKE} -C src $* BUILDDIR=${ABSBUILDDIR}
+
+# Individual test sub-targets (test.perf.build, test.apitest.build, ...) need the
+# exported headers and libnccl from src.build, just like test.build does.
+test.%.build: src.build
+	${MAKE} -C test $*.build BUILDDIR=${ABSBUILDDIR}
 
 examples: src.build
 	${MAKE} -C docs/examples NCCL_HOME=${ABSBUILDDIR}

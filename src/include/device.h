@@ -42,6 +42,8 @@ extern const char* ncclProtoStr[NCCL_NUM_PROTOCOLS];
 #define NCCL_CUDA_ARCH_SPECIFIC 1010
 #elif __CUDA_ARCH_HAS_FEATURE__(SM120_ALL)
 #define NCCL_CUDA_ARCH_SPECIFIC 1200
+#elif __CUDA_ARCH_HAS_FEATURE__(RUBIN_ALL)
+#define NCCL_CUDA_ARCH_SPECIFIC 1070
 #else
 #define NCCL_CUDA_ARCH_SPECIFIC 0
 #endif
@@ -90,7 +92,7 @@ union ncclLLFifoLine {
 #define WARP_SIZE 32
 #define MAXCHANNELS 64
 #define NCCL_MAX_CGA_CLUSTER_SIZE 8
-#define NCCL_MAX_LOCAL_RANKS 72
+#define NCCL_MAX_LOCAL_RANKS 144
 #define NCCL_MAX_NTHREADS 640
 #define NCCL_MIN_NTHREADS (4 * WARP_SIZE)
 #define NCCL_SIMPLE_MAX_NTHREADS 512
@@ -290,10 +292,8 @@ struct alignas(16) ncclDevWorkColl {
   uint32_t redOpArgIsPtr:1, regUsed:1, netRegUsed:1, oneNode:1, direct:2, isOneRPN:1;
   uint32_t profilerEnabled:1;
   uint32_t root;
-  uint8_t pad1[12];  // pad to 16-byte boundary (20 bytes above -> 32)
   void* recvbuff;
   void* sendbuff;
-  uint64_t pad0;     // pad to 16-byte boundary (16 bytes above -> 32)
   uintptr_t sendbuffOffset;
   uintptr_t recvbuffOffset;
   uintptr_t* sendbuffRmtAddrs;
@@ -313,7 +313,6 @@ struct alignas(16) ncclDevWorkColl {
     } collnet;
   };
   uint64_t redOpArg;
-  uint8_t pad2[8];   // pad struct to multiple of 16
 };
 
 struct alignas(16) ncclDevWorkBcast {
@@ -323,7 +322,7 @@ struct alignas(16) ncclDevWorkBcast {
   void* recvbuff;
   size_t bytes;
   size_t bytes_done;
-  uint8_t pad[8];
+  // Compiler will add any necessary padding at the end to ensure 16-byte size granularity.
 };
 
 __host__ __device__ constexpr int ncclProtoGrainSize(int proto) {
@@ -390,6 +389,14 @@ __host__ __device__ constexpr int ncclMaxDevWorkBatchBytes(int cudaArch = NCCL_C
 #define NCCL_MAX_DEV_WORK_BATCH_BYTES 1024
 #define NCCL_MAX_DEV_WORK_BATCH_COLLS (NCCL_MAX_DEV_WORK_BATCH_BYTES / sizeof(ncclDevWorkColl))
 #define NCCL_MAX_DEV_WORK_P2P_PER_BATCH 8
+// funcId needs 11 bits for the generated device function count; the rest of the
+// word carries ncclDevWorkBatch::func, so the progress-counter slot arrives with
+// the batch descriptor the kernel already loads rather than costing a lookup in
+// device memory.
+constexpr int NCCL_DEV_WORK_BATCH_FUNC_ID_BITS = 11;
+constexpr int NCCL_DEV_WORK_BATCH_FUNC_BITS = 4;
+static_assert(NCCL_NUM_PROGRESS_COUNTERS <= (1 << NCCL_DEV_WORK_BATCH_FUNC_BITS),
+              "Progress-counter slots must fit in ncclDevWorkBatch::func");
 struct alignas(16) ncclDevWorkBatch {
   union {
     struct {
@@ -397,7 +404,10 @@ struct alignas(16) ncclDevWorkBatch {
       // nextJump=0: end of this channel's batch list
       // nextJump>0: batches[thisIndex+nextJump] is next batch in this list
       uint32_t nextJump:14, nextExtends:1;
-      uint32_t workType:2, funcId:15;
+      // func is the ncclFunc_t this batch's completions are counted under; the
+      // device would otherwise have to translate funcId through a table in
+      // global memory on the batch-entry path.
+      uint32_t workType:2, funcId : NCCL_DEV_WORK_BATCH_FUNC_ID_BITS, func : NCCL_DEV_WORK_BATCH_FUNC_BITS;
     };
     // Unioning bitfields with underlying type hints compiler to emit the best
     // SASS LD/ST accesses.
@@ -455,6 +465,14 @@ struct ncclDevProfilerPhases {
   } data[MAX_PROFILER_EVENTS_PER_CHANNEL];
 };
 
+// Shared layout for device progress counters and their pinned host mirror.
+// Each channel owns one active-slot bitmask to avoid inter-channel atomics.
+struct ncclProgressCountersBlock {
+  uint64_t completedWorkCount[NCCL_NUM_PROGRESS_COUNTERS];
+  uint64_t completedTimeNs[NCCL_NUM_PROGRESS_COUNTERS];
+  uint64_t collOpActive[MAXCHANNELS];
+};
+
 struct ncclKernelComm {
   int rank;
   int nRanks;
@@ -477,7 +495,9 @@ struct ncclKernelComm {
   // Profiler counters
   struct ncclDevProfiler* workStarted /*[MAXCHANNELS]*/;
   struct ncclDevProfiler* workCompleted /*[MAXCHANNELS]*/;
-  struct ncclDevProfilerPhases* workPhases /*[MAXCHANNELS]*/;
+
+  // GPU-resident progress-counter block; null when GPU progress counters are disabled.
+  struct ncclProgressCountersBlock* progressCounters;
 };
 
 struct alignas(16) ncclKernelCommAndChannels {
@@ -602,7 +622,7 @@ extern bool const ncclDevKernelForFuncIsSpecialized[/*funcIndex*/];
 
 // Launch a one-rank reduction on stream.
 ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct ncclDevRedOpFull redOp,
-                               ncclDataType_t type, cudaStream_t stream);
+                               ncclDataType_t type, cudaStream_t stream, cudaEvent_t launchCompletionEvent);
 
 // `ncclNvlsSupported()` needs to be in sync with "func_valid" in "src/device/generate.py"
 inline bool ncclNvlsSupported(int devRedOp, int type) {

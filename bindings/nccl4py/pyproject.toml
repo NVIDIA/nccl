@@ -68,16 +68,30 @@ issues = "https://github.com/NVIDIA/nccl/issues"
 
 [build-system]
 requires = [
-    "setuptools>=77.0.3",
+    "setuptools>=80",
+    "setuptools-scm>=10.2,<11",
     "Cython>=3.1"
 ]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+root = "../.."
+version_scheme = "no-guess-dev"
+local_scheme = "node-and-date"
+
+[tool.setuptools_scm.scm.git]
+pre_parse = "fail_on_shallow"
+
+[tool.setuptools_scm.tag]
+prefix = "nccl4py-v"
+strict = true
 
 [tool.setuptools]
 include-package-data = false
 
 [tool.setuptools.packages.find]
-include = ["nccl*"]
+where = ["."]
+include = ["nccl", "nccl.*"]
 # nccl/ is a PEP 420 namespace so NCCL extension distributions (e.g. NCCL EP)
 # can add their own nccl.<ext> subpackage. Required: nccl/ has no __init__.py,
 # so without it no Python module is packaged at all. Only nccl/ is a namespace;
@@ -86,9 +100,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 "nccl.bindings" = ["cynccl.pxd"]
-
-[tool.setuptools.dynamic]
-version = { attr = "nccl.core._version.__version__" }
+"nccl.core" = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
@@ -110,7 +122,7 @@ skip = "*-musllinux_*"
 build-verbosity = 1
 
 [tool.cibuildwheel.linux]
-archs = ["native"]  # Fast local builds; override in CI for multi-arch
+archs = ["native"]  # Each local or CI runner builds its native architecture
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
 repair-wheel-command = "auditwheel repair --exclude libnccl.so.2 --exclude libcuda.so.1 -w {dest_dir} {wheel}"

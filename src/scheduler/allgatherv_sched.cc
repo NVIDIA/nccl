@@ -154,8 +154,8 @@ ncclResult_t ncclScheduleBcastTasksToPlan(struct ncclComm* comm, struct ncclKern
             channelWorkBytes[channelId] += sizeof(ncclDevWorkBcast);
           }
           nBcasts += 1;
-          ncclAddWorkBatchToPlan(comm, plan, channelId, ncclDevWorkTypeBcast, funcIndex, plan->workBytes,
-                                 /*p2pEpoch=*/-1, /*p2pRound=*/-1, newBatch);
+          ncclAddWorkBatchToPlan(comm, plan, channelId, ncclDevWorkTypeBcast, funcIndex, ncclFuncAllGatherV,
+                                 plan->workBytes, /*p2pEpoch=*/-1, /*p2pRound=*/-1, newBatch);
           newBatch = false;
           plan->workBytes += sizeof(ncclDevWorkBcast);
         }

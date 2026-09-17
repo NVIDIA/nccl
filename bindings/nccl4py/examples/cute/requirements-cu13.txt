@@ -1,4 +1,5 @@
 # CUDA 13. nccl4py[cu13] brings in cuda.core and nvidia-cutlass-dsl.
 nccl4py[cu13]
-cupy-cuda13x
+# CuPy 14's NVRTC path needs the CUDA toolkit components supplied by the ctk extra.
+cupy-cuda13x[ctk]>=14.0
 mpi4py

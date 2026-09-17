@@ -8,12 +8,12 @@
 #include "socket.h"
 #include "utils.h"
 #include "os.h"
+#include "crypt.h"
 #include <stdlib.h>
 #include <cstdlib>
 
 #include "param.h"
 #include <time.h>
-#include <atomic>
 #include <mutex>
 
 NCCL_PARAM(RetryCnt, "SOCKET_RETRY_CNT", 34);
@@ -45,13 +45,22 @@ uint64_t ncclSocketDefaultMagic(void) {
   return cached;
 }
 
-static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset,
-                                   int* pclosed = NULL) {
+void ncclSocketMove(struct ncclSocket* dst, struct ncclSocket* src) {
+  memcpy(dst, src, sizeof(struct ncclSocket));
+  ncclCryptRebindSocket(dst);
+  src->socketDescriptor = NCCL_INVALID_SOCKET;
+  src->acceptSocketDescriptor = NCCL_INVALID_SOCKET;
+  src->state = ncclSocketStateNone;
+  src->crypto = nullptr;
+}
+
+static ncclResult_t socketProgressRaw(int op, struct ncclSocket* sock, void* ptr, int size, int* offset,
+                                      bool* pclosed = nullptr) {
   int closed;
   NCCLCHECK(ncclOsSocketProgressOpt(op, sock, ptr, size, offset, 0, &closed));
   if (closed) {
     if (pclosed) {
-      *pclosed = closed;
+      *pclosed = true;
       return ncclSuccess;
     } else {
       char line[SOCKET_NAME_MAXLEN + 1];
@@ -59,6 +68,18 @@ static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, i
            ncclSocketToString(&sock->addr, line, /*numericHostForm*/ 0));
       return ncclRemoteError;
     }
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t socketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset,
+                                   bool* pclosed = nullptr) {
+  if (sock->crypto) {
+    if (size <= *offset) return ncclSuccess;
+    if (op == NCCL_SOCKET_SEND) NCCLCHECK(ncclCryptSocketSend(sock, ptr, size, offset, pclosed));
+    else NCCLCHECK(ncclCryptSocketRecv(sock, ptr, size, offset, pclosed));
+  } else {
+    NCCLCHECK(socketProgressRaw(op, sock, ptr, size, offset, pclosed));
   }
   return ncclSuccess;
 }
@@ -324,67 +345,30 @@ ncclResult_t ncclSocketGetAddr(struct ncclSocket* sock, union ncclSocketAddress*
   return ncclSuccess;
 }
 
+static void socketResetAccept(struct ncclSocket* sock) {
+  ncclOsSocketResetAccept(sock);
+  ncclCryptFree(sock->crypto);
+  sock->crypto = nullptr;
+}
+
 static ncclResult_t socketFinalizeAccept(struct ncclSocket* sock) {
-  uint64_t magic;
-  enum ncclSocketType type;
-  int received;
-  char line[SOCKET_NAME_MAXLEN + 1];
-  // once accepted, linux sockets do NOT inherit file status flags such as O_NONBLOCK (BSD ones do)
   NCCLCHECK(ncclOsSocketSetFlags(sock));
 
-  if (sock->asyncFlag == 0 || sock->finalizeCounter < sizeof(magic)) {
-    if (sock->asyncFlag == 0) {
-      received = 0;
-      if (socketWait(NCCL_SOCKET_RECV, sock, &magic, sizeof(magic), &received) != ncclSuccess) {
-        INFO(NCCL_NET | NCCL_INIT, "socketFinalizeAccept: handshake receive from %s failed, discarding peer connection",
-             ncclSocketToString(&sock->addr, line));
-        ncclOsSocketResetAccept(sock);
-        return ncclSuccess;
-      }
-    } else {
-      int closed = 0;
-      received = sock->finalizeCounter;
-      NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, sock->finalizeBuffer, sizeof(magic), &received, &closed));
-      sock->finalizeCounter = received;
-      if (received < sizeof(magic)) {
-        if (closed) {
-          INFO(NCCL_NET | NCCL_INIT, "socketFinalizeAccept: peer %s closed before magic handshake, discarding",
-               ncclSocketToString(&sock->addr, line));
-          ncclOsSocketResetAccept(sock);
-        }
-        return ncclSuccess;
-      }
-      memcpy(&magic, sock->finalizeBuffer, sizeof(magic));
-    }
-    if (magic != sock->magic) {
-      INFO(NCCL_NET | NCCL_INIT,
-           "socketFinalizeAccept from %s: socket magic mismatch (peer 0x%016llx != expected 0x%016llx), discarding "
-           "peer connection",
-           ncclSocketToString(&sock->addr, line), (unsigned long long)magic, (unsigned long long)sock->magic);
-      ncclOsSocketResetAccept(sock);
+  ncclResult_t ret;
+  do {
+    // Runs the TLS handshake and reads the hello in encrypted mode, or reads the
+    // stock plaintext hello otherwise; all of the socket I/O lives in crypt.cc.
+    enum ncclCryptHelloVerdict verdict;
+    NCCLCHECK(ret = ncclCryptAcceptHello(sock, &verdict));
+    if (verdict == NCCL_CRYPT_HELLO_VERDICT_RESET) {
+      socketResetAccept(sock);
       return ncclSuccess;
     }
-  }
-  if (sock->asyncFlag == 0) {
-    received = 0;
-    NCCLCHECK(socketWait(NCCL_SOCKET_RECV, sock, &type, sizeof(type), &received));
-  } else {
-    received = sock->finalizeCounter - sizeof(magic);
-    NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, sock->finalizeBuffer, sizeof(type), &received));
-    sock->finalizeCounter = received + sizeof(magic);
-    if (received < sizeof(type)) return ncclSuccess;
-    memcpy(&type, sock->finalizeBuffer, sizeof(type));
-  }
-  if (type != sock->type) {
-    INFO(NCCL_NET | NCCL_INIT,
-         "socketFinalizeAccept from %s: wrong socket type (peer %d != expected %d -- peer connected to wrong NCCL "
-         "socket), discarding peer connection",
-         ncclSocketToString(&sock->addr, line), (int)type, (int)sock->type);
-    ncclOsSocketResetAccept(sock);
-    return ncclSuccess;
-  } else {
-    sock->state = ncclSocketStateReady;
-  }
+    if (verdict == NCCL_CRYPT_HELLO_VERDICT_READY) {
+      sock->state = ncclSocketStateReady;
+      return ncclSuccess;
+    }
+  } while (sock->asyncFlag == 0 && ret == ncclInProgress);
   return ncclSuccess;
 }
 
@@ -398,24 +382,11 @@ ncclResult_t ncclSocketPollConnect(struct ncclSocket* sock) {
 }
 
 static ncclResult_t socketFinalizeConnect(struct ncclSocket* sock) {
-  int sent;
-  if (sock->asyncFlag == 0) {
-    sent = 0;
-    NCCLCHECK(socketWait(NCCL_SOCKET_SEND, sock, &sock->magic, sizeof(sock->magic), &sent));
-    sent = 0;
-    NCCLCHECK(socketWait(NCCL_SOCKET_SEND, sock, &sock->type, sizeof(sock->type), &sent));
-  } else {
-    if (sock->finalizeCounter < sizeof(sock->magic)) {
-      sent = sock->finalizeCounter;
-      NCCLCHECK(socketProgress(NCCL_SOCKET_SEND, sock, &sock->magic, sizeof(sock->magic), &sent));
-      sock->finalizeCounter = sent;
-      if (sent < sizeof(sock->magic)) return ncclSuccess;
-    }
-    sent = sock->finalizeCounter - sizeof(sock->magic);
-    NCCLCHECK(socketProgress(NCCL_SOCKET_SEND, sock, &sock->type, sizeof(sock->type), &sent));
-    sock->finalizeCounter = sent + sizeof(sock->magic);
-    if (sent < sizeof(sock->type)) return ncclSuccess;
-  }
+  ncclResult_t ret;
+  do {
+    NCCLCHECK(ret = ncclCryptConnectHello(sock));
+  } while (sock->asyncFlag == 0 && ret == ncclInProgress);
+  if (ret == ncclInProgress) return ncclSuccess;
   sock->state = ncclSocketStateReady;
   return ncclSuccess;
 }
@@ -478,6 +449,8 @@ ncclResult_t ncclSocketConnect(struct ncclSocket* sock) {
   }
   TRACE(NCCL_INIT | NCCL_NET, "Connecting to socket %s", ncclSocketToString(&sock->addr, line));
 
+  NCCLCHECK(ncclCryptStartConnect(sock));
+
   sock->state = ncclSocketStateConnecting;
   sock->finalizeCounter = 0;
   do {
@@ -519,10 +492,12 @@ ncclResult_t ncclSocketAccept(struct ncclSocket* sock, struct ncclSocket* listen
   }
 
   if (!ncclOsSocketDescriptorIsValid(sock->acceptSocketDescriptor)) {
+    // Clone the listener configuration; the accepted socket owns its own TLS state.
     memcpy(sock, listenSock, sizeof(struct ncclSocket));
     sock->acceptSocketDescriptor = listenSock->acceptSocketDescriptor;
     sock->state = ncclSocketStateAccepting;
     sock->finalizeCounter = 0;
+    sock->crypto = nullptr;
   }
 
   do {
@@ -571,6 +546,8 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, const union ncclSocketAddre
   sock->socketDescriptor = NCCL_INVALID_SOCKET;
   sock->acceptSocketDescriptor = NCCL_INVALID_SOCKET;
   sock->customRetry = customRetry;
+  sock->finalizeCounter = 0;
+  sock->crypto = nullptr;
 #ifdef NCCL_OS_WINDOWS
   sock->socketBlockingMode = 1;
 #endif
@@ -601,7 +578,7 @@ fail:
   goto exit;
 }
 
-ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, int* closed) {
+ncclResult_t ncclSocketProgress(int op, struct ncclSocket* sock, void* ptr, int size, int* offset, bool* closed) {
   if (sock == NULL) {
     WARN("ncclSocketProgress: pass NULL socket");
     return ncclInvalidArgument;
@@ -690,33 +667,19 @@ ncclResult_t ncclSocketMultiOp(struct ncclSocketOp* ops, int numOps) {
   return ncclSuccess;
 }
 // Receive or detect connection closed
-ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, int* closed, bool blocking) {
+ncclResult_t ncclSocketTryRecv(struct ncclSocket* sock, void* ptr, int size, bool* closed, bool blocking) {
   int offset = 0;
   if (sock == NULL) {
     WARN("ncclSocketTryRecv: pass NULL socket");
     return ncclInvalidArgument;
   }
-  *closed = 0;
-  // Block until connection closes or nbytes received
-  if (blocking) {
-    while (offset < size) {
-      NCCLCHECK(ncclOsSocketProgressOpt(NCCL_SOCKET_RECV, sock, ptr, size, &offset, 0, closed));
-      if (*closed) return ncclSuccess;
-    }
-  } else {
-    NCCLCHECK(ncclOsSocketProgressOpt(NCCL_SOCKET_RECV, sock, ptr, size, &offset, 0, closed));
+  *closed = false;
+  NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, ptr, size, &offset, closed));
+  if (*closed) return ncclSuccess;
+  if (offset == 0 && !blocking) return ncclInProgress;
+  while (offset < size) {
+    NCCLCHECK(socketProgress(NCCL_SOCKET_RECV, sock, ptr, size, &offset, closed));
     if (*closed) return ncclSuccess;
-
-    // If any bytes were received, block waiting for the rest
-    if (offset > 0) {
-      while (offset < size) {
-        NCCLCHECK(ncclOsSocketProgressOpt(NCCL_SOCKET_RECV, sock, ptr, size, &offset, 0, closed));
-        if (*closed) return ncclSuccess;
-      }
-      // No bytes were received, return ncclInProgress
-    } else {
-      return ncclInProgress;
-    }
   }
   return ncclSuccess;
 }

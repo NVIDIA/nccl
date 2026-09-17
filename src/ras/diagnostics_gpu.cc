@@ -184,18 +184,111 @@ exit:
 }
 
 // *************************************************************************
-// CUDA driver version consistency check.
+// Version consistency checks.
 // *************************************************************************
-#define RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN 0
+static const void* rasDiagnosticsVersionDataFromRecord(const char* record) {
+  return record + sizeof(struct rasDiagnosticsRankHeader);
+}
+
+// format converts a check-specific value to text and returns whether it was collected successfully.
+static ncclResult_t rasDiagnosticsVersionSummarize(const struct rasDiagnosticsReporter* reporter, const char* data,
+                                                   int nData, const char* checkLabel, size_t dataSize,
+                                                   bool (*format)(const void* data, char* buf, size_t bufLen)) {
+  ncclResult_t ret = ncclSuccess;
+  char* records = nullptr;
+  const size_t recordStride = rasDiagnosticsLocalRecordStride(dataSize);
+  int nRecords;
+
+  if (reporter == nullptr || reporter->emit == nullptr) {
+    WARN("RAS diagnostics %s check received invalid reporter", checkLabel);
+    return ncclInternalError;
+  }
+  if (nData == 0) return ncclSuccess;
+  if (data == nullptr) {
+    WARN("RAS diagnostics %s check received null data with size %d", checkLabel, nData);
+    return ncclInternalError;
+  }
+  if (nData < 0 || nData % (int)recordStride != 0) {
+    WARN("RAS diagnostics %s check received malformed data size %d", checkLabel, nData);
+    return ncclInternalError;
+  }
+
+  nRecords = nData / (int)recordStride;
+  NCCLCHECK(ncclCalloc(&records, nData));
+  memcpy(records, data, nData);
+  qsort(records, nRecords, recordStride, rasDiagnosticsRankHeaderCompare);
+
+  for (int start = 0; start < nRecords;) {
+    const char* startRecord = records + start * recordStride;
+    const struct rasDiagnosticsRankHeader* startRank = rasDiagnosticsRankHeaderFromRecord(startRecord);
+    const void* expectedVersion = rasDiagnosticsVersionDataFromRecord(startRecord);
+    int expectedRank = startRank->commRank;
+    int commNRanks = startRank->commNRanks;
+    int mismatchRanks[RAS_DIAG_RANK_SET_MAX];
+    int nMismatchStored = 0, nMismatch = 0;
+    int end = start + 1;
+
+    while (end < nRecords) {
+      const char* record = records + end * recordStride;
+      const struct rasDiagnosticsRankHeader* rank = rasDiagnosticsRankHeaderFromRecord(record);
+      const void* version = rasDiagnosticsVersionDataFromRecord(record);
+
+      if (rasDiagnosticsCommIdCompare(&startRank->commId, &rank->commId) != 0) break;
+      // Version PODs are fully initialized, so their byte representation can be compared directly.
+      if (memcmp(version, expectedVersion, dataSize) != 0) {
+        if (nMismatchStored < RAS_DIAG_RANK_SET_MAX) mismatchRanks[nMismatchStored++] = rank->commRank;
+        nMismatch++;
+      }
+      end++;
+    }
+
+    if (end - start != commNRanks) {
+      NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, checkLabel, startRank, end - start), ret, exit);
+    } else if (nMismatch == 0) {
+      char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+      if (!format(expectedVersion, version, sizeof(version))) {
+        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO, "%s: %s across %d ranks in comm 0x%lx",
+                                           checkLabel, version, commNRanks, startRank->commId.commHash),
+                      ret, exit);
+      } else {
+        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_OK, "%s: %s consistent across %d ranks in comm 0x%lx",
+                                           checkLabel, version, commNRanks, startRank->commId.commHash),
+                      ret, exit);
+      }
+    } else {
+      char rankSet[128];
+      char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+      (void)format(expectedVersion, version, sizeof(version));
+      rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), mismatchRanks, nMismatchStored, nMismatch);
+      NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                                         "%s: mismatch across %d ranks in comm 0x%lx, "
+                                         "rank(s) %s differ from rank %d (%s)",
+                                         checkLabel, commNRanks, startRank->commId.commHash, rankSet, expectedRank,
+                                         version),
+                    ret, exit);
+    }
+
+    start = end;
+  }
+
+exit:
+  free(records);
+  return ret;
+}
+
+// CUDA driver version.
+#define RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN UINT32_MAX
 
 struct rasDiagnosticsCudaDriverVersionData {
   uint32_t version;
 };
 
-static const char* rasDiagnosticsCudaDriverVersionString(uint32_t version, char* buf, size_t bufLen) {
+static bool rasDiagnosticsCudaDriverVersionFormat(const void* data, char* buf, size_t bufLen) {
+  uint32_t version = ((const struct rasDiagnosticsCudaDriverVersionData*)data)->version;
   if (version == RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN) snprintf(buf, bufLen, "unavailable");
+  else if (version == 0) snprintf(buf, bufLen, "no driver installed");
   else snprintf(buf, bufLen, "%u", version);
-  return buf;
+  return version != RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN && version != 0;
 }
 
 static ncclResult_t rasDiagnosticsCudaDriverVersionFillLocalData(const struct rasDiagnosticsCommSnapshot* comm,
@@ -205,7 +298,7 @@ static ncclResult_t rasDiagnosticsCudaDriverVersionFillLocalData(const struct ra
 
   (void)comm;
   versionData->version = RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN;
-  if (ncclCudaDriverVersion(&version) == ncclSuccess && version > 0) {
+  if (ncclCudaDriverVersion(&version) == ncclSuccess) {
     versionData->version = (uint32_t)version;
   }
   return ncclSuccess;
@@ -218,97 +311,52 @@ ncclResult_t rasDiagnosticsCudaDriverVersionCollectLocal(const struct rasDiagnos
   return ncclSuccess;
 }
 
-static const struct rasDiagnosticsCudaDriverVersionData* rasDiagnosticsCudaDriverVersionDataFromRecord(
-  const char* record) {
-  return (const struct rasDiagnosticsCudaDriverVersionData*)(record + sizeof(struct rasDiagnosticsRankHeader));
-}
-
 ncclResult_t rasDiagnosticsCudaDriverVersionSummarize(
   const struct rasDiagnosticsContext* ctx, const struct rasDiagnosticsReporter* reporter, const char* data, int nData) {
-  ncclResult_t ret = ncclSuccess;
-  char* records = nullptr;
-  const size_t recordStride = rasDiagnosticsLocalRecordStride(sizeof(struct rasDiagnosticsCudaDriverVersionData));
-  int nRecords;
-
   (void)ctx;
+  return rasDiagnosticsVersionSummarize(reporter, data, nData, "CUDA driver version",
+                                        sizeof(struct rasDiagnosticsCudaDriverVersionData),
+                                        rasDiagnosticsCudaDriverVersionFormat);
+}
 
-  if (reporter == nullptr || reporter->emit == nullptr) {
-    WARN("RAS diagnostics CUDA driver version check received invalid reporter");
-    return ncclInternalError;
-  }
-  if (nData == 0) return ncclSuccess;
-  if (data == nullptr) {
-    WARN("RAS diagnostics CUDA driver version check received null data with size %d", nData);
-    return ncclInternalError;
-  }
-  if (nData < 0 || nData % (int)recordStride != 0) {
-    WARN("RAS diagnostics CUDA driver version check received malformed data size %d", nData);
-    return ncclInternalError;
-  }
+// NVIDIA graphics driver version.
+struct rasDiagnosticsNvidiaDriverVersionData {
+  char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+};
 
-  nRecords = nData / (int)recordStride;
-  NCCLCHECK(ncclCalloc(&records, nData));
-  memcpy(records, data, nData);
-  qsort(records, nRecords, recordStride, rasDiagnosticsRankHeaderCompare);
+static bool rasDiagnosticsNvidiaDriverVersionFormat(const void* data, char* buf, size_t bufLen) {
+  const struct rasDiagnosticsNvidiaDriverVersionData* versionData =
+    (const struct rasDiagnosticsNvidiaDriverVersionData*)data;
+  if (versionData->version[0] == '\0') snprintf(buf, bufLen, "unavailable via NVML");
+  else snprintf(buf, bufLen, "%.*s", NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE, versionData->version);
+  return versionData->version[0] != '\0';
+}
 
-  for (int start = 0; start < nRecords;) {
-    const char* startRecord = records + start * recordStride;
-    const struct rasDiagnosticsRankHeader* startRank = rasDiagnosticsRankHeaderFromRecord(startRecord);
-    uint32_t expectedVersion = rasDiagnosticsCudaDriverVersionDataFromRecord(startRecord)->version;
-    int expectedRank = startRank->commRank;
-    int commNRanks = startRank->commNRanks;
-    int mismatchRanks[RAS_DIAG_RANK_SET_MAX];
-    int nMismatchStored = 0, nMismatch = 0;
-    int end = start + 1;
+static ncclResult_t rasDiagnosticsNvidiaDriverVersionFillLocalData(const struct rasDiagnosticsCommSnapshot* comm,
+                                                                   void* checkData) {
+  struct rasDiagnosticsNvidiaDriverVersionData* versionData = (struct rasDiagnosticsNvidiaDriverVersionData*)checkData;
 
-    while (end < nRecords) {
-      const char* record = records + end * recordStride;
-      const struct rasDiagnosticsRankHeader* rank = rasDiagnosticsRankHeaderFromRecord(record);
-      uint32_t version = rasDiagnosticsCudaDriverVersionDataFromRecord(record)->version;
+  (void)comm;
+  memset(versionData, 0, sizeof(*versionData));
+  if (ncclNvmlSystemGetDriverVersion(versionData->version, sizeof(versionData->version)) != ncclSuccess)
+    memset(versionData, 0, sizeof(*versionData));
+  versionData->version[sizeof(versionData->version) - 1] = '\0';
+  return ncclSuccess;
+}
 
-      if (rasDiagnosticsCommIdCompare(&startRank->commId, &rank->commId) != 0) break;
-      if (version != expectedVersion) {
-        if (nMismatchStored < RAS_DIAG_RANK_SET_MAX) mismatchRanks[nMismatchStored++] = rank->commRank;
-        nMismatch++;
-      }
-      end++;
-    }
+ncclResult_t rasDiagnosticsNvidiaDriverVersionCollectLocal(const struct rasDiagnosticsContext* ctx,
+                                                           struct rasDiagnosticsLocalData* data) {
+  NCCLCHECK(rasDiagnosticsCollectLocalRecords(ctx, sizeof(struct rasDiagnosticsNvidiaDriverVersionData),
+                                              rasDiagnosticsNvidiaDriverVersionFillLocalData, data));
+  return ncclSuccess;
+}
 
-    if (end - start != commNRanks) {
-      NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, "CUDA driver version", startRank, end - start), ret, exit);
-    } else if (nMismatch == 0) {
-      char version[32];
-      if (expectedVersion == RAS_DIAG_CUDA_DRIVER_VERSION_UNKNOWN) {
-        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                           "CUDA driver version: unavailable across %d ranks in comm 0x%lx", commNRanks,
-                                           startRank->commId.commHash),
-                      ret, exit);
-      } else {
-        NCCLCHECKGOTO(rasDiagnosticsReport(
-                        reporter, RAS_DIAG_TAG_OK, "CUDA driver version: %s consistent across %d ranks in comm 0x%lx",
-                        rasDiagnosticsCudaDriverVersionString(expectedVersion, version, sizeof(version)), commNRanks,
-                        startRank->commId.commHash),
-                      ret, exit);
-      }
-    } else {
-      char rankSet[128];
-      char version[32];
-      rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), mismatchRanks, nMismatchStored, nMismatch);
-      NCCLCHECKGOTO(
-        rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                             "CUDA driver version: mismatch across %d ranks in comm 0x%lx, "
-                             "rank(s) %s differ from rank %d (%s)",
-                             commNRanks, startRank->commId.commHash, rankSet, expectedRank,
-                             rasDiagnosticsCudaDriverVersionString(expectedVersion, version, sizeof(version))),
-        ret, exit);
-    }
-
-    start = end;
-  }
-
-exit:
-  free(records);
-  return ret;
+ncclResult_t rasDiagnosticsNvidiaDriverVersionSummarize(
+  const struct rasDiagnosticsContext* ctx, const struct rasDiagnosticsReporter* reporter, const char* data, int nData) {
+  (void)ctx;
+  return rasDiagnosticsVersionSummarize(reporter, data, nData, "NVIDIA graphics driver version",
+                                        sizeof(struct rasDiagnosticsNvidiaDriverVersionData),
+                                        rasDiagnosticsNvidiaDriverVersionFormat);
 }
 
 // *************************************************************************
@@ -491,39 +539,54 @@ exit:
 }
 
 // *************************************************************************
-// Per-NVLink operational state check.
+// Per-NVLink presence, operational state and speed check.
 // *************************************************************************
-// Counts each device's valid NVLinks and how many are not enabled. PCIe-only devices report zero links and are
-// skipped silently.
-
-// NVML has no valid-link count query, so scan link IDs [0, RAS_DIAG_NVLINK_MAX_LINKS) and keep the ones it marks valid.
-#define RAS_DIAG_NVLINK_MAX_LINKS 18
-
 struct rasDiagnosticsNvLinkData {
-  uint8_t nLinks; // Valid NVLinks reported by NVML.
-  uint8_t nInactive; // Valid NVLinks not in the NVML_FEATURE_ENABLED state.
+  uint8_t nLinks;
+  uint8_t nInactive;
+  uint32_t minSpeedMBps;
+  uint32_t maxSpeedMBps;
 };
 
 static ncclResult_t rasDiagnosticsNvLinkFillLocalData(const struct rasDiagnosticsCommSnapshot* comm, void* checkData) {
   struct rasDiagnosticsNvLinkData* nvlData = (struct rasDiagnosticsNvLinkData*)checkData;
+  nvmlFieldValue_t linkCount = {};
+  unsigned int nUnreadable = 0;
+  nvmlDevice_t device;
 
-  nvlData->nLinks = 0;
-  nvlData->nInactive = 0;
+  *nvlData = {};
 
-  if (comm->nvmlDev >= 0 && comm->nvmlDev < ncclNvmlDeviceCount) {
-    nvmlDevice_t device;
-    if (ncclNvmlDeviceGetHandleByIndex((unsigned int)comm->nvmlDev, &device) == ncclSuccess) {
-      for (unsigned int link = 0; link < RAS_DIAG_NVLINK_MAX_LINKS; link++) {
-        unsigned int valid = 0;
-        if (ncclNvmlDeviceGetNvLinkCapability(device, link, NVML_NVLINK_CAP_VALID, &valid) != ncclSuccess || valid == 0)
-          continue;
-        nvlData->nLinks++;
-        // Unreadable state counts as inactive rather than assumed healthy.
-        nvmlEnableState_t state = NVML_FEATURE_DISABLED;
-        if (ncclNvmlDeviceGetNvLinkState(device, link, &state) != ncclSuccess || state != NVML_FEATURE_ENABLED)
-          nvlData->nInactive++;
+  if (comm->nvmlDev >= 0 && comm->nvmlDev < ncclNvmlDeviceCount &&
+      ncclNvmlDeviceGetHandleByIndex((unsigned int)comm->nvmlDev, &device) == ncclSuccess) {
+    linkCount.fieldId = NVML_FI_DEV_NVLINK_LINK_COUNT;
+    if (ncclNvmlDeviceGetFieldValues(device, 1, &linkCount) == ncclSuccess && linkCount.nvmlReturn == NVML_SUCCESS)
+      nvlData->nLinks = (uint8_t)linkCount.value.uiVal;
+
+    for (unsigned int link = 0; link < nvlData->nLinks; link++) {
+      nvmlFieldValue_t values[2] = {};
+      unsigned int speedMBps = 0;
+
+      values[0].fieldId = NVML_FI_DEV_NVLINK_GET_STATE;
+      values[0].scopeId = link;
+      values[1].fieldId = NVML_FI_DEV_NVLINK_GET_SPEED;
+      values[1].scopeId = link;
+      // A link counts as up only where NVML confirms it enabled at a known speed, as topology detection requires.
+      if (ncclNvmlDeviceGetFieldValues(device, 2, values) == ncclSuccess && values[0].nvmlReturn == NVML_SUCCESS) {
+        if ((nvmlEnableState_t)values[0].value.uiVal == NVML_FEATURE_ENABLED && values[1].nvmlReturn == NVML_SUCCESS)
+          speedMBps = values[1].value.uiVal;
+      } else {
+        nUnreadable++;
       }
+
+      if (speedMBps == 0) {
+        nvlData->nInactive++;
+        continue;
+      }
+      if (nvlData->minSpeedMBps == 0 || speedMBps < nvlData->minSpeedMBps) nvlData->minSpeedMBps = speedMBps;
+      if (speedMBps > nvlData->maxSpeedMBps) nvlData->maxSpeedMBps = speedMBps;
     }
+    // Links whose state NVML cannot report leave nothing to check, so treat the device as having no NVLink.
+    if (nUnreadable == nvlData->nLinks) *nvlData = {};
   }
   return ncclSuccess;
 }
@@ -571,12 +634,14 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
     const char* startRecord = records + start * recordStride;
     const struct rasDiagnosticsRankHeader* startRank = rasDiagnosticsRankHeaderFromRecord(startRecord);
     // Sorted by rank, so the group's first record is its lowest rank; use it as the reference.
-    int refLinks = rasDiagnosticsNvLinkDataFromRecord(startRecord)->nLinks;
+    const struct rasDiagnosticsNvLinkData* refData = rasDiagnosticsNvLinkDataFromRecord(startRecord);
     int commNRanks = startRank->commNRanks;
     int countMismatchRanks[RAS_DIAG_RANK_SET_MAX];
     int inactiveRanks[RAS_DIAG_RANK_SET_MAX];
+    int speedMismatchRanks[RAS_DIAG_RANK_SET_MAX];
     int nCountMismatchStored = 0, nCountMismatch = 0;
     int nInactiveStored = 0, nInactive = 0;
+    int nSpeedMismatchStored = 0, nSpeedMismatch = 0;
     int nWithLinks = 0;
     int end = start;
 
@@ -588,7 +653,7 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
       if (end > start && rasDiagnosticsCommIdCompare(&startRank->commId, &rank->commId) != 0) break;
       nvlData = rasDiagnosticsNvLinkDataFromRecord(record);
       if (nvlData->nLinks > 0) nWithLinks++;
-      if (nvlData->nLinks != refLinks) {
+      if (nvlData->nLinks != refData->nLinks) {
         if (nCountMismatchStored < RAS_DIAG_RANK_SET_MAX) countMismatchRanks[nCountMismatchStored++] = rank->commRank;
         nCountMismatch++;
       }
@@ -596,19 +661,25 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
         if (nInactiveStored < RAS_DIAG_RANK_SET_MAX) inactiveRanks[nInactiveStored++] = rank->commRank;
         nInactive++;
       }
+      // A rank with no link up reports no speed; the inactive-link report covers it instead.
+      if (nvlData->minSpeedMBps != nvlData->maxSpeedMBps ||
+          (nvlData->maxSpeedMBps > 0 && refData->maxSpeedMBps > 0 && nvlData->maxSpeedMBps != refData->maxSpeedMBps)) {
+        if (nSpeedMismatchStored < RAS_DIAG_RANK_SET_MAX) speedMismatchRanks[nSpeedMismatchStored++] = rank->commRank;
+        nSpeedMismatch++;
+      }
       end++;
     }
 
     if (end - start != commNRanks) {
       NCCLCHECKGOTO(rasDiagnosticsReportIncomplete(reporter, "NVLink", startRank, end - start), ret, exit);
     } else if (nWithLinks == 0) {
-      // No device exposes NVLink (e.g. PCIe-only); nothing to report.
-    } else if (nCountMismatch == 0 && nInactive == 0) {
-      NCCLCHECKGOTO(
-        rasDiagnosticsReport(reporter, RAS_DIAG_TAG_OK,
-                             "NVLink: found %d link(s) per device, all active across %d ranks in comm 0x%lx", refLinks,
-                             commNRanks, startRank->commId.commHash),
-        ret, exit);
+      // Nothing to check: either no device exposes NVLink (e.g. PCIe-only), or NVML cannot report it.
+    } else if (nCountMismatch == 0 && nInactive == 0 && nSpeedMismatch == 0) {
+      NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_OK,
+                                         "NVLink: %d links per GPU, all active at consistent speed across %d ranks "
+                                         "in comm 0x%lx",
+                                         refData->nLinks, commNRanks, startRank->commId.commHash),
+                    ret, exit);
     } else {
       if (nCountMismatch > 0) {
         char rankSet[128];
@@ -617,7 +688,7 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
           rasDiagnosticsReport(
             reporter, RAS_DIAG_TAG_INFO,
             "NVLink: link-count mismatch across %d ranks in comm 0x%lx, rank(s) %s differ from rank %d (%d)",
-            commNRanks, startRank->commId.commHash, rankSet, startRank->commRank, refLinks),
+            commNRanks, startRank->commId.commHash, rankSet, startRank->commRank, refData->nLinks),
           ret, exit);
       }
       if (nInactive > 0) {
@@ -625,6 +696,15 @@ ncclResult_t rasDiagnosticsNvLinkSummarize(const struct rasDiagnosticsContext* c
         rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), inactiveRanks, nInactiveStored, nInactive);
         NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
                                            "NVLink: inactive link(s) on rank(s) %s across %d ranks in comm 0x%lx",
+                                           rankSet, commNRanks, startRank->commId.commHash),
+                      ret, exit);
+      }
+      if (nSpeedMismatch > 0) {
+        char rankSet[128];
+        rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), speedMismatchRanks, nSpeedMismatchStored, nSpeedMismatch);
+        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                                           "NVLink: inconsistent link speeds on rank(s) %s across %d ranks "
+                                           "in comm 0x%lx",
                                            rankSet, commNRanks, startRank->commId.commHash),
                       ret, exit);
       }

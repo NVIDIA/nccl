@@ -721,7 +721,7 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
       // always 0.  It will increase after we send this response back to the peer we got the request from.
       rank->peerIdx = 0;
       memcpy(rank->collOpCounts, ncclComm->seqNumber, sizeof(rank->collOpCounts));
-      rank->status.initState = ncclComm->initState;
+      rank->status.initState = COMPILER_ATOMIC_LOAD(&ncclComm->initState, std::memory_order_acquire);
       rank->status.asyncError = COMPILER_ATOMIC_LOAD(&ncclComm->asyncResult, std::memory_order_acquire);
       if (rank->status.asyncError == ncclSuccess && ncclComm->proxyState) {
         rank->status.asyncError = COMPILER_ATOMIC_LOAD(&ncclComm->proxyState->asyncResult, std::memory_order_acquire);

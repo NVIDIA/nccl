@@ -23,9 +23,35 @@ __device__ __forceinline__ void niin_device_barrier_all() {
     bar.sync(ncclCoopThread{}, cuda::memory_order_acq_rel);
   } else {
     // Multi-node — need GIN barrier for cross-node sync
-    ncclGin gin(comm, niin_gin_context_index());
-    ncclBarrierSession<ncclCoopThread> bar(ncclCoopThread{}, ncclTeamTagWorld{}, gin, 0);
-    bar.sync(ncclCoopThread{}, cuda::memory_order_acq_rel, ncclGinFenceLevel::Relaxed);
+    // RMA operations are distributed across GIN contexts by CTA.  The
+    // barrier must therefore fence all of them, not only this CTA's context.
+    ncclGinAllContexts gin(comm);
+    ncclGinBarrierSession<ncclCoopThread> bar(ncclCoopThread{}, gin, ncclTeamTagWorld{}, 0);
+    // A barrier must make prior remote puts visible after it returns.  Ask
+    // NCCL's existing GIN barrier to fence both the producer and consumer
+    // sides instead of using its synchronization-only mode.
+    bar.sync(ncclCoopThread{}, cuda::memory_order_acq_rel,
+             ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
+  }
+}
+
+// The block-scoped NVSHMEMX barriers have a stronger participation contract:
+// every thread in one matching CTA per PE enters the operation.  Use NCCL's
+// CTA cooperative form for those wrappers rather than letting one thread use
+// the scalar barrier form.  In particular, the CTA form owns the required
+// intra-CTA rendezvous while advancing the shared NCCL barrier session.
+__device__ __forceinline__ void niin_device_barrier_all_cta() {
+  ncclDevComm const& comm = niin_comm();
+  ncclCoopCta coop;
+  if (comm.lsaSize == comm.nRanks || !niin_has_gin()) {
+    ncclLsaBarrierSession<ncclCoopCta> bar(
+        coop, comm, ncclTeamLsa(comm), comm.lsaBarrier, 0);
+    bar.sync(coop, cuda::memory_order_acq_rel);
+  } else {
+    ncclGinAllContexts gin(comm);
+    ncclGinBarrierSession<ncclCoopCta> bar(coop, gin, ncclTeamTagWorld{}, 0);
+    bar.sync(coop, cuda::memory_order_acq_rel,
+             ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
   }
 }
 
@@ -44,6 +70,31 @@ __host__ __device__ __forceinline__ void nvshmem_barrier_all() {
 
 __host__ __device__ __forceinline__ void nvshmem_sync_all() {
   nvshmem_barrier_all();
+}
+
+// ---------------------------------------------------------------------------
+// Block-scoped extended barriers.
+//
+// NVSHMEMX requires every thread in the CTA to participate in the block
+// variants.  One representative thread performs NIIN's existing global
+// barrier/sync while the CTA-level barriers make the operation collective at
+// block scope.  Barrier adds the system-scope release/acquire ordering that
+// sync intentionally does not provide.
+// ---------------------------------------------------------------------------
+#define NIIN_HAS_NVSHMEMX_BLOCK_COLLECTIVES 1
+
+__device__ __forceinline__ void nvshmemx_sync_all_block() {
+  __syncthreads();
+  niin_device_barrier_all_cta();
+  __syncthreads();
+}
+
+__device__ __forceinline__ void nvshmemx_barrier_all_block() {
+  cuda::atomic_thread_fence(cuda::memory_order_release, cuda::thread_scope_system);
+  __syncthreads();
+  niin_device_barrier_all_cta();
+  __syncthreads();
+  cuda::atomic_thread_fence(cuda::memory_order_acquire, cuda::thread_scope_system);
 }
 
 __host__ __device__ __forceinline__ void nvshmem_barrier(nvshmem_team_t team) {

@@ -84,7 +84,7 @@ ncclResult_t ncclIpcSocketInit(ncclIpcSocket* handle, int rank, uint64_t hash, v
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, int* fd) {
+ncclResult_t ncclIpcSocketGetFd(struct ncclIpcSocket* handle, ncclIpcFd* fd) {
   if (handle == NULL) {
     WARN("ncclIpcSocketGetFd: pass NULL socket");
     return ncclInvalidArgument;
@@ -109,7 +109,7 @@ ncclResult_t ncclIpcSocketClose(ncclIpcSocket* handle) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, int* recvFd) {
+ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, ncclIpcFd* recvFd) {
   struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
   struct iovec iov[1];
 
@@ -164,11 +164,11 @@ ncclResult_t ncclIpcSocketRecvMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket* handle, int* recvFd) {
+ncclResult_t ncclIpcSocketRecvFd(ncclIpcSocket* handle, ncclIpcFd* recvFd) {
   return ncclIpcSocketRecvMsg(handle, NULL, 0, recvFd);
 }
 
-ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, const int sendFd, int rank,
+ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, ncclIpcFd sendFd, int rank,
                                   uint64_t hash) {
   struct msghdr msg = {0, 0, 0, 0, 0, 0, 0};
   struct iovec iov[1];
@@ -240,6 +240,10 @@ ncclResult_t ncclIpcSocketSendMsg(ncclIpcSocket* handle, void* hdr, int hdrLen, 
   return ncclSuccess;
 }
 
-ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket* handle, const int sendFd, int rank, uint64_t hash) {
+ncclResult_t ncclIpcSocketSendFd(ncclIpcSocket* handle, ncclIpcFd sendFd, int rank, uint64_t hash) {
   return ncclIpcSocketSendMsg(handle, NULL, 0, sendFd, rank, hash);
+}
+
+int ncclIpcFdClose(ncclIpcFd fd) {
+  return close(fd);
 }

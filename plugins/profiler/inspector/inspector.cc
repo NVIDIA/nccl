@@ -49,6 +49,10 @@ static bool enableNcclInspectorDumpVerbose = false;
 // Global flag to control prometheus format dumping
 static bool enableNcclInspectorPromDump = false;
 static bool warnedOtelPromDumpConflict = false;
+// Opt-in flag for the extra per-device stats metrics (collectives/p2p totals
+// and drop counters) in Prometheus mode; kept off so the default Prometheus
+// output stays minimal. Non-static: read from inspector_prom.cc.
+bool enableNcclInspectorPromStats = false;
 // Per-communicator completed-collective ring buffer capacity
 static uint32_t ncclInspectorDumpCollRingSize = 1024;
 // Per-communicator completed-P2P ring buffer capacity
@@ -859,6 +863,7 @@ static void showInspectorEnvVars() {
     {"NCCL_INSPECTOR_DUMP_DIR", getenv("NCCL_INSPECTOR_DUMP_DIR"), "(auto-generated)", "Output directory for inspector logs"},
     {"NCCL_INSPECTOR_DUMP_VERBOSE", getenv("NCCL_INSPECTOR_DUMP_VERBOSE"), "0", "Enable/disable verbose dumping (event_trace)"},
     {"NCCL_INSPECTOR_PROM_DUMP", getenv("NCCL_INSPECTOR_PROM_DUMP"), "0", "Enable/disable Prometheus format output dump"},
+    {"NCCL_INSPECTOR_PROM_DUMP_STATS", getenv("NCCL_INSPECTOR_PROM_DUMP_STATS"), "0", "Enable/disable extra per-device Prometheus stats metrics (collectives/p2p totals and drop counters)"},
     {"NCCL_INSPECTOR_OTEL_EXPORT", getenv("NCCL_INSPECTOR_OTEL_EXPORT"), "0", "Enable/disable OTLP HTTP metrics export"},
     {"NCCL_INSPECTOR_OTEL_VERBOSE", getenv("NCCL_INSPECTOR_OTEL_VERBOSE"), "0", "Enable/disable high-cardinality per-operation OTLP metrics"},
     {"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"), "http://localhost:4318/v1/metrics", "OTLP HTTP metrics endpoint"},
@@ -1024,6 +1029,10 @@ static inspectorResult_t initDumpThreadFromEnv() {
   enable = str ? atoi(str) : 0;
   enableNcclInspectorPromDump = enable == 0 ? false : true;
   warnedOtelPromDumpConflict = false;
+
+  str = getenv("NCCL_INSPECTOR_PROM_DUMP_STATS");
+  enable = str ? atoi(str) : 0;
+  enableNcclInspectorPromStats = enable == 0 ? false : true;
 
   inspectorOtelInitFromEnv();
 

@@ -150,8 +150,8 @@ def test_nccl_put(
     ):
     """Launch the kernel, taking arguments the caller already converted.
 
-    The caller wraps each resource — nccl_cute.DevComm(resource) /
-    nccl_cute.Window(resource) — so no adapter is needed. Costs a line
+    The caller wraps each resource -- nccl_cute.DevComm(resource) /
+    nccl_cute.Window(resource) -- so no adapter is needed. Costs a line
     per argument but gives better IDE completion and keeps static
     analysis honest, since the annotations name the types the body
     actually sees.
@@ -287,7 +287,7 @@ def main():
     device.sync()
     comm_mpi.Barrier()
 
-    # Host-side validation on the receiver — compare the full 1 MiB payload.
+    # Host-side validation on the receiver -- compare the full 1 MiB payload.
     mismatches = 0
     if rank == DST_RANK:
         expected = cp.arange(NUM_ELEMS, dtype='int64')

@@ -87,6 +87,40 @@ NCCL_DEVICE_INLINE void waitMbarrier(ncclCftSmem& cftSmem, uint32_t phaseParity,
   } while (!ready);
 }
 
+template <bool EnableTimeout, typename OpCoop>
+NCCL_DEVICE_INLINE ncclResult_t waitCountedInternal(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer,
+                                                    uint64_t* counter, size_t expected, uint32_t* abortFlag = nullptr,
+                                                    uint64_t timeoutCycles = 0ULL) {
+  using nccl::utility::testAbort;
+  uint32_t steps = 0;
+  uint64_t startCycle = 0;
+  ncclResult_t ret = ncclSuccess;
+
+  if (nccl::cft::internal::elected(coop)) {
+    if NCCL_IF_CONSTEXPR (EnableTimeout) {
+      startCycle = clock64();
+    }
+    cuda::atomic_ref<uint64_t> inbox(*counter);
+    while (true) {
+      uint64_t got = inbox.load(cuda::memory_order_relaxed);
+      if (got - expected <= uint64_t(-1) >> 1) break;
+      if NCCL_IF_CONSTEXPR (EnableTimeout) {
+        if (clock64() - startCycle >= timeoutCycles) {
+          ret = ncclTimeout;
+          goto exit;
+        }
+      } else {
+        if (testAbort(abortFlag, steps)) goto exit;
+      }
+    }
+  }
+  goto exit;
+exit:
+  coop.sync();
+  ncclMemFence(coop, nccl::utility::acquireOrderOf(order), ncclMemProxyType::Fabric, consumer, ncclMemFenceScope::Sys);
+  return ret;
+}
+
 #endif
 
 NCCL_DEVICE_INLINE const char* redOpUnsupported() {
@@ -107,27 +141,16 @@ NCCL_DEVICE_INLINE const char* redOpUnsupported() {
                  : "memory"); \
   }
 
-#define NCCL_CFT_DEFINE_RED_CP_MASK(NAME, PTX_OP, PTX_TYPE) \
-  NCCL_DEVICE_INLINE void red_cp_mask_##NAME(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                             ncclCftSmem& cftSmem, uint16_t cpMask) { \
+#define NCCL_CFT_DEFINE_RED_COUNTED(NAME, PTX_MULTIMEM, PTX_OP, PTX_TYPE) \
+  NCCL_DEVICE_INLINE void red_counted_##NAME(ncclCftLeId leId, size_t leOffset, size_t counterOffset, void* src, \
+                                             uint32_t bytes, ncclCftSmem& cftSmem) { \
     uint32_t srcSmemPtr = smemAddr(src); \
     uint32_t mbarPtr = smemAddr(cftSmem); \
-    asm volatile("fabric.try_red.async.shared::cta.mbarrier::complete_tx::16B.mbarrier::report::fabric.cp_mask" \
-                 ".relaxed.sys." PTX_OP "." PTX_TYPE " [%0, %1], [%2], %3, [%4], %5;" \
+    asm volatile("fabric.try_red.async" PTX_MULTIMEM \
+                 ".shared::cta.mbarrier::complete_tx::16B.mbarrier::report::fabric.counted::bytes.relaxed.sys." PTX_OP \
+                 "." PTX_TYPE " [%0, %1, %2], [%3], %4, [%5];" \
                  : \
-                 : "r"(leId), "l"(leOffset), "r"(srcSmemPtr), "r"(bytes), "r"(mbarPtr), "h"(cpMask) \
-                 : "memory"); \
-  }
-
-#define NCCL_CFT_DEFINE_RED_MULTIMEM_CP_MASK(NAME, PTX_OP, PTX_TYPE) \
-  NCCL_DEVICE_INLINE void red_multimem_cp_mask_##NAME(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                                      ncclCftSmem& cftSmem, uint16_t cpMask) { \
-    uint32_t srcSmemPtr = smemAddr(src); \
-    uint32_t mbarPtr = smemAddr(cftSmem); \
-    asm volatile("fabric.try_red.async.multimem.shared::cta.mbarrier::complete_tx::16B.mbarrier::report::fabric." \
-                 "cp_mask.relaxed.sys." PTX_OP "." PTX_TYPE " [%0, %1], [%2], %3, [%4], %5;" \
-                 : \
-                 : "r"(leId), "l"(leOffset), "r"(srcSmemPtr), "r"(bytes), "r"(mbarPtr), "h"(cpMask) \
+                 : "r"(leId), "l"(leOffset), "l"(counterOffset), "r"(srcSmemPtr), "r"(bytes), "r"(mbarPtr) \
                  : "memory"); \
   }
 
@@ -147,8 +170,8 @@ NCCL_DEVICE_INLINE const char* redOpUnsupported() {
 #define NCCL_CFT_DEFINE_RED_FAMILY(NAME, OP, TYPE) \
   NCCL_CFT_DEFINE_RED(NAME, "", OP, TYPE) \
   NCCL_CFT_DEFINE_RED(multimem_##NAME, ".multimem", OP, TYPE) \
-  NCCL_CFT_DEFINE_RED_CP_MASK(NAME, OP, TYPE) \
-  NCCL_CFT_DEFINE_RED_MULTIMEM_CP_MASK(NAME, OP, TYPE)
+  NCCL_CFT_DEFINE_RED_COUNTED(NAME, "", OP, TYPE) \
+  NCCL_CFT_DEFINE_RED_COUNTED(multimem_##NAME, ".multimem", OP, TYPE)
 
 #define NCCL_CFT_DEFINE_ALL_FAMILY(NAME, OP, TYPE) \
   NCCL_CFT_DEFINE_RED_FAMILY(NAME, OP, TYPE) \
@@ -182,8 +205,7 @@ NCCL_CFT_DEFINE_RED_FAMILY(add_f64, "add", "f64")
 #undef NCCL_CFT_DEFINE_ALL_FAMILY
 #undef NCCL_CFT_DEFINE_RED_FAMILY
 #undef NCCL_CFT_DEFINE_PULLRED
-#undef NCCL_CFT_DEFINE_RED_MULTIMEM_CP_MASK
-#undef NCCL_CFT_DEFINE_RED_CP_MASK
+#undef NCCL_CFT_DEFINE_RED_COUNTED
 #undef NCCL_CFT_DEFINE_RED
 
 template <typename RedOp>
@@ -196,17 +218,17 @@ struct Red;
                                        ncclCftSmem& cftSmem) { \
       red_##NAME(leId, leOffset, src, bytes, cftSmem); \
     } \
-    static NCCL_DEVICE_INLINE void redCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                             ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
+    static NCCL_DEVICE_INLINE void redCounted(ncclCftLeId leId, size_t leOffset, size_t counterOffset, void* src, \
+                                              uint32_t bytes, ncclCftSmem& cftSmem) { \
+      red_counted_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
     } \
     static NCCL_DEVICE_INLINE void redMultimem(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
                                                ncclCftSmem& cftSmem) { \
       red_multimem_##NAME(leId, leOffset, src, bytes, cftSmem); \
     } \
-    static NCCL_DEVICE_INLINE void redMultimemCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                                     ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_multimem_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
+    static NCCL_DEVICE_INLINE void redMultimemCounted(ncclCftLeId leId, size_t leOffset, size_t counterOffset, \
+                                                      void* src, uint32_t bytes, ncclCftSmem& cftSmem) { \
+      red_counted_multimem_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
     } \
     static NCCL_DEVICE_INLINE void pullred(ncclCftLeId leId, size_t leOffset, void* dst, uint32_t bytes, \
                                            ncclCftSmem& cftSmem) { \
@@ -221,17 +243,17 @@ struct Red;
                                        ncclCftSmem& cftSmem) { \
       red_##NAME(leId, leOffset, src, bytes, cftSmem); \
     } \
-    static NCCL_DEVICE_INLINE void redCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                             ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
+    static NCCL_DEVICE_INLINE void redCounted(ncclCftLeId leId, size_t leOffset, size_t counterOffset, void* src, \
+                                              uint32_t bytes, ncclCftSmem& cftSmem) { \
+      red_counted_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
     } \
     static NCCL_DEVICE_INLINE void redMultimem(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
                                                ncclCftSmem& cftSmem) { \
       red_multimem_##NAME(leId, leOffset, src, bytes, cftSmem); \
     } \
-    static NCCL_DEVICE_INLINE void redMultimemCpMask(ncclCftLeId leId, size_t leOffset, void* src, uint32_t bytes, \
-                                                     ncclCftSmem& cftSmem, uint16_t cpMask) { \
-      red_multimem_cp_mask_##NAME(leId, leOffset, src, bytes, cftSmem, cpMask); \
+    static NCCL_DEVICE_INLINE void redMultimemCounted(ncclCftLeId leId, size_t leOffset, size_t counterOffset, \
+                                                      void* src, uint32_t bytes, ncclCftSmem& cftSmem) { \
+      red_counted_multimem_##NAME(leId, leOffset, counterOffset, src, bytes, cftSmem); \
     } \
   };
 
@@ -435,6 +457,44 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::flush(OpCoop coop, bool* hasReport, uint3
 
 template <typename Coop>
 template <typename OpCoop>
+NCCL_DEVICE_INLINE void ncclCft<Coop>::waitCounted(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer,
+                                                   uint64_t* counter, size_t expected, uint32_t* abortFlag) {
+#if NCCL_CFT_ENABLE
+  nccl::cft::internal::waitCountedInternal</*EnableTimeout=*/false>(coop, order, consumer, counter, expected,
+                                                                    abortFlag);
+#else
+  (void)coop;
+  (void)order;
+  (void)consumer;
+  (void)counter;
+  (void)expected;
+  (void)abortFlag;
+  nccl::cft::internal::unsupported();
+#endif
+}
+
+template <typename Coop>
+template <typename OpCoop>
+NCCL_DEVICE_INLINE ncclResult_t ncclCft<Coop>::waitCounted(OpCoop coop, cuda::memory_order order,
+                                                           ncclMemProxyType consumer, uint64_t* counter,
+                                                           size_t expected, uint64_t timeoutCycles) {
+#if NCCL_CFT_ENABLE
+  return nccl::cft::internal::waitCountedInternal</*EnableTimeout=*/true>(coop, order, consumer, counter, expected,
+                                                                          /*abortFlag=*/nullptr, timeoutCycles);
+#else
+  (void)coop;
+  (void)order;
+  (void)consumer;
+  (void)counter;
+  (void)expected;
+  (void)timeoutCycles;
+  nccl::cft::internal::unsupported();
+  return ncclInternalError;
+#endif
+}
+
+template <typename Coop>
+template <typename OpCoop>
 NCCL_DEVICE_INLINE void ncclCft<Coop>::put(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource,
                                            uint32_t bytes) {
 #if NCCL_CFT_ENABLE
@@ -499,6 +559,38 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::putCpMask(OpCoop coop, ncclCftLeId leId, 
 
 template <typename Coop>
 template <typename OpCoop>
+NCCL_DEVICE_INLINE void ncclCft<Coop>::putCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset,
+                                                  void* smemSource, uint32_t bytes) {
+#if NCCL_CFT_ENABLE
+  coop.sync();
+  if (nccl::cft::internal::elected(coop)) {
+#ifdef NCCL_DEVICE_CFT_ENABLE_DEBUG
+    assert(reinterpret_cast<uintptr_t>(smemSource) % 16 == 0 &&
+           "ncclCft::putCounted requires 'smemSource' to be 16 bytes aligned.");
+    assert(bytes % 16 == 0 && "ncclCft::putCounted requires 'bytes' to be a multiple of 16.");
+#endif
+    uint32_t srcSmemPtr = nccl::cft::internal::smemAddr(smemSource);
+    uint32_t mbarPtr = nccl::cft::internal::smemAddr(this->cftSmem);
+    asm volatile("fabric.try_put.async.shared::cta.mbarrier::complete_tx::16B.mbarrier::report::fabric."
+                 "counted::bytes.relaxed.sys.b128 [%0, %1, %2], [%3], %4, [%5];"
+                 :
+                 : "r"(leId), "l"(leOffset), "l"(counterOffset), "r"(srcSmemPtr), "r"(bytes), "r"(mbarPtr)
+                 : "memory");
+    this->txCount += (bytes / 16);
+  }
+#else
+  (void)coop;
+  (void)leId;
+  (void)leOffset;
+  (void)counterOffset;
+  (void)smemSource;
+  (void)bytes;
+  nccl::cft::internal::unsupported();
+#endif
+}
+
+template <typename Coop>
+template <typename OpCoop>
 NCCL_DEVICE_INLINE void ncclCft<Coop>::putMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource,
                                                    uint32_t bytes) {
 #if NCCL_CFT_ENABLE
@@ -523,6 +615,38 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::putMultimem(OpCoop coop, ncclCftLeId leId
   (void)coop;
   (void)leId;
   (void)leOffset;
+  (void)smemSource;
+  (void)bytes;
+  nccl::cft::internal::unsupported();
+#endif
+}
+
+template <typename Coop>
+template <typename OpCoop>
+NCCL_DEVICE_INLINE void ncclCft<Coop>::putMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset,
+                                                          size_t counterOffset, void* smemSource, uint32_t bytes) {
+#if NCCL_CFT_ENABLE
+  coop.sync();
+  if (nccl::cft::internal::elected(coop)) {
+#ifdef NCCL_DEVICE_CFT_ENABLE_DEBUG
+    assert(reinterpret_cast<uintptr_t>(smemSource) % 16 == 0 &&
+           "ncclCft::putMultimemCounted requires 'smemSource' to be 16 bytes aligned.");
+    assert(bytes % 16 == 0 && "ncclCft::putMultimemCounted requires 'bytes' to be a multiple of 16.");
+#endif
+    uint32_t srcSmemPtr = nccl::cft::internal::smemAddr(smemSource);
+    uint32_t mbarPtr = nccl::cft::internal::smemAddr(this->cftSmem);
+    asm volatile("fabric.try_put.async.multimem.shared::cta.mbarrier::complete_tx::16B.mbarrier::report::fabric."
+                 "counted::bytes.relaxed.sys.b128 [%0, %1, %2], [%3], %4, [%5];"
+                 :
+                 : "r"(leId), "l"(leOffset), "l"(counterOffset), "r"(srcSmemPtr), "r"(bytes), "r"(mbarPtr)
+                 : "memory");
+    this->txCount += (bytes / 16);
+  }
+#else
+  (void)coop;
+  (void)leId;
+  (void)leOffset;
+  (void)counterOffset;
   (void)smemSource;
   (void)bytes;
   nccl::cft::internal::unsupported();
@@ -623,17 +747,17 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::red(OpCoop coop, ncclCftLeId leId, size_t
 
 template <typename Coop>
 template <typename RedOp, typename OpCoop>
-NCCL_DEVICE_INLINE void ncclCft<Coop>::redCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red,
-                                                 void* smemSource, uint32_t bytes, uint16_t cpMask) {
+NCCL_DEVICE_INLINE void ncclCft<Coop>::redCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset,
+                                                  RedOp const& red, void* smemSource, uint32_t bytes) {
 #if NCCL_CFT_ENABLE
   coop.sync();
   if (nccl::cft::internal::elected(coop)) {
 #ifdef NCCL_DEVICE_CFT_ENABLE_DEBUG
     assert(reinterpret_cast<uintptr_t>(smemSource) % 16 == 0 &&
-           "ncclCft::redCpMask requires 'smemSource' to be 16 bytes aligned.");
-    assert(bytes % 16 == 0 && "ncclCft::redCpMask requires 'bytes' to be a multiple of 16.");
+           "ncclCft::redCounted requires 'smemSource' to be 16 bytes aligned.");
+    assert(bytes % 16 == 0 && "ncclCft::redCounted requires 'bytes' to be a multiple of 16.");
 #endif
-    nccl::cft::internal::Red<RedOp>::redCpMask(leId, leOffset, smemSource, bytes, this->cftSmem, cpMask);
+    nccl::cft::internal::Red<RedOp>::redCounted(leId, leOffset, counterOffset, smemSource, bytes, this->cftSmem);
     this->txCount += (bytes / 16);
   }
   (void)red;
@@ -641,10 +765,10 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::redCpMask(OpCoop coop, ncclCftLeId leId, 
   (void)coop;
   (void)leId;
   (void)leOffset;
+  (void)counterOffset;
   (void)red;
   (void)smemSource;
   (void)bytes;
-  (void)cpMask;
   assert(false && nccl::cft::internal::redOpUnsupported());
 #endif
 }
@@ -678,17 +802,19 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::redMultimem(OpCoop coop, ncclCftLeId leId
 
 template <typename Coop>
 template <typename RedOp, typename OpCoop>
-NCCL_DEVICE_INLINE void ncclCft<Coop>::redMultimemCpMask(
-  OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemSource, uint32_t bytes, uint16_t cpMask) {
+NCCL_DEVICE_INLINE void ncclCft<Coop>::redMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset,
+                                                          size_t counterOffset, RedOp const& red, void* smemSource,
+                                                          uint32_t bytes) {
 #if NCCL_CFT_ENABLE
   coop.sync();
   if (nccl::cft::internal::elected(coop)) {
 #ifdef NCCL_DEVICE_CFT_ENABLE_DEBUG
     assert(reinterpret_cast<uintptr_t>(smemSource) % 16 == 0 &&
-           "ncclCft::redMultimemCpMask requires 'smemSource' to be 16 bytes aligned.");
-    assert(bytes % 16 == 0 && "ncclCft::redMultimemCpMask requires 'bytes' to be a multiple of 16.");
+           "ncclCft::redMultimemCounted requires 'smemSource' to be 16 bytes aligned.");
+    assert(bytes % 16 == 0 && "ncclCft::redMultimemCounted requires 'bytes' to be a multiple of 16.");
 #endif
-    nccl::cft::internal::Red<RedOp>::redMultimemCpMask(leId, leOffset, smemSource, bytes, this->cftSmem, cpMask);
+    nccl::cft::internal::Red<RedOp>::redMultimemCounted(leId, leOffset, counterOffset, smemSource, bytes,
+                                                        this->cftSmem);
     this->txCount += (bytes / 16);
   }
   (void)red;
@@ -696,11 +822,11 @@ NCCL_DEVICE_INLINE void ncclCft<Coop>::redMultimemCpMask(
   (void)coop;
   (void)leId;
   (void)leOffset;
+  (void)counterOffset;
   (void)red;
   (void)smemSource;
   (void)bytes;
-  (void)cpMask;
-  nccl::cft::internal::unsupported();
+  assert(false && nccl::cft::internal::redOpUnsupported());
 #endif
 }
 

@@ -22,6 +22,12 @@ typedef enum {
   RAS_DIAG_CHECK_ECC = 2,
   RAS_DIAG_CHECK_NVLINK = 3,
   RAS_DIAG_CHECK_NCCL_ENV = 4,
+  RAS_DIAG_CHECK_RDMA_TOPO = 5,
+  RAS_DIAG_CHECK_IOMMU_MODE = 6,
+  RAS_DIAG_CHECK_ATS = 7,
+  RAS_DIAG_CHECK_XID_SXID = 8,
+  RAS_DIAG_CHECK_NVIDIA_DRIVER_VERSION = 9,
+  RAS_DIAG_CHECK_PATHS = 10,
   // Must remain last. Add new check IDs above this sentinel and add the corresponding dispatch table entry.
   RAS_DIAG_CHECK_COUNT
 } rasDiagnosticsCheckId;

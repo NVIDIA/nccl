@@ -448,6 +448,14 @@ ncclResult_t ncclTopoCompareGraphs(struct ncclTopoSystem* system, struct ncclTop
   // 1. Try to get the same nChannels between Rings and Trees
   if (graph->nChannels < graph->minChannels) return ncclSuccess;
 
+  const bool evenReference = refGraph->nChannels > 0 && !(refGraph->nChannels & 1);
+  const bool evenReferenceIsBetter = refGraph->nChannels * refGraph->bwIntra >= graph->nChannels * graph->bwIntra;
+
+  // Favor an even number of channels when aggregate bandwidth is equal or better.
+  if (graph->pattern != NCCL_TOPO_PATTERN_NVLS && evenReference && (graph->nChannels & 1) &&
+      graph->nChannels < system->nodes[NET].count && evenReferenceIsBetter)
+    return ncclSuccess;
+
   if (graph->pattern == NCCL_TOPO_PATTERN_NVLS) {
     // NVLS channels correspond to GPUs pulling from NVLS. So the more the better.
     if (graph->nChannels > refGraph->nChannels && graph->nChannels <= system->nodes[GPU].count) *copy = 1;
@@ -545,8 +553,10 @@ ncclResult_t ncclTopoSelectNets(struct ncclTopoSystem* system, int typeInter, in
   int netCount = 0;
 
   // First add the preferred NETs.
-  if (system->nHosts > 1 && ncclParamScatterEnable()) {
-    // For MNNVL systems, we sort the devices by GPU first, then by channel
+  if (system->nHosts > 1 && ncclParamScatterEnable() && ncclParamCrossNic() != 0) {
+    // For MNNVL systems, we sort the devices by GPU first, then by channel.
+    // This logic cannot guarantee no cross-rail connectivity with different GPU count per NVLD.
+    // When cross-rail connectivity must be avoided (CROSS_NIC=0), we use the ChannelFirst one.
     NCCLCHECK(ncclTopoPrefNetsGpuFirst(system, gpu, nets, &netCount));
   } else {
     // For other systems, we sort the devices by channel first, then by GPU
@@ -589,28 +599,35 @@ exit:
   return ret;
 }
 
-NCCL_PARAM(MnnvlRailPerHost, "MNNVL_RAIL_PER_HOST", 0);
+NCCL_PARAM(MnnvlRailPerHost, "MNNVL_RAIL_PER_HOST", -1);
+
+static bool ncclTopoMnnvlRailPerHost(struct ncclTopoSystem* system) {
+  int railPerHost = ncclParamMnnvlRailPerHost();
+  if (railPerHost == -1) {
+    railPerHost = 1;
+    for (int g = 0; g < system->nodes[GPU].count && railPerHost == 1; g++) {
+      railPerHost &= RUBIN_AND_LATER(system->nodes[GPU].nodes[g].gpu.cudaCompCap) ? 1 : 0;
+    }
+  }
+  return railPerHost;
+}
 
 static bool ncclTopoSearchCheckNet(struct ncclTopoSystem* system, struct ncclTopoGraph* graph,
                                    struct ncclTopoNode* startNet, int n, int step) {
   struct ncclTopoNode* net = system->nodes[NET].nodes + n;
-  // always forbid connections between different networking planes (if both planes are defined).
-  if (net->net.planeId != NCCL_TOPO_UNDEF && startNet->net.planeId != NCCL_TOPO_UNDEF &&
-      net->net.planeId != startNet->net.planeId) {
-    return false;
-  }
+  // Always forbid connections between different networking planes
+  if (net->net.planeId != startNet->net.planeId) return false;
+
   if (graph->pattern == NCCL_TOPO_PATTERN_TREE && net->id != startNet->id) return false; // Trees are symmetric
   if (graph->pattern == NCCL_TOPO_PATTERN_RING && graph->crossNic == 2) {
     if (graph->nChannels & 1 && net->id != graph->inter[(graph->nChannels - 1) * 2]) return false;
   } else if (graph->crossNic == 0) {
-    if (net->net.railId != NCCL_TOPO_UNDEF && startNet->net.railId != NCCL_TOPO_UNDEF) {
-      if (net->net.railId != startNet->net.railId) return false;
-    } else if (ncclParamMnnvlRailPerHost() && NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id)) {
-      // Different hosts in an MNNVL system: rail are per host and identified with the PCI id.
-      if (net->net.pciId != startNet->net.pciId || net->net.port != startNet->net.port) return false;
-    } else {
-      if (net->net.asic != startNet->net.asic || net->net.port != startNet->net.port) return false;
-    }
+    // Different hosts have the same rails.
+    // If the user did not ask for MNNVL rail per host, we need to ensure that the system IDs are matching as well.
+    if (net->net.railId != startNet->net.railId) return false;
+    if ((net->net.railId & NCCL_TOPO_UNDEF_BIT) && !ncclTopoMnnvlRailPerHost(system) &&
+        NCCL_TOPO_ID_SYSTEM_ID(net->id) != NCCL_TOPO_ID_SYSTEM_ID(startNet->id))
+      return false;
   }
   if (graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE && step != 0 &&
       net->id != graph->inter[graph->nChannels * 2 + 1]) {
@@ -1041,7 +1058,7 @@ ncclResult_t ncclTopoGetXmlFromGraph(struct ncclTopoGraph* graph, struct ncclTop
   NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedintra", graph->bwIntra));
   NCCLCHECK(xmlSetAttrFloat(xmlGraph, "speedinter", graph->bwInter));
   NCCLCHECK(xmlSetAttrFloat(xmlGraph, "latencyinter", graph->latencyInter));
-  const char* str;
+  const char* str = NULL;
   NCCLCHECK(kvConvertToStr(graph->typeIntra, &str, kvDictLinkType));
   NCCLCHECK(xmlSetAttr(xmlGraph, "typeintra", str));
   NCCLCHECK(kvConvertToStr(graph->typeInter, &str, kvDictLinkType));
@@ -1096,6 +1113,35 @@ float sm100SpeedArrayInter[] = {96.0, 90.2, 86.0, 80.0, 48.0, 45.1, 42.0, 40.0, 
                                 20.0, 17.5, 15.0, 12.0, 6.0,  3.0,  2.4,  1.2,  0.24, 0.12};
 #define NSPEEDSINTRA_SM100 (sizeof(sm100SpeedArrayIntra) / sizeof(float))
 #define NSPEEDSINTER_SM100 (sizeof(sm100SpeedArrayInter) / sizeof(float))
+
+// clang-format off
+float rubinSpeedArrayIntra[] = {/*4x*/280.8, /*6x*/187.2, /*8x*/140.4, /*12x*/93.6, /*16x*/70.2,
+                                /*24x*/46.8,  /*32x*/35.1, /*48x*/23.4,  /*64x=*/17.55};
+float rubinSpeedArrayInter[] = {
+  /*4x*/ 280.8,    /*6x*/ 187.2,  /*8x*/ 140.4,  96.0,          /*12x*/ 93.6,
+  /*15x*/ 74.6,    /*16x*/ 70.2,  48.0,         /*24x*/ 46.8,
+  /*30x*/ 37.4,    /*31x*/ 36.1,  /*32x*/ 35.1,
+  /*rest*/ 32.8, 24.6, /*48x*/23.4, 19.7, 18.1, /*64x*/17.55, 16.4, 14.4, 12.3, 9.9, 4.9, 2.5, 2.0, 1.0, 0.2, 0.1
+};
+// clang-format on
+#define NSPEEDSINTRA_RUBIN (sizeof(rubinSpeedArrayIntra) / sizeof(float))
+#define NSPEEDSINTER_RUBIN (sizeof(rubinSpeedArrayInter) / sizeof(float))
+
+static void ncclTopoGetSpeedArray(int inter, int ccMin, int* nSpeeds, float** speedArray) {
+  if (RUBIN_AND_LATER(ccMin)) {
+    *nSpeeds = inter ? NSPEEDSINTER_RUBIN : NSPEEDSINTRA_RUBIN;
+    *speedArray = inter ? rubinSpeedArrayInter : rubinSpeedArrayIntra;
+  } else if (ccMin >= 100) {
+    *nSpeeds = inter ? NSPEEDSINTER_SM100 : NSPEEDSINTRA_SM100;
+    *speedArray = inter ? sm100SpeedArrayInter : sm100SpeedArrayIntra;
+  } else if (ccMin >= 90) {
+    *nSpeeds = inter ? NSPEEDSINTER_SM90 : NSPEEDSINTRA_SM90;
+    *speedArray = inter ? sm90SpeedArrayInter : sm90SpeedArrayIntra;
+  } else {
+    *nSpeeds = inter ? NSPEEDSINTER : NSPEEDSINTRA;
+    *speedArray = inter ? speedArrayInter : speedArrayIntra;
+  }
+}
 
 ncclResult_t ncclTopoCheckCrossNicSupport(bool* supported) {
   *supported = (ncclParamCrossNic() != 0);
@@ -1190,14 +1236,9 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   NCCLCHECKGOTO(ncclCalloc(&tmpGraph, 1), ret, exit);
   memcpy(tmpGraph, graph, sizeof(struct ncclTopoGraph));
 
+  ncclTopoGetSpeedArray(system->inter, ccMin, &nspeeds, &speedArray);
+
   // First try crossnic, then decrease bw and finally increase bwIntra.
-  if (system->inter == 0) {
-    nspeeds = ccMin >= 100 ? NSPEEDSINTRA_SM100 : (ccMin >= 90 ? NSPEEDSINTRA_SM90 : NSPEEDSINTRA);
-    speedArray = ccMin >= 100 ? sm100SpeedArrayIntra : (ccMin >= 90 ? sm90SpeedArrayIntra : speedArrayIntra);
-  } else {
-    nspeeds = ccMin >= 100 ? NSPEEDSINTER_SM100 : (ccMin >= 90 ? NSPEEDSINTER_SM90 : NSPEEDSINTER);
-    speedArray = ccMin >= 100 ? sm100SpeedArrayInter : (ccMin >= 90 ? sm90SpeedArrayInter : speedArrayInter);
-  }
   maxBw = system->maxBw;
   totalBw = system->totalBw;
 

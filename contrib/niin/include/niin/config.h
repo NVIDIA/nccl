@@ -52,4 +52,12 @@
 #error "NIIN_ON_NOT_IMPLEMENTED must be NIIN_TRAP, NIIN_NOOP, or NIIN_WARN"
 #endif
 
+// Network (GIN) transport helpers are defined in headers but deliberately not
+// inlined: a caller that only reaches NVLink peers should not carry a network
+// descriptor build in its register footprint. `inline` keeps one definition per
+// program under RDC; `__noinline__` keeps it out of the caller's frame.
+#ifndef NIIN_NOINLINE_DEVICE
+#define NIIN_NOINLINE_DEVICE inline __device__ __noinline__
+#endif
+
 #endif // NIIN_CONFIG_H_

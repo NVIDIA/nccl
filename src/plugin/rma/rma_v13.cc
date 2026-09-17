@@ -52,6 +52,12 @@ static ncclResult_t ncclRma_regMrSymDmaBuf(void* collComm, void* data, size_t si
   return ncclSuccess;
 }
 
+static ncclResult_t ncclRma_getRmaProperties(void* collComm, ncclRmaProperties_t* rmaProps) {
+  (void)collComm;
+  rmaProps->flushesAllPutsOnAnySignal = false;
+  return ncclSuccess;
+}
+
 // Drop isStrongSignal. All signals in v13 are strong signals.
 static ncclResult_t ncclRma_iputSignal(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
                                        uint64_t dstOff, void* dstMhandle, uint32_t rank, uint64_t signalOff,
@@ -87,6 +93,7 @@ ncclRma_t* getNcclRma_v13(void* lib) {
     ncclRma.name = ncclRma_v13->name;
     ncclRma.init = ncclRma_init;
     ncclRma.devices = ncclRma_v13->devices;
+    ncclRma.getRmaProperties = ncclRma_getRmaProperties;
     ncclRma.getProperties = ncclRma_v13->getProperties;
     ncclRma.listen = ncclRma_v13->listen;
     ncclRma.connect = ncclRma_v13->connect;

@@ -83,7 +83,7 @@ template <unsigned backendMask>
 struct ncclGinCtx_M : ncclGinCtx {};
 
 struct ncclGinDescriptorSmem {
-  alignas(16) char space[64];
+  alignas(64) char space[128];
 };
 
 enum ncclGinSignalType {
@@ -193,6 +193,13 @@ struct ncclGinApi_Flush {
 // as strong signals (required by the barrier implementation)
 template <ncclNetDeviceType backend>
 struct ncclGinApi_SupportsStrongSignal {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx);
+};
+
+// Reports whether the backend flushes all previously-received puts on any received signal. Dispatched
+// per backend so each backend owns the answer.
+template <ncclNetDeviceType backend>
+struct ncclGinApi_FlushesAllPutsOnAnySignal {
   NCCL_DEVICE_INLINE static bool call(ncclGinCtx);
 };
 #endif

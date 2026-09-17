@@ -20,7 +20,7 @@ Types
 
 .. c:type:: ncclParamHandle_t
 
-  Opaque handle that represents a binding between a caller and a 
+  Opaque handle that represents a binding between a caller and a
   parameter. It is created by :c:func:`ncclParamBind`. The handle remains valid for
   duration of the NCCL module's lifetime; callers must not free it or expect it to be
   accessible during static destruction or process tear down.

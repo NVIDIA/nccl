@@ -76,8 +76,12 @@ NCCL_DEVICE_INLINE ncclGinBarrierSession<Coop>& ncclBarrierSession<Coop>::ginBar
 
 #ifdef __CUDACC__
 template <typename Coop>
-NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(
-  ncclGinFenceLevel fence, bool* needsLsaBarrier, bool* needsRailGinBarrier, bool* needsDenseGinBarrier) const {
+NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(ncclGinFenceLevel fence, bool* needsLsaBarrier,
+                                                                    bool* needsRailGinBarrier,
+                                                                    bool* needsDenseGinBarrier,
+                                                                    bool* needsProducerFlush) const {
+  *needsProducerFlush = false;
+
   // Barrier on TeamLsa
   if (!this->gin.present) {
     *needsLsaBarrier = this->innerLsaBar.present;
@@ -107,6 +111,15 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(
     return;
   }
 
+  // Optimize for the auto-flush fence path.
+  if (this->outerDenseGinBar.present && this->gin.thing._flushesAllPutsOnAnySignal()) {
+    *needsLsaBarrier = this->innerLsaBar.present;
+    *needsRailGinBarrier = this->outerRailGinBar.present;
+    *needsDenseGinBarrier = false;
+    *needsProducerFlush = true;
+    return;
+  }
+
   // If all ranks are connected via GIN, use a dense GIN barrier (=full GIN barrier) to sync all ranks.
   if (comm.ginContextStride == 1) {
     *needsLsaBarrier = false;
@@ -127,8 +140,12 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::selectBarrierAlgo(
 #ifdef __CUDACC__
 template <typename Coop>
 NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::sync(Coop, cuda::memory_order ord, ncclGinFenceLevel fence) {
-  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier;
-  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier);
+  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier, needsProducerFlush;
+  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier, &needsProducerFlush);
+  if (needsProducerFlush) {
+    // Push this rank's own puts out before the barrier so peers' auto-flush makes them visible.
+    this->gin.thing.flush(this->coop, nccl::utility::releaseOrderOf(ord));
+  }
   if (needsLsaBarrier) {
     this->innerLsaBar.thing.sync(
       this->coop, (needsRailGinBarrier || needsDenseGinBarrier) ? nccl::utility::releaseOrderOf(ord) : ord);
@@ -146,8 +163,20 @@ NCCL_DEVICE_INLINE void ncclBarrierSession<Coop>::sync(Coop, cuda::memory_order 
 template <typename Coop>
 NCCL_DEVICE_INLINE ncclResult_t ncclBarrierSession<Coop>::sync(Coop, cuda::memory_order ord, ncclGinFenceLevel fence,
                                                                uint64_t timeoutCycles) {
-  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier;
-  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier);
+  bool needsLsaBarrier, needsRailGinBarrier, needsDenseGinBarrier, needsProducerFlush;
+  selectBarrierAlgo(fence, &needsLsaBarrier, &needsRailGinBarrier, &needsDenseGinBarrier, &needsProducerFlush);
+
+  ncclResult_t flushResult = ncclSuccess;
+
+  if (needsProducerFlush) {
+    // Push this rank's own puts out before the barrier so peers' auto-flush makes them visible.
+    uint64_t startCycle = clock64();
+    flushResult = this->gin.thing.flush(this->coop, nccl::utility::releaseOrderOf(ord), ncclGin_None{}, timeoutCycles);
+    uint64_t elapsed = clock64() - startCycle;
+    timeoutCycles -= min(elapsed, timeoutCycles);
+    // As with the barriers below, threads within a coop don't synchronize about the timeout
+    // condition, so we must not return early here: every thread has to reach the coop syncs below.
+  }
 
   ncclResult_t lsaResult = ncclSuccess, railResult = ncclSuccess, denseResult = ncclSuccess;
 
@@ -173,6 +202,7 @@ NCCL_DEVICE_INLINE ncclResult_t ncclBarrierSession<Coop>::sync(Coop, cuda::memor
       this->coop, needsLsaBarrier ? nccl::utility::acquireOrderOf(ord) : ord, fence, timeoutCycles);
   }
 
+  if (flushResult != ncclSuccess) return flushResult;
   if (lsaResult != ncclSuccess) return lsaResult;
   if (railResult != ncclSuccess) return railResult;
   return denseResult;

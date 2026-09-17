@@ -9,6 +9,7 @@
 #include "tuning.h"
 #include "cost_model.h"
 #include "comm.h"
+#include "cudawrap.h"
 
 // Parse a map of prefixes to a list of elements. The first prefix is
 // optional and, if not present, the list of elements will be applied
@@ -115,11 +116,11 @@ fail:
 
 NCCL_PARAM(Ll128C2c, "LL128_C2C", 1);
 
-static int isLL128Enabled(int minCompCap, int maxCompCap, int interType, int intraType, int nRanks, int func,
-                          int algo) {
+static int isLL128Enabled(int minCompCap, int maxCompCap, int interType, int intraType, int nRanks, int func, int algo,
+                          int minDriverVersion) {
   int ret = 1;
-  if (ncclParamLl128C2c() && minCompCap >= 90) {
-    // Enable LL128 by default only on Hopper/Blackwell for all connections up to P2C and PXN.
+  if (ncclParamLl128C2c() && minCompCap >= 90 && (!RUBIN_AND_LATER(minCompCap) || minDriverVersion >= 13030)) {
+    // Rubin, Blackwell, and Hopper: Enable LL128 for all P2C and PXN if CUDA supports it.
     ret &= (interType <= PATH_PXN);
   } else {
     // Enable LL128 only up to PXB. Don't enable LL128 over PxN because PxN can encapsulate PxB or P2C links.
@@ -187,7 +188,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {39.0, 39.0, 20.4}, /* Volta-N1/Intel-N2/Intel-N4) */
     {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
     {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
-    {2 * 141.0, 2 * 45.0 /*avg of ring & tree*/, 2 * 35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
+    {2 * 141.2, 2 * 45.0 /*avg of ring & tree*/, 2 * 35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
   },
     // perChMaxRingLL128Bws
   {
@@ -201,7 +202,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Volta (N1/N2/N4) */
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 29.0}, /* Hopper (N1/N2/N4) */
-    {55.6, 31.67, 20.0}, /* Blackwell (N1/N2/N4) */
+    {55.6, 36.7, 20.0}, /* Blackwell (N1/N2/N4) */
   },
     // perChMaxTreeBws
   {
@@ -289,13 +290,21 @@ static ncclResult_t getModelEntry(int id, struct ncclTuningModelEntry_t** entry)
 }
 
 /*
+  Pre-initialize the cost model for a communicator.
+  Operations to run before the tuner plugin is initialized.
+*/
+ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm) {
+  comm->tuningContext.tuningConstants = ncclTunerConstantsDefaults;
+  return ncclSuccess;
+}
+
+/*
   Initialize the cost model for a communicator.
   This will initialize the cost model for all models that are enabled.
   If a model fails to initialize, it will be disabled and the error will be logged.
 */
 ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
-  comm->tuningContext.tuningConstants = ncclTunerConstantsDefaults;
   // Protocols/Algorithms enable/disable, and user overrides.
   // All are enabled except ll128 which is enabled by default only in certain cases.
   int protoEnable[NCCL_NUM_FUNCTIONS * NCCL_NUM_PROTOCOLS];
@@ -356,7 +365,7 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
       // protoEnable[..] == 2 indicates that user did not set NCCL_PROTO=LL128 explicitly.
       if (proto == NCCL_PROTO_LL128 && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 2 &&
           !isLL128Enabled(comm->minCompCap, comm->maxCompCap, comm->graphs[algo].typeInter,
-                          comm->graphs[algo].typeIntra, comm->nRanks, f, algo)) {
+                          comm->graphs[algo].typeIntra, comm->nRanks, f, algo, comm->minDriverVersion)) {
         comm->tuningContext.enabled[i][f] = 0;
       }
       //  Check the user env vars only for functions that have a forced configuration and not already disabled.

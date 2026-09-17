@@ -48,6 +48,27 @@ enabling users to perform inter-GPU communication within their own kernels.
   - Combined LSA and GIN synchronization
   - Production-ready optimized communication patterns
 
+### [05_allgather_cft_counted](05_allgather_cft_counted/)
+**CFT Counted AllGather**
+- **Pattern**: GPU kernel performs AllGather with counted CFT puts
+- **API**: `ncclCft::putCounted`, CFT logical endpoints, symmetric windows
+- **Use case**: Peer completion using a counter instead of barrier sync
+- **Key features**:
+  - Device-side allgather implemented with CFT counted writes
+  - Counter base completion
+  - One counter per rank shared across all peers
+
+### [06_allgather_cft_multimem_counted](06_allgather_cft_multimem_counted/)
+**CFT Multimem Counted AllGather**
+- **Pattern**: GPU kernel performs AllGather with counted CFT multimem puts
+- **API**: `ncclCft::putMultimemCounted`, CFT multimem logical endpoint,
+  symmetric windows
+- **Use case**: Counter-based completion with multicast writes
+- **Key features**:
+  - Device-side allgather implemented with CFT multimem counted writes
+  - One multicast put per chunk instead of one put per peer
+  - One counter per rank shared across all multicast senders
+
 ## Choosing the Right Pattern
 
 *Scenario* : Custom kernels fusing computation and communication.
@@ -98,6 +119,8 @@ Note: These examples are C/CUDA-only as they demonstrate GPU kernel programming.
 make 01_allreduce_lsa
 make 02_alltoall_gin
 make 03_alltoall_hybrid
+make 05_allgather_cft_counted
+make 06_allgather_cft_multimem_counted
 ```
 
 ### **Individual Examples**
@@ -113,6 +136,14 @@ cd 02_alltoall_gin/c && make
 # Build and run the Hybrid AlltoAll example
 cd 03_alltoall_hybrid/c && make
 ./alltoall_hybrid
+
+# Build and run the CFT counted AllGather example
+cd 05_allgather_cft_counted/c && make
+./allgather_cft_counted
+
+# Build and run the CFT multimem counted AllGather example
+cd 06_allgather_cft_multimem_counted/c && make
+./allgather_cft_multimem_counted
 ```
 
 ## References

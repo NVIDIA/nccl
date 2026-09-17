@@ -9,8 +9,8 @@
 
 A multimem (multicast) mapping lets one store reach every LSA peer's copy
 of a window. This requests one for the LSA team and shows the two places
-the handle comes from — embedded in the devcomm, or returned to the host
-by ``create_dev_comm`` — and the three places it is consumed.
+the handle comes from -- embedded in the devcomm, or returned to the host
+by ``create_dev_comm`` -- and the three places it is consumed.
 
 The CuTeDSL layer exposes multimem *addresses*; the multimem load-reduce
 and store instructions themselves are PTX and are not wrapped here.
@@ -87,12 +87,14 @@ def multimem_kernel(
     bar = nccl_cute.lsa_default(
         coop, dev_comm, index=BARRIER_INDEX, multimem=True, mm_handle=embedded_mm)
     bar.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
+    bar.destroy()
 
     # Same barrier, with team and handle named by the caller.
     explicit = nccl_cute.lsa_session(
         coop, dev_comm, dev_comm.team_lsa, dev_comm.lsa_barrier,
         index=BARRIER_INDEX, multimem=True, mm_handle=host_mm)
     explicit.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
+    explicit.destroy()
 
     if 0 == tidx:
         cute.printf(f"rank {dev_comm.rank}: multimem barriers passed")

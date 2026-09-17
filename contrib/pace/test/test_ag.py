@@ -44,8 +44,8 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
                 print(f'[rank {rank}]: get_gathered_tensors mismatch')
                 torch.save((r, ans, gathered_r), f'ag_gathered_{rank}.h5')
                 raise RuntimeError('get_gathered_tensors check failed')
-   
-    
+
+
     def test_ag(input_tensor, rand_input):
         fix_answer = torch.ones((input_tensor.numel() * num_ranks), dtype=input_tensor.dtype, device='cuda')
         rand_answer = torch.ones_like(fix_answer)
@@ -54,7 +54,7 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
         if not args.no_check:
             dist.all_gather_into_tensor(output_tensor=rand_answer, input_tensor=rand_input, group=group)
             dist.all_gather_into_tensor(output_tensor=fix_answer, input_tensor=input_tensor, group=group)
-            
+
             output_t = torch.zeros_like(fix_answer)
 
             # normal
@@ -98,7 +98,7 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
 
             rs, _ = buffer.all_gather(batch_input)
             check_func(rs, batch_answer, in_ = batch_input)
-            
+
             rs, event = buffer.all_gather(batch_input, async_finish=True)
             event.current_stream_wait()
             check_func(rs, batch_answer, in_ = batch_input)
@@ -112,7 +112,7 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
             assert rs is list_out, f'[rank {rank}]: list out= did not return the caller buffers'
             for i in range(len(batch_input)):
                 assert torch.allclose(rs[i], batch_answer[i]), f'[rank {rank}]: list out= tensor {i} mismatch'
-            
+
             dist.barrier()
             if rank == 0:
                 print(f'[rank {rank}]: check passed')
@@ -125,7 +125,7 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
                 if rank == 0 or True:
                     print(f'[rank {rank}]: allgather bandwidth: {total_bytes / t / 1e9:.2f} GBps')
                 dist.barrier()
-            
+
             def test_func():
                 buffer.all_gather(input_tensor)
 
@@ -170,7 +170,7 @@ def test_main(args: argparse.Namespace, num_local_ranks: int, num_ranks: int, ra
                     print(f'[rank {rank}]: nccl_allgather bandwidth: {total_bytes / t / 1e9:.2f} GBps')
 
         dist.barrier()
-    
+
     for seq_len in args.seq_len:
         if rank == 0:
             print(f'\n===== Testing seq_len={seq_len} =====')

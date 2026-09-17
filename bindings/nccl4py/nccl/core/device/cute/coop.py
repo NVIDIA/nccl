@@ -33,7 +33,7 @@ class Coop:
 
     ptr: _LLVMPtrType
 
-    # === Read-only accessors (cheap — direct ptr dispatch) ===
+    # === Read-only accessors (cheap -- direct ptr dispatch) ===
 
     @property
     def thread_rank(self) -> cutlass.Int32:

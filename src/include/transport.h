@@ -12,6 +12,8 @@
 #include "graph.h"
 #include "nvmlwrap.h"
 #include "core.h"
+#include "multicast.h"
+#include "nvls_ub.h"
 
 #define NTRANSPORTS 4
 #define TRANSPORT_UNDEFINED -1
@@ -37,7 +39,10 @@ struct ncclComm;
 
 int64_t ncclParamMultiSegmentRegister();
 extern int64_t ncclParamNvlsEnable();
+int ncclPatEnable(struct ncclComm* comm);
 
+// ncclPeerInfo is exchanged before NCCL version validation.
+// Preserve its wire ABI by appending new fields.
 struct ncclPeerInfo {
   int rank;
   int cudaDev;
@@ -62,6 +67,10 @@ struct ncclPeerInfo {
   bool rmaPluginAvailable;
   bool cuMemGdrSupport;
   int mloPart; // MLOPart partition index, or -1 if not an MLOPart GPU
+  int cudaDriverVersion;
+  bool gpuCftMulticastSupport;
+  bool gpuCftCountedSupport;
+  uint32_t gitVersionHash;
 };
 
 #define CONNECT_SIZE 256
@@ -74,25 +83,28 @@ struct ncclConnect {
 #if CUDART_VERSION >= 12010
 
 #define NVLS_HANDLE_SIZE 64
+
+// UC (unicast) physical memory a consumer binds into its MC group slice.
+struct ncclNvlsUcSegment {
+  CUmemGenericAllocationHandle handle;
+  void* ptr;    // mapped UC VA (NULL until bound)
+  size_t size;  // bind extent (UC-granularity-rounded)
+};
+
 struct ncclNvlsSharedRes {
   int refCount;
   bool inited;
-  CUmulticastObjectProp bufProp;
-  CUmulticastObjectProp signalProp;
   CUmemAccessDesc accessDesc;
   int dev;
-  size_t creditUCSize;
-  size_t creditMCSize;
-  size_t buffUCSize;
-  size_t buffMCSize;
-  CUmemGenericAllocationHandle mcBuffHandle; // Multicast handle for NVLS buffer
-  CUmemGenericAllocationHandle mcCreditHandle; // Multicast handle for NVLS credit buffer
-  char* mcBuff; // Multicast NVLS buffer address
-  char* mcCredit; // Multicast NVLS credit address
-  CUmemGenericAllocationHandle ucBuffHandle; // Unicast Handle for NVLS buffer
-  CUmemGenericAllocationHandle ucCreditHandle; // Unicast Handle for NVLS credit buffer
-  char* ucBuff; // Unicast NVLS buffer address
-  char* ucCredit; // Unicast NVLS credit address
+  // Single MC object per NVLS domain: credit and data are slices of one group.
+  struct ncclMcGroup* mcGroup;
+  struct ncclMcPartition creditPartition;
+  struct ncclMcPartition dataPartition;
+  struct ncclNvlsUcSegment creditUc;
+  struct ncclNvlsUcSegment dataUc;       // unset until ncclNvlsBufferSetup
+  struct ncclMcPartition ubPartition;    // user buffer slice within the group
+  struct ncclMcArena ubArena;            // sub-allocator over ubPartition
+  bool ubEnabled;                        // a user buffer slice was carved out of the group
   int nChannels;
   int nHeads;
   int chunkSize;
@@ -160,8 +172,6 @@ ncclResult_t ncclNvlsGraphRegisterBuffer(
 ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm* comm, const void* sendbuff, void* recvbuff,
                                          size_t sendbuffSize, size_t recvbuffSize, int* outRegBufUsed,
                                          void** outRegBufSend, void** outRegBufRecv);
-ncclResult_t ncclNvlsDeregBuffer(struct ncclComm* comm, CUmemGenericAllocationHandle* mcHandler, CUdeviceptr ptr,
-                                 int dev, size_t ucsize, size_t mcsize);
 ncclResult_t ncclNvlsFree(struct ncclComm* comm);
 
 enum {
@@ -213,13 +223,6 @@ ncclResult_t ncclRegisterCollNvlsBuffers(
   void* outRegBufRecv[NCCL_MAX_LOCAL_RANKS],
   struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* cleanupQueue, bool* regNeedConnect);
 ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, ncclFunc_t func, int* recChannels);
-
-#if CUDART_VERSION >= 12010
-ncclResult_t ncclNvlsGroupCreate(struct ncclComm* comm, CUmulticastObjectProp* prop, int rank, unsigned int nranks,
-                                 CUmemGenericAllocationHandle* mcHandle, char* shareableHandle);
-ncclResult_t ncclNvlsGroupConnect(struct ncclComm* comm, char* shareableHandle, int rank,
-                                  CUmemGenericAllocationHandle* mcHandle);
-#endif
 
 ncclResult_t ncclIpcSymmetricInit(struct ncclComm* comm);
 ncclResult_t ncclIpcMapSymmetric(struct ncclComm* comm, size_t offset, size_t size,

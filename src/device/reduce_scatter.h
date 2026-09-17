@@ -92,8 +92,8 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SI
     ncclCollCbdPart(work, ncclShmem.channelId, Proto::Id, sizeof(T), &count, &channelOffset, &channelCount,
                     &chunkCount);
 
-    static constexpr int nworkers = NCCL_PAT_NWORKERS;
-    static constexpr int nScatterWorkers = NCCL_MAX_NTHREADS - NCCL_PAT_NWORKERS - WARP_SIZE;
+    const int nworkers = work->isOneRPN ? NCCL_PAT_NWORKERS : NCCL_PAT_MULTI_RPN_NWORKERS;
+    const int nScatterWorkers = NCCL_MAX_NTHREADS - nworkers - WARP_SIZE;
     struct ncclPatShmem* shmem = (struct ncclPatShmem*)ncclScratchForWarp(0);
     uint64_t pollCount = 0;
     __syncthreads(); // Don't start using shared mem until everyone arrives
@@ -155,7 +155,7 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SI
       if (tid == NCCL_MAX_NTHREADS - 1) {
         // Algo computation thread. Multi-RPN PAT-RS stages one NVLS FIFO slot per parallel PAT wave.
         size_t patCount = count * localRanks;
-        PatRSAlgorithm<T> patAlgo(chunkCount * sizeof(T), NCCL_STEPS, NCCL_PAT_NWORKERS / WARP_SIZE, channelOffset,
+        PatRSAlgorithm<T> patAlgo(chunkCount * sizeof(T), NCCL_STEPS, nworkers / WARP_SIZE, channelOffset,
                                   channelOffset + channelCount, patCount, chunkCount, node, nNodes);
         shmem->parallelFactor = patAlgo.getParallelFactor();
         int step = 0;
@@ -208,7 +208,7 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_PAT, NCCL_PROTO_SI
         int scatterTid = tid - nworkers;
         Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, NvlsProto, 0> prims(
           scatterTid, nScatterWorkers, nullptr, nvls->up, inputBuf, nullptr, work->redOpArg,
-          /*group=*/1, /*connIndexRecv=*/1, /*connIndexSend=*/1);
+          /*group=*/NCCL_PAT_MULTI_RPN_NWORKERS / WARP_SIZE, /*connIndexRecv=*/1, /*connIndexSend=*/1);
 
         int parallelFactor = 0;
         volatile int* pfPtr = &shmem->parallelFactor;

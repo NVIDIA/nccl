@@ -19,10 +19,10 @@
 NCCL_PARAM(GinEnable, "GIN_ENABLE", 1);
 
 // Backend version compatibility. Index: backend version. Value: min compatible NCCL version
-const int proxyBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 3), NCCL_VERSION(2, 30, 5)};
+const int proxyBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 3), NCCL_VERSION(2, 30, 5), NCCL_VERSION(2, 32, 0)};
 const int gdakiBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 3), NCCL_VERSION(2, 30, 5)};
 const int gpiBackendMinVersions[] = {0, NCCL_VERSION(2, 30, 5)};
-const int efaGdaBackendMinVersions[] = {0, NCCL_VERSION(2, 31, 0)};
+constexpr int efaGdaBackendMinVersions[] = {0, NCCL_VERSION(2, 31, 0), NCCL_VERSION(2, 32, 0)};
 
 ncclResult_t ncclGetGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
   if (comm == nullptr || ginType == nullptr) return ncclInternalError;
@@ -116,6 +116,10 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   int nLocalGinDevs;
   int localGinDevs[NCCL_TOPO_MAX_NODES];
   NCCLCHECK(ncclTopoGetLocalGinDevs(comm, localGinDevs, &nLocalGinDevs));
+  if (nLocalGinDevs > NCCL_GIN_MAX_CONNECTIONS) {
+    ATTN("Found %d local devices, but GIN supports at most %d connections. Using the first %d connections.",
+         nLocalGinDevs, NCCL_GIN_MAX_CONNECTIONS, NCCL_GIN_MAX_CONNECTIONS);
+  }
 
   void** handles = NULL;
   char* allHandles = NULL;
@@ -382,7 +386,7 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
       ginState->proxyThreadsCreated = true;
       for (int t = 0; t < ginState->proxyNthreads; t++) {
         ginState->thread[t] = std::thread([ginState, t] { ncclGinProgress(ginState, t); });
-        ncclSetThreadName(ginState->thread[t], "NCCL GIN Progress%2d-%d", comm->cudaDev, t);
+        ncclSetThreadName(ginState->thread[t], "NCCL GIN P%d-%d", comm->cudaDev, t);
       }
     }
   }

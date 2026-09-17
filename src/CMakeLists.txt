@@ -21,6 +21,7 @@ set(LIBSRCFILES
     cft_dev_runtime.cc
     dev_runtime_segments.cc
     mem_manager.cc
+    plugin/net.cc
 )
 
 # Add NVTX support if enabled
@@ -100,6 +101,9 @@ endif()
 
 ###################### Create a shared NCCL library ############################
 add_library(nccl SHARED)
+if(NCCL_OS_WINDOWS)
+    target_compile_definitions(nccl PRIVATE NCCL_BUILD_SHARED_LIB)
+endif()
 
 target_sources(nccl PRIVATE ${LIBSRCFILES})
 if(NCCL_OS_WINDOWS)
@@ -119,6 +123,7 @@ set(NCCL_PRIVATE_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/plugin
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
     ${CMAKE_BINARY_DIR}/obj/include
 )
 if(NOT NCCL_OS_WINDOWS AND DOCA_HOME)
@@ -232,20 +237,17 @@ target_link_libraries(nccl
     ${EXTRA_LIBS}
 )
 
-# Add version script for symbol visibility control
-target_link_options(nccl PRIVATE
-    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
-)
+# Add version script for symbol visibility control on linkers that support it.
+if(NOT NCCL_OS_WINDOWS)
+    target_link_options(nccl PRIVATE
+        "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/libnccl.map"
+    )
+endif()
 
 # Set output directories for nccl shared library
 set_target_properties(nccl PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
-
-# On Windows, export all symbols to generate import library (nccl.lib) for DLL linking
-if(NCCL_OS_WINDOWS)
-    set_target_properties(nccl PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-endif()
 
 ###################### Create a ras binary executable ############################
 if(NOT NCCL_OS_WINDOWS)
@@ -329,6 +331,7 @@ target_include_directories(nccl_static
     transport/net_ib/gdaki/doca-gpunetio/include
     ${CUDAToolkit_INCLUDE_DIRS}
     ${CUDAToolkit_INCLUDE_DIRS}/cccl
+    ${NCCL_TLS_INCLUDE_DIRS}
     ${CMAKE_BINARY_DIR}/obj/include
 )
 

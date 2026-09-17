@@ -108,8 +108,12 @@ struct ncclParam : public ncclParamInterface {
   }
 
   std::string dump() override {
-    std::string currentStr = this->toString();
+    auto lock = ensureLoaded();
+    bool sensitive = info.flags & NCCL_PARAM_FLAG_SENSITIVE;
+    std::string currentStr = parser.toString(value);
     std::string defaultStr = parser.toString(defaultValue);
+    if (sensitive && !currentStr.empty()) currentStr = "<redacted>";
+    if (sensitive && !defaultStr.empty()) defaultStr = "<redacted>";
     std::string flagStr = nccl::param::utils::flagsStr(info.flags);
 
     // Line 1: Key (type) [flags] desc

@@ -12,7 +12,10 @@ The following environment variables control NCCL logging behavior:
 +------------------------------------+-----------------------------------------------+
 | Variable                           | Description                                   |
 +====================================+===============================================+
-| :ref:`NCCL_DEBUG`                  | Sets verbosity: VERSION, WARN, INFO, TRACE    |
+| :ref:`NCCL_DEBUG`                  | Sets verbosity: VERSION, WARN, ATTN, INFO,    |
+|                                    | TRACE                                         |
++------------------------------------+-----------------------------------------------+
+| :ref:`NCCL_DEBUG_LEVELS`           | Adds individual logging levels                |
 +------------------------------------+-----------------------------------------------+
 | :ref:`NCCL_DEBUG_SUBSYS`           | Filters log output by subsystem               |
 +------------------------------------+-----------------------------------------------+
@@ -35,12 +38,18 @@ NCCL supports several logging levels, from least to most verbose:
 +=========+============================================+=============================+
 | VERSION | Prints NCCL version at startup             | Verify installation         |
 +---------+--------------------------------------------+-----------------------------+
-| WARN    | Warnings and errors                        | Production minimum          |
+| WARN    | Errors returned by NCCL                    | Production baseline         |
++---------+--------------------------------------------+-----------------------------+
+| ATTN    | Noteworthy messages that are not errors    | Production diagnostics      |
 +---------+--------------------------------------------+-----------------------------+
 | INFO    | Detailed operational information           | Diagnose runtime issues     |
 +---------+--------------------------------------------+-----------------------------+
 | TRACE   | Replayable traces, plus CALL APIs          | Deep debugging / NCCL dev   |
 +---------+--------------------------------------------+-----------------------------+
+
+Use ``NCCL_DEBUG=ATTN`` when diagnosing production jobs that need noteworthy
+operational notices without the volume of ``INFO`` output. It includes all
+``WARN`` messages.
 
 Setting the Logging Level
 -------------------------
@@ -50,6 +59,27 @@ Set the ``NCCL_DEBUG`` environment variable:
 .. code:: shell
 
     NCCL_DEBUG=INFO ./my_app
+
+Adding Logging Levels
+---------------------
+
+``NCCL_DEBUG_LEVELS`` adds selected levels to the inclusive ``NCCL_DEBUG``
+setting. The effective selection is the logical union of the levels selected by
+both variables. This is useful for a mixed NCCL deployment where older
+releases need to retain a ``WARN`` baseline:
+
+.. code:: shell
+
+    NCCL_DEBUG=WARN NCCL_DEBUG_LEVELS=ATTN ./my_app
+
+Here, ``NCCL_DEBUG=WARN`` selects VERSION and WARN, while
+``NCCL_DEBUG_LEVELS=ATTN`` selects ATTN. Newer releases therefore emit
+VERSION, WARN, and ATTN messages. Older releases ignore ``NCCL_DEBUG_LEVELS``
+and emit their normal WARN output.
+
+Do not set ``NCCL_DEBUG=ATTN`` as a site-wide setting in a mixed-version
+deployment. NCCL versions before 2.32 do not recognize ``ATTN`` and fall back
+to no debug logging.
 
 Example Output
 --------------
@@ -67,6 +97,12 @@ The snippets below are excerpts from NCCL logs; only the relevant lines are show
 .. code:: shell
 
     [2026-05-05 06:16:47] node-01:189884:189884 [3] plugin/net.cc:334 NCCL WARN Failed to initialize any NET plugin
+
+**NCCL_DEBUG=ATTN** - Errors and noteworthy non-fatal messages are printed:
+
+.. code:: shell
+
+    [2026-05-05 06:16:47] node-01:189884:189884 [3] plugin/net.cc:208 (ncclNetPluginInit) NCCL ATTN Failed to initialize NET plugin IB
 
 **NCCL_DEBUG=INFO** - Detailed information about NCCL operations:
 

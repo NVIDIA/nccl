@@ -4,7 +4,7 @@ Benchmark harness for UB-X collectives. Reports latency and bandwidth in
 the same column layout as nccl-tests, so you can paste UBX numbers into
 the same comparison sheets you already use.
 
-CUDA graph mode is the default (`-G 10000`). Pass `--no-cudagraph` for
+CUDA graph mode is the default (`-G 1000`). Pass `--no-cudagraph` for
 eager mode when you want per-op launch + sync overhead measured as well.
 
 ## Install
@@ -60,7 +60,7 @@ srun -n 4 python -m ubx_bench a2av_dispatch \
 | `-i SIZE` | none | Additive step. |
 | `-n N` | `20` | Timed iterations per measurement. |
 | `-w N` | `5` | Warmup iterations. |
-| `-G N` | `10000` | Number of CUDA-graph replays per measurement. |
+| `-G N` | `1000` | Number of CUDA-graph replays per measurement. |
 | `--no-cudagraph` | (off) | Disable CUDA graph capture; run in eager mode. |
 | `--backend NAME[,NAME…]` | `all` | `ubx`, `nccl`, `all`, or comma-separated list. |
 | `--kernel NAME` | `auto` | UB-X kernel: `mc`, `uc`, `lamport`, `auto` (collective-dependent). |

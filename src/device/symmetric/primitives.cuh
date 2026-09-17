@@ -338,7 +338,7 @@ static __device__ __forceinline__ void tmaLoadStoreMc(char* dest, char* smem, ch
 // TODO: move this into data_ops.cuh
 template <typename T, bool EnableTma = false>
 static __device__ void bcastMultimem(ncclSymkArgsHandler& handler, int tn, int t, ncclSymPtr<T> input,
-                                     ncclSymPtr<T> output, size_t nElts) {
+                                     ncclSymPtr<T> output, size_t nElts, uint32_t rank = 0) {
   size_t nBytes = nElts * sizeof(T);
   uintptr_t inputUptr = reinterpret_cast<uintptr_t>(input.localPtr());
   uintptr_t outputUptr = reinterpret_cast<uintptr_t>(output.multimemPtr(handler.comm.lsaMultimem));
@@ -361,9 +361,8 @@ static __device__ void bcastMultimem(ncclSymkArgsHandler& handler, int tn, int t
   if (alignment % 16 == 0) {
     constexpr int BytePerPack = ncclSymkBytePerPack, UnrollPacks = ncclSymkDeepUnrollPacks;
     constexpr int BytePerChunk = ncclSymkMultimemDeepBytePerChunk;
-    uintptr_t cursor = nPreBytes;
-    uint32_t nChunks = (nBytes - cursor) / BytePerChunk;
-    uintptr_t cursorAfter = cursor + uintptr_t(nChunks) * BytePerChunk;
+    uint32_t nChunks = (nBytes - nPreBytes) / BytePerChunk;
+    uintptr_t cursorAfter = nPreBytes + uintptr_t(nChunks) * BytePerChunk;
 
 #if __CUDA_ARCH__ >= 1000
     // Initialize share memory pointer and barrier
@@ -377,11 +376,20 @@ static __device__ void bcastMultimem(ncclSymkArgsHandler& handler, int tn, int t
 #endif
 
     nSufBytes = nBytes - cursorAfter;
+    size_t nMainBytes = nBytes - nPreBytes - nSufBytes;
+
+    // Ranks use offset multipliers 0 1 3 2 4 5 7 6 etc. This ensures proper address distribution even if
+    // each rank has only 64MiB to process.
+    uint32_t startOffsetMultiplier = rank ^ ((rank >> 1) & 1);
+    size_t startBytes = nMainBytes > 0 ? (size_t)startOffsetMultiplier * ncclSymkMcPerRankOffsetBytes % nMainBytes : 0;
+    uintptr_t wrapAt = cursorAfter + (t % WARP_SIZE) * BytePerPack;
+    uintptr_t cursor = nPreBytes + uintptr_t(startBytes / BytePerChunk) * BytePerChunk;
     cursor += (t / WARP_SIZE) * UnrollPacks * WARP_SIZE * BytePerPack;
     cursor += (t % WARP_SIZE) * BytePerPack;
-    int nIters = nChunks - t / WARP_SIZE;
+    int nIters = (int)nChunks - (int)(t / WARP_SIZE);
     NVCC_PRAGMA_UNROLL_DISABLED
     while (0 < nIters) {
+      if (cursor >= wrapAt) cursor -= nMainBytes;
 #if __CUDA_ARCH__ >= 1000
       if NCCL_IF_CONSTEXPR (EnableTma) {
         if (lane == 0)

@@ -93,6 +93,7 @@ ncclResult_t ncclTuningSetThreadThresholds(struct ncclComm* comm) {
     comm->tuningContext.maxThreads[NCCL_ALGO_COLLNET_CHAIN][NCCL_PROTO_SIMPLE] =
       comm->tuningContext.maxThreads[NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] =
         comm->tuningContext.maxThreads[NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] = NCCL_MAX_NTHREADS;
+  comm->tuningContext.maxThreads[NCCL_ALGO_PAT][NCCL_PROTO_SIMPLE] = NCCL_MAX_NTHREADS;
   comm->tuningContext.maxThreads[NCCL_ALGO_RING][NCCL_PROTO_LL] =
     comm->tuningContext.maxThreads[NCCL_ALGO_TREE][NCCL_PROTO_LL] =
       ncclTuningGetNthreads("NCCL_NTHREADS", ncclParamNthreads(), 2 * WARP_SIZE, NCCL_LL_MAX_NTHREADS,
@@ -162,9 +163,9 @@ ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct
     }
   } else if (result->algo == NCCL_ALGO_PAT && !input->comm->isOneRPN) {
     // Multi-RPN PAT uses NVLS for intra-node transfers.
-    nc = std::min(input->comm->nChannels, input->comm->nvlsChannels);
+    nc = input->comm->nvlsChannels;
   } else {
-    // Ring/Tree channel tuning
+    // Ring/Tree/one-RPN PAT channel tuning
     while (input->nBytes < nc * nt * threadThreshold) {
       if (nc >= 2) nc--;
       else break;

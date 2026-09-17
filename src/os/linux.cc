@@ -8,6 +8,7 @@
 #include "os.h"
 
 #include "checks.h"
+#include "crypt.h"
 #include "utils.h"
 
 #include <cstdint>
@@ -93,6 +94,10 @@ uint64_t ncclOsGetTid() {
 
 size_t ncclOsGetPageSize() {
   return (size_t)sysconf(_SC_PAGESIZE);
+}
+
+size_t ncclOsGetCommMempoolMaxSize() {
+  return 0;
 }
 
 void* ncclOsAlignedAlloc(size_t alignment, size_t size) {
@@ -528,11 +533,11 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
     if (sock->state > ncclSocketStateNone && sock->state < ncclSocketStateNum && ncclOsSocketIsValid(sock)) {
       if (wait) {
         char data;
-        int closed = 0;
+        bool closed = false;
         do {
           int offset = 0;
           if (ncclSocketProgress(NCCL_SOCKET_RECV, sock, &data, sizeof(char), &offset, &closed) != ncclSuccess) break;
-        } while (closed == 0);
+        } while (!closed);
       }
       /* shutdown() is needed to send FIN packet to proxy thread; shutdown() is not affected
        * by refcount of fd, but close() is. close() won't close a fd and send FIN packet if
@@ -540,6 +545,10 @@ ncclResult_t ncclSocketClose(struct ncclSocket* sock, bool wait) {
        * connection close here. */
       (void)shutdown(sock->socketDescriptor, SHUT_RDWR);
       (void)close(sock->socketDescriptor);
+    }
+    if (sock->crypto) {
+      ncclCryptFree(sock->crypto);
+      sock->crypto = nullptr;
     }
     sock->state = ncclSocketStateClosed;
     sock->socketDescriptor = NCCL_INVALID_SOCKET;
@@ -712,7 +721,8 @@ ncclResult_t ncclOsGetBcmLinks(const char* busId, int* nlinks, char** peers) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen) {
+ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen, int* cpuOffset) {
+  *cpuOffset = 0;
   char filePath[PATH_MAX];
   snprintf(filePath, sizeof(filePath), "/sys/devices/system/node/node%u/cpumap", numaId);
   int offset = 0;

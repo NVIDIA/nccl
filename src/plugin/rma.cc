@@ -18,16 +18,17 @@
 
 typedef ncclRma_t* getNcclRma_t(void* rmaPluginLib);
 
+extern getNcclRma_t getNcclRma_v16;
 extern getNcclRma_t getNcclRma_v15;
 extern getNcclRma_t getNcclRma_v14;
 extern getNcclRma_t getNcclRma_v13;
 NCCL_PARAM(RmaPluginRefCount, "RMA_PLUGIN_REF_COUNT", 0);
-#define NCCL_RMA_VERSION_COUNT 3
-int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {15, 14, 13};
-getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v15, getNcclRma_v14, getNcclRma_v13};
+#define NCCL_RMA_VERSION_COUNT 4
+int ncclRmaVersion[NCCL_RMA_VERSION_COUNT] = {16, 15, 14, 13};
+getNcclRma_t* getNcclRma[NCCL_RMA_VERSION_COUNT] = {getNcclRma_v16, getNcclRma_v15, getNcclRma_v14, getNcclRma_v13};
 
-#define NCCL_RMA_NUM_RESERVED_PLUGINS 3
-#define NCCL_RMA_NUM_INTERNAL_PLUGINS 1
+#define NCCL_RMA_NUM_RESERVED_PLUGINS 4
+#define NCCL_RMA_NUM_INTERNAL_PLUGINS 2
 
 typedef enum ncclRmaPluginState {
   ncclRmaPluginStateDisabled = -2,       // Plugin library failed to initialize
@@ -103,21 +104,33 @@ fail:
 
 static ncclResult_t ncclRmaPluginInit(struct ncclComm* comm, rmaPluginLib_t* pluginLib) {
   int ndev;
+  bool initCompleted = false;
   // Init must be called for each new comm to set the right context
   if (pluginLib->state >= ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
-    if (pluginLib->ncclRma->init(&comm->rmaContext, comm->commHash, ncclDebugLog) != ncclSuccess) {
-      pluginLib->state = ncclRmaPluginStateDisabled;
-    }
+    if (pluginLib->ncclRma->init(&comm->rmaContext, comm->commHash, ncclDebugLog) != ncclSuccess) goto fail;
+    initCompleted = true;
   }
+
+  // Detection of the devices is only done when the plugin is being initialized the first time
   if (pluginLib->state == ncclRmaPluginStateInitReady && pluginLib->ncclRma) {
-    if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) {
-      pluginLib->state = ncclRmaPluginStateDisabled;
-    } else {
-      pluginLib->physDevs = ndev;
-      pluginLib->state = ncclRmaPluginStateEnabled;
-    }
+    if (pluginLib->ncclRma->devices(&ndev) != ncclSuccess || ndev <= 0) goto fail;
+    pluginLib->physDevs = ndev;
   }
+
+  pluginLib->state = ncclRmaPluginStateEnabled;
+  INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Initialized plugin %s", pluginLib->name);
+
+exit:
   return ncclSuccess;
+fail:
+  if (initCompleted) {
+    pluginLib->ncclRma->finalize(comm->rmaContext);
+    comm->rmaContext = nullptr;
+  }
+  pluginLib->physDevs = 0;
+  pluginLib->state = ncclRmaPluginStateDisabled;
+  INFO(NCCL_INIT | NCCL_NET, "RMA/Plugin: Failed to initialize plugin %s", pluginLib->name);
+  goto exit;
 }
 
 static ncclResult_t ncclRmaPluginAssignToComm(struct ncclComm* comm, int pluginIndex, bool* isAssigned) {
@@ -212,6 +225,13 @@ static void initPluginLibsOnceFunc() {
   pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
   pluginLibs[pluginCounter].version = ncclRmaVersion[0];
   pluginCounter++;
+
+  // Add internal socket RMA plugin.
+  pluginLibs[pluginCounter].ncclRma = &ncclRmaSocketProxy;
+  pluginLibs[pluginCounter].state = ncclRmaPluginStateInitReady;
+  pluginLibs[pluginCounter].version = ncclRmaVersion[0];
+  pluginCounter++;
+
   pluginCount = pluginCounter;
 }
 

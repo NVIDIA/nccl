@@ -7,6 +7,10 @@ set(TUNING_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/pat.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/ring.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/sym_model.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/gin.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/lsa.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/lsa_a2a.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/lsa_base.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/tree.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/tuning_general.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/tuning.cc

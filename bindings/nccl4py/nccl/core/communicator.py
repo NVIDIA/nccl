@@ -31,7 +31,7 @@ from nccl.core.constants import (
     CommSuspendFlag,
     WindowFlag,
 )
-from nccl.core.cuda import get_stream_ptr
+from nccl.core.cuda import get_event_ptr, get_stream_ptr
 from nccl.core.team import NCCLTeam
 from nccl.core.resources import (
     CommResource,
@@ -47,9 +47,11 @@ from nccl.core.typing import (
     NcclGinType,
     NcclGinConnectionType,
     NcclHostCftMode,
+    NcclNvlsHostMode,
     NcclCftTeamMode,
     NcclCftCap,
     NcclStreamSpec,
+    NcclEventSpec,
     NcclScalarSpec,
     NcclInvalid,
     NcclCommMemStat,
@@ -88,70 +90,171 @@ class NCCLConfig(LowppSpec, lowpp_cls=_nccl_bindings.Config):
     """
 
     blocking: bool | None = None
-    """Blocking (True) or non-blocking (False) communicator behavior. If unset, NCCL uses True."""
+    """Blocking (True) or non-blocking (False) communicator behavior. If unset,
+    NCCL uses True.
+
+    Available since NCCL 2.14.0.
+    """
 
     cga_cluster_size: int | None = None
-    """Cooperative Group Array (CGA) size for kernels (0-8). If unset, NCCL uses 4 for sm90+, 0 otherwise."""
+    """Cooperative Group Array (CGA) size for kernels (0-8). If unset, NCCL uses
+    4 for sm90+, 0 otherwise.
+
+    Available since NCCL 2.17.0.
+    """
 
     min_ctas: int | None = None
-    """Minimum number of CTAs per kernel; positive integer up to 32. If unset, NCCL uses 1."""
+    """Minimum number of CTAs per kernel; positive integer up to 32. If unset,
+    NCCL uses 1.
+
+    Available since NCCL 2.17.0.
+    """
 
     max_ctas: int | None = None
-    """Maximum number of CTAs per kernel; positive integer up to 32. If unset, NCCL uses 32."""
+    """Maximum number of CTAs per kernel; positive integer up to 32. If unset,
+    NCCL uses 32.
+
+    Available since NCCL 2.17.0.
+    """
 
     net_name: str | None = None
-    """Network module name (e.g. 'IB', 'Socket'). Case-insensitive. If unset, NCCL auto-selects."""
+    """Network module name (e.g. 'IB', 'Socket'). Case-insensitive. If unset,
+    NCCL auto-selects.
+
+    Available since NCCL 2.17.0.
+    """
 
     split_share: bool | None = None
-    """Share resources with the child communicator during split. If unset, NCCL uses False."""
+    """Share resources with the child communicator during split. If unset,
+    NCCL uses False.
+
+    Available since NCCL 2.18.0.
+    """
 
     traffic_class: int | None = None
-    """Traffic class (TC) for network operations (>= 0). Network-specific meaning."""
+    """Traffic class (TC) for network operations (>= 0). Network-specific meaning.
+
+    Available since NCCL 2.26.0.
+    """
 
     comm_name: str | None = None
-    """User-defined communicator name for logging and profiling."""
+    """User-defined communicator name for logging and profiling.
+
+    Available since NCCL 2.27.0.
+    """
 
     collnet_enable: bool | None = None
-    """Enable (True) or disable (False) IB SHARP. If unset, NCCL uses False."""
+    """Enable (True) or disable (False) IB SHARP. If unset, NCCL uses False.
+
+    Available since NCCL 2.27.0.
+    """
 
     cta_policy: CTAPolicy | None = None
-    """CTA scheduling policy. If unset, NCCL uses CTAPolicy.DEFAULT."""
+    """CTA scheduling policy. If unset, NCCL uses CTAPolicy.DEFAULT.
+
+    Available since NCCL 2.27.0.
+    """
 
     shrink_share: bool | None = None
-    """Share resources with the child communicator during shrink. If unset, NCCL uses False."""
+    """Share resources with the child communicator during shrink. If unset,
+    NCCL uses False.
+
+    Available since NCCL 2.27.0.
+    """
 
     nvls_ctas: int | None = None
-    """Total number of CTAs for NVLS kernels (positive integer). If unset, NCCL auto-determines."""
+    """Total number of CTAs for NVLS kernels (positive integer). If unset,
+    NCCL auto-determines.
+
+    Available since NCCL 2.27.1.
+    """
 
     n_channels_per_net_peer: int | None = None
-    """Number of network channels for pairwise communication. Positive integer, rounded up to power of 2. If unset, NCCL uses an AlltoAll-optimized value."""
+    """Number of network channels for pairwise communication. Positive integer,
+    rounded up to power of 2. If unset, NCCL uses an AlltoAll-optimized value.
+
+    Available since NCCL 2.28.0.
+    """
 
     nvlink_centric_sched: bool | None = None
-    """Enable NVLink-centric scheduling. If unset, NCCL uses False."""
+    """Enable NVLink-centric scheduling. If unset, NCCL uses False.
+
+    Available since NCCL 2.28.2.
+    """
 
     graph_usage_mode: int | None = None
-    """Graph usage mode (NCCL 2.29+). Supported values are 0 (no graphs), 1 (one graph), 2 (multiple graphs or mix of graph and non-graph). If unset, NCCL uses 2."""
+    """Graph usage mode. Supported values are 0 (no graphs), 1 (one graph), and 2
+    (multiple graphs or a mix of graph and non-graph). If unset, NCCL uses 2.
+
+    Available since NCCL 2.29.0.
+    """
 
     num_rma_ctx: int | None = None
-    """Number of RMA contexts (NCCL 2.29+). Positive integer. If unset, NCCL uses 1."""
+    """Number of RMA contexts. Positive integer. If unset, NCCL uses 1.
+
+    Available since NCCL 2.29.0.
+    """
 
     max_p2p_peers: int | None = None
-    """Maximum number of peers any rank will concurrently communicate with using P2P (NCCL 2.30+). Positive integer. If unset, NCCL uses the communicator size."""
+    """Maximum number of peers any rank will concurrently communicate with using
+    P2P. Positive integer. If unset, NCCL uses the communicator size.
+
+    Available since NCCL 2.30.0.
+    """
 
     graph_stream_ordering: int | None = None
-    """Whether NCCL preserves stream-ordering semantics for collectives captured into CUDA graphs. Supported values are 0 (disabled) or 1 (enabled). The value 0 cannot be combined with ``graph_usage_mode=2``. Also controllable via the ``NCCL_GRAPH_STREAM_ORDERING`` environment variable. If unset, NCCL uses 1."""
+    """Whether NCCL preserves stream-ordering semantics for collectives captured
+    into CUDA graphs. Supported values are 0 (disabled) or 1 (enabled). The value 0
+    cannot be combined with ``graph_usage_mode=2``. Also controllable via the
+    ``NCCL_GRAPH_STREAM_ORDERING`` environment variable. If unset, NCCL uses 1.
+
+    Available since NCCL 2.30.5.
+    """
 
     launch_order_implicit: bool | None = None
-    """Whether this communicator takes part in implicit launch ordering (NCCL 2.31+). Within one CUDA context, operations on communicators that enable it must not overlap with operations on communicators that do not. Also controllable via the ``NCCL_LAUNCH_ORDER_IMPLICIT`` environment variable, which takes precedence. If unset, NCCL uses False."""
+    """Whether this communicator takes part in implicit launch ordering. Within one
+    CUDA context, operations on communicators that enable it must not overlap with
+    operations on communicators that do not. Also controllable via the
+    ``NCCL_LAUNCH_ORDER_IMPLICIT`` environment variable, which takes precedence.
+    If unset, NCCL uses False.
+
+    Available since NCCL 2.31.0.
+    """
 
     num_rma_sig: int | None = None
-    """Number of one-sided RMA signal indexes available per context (NCCL 2.31+). Non-negative integer; bounds the ``signal_index`` accepted by the signal and wait-signal operations. If unset, NCCL uses 1."""
+    """Number of one-sided RMA signal indexes available per context. Non-negative
+    integer; bounds the ``signal_index`` accepted by the signal and wait-signal
+    operations. If unset, NCCL uses 1.
+
+    Available since NCCL 2.31.0.
+    """
 
     rma_eager_init: bool | None = None
-    """Whether the collective one-sided RMA signal setup is initialized at communicator creation rather than at the first window registration (NCCL 2.31+). True is required if the communicator issues signal or wait-signal operations without first registering a symmetric window. Also controllable via the ``NCCL_RMA_EAGER_INIT`` environment variable, which takes precedence. If unset, NCCL uses False."""
+    """Whether the collective one-sided RMA signal setup is initialized at
+    communicator creation rather than at the first window registration. True is
+    required if the communicator issues signal or wait-signal operations without
+    first registering a symmetric window. Also controllable via the
+    ``NCCL_RMA_EAGER_INIT`` environment variable, which takes precedence. If unset,
+    NCCL uses False.
+
+    Available since NCCL 2.31.0.
+    """
 
     host_cft_mode: NcclHostCftMode | None = None
-    """Host-side Compute Fabric Transport mode (NCCL 2.31+). Controls whether the communicator creates the CUDA fabric logical endpoints backing the host-side CFT queries. If unset, NCCL uses :py:attr:`NcclHostCftMode.DEFAULT`."""
+    """Host-side Compute Fabric Transport mode. Controls whether the communicator
+    creates the CUDA fabric logical endpoints backing the host-side CFT queries. If
+    unset, NCCL uses :py:attr:`NcclHostCftMode.DEFAULT`.
+
+    Available since NCCL 2.31.1.
+    """
+
+    nvls_host_mode: NcclNvlsHostMode | None = None
+    """Host-side NVLS mode. Selects which host NVLS components
+    the communicator uses. If unset, NCCL uses its library-defined default,
+    which is currently equivalent to :py:attr:`NcclNvlsHostMode.ENABLE`.
+
+    Available since NCCL 2.32.0.
+    """
 
 
 @dataclass(frozen=True)
@@ -225,10 +328,9 @@ class NCCLCollConfig(LowppSpec, lowpp_cls=_nccl_bindings.CollConfig):
     """Per-call configuration for a single collective.
 
     Accepted as the ``config`` argument of every collective on
-    :py:class:`Communicator`, tuning that one call. Fields left unset fall
-    back to the communicator's value, or to NCCL's own default. The same
-    configuration must be set on every rank; NCCL validates it only locally,
-    when the call is issued.
+    :py:class:`Communicator`, tuning that one call. The same configuration must
+    be set on every rank; NCCL validates it only locally, when the call is
+    issued.
 
     See Also:
         :c:type:`ncclCollConfig_t`
@@ -237,46 +339,90 @@ class NCCLCollConfig(LowppSpec, lowpp_cls=_nccl_bindings.CollConfig):
     min_ctas: int | None = None
     """Lower bound on channels/CTAs for this call. Also set by
     ``NCCL_MIN_CTAS``, which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.min_ctas`."""
+    :py:attr:`NCCLConfig.min_ctas`.
+
+    Available since NCCL 2.31.0.
+    """
 
     max_ctas: int | None = None
     """Upper bound on channels/CTAs for this call, clamped to the
     communicator's ``max_ctas``. Also set by ``NCCL_MAX_CTAS``, which takes
-    precedence. If unset, inherits :py:attr:`NCCLConfig.max_ctas`."""
+    precedence. If unset, inherits :py:attr:`NCCLConfig.max_ctas`.
+
+    Available since NCCL 2.31.0.
+    """
 
     nvls_ctas: int | None = None
     """NVLS-pool-specific channel cap for this call. Also set by
     ``NCCL_NVLS_NCHANNELS``, which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.nvls_ctas`."""
+    :py:attr:`NCCLConfig.nvls_ctas`.
+
+    Available since NCCL 2.31.0.
+    """
 
     cga_cluster_size: int | None = None
     """CUDA thread-block-cluster size (0-8, Hopper+). Inconsistent values
     within one group are undefined behavior. Also set by
     ``NCCL_CGA_CLUSTER_SIZE``, which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.cga_cluster_size`."""
+    :py:attr:`NCCLConfig.cga_cluster_size`.
+
+    Available since NCCL 2.31.0.
+    """
 
     alg_selection: str | None = None
     """Selection string filtering which algorithms this call may use, e.g.
     ``"ring"``, ``"tree,ring"``, ``"^symk"``. If unset or empty, NCCL selects
-    automatically."""
+    automatically.
+
+    Available since NCCL 2.31.0.
+    """
 
     force_alg_selection: bool | None = None
     """Whether an unsatisfiable :py:attr:`alg_selection` is an error rather
-    than a fallback to automatic selection. If unset, NCCL uses True."""
+    than a fallback to automatic selection. If unset, NCCL uses True.
+
+    Available since NCCL 2.31.0.
+    """
 
     cta_policy: CTAPolicy | None = None
     """CTA scheduling policy for this call. Also set by ``NCCL_CTA_POLICY``,
     which takes precedence. If unset, inherits
-    :py:attr:`NCCLConfig.cta_policy`."""
+    :py:attr:`NCCLConfig.cta_policy`.
+
+    Available since NCCL 2.31.0.
+    """
 
     user_profiler_tag: int | None = None
     """Opaque value delivered verbatim to profiler plugins with this call's
     profiler events; does not affect execution. Values with the
-    most-significant bit set are reserved by NCCL. If unset, NCCL uses 0."""
+    most-significant bit set are reserved by NCCL. If unset, NCCL uses 0.
+
+    Available since NCCL 2.31.0.
+    """
+
+    launch_completion_event: NcclEventSpec | None = None
+    """Caller-owned, rank-local CUDA event recorded at collective kernel launch
+    completion. With CUDA versions earlier than 12.3, NCCL records the event
+    before the kernel launch instead. A ``cuda.core.Event`` created by
+    ``Device().create_event()`` has the required timing-disabled configuration;
+    events passed as integer handles must likewise have timing disabled.
+    Interprocess and interop events are unsupported. Either every rank passes
+    an event or none does, and at most one per communicator in a group. Keep it
+    alive through all queued waits and captured-graph executions. If unset,
+    NCCL records no event.
+
+    See Also:
+        :c:member:`ncclCollConfig_t.launchCompletionEvent`
+
+    Available since NCCL 2.32.0.
+    """
 
     vendor_options: tuple[VendorOption, ...] = ()
     """Vendor-specific options; ``(vendor_id, option_id)`` keys must be
-    unique."""
+    unique.
+
+    Available since NCCL 2.31.0.
+    """
 
     def __post_init__(self):
         _validate_vendor_options(self.vendor_options)
@@ -287,7 +433,7 @@ class NCCLCommProperties:
     """The properties NCCL reports for a communicator.
 
     Returned by :py:attr:`Communicator.properties`. These values are fixed
-    for the lifetime of the communicator. Fields marked NCCL 2.31+ are
+    for the lifetime of the communicator. Version-marked fields are
     ``None`` when nccl4py was built against an older NCCL.
 
     See Also:
@@ -351,6 +497,21 @@ class NCCLCommProperties:
     dev_comm_runtime_version_size: int | None = None
     """Size, in bytes, of the device communicator structure in the running NCCL
     library (NCCL 2.31+)."""
+
+    cft_support: bool | None = None
+    """Whether every rank in the communicator supports CFT unicast logical
+    endpoints, which requires CUDA and driver 13.3+ on each. NCCL reduces this
+    across ranks, so ``False`` does not mean the local GPU lacks support
+    (NCCL 2.32+)."""
+
+    cft_multicast_support: bool | None = None
+    """Whether every rank in the communicator supports multicast CFT logical
+    endpoints. Independent of :py:attr:`cft_support`; a GPU may support
+    multicast endpoints without unicast ones (NCCL 2.32+)."""
+
+    cft_counted_support: bool | None = None
+    """Whether every rank in the communicator supports counted CFT
+    logical-endpoint operations (NCCL 2.32+)."""
 
 
 @dataclass(frozen=True)
@@ -563,6 +724,7 @@ def _materialize_coll_config(
     # point of use rather than relying solely on construction-time validation.
     _validate_vendor_options(config.vendor_options)
     cfg = config._to_lowpp()
+    cfg.launch_completion_event_handle = get_event_ptr(config.launch_completion_event)
     keepalive: list[Any] = []
 
     nodes = []
@@ -629,7 +791,7 @@ def _materialize_team_requirements(
             multimem_handles[team] = handle
 
         if previous is not None:
-            previous.next = node.ptr
+            previous.next = node
 
         team_nodes.append(node)
         previous = node
@@ -670,13 +832,13 @@ def _materialize_resource_requirements(
             handle = _nccl_bindings.LsaBarrierHandle()
             team_lowpp = resource.team._to_lowpp()
             _nccl_bindings.lsa_barrier_create_requirement(
-                team_lowpp.ptr, resource.n_barriers, handle.ptr, node.ptr
+                team_lowpp, resource.n_barriers, handle.ptr, node.ptr
             )
         elif isinstance(resource, GinBarrierRequirement):
             handle = _nccl_bindings.GinBarrierHandle()
             team_lowpp = resource.team._to_lowpp()
             _nccl_bindings.gin_barrier_create_requirement(
-                comm, team_lowpp.ptr, resource.n_barriers, handle.ptr, node.ptr
+                comm, team_lowpp, resource.n_barriers, handle.ptr, node.ptr
             )
         elif isinstance(resource, LLA2ARequirement):
             handle = _nccl_bindings.LLA2AHandle()
@@ -690,7 +852,7 @@ def _materialize_resource_requirements(
             raise TypeError(f"unknown resource requirement: {type(resource).__name__}")
 
         if previous is not None:
-            previous.next = node.ptr
+            previous.next = node
 
         resource_nodes.append(node)
         resource_handles.append(handle)
@@ -1324,6 +1486,9 @@ class Communicator:
             pod = _nccl_bindings.comm_query_properties(self._comm)
             gin_support = getattr(pod, "gin_support", None)
             gin_connection_type = getattr(pod, "gin_connection_type", None)
+            cft_support = getattr(pod, "cft_support", None)
+            cft_multicast_support = getattr(pod, "cft_multicast_support", None)
+            cft_counted_support = getattr(pod, "cft_counted_support", None)
             self._comm_properties = NCCLCommProperties(
                 rank=pod.rank,
                 n_ranks=pod.n_ranks,
@@ -1353,6 +1518,13 @@ class Communicator:
                     )
                 ),
                 dev_comm_runtime_version_size=getattr(pod, "dev_comm_runtime_version_size", None),
+                cft_support=None if cft_support is None else bool(cft_support),
+                cft_multicast_support=(
+                    None if cft_multicast_support is None else bool(cft_multicast_support)
+                ),
+                cft_counted_support=(
+                    None if cft_counted_support is None else bool(cft_counted_support)
+                ),
             )
         return self._comm_properties
 
@@ -1544,7 +1716,7 @@ class Communicator:
         """
         self._check_valid("team_rank_to_world")
         team_lowpp = team._to_lowpp()
-        return _nccl_bindings.team_rank_to_world(self._comm, team_lowpp.ptr, team_rank)
+        return _nccl_bindings.team_rank_to_world(self._comm, team_lowpp, team_rank)
 
     def team_rank_to_lsa(self, team: NCCLTeam, team_rank: int) -> int:
         """Maps a rank within ``team`` to its rank in the LSA team.
@@ -1569,7 +1741,7 @@ class Communicator:
         """
         self._check_valid("team_rank_to_lsa")
         team_lowpp = team._to_lowpp()
-        return _nccl_bindings.team_rank_to_lsa(self._comm, team_lowpp.ptr, team_rank)
+        return _nccl_bindings.team_rank_to_lsa(self._comm, team_lowpp, team_rank)
 
     # --- Point-to-Point Communication ---
     def send(

@@ -183,8 +183,15 @@ ncclResult_t rasDiagnosticsReport(const struct rasDiagnosticsReporter* reporter,
 ncclResult_t rasDiagnosticsReportIncomplete(const struct rasDiagnosticsReporter* reporter, const char* checkName,
                                             const struct rasDiagnosticsRankHeader* rank, int gatheredRanks) {
   return rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                              "%s: diagnostics incomplete, gathered %d/%d ranks in comm 0x%lx/0x%lx/0x%lx "
-                              "(RAS overlay may not be ready)",
-                              checkName, gatheredRanks, rank->commNRanks, rank->commId.commHash, rank->commId.hostHash,
+                              "%s: diagnostics incomplete, gathered %d/%d ranks in comm 0x%lx/0x%lx/0x%lx", checkName,
+                              gatheredRanks, rank->commNRanks, rank->commId.commHash, rank->commId.hostHash,
                               rank->commId.pidHash);
+}
+
+ncclResult_t rasDiagnosticsReportTopologyNotReady(const struct rasDiagnosticsReporter* reporter, const char* checkName,
+                                                  const struct rasDiagnosticsRankHeader* rank, int unavailableRanks) {
+  return rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                              "%s: incomplete for comm 0x%lx: topology-dependent data was unavailable for %d of %d "
+                              "ranks",
+                              checkName, rank->commId.commHash, unavailableRanks, rank->commNRanks);
 }

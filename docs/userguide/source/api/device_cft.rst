@@ -149,7 +149,7 @@ CFT Operations
    The object can track a specific amount of in-flight data, limiting the number of outstanding CFT operations. Specifically,
    the object can track up to 16MB of non-fetching CFT operations (i.e., ``put``, ``red`` and their multicast variants) and up
    to 1MB of fetching CFT operations (i.e., ``get``, ``pullred``).
-   
+
 .. cpp:class:: template<typename Coop> ncclCft
 
    A class encompassing major elements of CFT support.
@@ -228,7 +228,7 @@ CFT Operations
       function returns. Users can call this function to wait for shared memory buffers to be consumed
       by previously initiated CFT operations before initiating new ones, and call :cpp:func:`ncclCft::flush`
       only when they need to wait for the completion of all the outstanding CFT operations, e.g., because
-      they reached the number of in-flight bytes that the CFT shared memory state object can track. 
+      they reached the number of in-flight bytes that the CFT shared memory state object can track.
 
    .. cpp:function:: void flush(OpCoop coop, bool* hasReport = nullptr, uint32_t* report = nullptr)
 

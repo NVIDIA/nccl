@@ -102,6 +102,9 @@ static ncclResult_t ncclCollNet_getProperties(int dev, ncclNetProperties_t* prop
   props->maxP2pBytes = props_v9.maxP2pBytes;
   props->maxCollBytes = props_v9.maxCollBytes;
   props->maxMultiRequestSize = 1;
+  // Undefined to be ignore in NCCL core
+  props->railId = NCCL_NET_ID_UNDEF;
+  props->planeId = NCCL_NET_ID_UNDEF;
   return ncclSuccess;
 }
 

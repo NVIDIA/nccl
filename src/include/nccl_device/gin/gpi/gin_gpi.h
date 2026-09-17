@@ -22,6 +22,11 @@
 #include "../gin_device_common.h"
 #include "gin_gpi_device_host_common.h"
 
+static_assert(sizeof(gpi_gfd_t) <= sizeof(ncclGinDescriptorSmem),
+              "ncclGinDescriptorSmem must be large enough for gpi_gfd_t");
+static_assert(alignof(gpi_gfd_t) <= alignof(ncclGinDescriptorSmem),
+              "ncclGinDescriptorSmem must satisfy gpi_gfd_t alignment");
+
 #ifdef NCCL_DEVICE_GIN_GPI_ENABLE_DEBUG
 #include <stdio.h>
 #endif
@@ -688,6 +693,13 @@ struct ncclGinApi_GetSignalPtr<NCCL_NET_DEVICE_GIN_GPI> {
     using nccl::utility::loadConst;
     gpi_gpu_channel_t* gpi_ctx = nccl::gin::gpi::gpi_gpu_channel_get_ptr(ctx);
     return {(uint64_t*)(loadConst(&gpi_ctx->gpu_signal_ptr_) + signalId), 0};
+  }
+};
+
+template <>
+struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_GPI> {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx) {
+    return false;
   }
 };
 

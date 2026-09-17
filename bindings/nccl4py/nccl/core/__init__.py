@@ -47,6 +47,7 @@ __all__ = [  # noqa: RUF022
     "NcclGinType",
     "NcclGinConnectionType",
     "NcclHostCftMode",
+    "NcclNvlsHostMode",
     "NcclCftTeamMode",
     "NcclCftCap",
     "NcclCommMemStat",
@@ -54,6 +55,7 @@ __all__ = [  # noqa: RUF022
     "NcclScalarSpec",
     "NcclDeviceSpec",
     "NcclStreamSpec",
+    "NcclEventSpec",
     # Exceptions
     "NcclInvalid",
     # Data type constants

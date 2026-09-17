@@ -18,22 +18,23 @@ installed `nvidia-nccl-cuXX` wheel.
 | File | Topic | Ranks | Needs |
 |---|---|---|---|
 | `00_basic.py` | Start here: 1 MiB `Gin.put` with a completion signal, launched through both `@cute.jit` argument forms | **exactly 2** | GIN network |
-| `01_coop_and_teams.py` | Cooperative groups, devcomm fields, teams and rank translation | any | — |
-| `02_lsa_allreduce.py` | Window address translation + LSA barriers, as a device-side all-reduce | ≥2, one node | peer access |
-| `03_multimem.py` | Multimem handles, multimem window addresses, multimem barrier arrive | ≥2, one node | multicast |
+| `01_coop_and_teams.py` | Cooperative groups, devcomm fields, teams and rank translation | any | - |
+| `02_lsa_allreduce.py` | Window address translation + LSA barriers, as a device-side all-reduce | >=2, one node | peer access |
+| `03_multimem.py` | Multimem handles, multimem window addresses, multimem barrier arrive | >=2, one node | multicast |
 | `04_gin_ops.py` | Every `Gin` operation: put / put_value / get / signal / counters / flush | **exactly 2** | GIN network, 2.31.1+ for `get` |
-| `05_barriers.py` | All three barrier session types, both factory forms, all fence levels | ≥2 | GIN network, 2.31.0+ for the `Gin` factories |
-| `06_resource_buffers.py` | The five `resource_buffer_*` address translations | ≥2, one node | peer access, multicast |
+| `05_barriers.py` | All three barrier session types, both factory forms, all fence levels | >=2 | GIN network, 2.31.0+ for the `Gin` factories |
+| `06_resource_buffers.py` | The five `resource_buffer_*` address translations | >=2, one node | peer access, multicast |
 | `07_compile_with_fake_args.py` | Compile with type-only arguments before creating NCCL resources, then invoke with real resources | **exactly 2** | GIN network |
+| `08_reduce_copy.py` | Device-side `ReduceCopy`: `lsa_reduce_sum` across registered windows into each rank's local buffer | >=2, one node | peer access |
 
-"Exactly 2" means the example hardcodes a rank 0 → rank 1 transfer and
+"Exactly 2" means the example hardcodes a rank 0 -> rank 1 transfer and
 rejects any other count rather than idling the extra ranks.
 "One node" means every rank must be in the same LSA team, since those
 examples read peer memory directly. GIN examples want two nodes for a real
 network path, but a single node works when NCCL can set up loopback GIN
 connections.
 
-Run under MPI, one rank per GPU — substitute `srun --mpi=pmix -n <ranks>`
+Run under MPI, one rank per GPU -- substitute `srun --mpi=pmix -n <ranks>`
 under Slurm. Recommended command per example:
 
 ```sh
@@ -45,10 +46,11 @@ mpirun -n 2 -N 1 python 04_gin_ops.py           # two nodes, one rank each
 mpirun -n 2 -N 1 python 05_barriers.py          # two nodes, one rank each
 mpirun -n 8      python 06_resource_buffers.py  # one node, all GPUs
 mpirun -n 2 -N 1 python 07_compile_with_fake_args.py  # two nodes, one rank each
+mpirun -n 8      python 08_reduce_copy.py      # one node, all GPUs
 ```
 
 `-n 8` stands for however many GPUs the node has; the one-node examples
-scale to any count ≥ 2.
+scale to any count >= 2.
 
 Nothing faults on an unsuitable machine: a wrong rank count or topology is
 an `ERROR` with a non-zero exit, and a missing capability is reported as
@@ -74,7 +76,7 @@ The fake objects describe only the JIT argument types. They carry no NCCL
 resource or runtime pointer, are not `Constexpr` values, and must only be
 passed to `cute.compile`. Passing one to the compiled callable contributes no
 runtime argument, which shifts every argument after it and launches with
-garbage rather than raising, so invoke with host-mode views as above — or with
+garbage rather than raising, so invoke with host-mode views as above -- or with
 the resources themselves, if the parameters are unannotated (see 00). The same
 module provides compile-only factories for `MultimemHandle`,
 `LsaBarrierHandle`, and `GinBarrierHandle` arguments.
@@ -99,7 +101,7 @@ affected sections check `nccl.get_version()` and skip rather than fail:
 `ncclGinGet` only gained C linkage in **2.31.1**, and the barrier-session
 entry points started taking `ncclGin_C` by pointer in **2.31.0**. The check
 reads the loaded `libnccl.so` and assumes `libnccl_device.bc` came from the
-same install — which is how the wheel and a source build ship them. If you
+same install -- which is how the wheel and a source build ship them. If you
 `LD_PRELOAD` one, point `NCCL_HOME` at the other's build.
 
 ## API coverage
@@ -125,7 +127,7 @@ same install — which is how the wheel and a source build ship them. If you
 | `gin_session` / `world_gin` / `rail_gin`, `GIN_ALL_CONTEXTS` | 05 |
 | `hybrid_session` / `world_hybrid` | 05 |
 | `MultimemHandle` / `LsaBarrierHandle` / `GinBarrierHandle` and their fields | 03, 05, 06 |
-| `MemoryOrder` | 02–06 |
+| `MemoryOrder` | 02-06 |
 | `ThreadScope` / `GinResourceSharingMode` | 04 |
 | `GinFenceLevel` | 05 |
 | `GinBackendMask` | 00, 04, 05, 07 |
@@ -133,5 +135,5 @@ same install — which is how the wheel and a source build ship them. If you
 Not exercised: `Gin.value()` and the raw `.ptr` accessors (binding
 plumbing); the `is_descriptor` / `descriptor_ptr` arguments, which need an
 `ncclGinDescriptorSmem` this layer does not wrap; and pass-through knobs
-left at their defaults — `opt_flags`, `signal_op=1` (Add), the non-GPU
+left at their defaults -- `opt_flags`, `signal_op=1` (Add), the non-GPU
 resource-sharing modes, and the individual `GinBackendMask` bits.

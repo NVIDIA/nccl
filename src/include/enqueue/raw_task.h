@@ -61,6 +61,7 @@ struct ncclRawTaskSendRecv {
   int peer;
   size_t bytes;
   cudaStream_t stream;
+  cudaEvent_t launchCompletionEvent;
 };
 
 // ncclPutSignal API inputs captured at enqueue time.

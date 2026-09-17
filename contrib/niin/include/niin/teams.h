@@ -49,24 +49,33 @@ inline TeamTable& table() {
 }
 
 // Called by niin_host_init_common after global state is set up
-inline void initPredefined(int worldRank, int worldSize, int lsaRank, int lsaSize) {
+inline void initPredefined(int worldRank, int worldSize, int lsaRank, int lsaSize,
+                           int nodeRank = -1, int nodeSize = 0) {
   auto& t = table();
+
+  // LSA is an NCCL topology domain; on systems such as NVL72 it can span
+  // multiple physical nodes.  NVSHMEM's SHARED/NODE teams must instead be
+  // based on launcher-local PE topology.
+  if (nodeRank < 0 || nodeSize < 1) {
+    nodeRank = lsaRank;
+    nodeSize = lsaSize;
+  }
 
   // TEAM_WORLD (id=0): all PEs
   t.teams[NVSHMEM_TEAM_WORLD] = {true, 0, 1, worldSize, worldRank};
 
-  // TEAM_SHARED (id=1): same node (LSA team)
-  int lsaStart = worldRank - lsaRank;
-  t.teams[NVSHMEM_TEAM_SHARED] = {true, lsaStart, 1, lsaSize, lsaRank};
+  // TEAM_SHARED (id=1): PEs on the same physical node.
+  int nodeStart = worldRank - nodeRank;
+  t.teams[NVSHMEM_TEAM_SHARED] = {true, nodeStart, 1, nodeSize, nodeRank};
 
   // NVSHMEMX_TEAM_NODE (id=2): alias for SHARED
-  t.teams[NVSHMEMX_TEAM_NODE] = {true, lsaStart, 1, lsaSize, lsaRank};
+  t.teams[NVSHMEMX_TEAM_NODE] = {true, nodeStart, 1, nodeSize, nodeRank};
 
   // NVSHMEMX_TEAM_SAME_MYPE_NODE (id=3): same local rank across nodes (rail team)
-  // E.g., local rank 0 on all nodes. stride=lsaSize, start=lsaRank.
-  int railSize = (worldSize + lsaSize - 1) / lsaSize;  // number of nodes
-  int railRank = worldRank / lsaSize;
-  t.teams[NVSHMEMX_TEAM_SAME_MYPE_NODE] = {true, lsaRank, lsaSize, railSize, railRank};
+  // E.g., local rank 0 on all nodes. stride=nodeSize, start=nodeRank.
+  int railSize = (worldSize + nodeSize - 1) / nodeSize;  // number of nodes
+  int railRank = worldRank / nodeSize;
+  t.teams[NVSHMEMX_TEAM_SAME_MYPE_NODE] = {true, nodeRank, nodeSize, railSize, railRank};
 
   // NVSHMEMI_TEAM_SAME_GPU (id=4): PEs sharing same GPU
   // In NCCL's 1-PE-per-GPU model, this is always just this PE alone.

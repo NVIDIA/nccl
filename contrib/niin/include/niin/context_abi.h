@@ -1,0 +1,49 @@
+/*************************************************************************
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * See LICENSE.txt for more license information
+ *************************************************************************/
+
+#ifndef NIIN_CONTEXT_ABI_H_
+#define NIIN_CONTEXT_ABI_H_
+
+// Keep the layout consumed by host-side binders separate from device helper
+// functions. The direct GPUNetIO atomic provider needs this ABI to update its
+// one optional pointer, but must not pull in GIN/LSA helper implementations or
+// NCCL transport internals.
+#include <nccl_device.h>
+
+#include "niin/gpunetio/context.h"
+
+struct niinContext {
+  ncclDevComm const* comm;       // NCCL device communicator
+  ncclDevComm commValue;         // Constant-context copy of the communicator
+  ncclWindow_t heapWindow;       // The single symmetric heap window
+  void* heapBase;                // Local base pointer of the heap
+  size_t heapSize;               // Size of the symmetric heap
+  void** peerHeapBaseP2p;        // Per-world-rank LSA heap base, null for non-LSA peers
+  int rank;                      // WORLD rank cached for LSA fast paths
+  int nRanks;                    // WORLD size cached for LSA fast paths
+  int lsaRank;                   // LSA rank cached for LSA fast paths
+  int lsaSize;                   // LSA size cached for LSA fast paths
+  unsigned int ginConnectionCount; // Nonzero when GIN is provisioned
+  bool worldIsLsaOnly;           // True when TEAM_WORLD is one LSA domain
+  int nodeRank;                  // Rank among PEs on this physical node
+  int nodeSize;                  // Number of PEs on this physical node
+  // Optional, NIIN-owned AMO provider (native GPUNetIO direct WQEs or the
+  // separate raw-verbs/SRQ proxy-all service). This stays separate from the GIN
+  // contexts NIIN rotates through: RMA and signaling always continue on GIN.
+  const struct niinGpunetioAtomicContext* gpunetioAtomicContext;
+  bool peerNativeAtomic;         // True if peer GPUs support native system-scope atomics
+  bool forceSeparatePutSignal;   // Force put+fence+signal instead of fused put_signal
+  unsigned int* ginPendingOps;   // Device scalar: unquieted GIN operations
+  unsigned int* lsaStorePending; // Per-CTA flag: local/LSA stores needing quiet fence
+  size_t lsaStorePendingLen;     // Number of entries in lsaStorePending
+  int tmaPolicy;                 // nvshmemx_tma_policy_t for the LSA put/get paths
+  uintptr_t* tmaSmemBases;       // Per-CTA shared-memory base registered by give_smem
+  size_t tmaSmemBasesLen;        // Number of entries in tmaSmemBases
+  size_t* tmaSmemSize;           // Shared-memory size given by every CTA (single scalar)
+};
+
+#endif  // NIIN_CONTEXT_ABI_H_

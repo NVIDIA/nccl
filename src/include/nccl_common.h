@@ -30,7 +30,9 @@ typedef enum {
   NCCL_LOG_WARN = 2,
   NCCL_LOG_INFO = 3,
   NCCL_LOG_ABORT = 4,
-  NCCL_LOG_TRACE = 5
+  NCCL_LOG_TRACE = 5,
+  // Appended for ABI compatibility; logically between WARN and INFO.
+  NCCL_LOG_ATTN = 6
 } ncclDebugLogLevel;
 
 typedef enum {
@@ -88,5 +90,9 @@ typedef enum {
   ncclFuncWaitSignal = 14,
   ncclNumFuncs = 15
 } ncclFunc_t;
+
+// Progress-counter slots use ncclFunc_t values plus one synthetic P2P slot.
+#define NCCL_PROGRESS_P2P_COUNTER_INDEX ncclNumFuncs
+#define NCCL_NUM_PROGRESS_COUNTERS (ncclNumFuncs + 1)
 
 #endif

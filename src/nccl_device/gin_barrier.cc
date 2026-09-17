@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "core.h"
+#include "nccl_device/host.h"
 #include "nccl_device/impl/gin_barrier__funcs.h"
 
 NCCL_API(ncclResult_t, ncclGinBarrierCreateRequirement, ncclComm_t comm, ncclTeam_t team, int nBarriers,

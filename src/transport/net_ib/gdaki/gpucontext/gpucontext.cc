@@ -12,8 +12,8 @@ void ncclGinGdakiGPUContext_initCurrent(void* ctxArray, int idx, struct doca_gpu
                                         struct doca_gpu_dev_verbs_qp* companion_gdqp,
                                         struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> counters_table,
                                         struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> signals_table,
-                                        __be32 sink_buffer_lkey, uint64_t* last_issued_get,
-                                        uint64_t* last_visible_get) {
+                                        __be32 sink_buffer_lkey, uint64_t* last_issued_get, uint64_t* last_visible_get,
+                                        bool use_mcst) {
   ncclGinGdakiGPUContext* ctx = (ncclGinGdakiGPUContext*)ctxArray + idx;
   ctx->gdqp = gdqp;
   ctx->companion_gdqp = companion_gdqp;
@@ -22,14 +22,15 @@ void ncclGinGdakiGPUContext_initCurrent(void* ctxArray, int idx, struct doca_gpu
   ctx->sink_buffer_lkey = sink_buffer_lkey;
   ctx->last_issued_get = last_issued_get;
   ctx->last_visible_get = last_visible_get;
+  ctx->use_mcst = use_mcst;
 }
 
 ncclResult_t ncclGinGdakiGPUContext_init(int version, void* ctxArray, int idx, struct doca_gpu_dev_verbs_qp* gdqp,
                                          struct doca_gpu_dev_verbs_qp* companion_gdqp,
                                          struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> counters_table,
                                          struct ncclGinGdakiGlobalGPUBufferTable<uint64_t> signals_table,
-                                         __be32 sink_buffer_lkey, uint64_t* last_issued_get,
-                                         uint64_t* last_visible_get) {
+                                         __be32 sink_buffer_lkey, uint64_t* last_issued_get, uint64_t* last_visible_get,
+                                         bool use_mcst) {
   switch (version) {
   case 1:
     ncclGinGdakiGPUContext_v1_init(ctxArray, idx, gdqp, companion_gdqp, counters_table, signals_table,
@@ -37,7 +38,7 @@ ncclResult_t ncclGinGdakiGPUContext_init(int version, void* ctxArray, int idx, s
     break;
   case NCCL_GIN_GDAKI_GPU_CONTEXT_VERSION:
     ncclGinGdakiGPUContext_initCurrent(ctxArray, idx, gdqp, companion_gdqp, counters_table, signals_table,
-                                       sink_buffer_lkey, last_issued_get, last_visible_get);
+                                       sink_buffer_lkey, last_issued_get, last_visible_get, use_mcst);
     break;
   default:
     WARN("Invalid GIN gdaki backend version %d", version);

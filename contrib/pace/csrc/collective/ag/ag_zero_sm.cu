@@ -939,7 +939,7 @@ static void execute_ag_zero_sm_core(uint64_t* args_cpu, int num_tensors,
     ncclWindow_t gin_win, void *gin_buffer, void *signal_buffer, void **p2p_ptrs, int unroll, int nvl_ring,
     int rdma_ring, size_t base_slot, int send_times, int capture_round_n, int rank, int num_local_ranks, int num_ranks,
     CUstreamBatchMemOpParams *mparam, ncclDevComm dev_comm, cudaStream_t stream, cudaStream_t copy_stream, bool launch_cord_kernel, bool use_ring) {
-    
+
     const bool is_single_node = (num_local_ranks == num_ranks);
 
     // Cord kernel (multi-node) drives RDMA signalling on `stream`, ahead of the

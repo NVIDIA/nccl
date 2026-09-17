@@ -44,6 +44,8 @@ ncclResult_t ncclTuningResultListPushFront(struct ncclTuningResultList_t* list, 
 ncclResult_t ncclTuningInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
 
+  NCCLCHECKGOTO(ncclTuningCostModelPreInit(comm), ret, fail);
+
   NCCLCHECKGOTO(ncclTunerPluginLoad(comm), ret, fail);
   if (comm->tuner) {
     NCCLCHECKGOTO(comm->tuner->init(&comm->tunerContext, comm->commHash, comm->nRanks, comm->nNodes, ncclDebugLog,
@@ -132,7 +134,7 @@ ncclResult_t ncclTuningComputeAllTunings(struct ncclTuningInput_t* const input,
     tuning.id = i;
     tuning.valid = 1;
 
-    if (!(input->tuningMask & (1lu << i))) {
+    if (!(input->tuningMask & (1ULL << i))) {
       tuning.valid = 0;
       continue;
     }
@@ -153,13 +155,17 @@ fail:
 static ncclResult_t ncclTuningSelectBestTuning(struct ncclTuningResultList_t* tunings,
                                                struct ncclTuningResult_t* const bestTuning) {
   bestTuning->timeUs = FLT_MAX;
+  float bestSelectionTimeUs = FLT_MAX;
   struct ncclTuningResultListNode* node = tunings->head;
   while (node != nullptr) {
     const struct ncclTuningResult_t& tuning = node->result;
-    TRACE(NCCL_TUNING, "A/P/S %s/%s/%s, time: %f", ncclAlgoToString(tuning.algo), ncclProtoToString(tuning.proto),
-          ncclSymkKernelIdToString(tuning.symKernelId), tuning.timeUs);
-    if (tuning.timeUs < bestTuning->timeUs) {
+    float selectionTimeUs = tuning.selectionTimeUs > 0.0f ? tuning.selectionTimeUs : tuning.timeUs;
+    TRACE(NCCL_TUNING, "A/P/S %s/%s/%s, time: %f, selection time: %f", ncclAlgoToString(tuning.algo),
+          ncclProtoToString(tuning.proto), ncclSymkKernelIdToString(tuning.symKernelId), tuning.timeUs,
+          selectionTimeUs);
+    if (selectionTimeUs < bestSelectionTimeUs) {
       *bestTuning = tuning;
+      bestSelectionTimeUs = selectionTimeUs;
     }
     node = node->next;
   }
@@ -173,12 +179,12 @@ static ncclResult_t ncclTuningSelectBestTuning(struct ncclTuningResultList_t* tu
 */
 ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
   ncclResult_t ret = ncclSuccess;
-  INFO(NCCL_TUNING,
-       "Input: { .comm = %p, .tuningMask = 0x%lx, .func = %s, .redOp = %d, .devRedop = %d, .dataType = %d, .nBytes = "
-       "%lu, .numPipesOps = %d, .count = %lu, .countMax = %lu, .nWorks = %d, .winRegType = %d, .regBuff = %d }",
-       input->comm, input->tuningMask, ncclFuncToString(input->func), input->redOp, input->devRedOp, input->datatype,
-       input->nBytes, input->numPipeOps, input->count, input->countMax, input->nWorks, input->winRegType,
-       input->regBuff);
+  TRACE(NCCL_TUNING,
+        "Input: { .comm = %p, .tuningMask = 0x%lx, .func = %s, .redOp = %d, .devRedop = %d, .dataType = %d, .nBytes = "
+        "%lu, .numPipesOps = %d, .count = %lu, .countMax = %lu, .nWorks = %d, .winRegType = %d, .regBuff = %d }",
+        input->comm, input->tuningMask, ncclFuncToString(input->func), input->redOp, input->devRedOp, input->datatype,
+        input->nBytes, input->numPipeOps, input->count, input->countMax, input->nWorks, input->winRegType,
+        input->regBuff);
   struct ncclTuningResultList_t tunings;
   tunings.head = nullptr;
   struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;
@@ -291,7 +297,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
     }
   }
 
-  INFO(
+  TRACE(
     NCCL_TUNING,
     "Best tuning { .id = %d, .valid = %d, timeUs = %f,  .algo = %s, .proto = %s, .symKernelId = %s, .ceMethodId = %d, "
     "nChannels = %d, maxChannels = %d, nWarps = %d, forced = %d }",

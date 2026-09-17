@@ -10,7 +10,7 @@
 Every rank stores ``rank + 1`` into its send window; each rank then reads
 every LSA peer's send window directly over NVLink/peer-access and writes
 the sum into its own receive window. Two LSA barriers bracket the
-reduction — the first split into its ``arrive`` / ``wait`` phases, the
+reduction -- the first split into its ``arrive`` / ``wait`` phases, the
 second a single ``sync``.
 
 All ranks must be LSA peers, so run on a single node::
@@ -109,6 +109,7 @@ def lsa_allreduce_kernel(
 
     # arrive + wait in one call; release makes the reduction visible first.
     bar.sync(coop, nccl_cute.MemoryOrder.RELEASE)
+    bar.destroy()
 
 
 @cute.jit

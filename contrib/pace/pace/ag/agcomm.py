@@ -70,17 +70,17 @@ class AGComm(BaseComm):
         storage_type, comm_type = None, None
         if input_dtype_mapping is not None:
             storage_type, comm_type = input_dtype_mapping
-        
+
         assert (storage_type == None) == (comm_type == None)
         if storage_type == comm_type:
             storage_type = None
             comm_type = None
-        
+
         if storage_type is not None:
             assert self.config.num_sms > 0, "Mapping can only be used with num_sms > 0"
             assert storage_type in [torch.float32], f'storage_type ({storage_type}) must be in [torch.float32]'
             assert comm_type in [torch.float32, torch.bfloat16], f'comm_type ({comm_type}) must be in [torch.float32, torch.bfloat16]'
-        
+
         assert isinstance(tensor, list) or isinstance(tensor, torch.Tensor)
         list_input = isinstance(tensor, list)
         if list_input:
@@ -94,7 +94,7 @@ class AGComm(BaseComm):
         if storage_type is not None:
             for t in tensor:
                 assert t.dtype == storage_type, f"tensor dtype ({t.dtype}) must match mapping requested dtype ({storage_type})"
-        
+
         # Validate and normalize output tensors if provided
         output_list = None  # The list form passed to C++
         single_output = False  # Track if user provided a single tensor
@@ -107,7 +107,7 @@ class AGComm(BaseComm):
             else:
                 assert isinstance(out, list), "out must be a Tensor or a list of tensors"
                 output_list = out
-            
+
             assert len(output_list) == len(tensor), f"output list length ({len(output_list)}) must match input tensor count ({len(tensor)})"
             for i, (inp, o) in enumerate(zip(tensor, output_list)):
                 expected_numel = inp.numel() * self.num_ranks
@@ -127,59 +127,59 @@ class AGComm(BaseComm):
     def get_split_tensors(self, tensors : Union[torch.Tensor, List[torch.Tensor]], output: torch.Tensor):
         """
         Split output tensor into per-tensor, per-rank slices.
-            
+
         Output layout (tight, no padding): [tensor0_allgather | tensor1_allgather | ...]
         Each tensor_i_allgather = [rank0_data | rank1_data | ... | rankN_data]
-            
+
         Returns:
             outs: List[List[Tensor]] where outs[i][j] is tensor i's data from rank j
         """
         if isinstance(tensors, torch.Tensor):
             tensors = [tensors]
-            
+
         # Get the number of elements for each tensor
         tensor_numels = [t.numel() for t in tensors]
-            
+
         # Calculate cumulative offsets for each tensor in output (in elements)
         tensor_offsets = [0]
         offset = 0
         for numel in tensor_numels:
             offset += numel * self.num_ranks
             tensor_offsets.append(offset)
-            
+
         # outs[i][j] = tensor i's data from rank j
-        outs = [[output[tensor_offsets[i] + j * tensor_numels[i]:tensor_offsets[i] + j * tensor_numels[i] + tensor_numels[i]] 
-                 for j in range(self.num_ranks)] 
+        outs = [[output[tensor_offsets[i] + j * tensor_numels[i]:tensor_offsets[i] + j * tensor_numels[i] + tensor_numels[i]]
+                 for j in range(self.num_ranks)]
                 for i in range(len(tensors))]
         return outs
-    
+
     def get_gathered_tensors(self, tensors : Union[torch.Tensor, List[torch.Tensor]], output: torch.Tensor):
         """
         Get complete allgather result for each tensor (keeping num_ranks data contiguous).
-            
+
         Output layout (tight, no padding): [tensor0_allgather | tensor1_allgather | ...]
         Each tensor_i_allgather = [rank0_data | rank1_data | ... | rankN_data]
-            
+
         Returns:
             outs: List[Tensor] where outs[i] is tensor i's complete allgather result
         """
         if isinstance(tensors, torch.Tensor):
             tensors = [tensors]
-            
+
         # Get the number of elements for each tensor
         tensor_numels = [t.numel() for t in tensors]
-            
+
         # Calculate cumulative offsets for each tensor in output (in elements)
         tensor_offsets = [0]
         offset = 0
         for numel in tensor_numels:
             offset += numel * self.num_ranks
             tensor_offsets.append(offset)
-            
+
         # outs[i] = tensor i's complete allgather result (numel * num_ranks elements)
         outs = [output[tensor_offsets[i]:tensor_offsets[i + 1]] for i in range(len(tensors))]
         return outs
-    
+
     def get_comm_slots(self, tensors : Union[torch.Tensor, List[torch.Tensor]]):
         if isinstance(tensors, torch.Tensor):
             tensors = [tensors]

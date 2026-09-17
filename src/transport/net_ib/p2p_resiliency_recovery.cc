@@ -1482,7 +1482,7 @@ ncclResult_t ncclIbPortRecoveryThreadStart() {
 
   INFO(NCCL_NET, "NET/IB: %s: Starting port recovery async thread", __func__);
   ncclIbPortRecoveryAsyncThread = std::thread(ncclIbPortRecoveryAsyncThreadMain);
-  ncclSetThreadName(ncclIbPortRecoveryAsyncThread, "NCCL IbResiliencyPortRecoveryAsync");
+  ncclSetThreadName(ncclIbPortRecoveryAsyncThread, "NCCL IbPortRec");
 
   return ncclSuccess;
 }

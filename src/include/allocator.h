@@ -27,6 +27,10 @@ void ncclSpaceConstruct(struct ncclSpace* a);
 void ncclSpaceDestruct(struct ncclSpace* a);
 ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t spaceLimit, int64_t objSize, int objAlign,
                             int64_t* outObjOffset);
+// Same as ncclSpaceAlloc, but a full space is reported by the ncclInternalError return
+// alone. For callers where running out of space is an expected, benign outcome.
+ncclResult_t ncclSpaceTryAlloc(struct ncclSpace* a, int64_t spaceLimit, int64_t objSize, int objAlign,
+                               int64_t* outObjOffset);
 ncclResult_t ncclSpaceFree(struct ncclSpace* a, int64_t objOffset, int64_t objSize);
 
 ////////////////////////////////////////////////////////////////////////////////

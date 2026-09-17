@@ -42,7 +42,7 @@ exit:
 }
 
 ncclResult_t ncclDevrCheckRegistrationSupport(void* userPtr, size_t userSize, struct ncclComm* comm,
-                                              bool hasSysmemSegment) {
+                                              bool hasSysmemSegment, int winFlags) {
   ncclResult_t ret = ncclSuccess;
   if (hasSysmemSegment) {
     if (!ncclParamElasticBufferRegister()) {
@@ -54,7 +54,7 @@ ncclResult_t ncclDevrCheckRegistrationSupport(void* userPtr, size_t userSize, st
       goto exit;
     }
 #if CUDART_VERSION >= 12080
-    else if (comm->MNNVL) {
+    else if (comm->MNNVL && ncclDevrWinRegEnabled(winFlags, ncclDevrRegisterLsa)) {
       int multiNodeLsaSupported = 0;
       CUCHECKGOTO(cuDeviceGetAttribute(&multiNodeLsaSupported, CU_DEVICE_ATTRIBUTE_HOST_NUMA_MULTINODE_IPC_SUPPORTED,
                                        comm->cudaDev),

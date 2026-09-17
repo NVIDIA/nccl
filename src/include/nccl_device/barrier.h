@@ -37,8 +37,10 @@ struct ncclBarrierSession : ncclBarrierSession_internal<Coop> {
   NCCL_DEVICE_INLINE ncclResult_t sync(Coop, cuda::memory_order, ncclGinFenceLevel, uint64_t timeoutCycles);
 
 private:
+  // needsProducerFlush is set when this rank takes the auto-flush path and must flush its own puts
+  // before the barrier so peers can observe them.
   NCCL_DEVICE_INLINE void selectBarrierAlgo(ncclGinFenceLevel fence, bool* needsLsaBarrier, bool* needsRailGinBarrier,
-                                            bool* needsDenseGinBarrier) const;
+                                            bool* needsDenseGinBarrier, bool* needsProducerFlush) const;
 };
 
 // Free-function hybrid barrier. Wraps session construct + sync + destruct.

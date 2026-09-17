@@ -1034,6 +1034,234 @@ __global__ void test_misaligned_block_get(niinContext* ctx, TestResult* result, 
 // ============================================================================
 // Main: run all tests
 // ============================================================================
+// Test 17h: TMA-backed RMA (nvshmemx_give_smem / release_smem)
+//
+// Every kernel here works whether or not TMA is active: below sm_90, or with
+// NVSHMEM_TMA_POLICY unset, give_smem is a no-op and the same transfers take
+// the vectorized load/store path. What the tests assert is that the data lands
+// correctly either way.
+// ============================================================================
+#define NIIN_TEST_TMA_SRC   327680   // 64 KB source
+#define NIIN_TEST_TMA_DST   393216   // 64 KB block-put destination
+#define NIIN_TEST_TMA_TDST  458752   // 8 KB thread-scoped put destination
+#define NIIN_TEST_TMA_SDST  466944   // 4 KB smem-sourced put destination
+#define NIIN_TEST_TMA_UDST  471040   // unaligned fallback destination
+
+// int4 element type pins the dynamic shared memory base to 16-byte alignment,
+// which nvshmemx_give_smem() requires.
+extern __shared__ int4 niinTestSmem[];
+
+__device__ __forceinline__ char* niinTestSmemBase() {
+  return reinterpret_cast<char*>(niinTestSmem);
+}
+
+__global__ void test_tma_setup(niinContext* ctx) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  int pe = nvshmem_my_pe();
+  char* heap = (char*)niin_heap_base();
+  int* src = (int*)(heap + NIIN_TEST_TMA_SRC);
+  for (int i = threadIdx.x; i < 16384; i += blockDim.x) src[i] = pe * 900000 + i;
+
+  // Zero the regions our peer will write into, so a dropped transfer shows up.
+  int* dst = (int*)(heap + NIIN_TEST_TMA_DST);
+  for (int i = threadIdx.x; i < 16384; i += blockDim.x) dst[i] = 0;
+  int* tdst = (int*)(heap + NIIN_TEST_TMA_TDST);
+  for (int i = threadIdx.x; i < 2048; i += blockDim.x) tdst[i] = 0;
+  int* sdst = (int*)(heap + NIIN_TEST_TMA_SDST);
+  for (int i = threadIdx.x; i < 1024; i += blockDim.x) sdst[i] = 0;
+  char* udst = heap + NIIN_TEST_TMA_UDST + 3;
+  for (int i = threadIdx.x; i < 1000; i += blockDim.x) udst[i] = 0;
+}
+
+// Block-scoped 64 KB put: the double-buffered, warp-specialized staging path.
+__global__ void test_tma_put_block(niinContext* ctx, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  nvshmemx_give_smem(niinTestSmemBase(), nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM));
+  __syncthreads();
+
+  int pe = niin_device_my_pe();
+  int peer = (pe + 1) % npes;
+  int* src = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_SRC);
+  int* dst = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_DST);
+  nvshmemx_int_put_block(dst, src, 16384, peer);
+  nvshmem_quiet();
+
+  __syncthreads();
+  nvshmemx_release_smem();
+  __syncthreads();
+}
+
+__global__ void test_tma_put_block_verify(niinContext* ctx, TestResult* result, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    int sender = (nvshmem_my_pe() - 1 + npes) % npes;
+    int* dst = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_DST);
+    bool ok = true;
+    for (int i = 0; i < 16384; i++) {
+      if (dst[i] != sender * 900000 + i) { ok = false; break; }
+    }
+    if (ok) recordPass(result);
+    else recordFail(result, "TMA block put wrong data");
+  }
+}
+
+// Thread-scoped 8 KB put: the single-issuer staging path. Only one thread in
+// the CTA may have a staged transfer in flight, so only thread 0 issues.
+__global__ void test_tma_put_thread(niinContext* ctx, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  nvshmemx_give_smem(niinTestSmemBase(), nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM));
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    int pe = niin_device_my_pe();
+    int peer = (pe + 1) % npes;
+    int* src = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_SRC);
+    int* dst = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_TDST);
+    nvshmem_int_put(dst, src, 2048, peer);
+    nvshmem_quiet();
+  }
+  __syncthreads();
+  nvshmemx_release_smem();
+  __syncthreads();
+}
+
+__global__ void test_tma_put_thread_verify(niinContext* ctx, TestResult* result, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    int sender = (nvshmem_my_pe() - 1 + npes) % npes;
+    int* dst = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_TDST);
+    bool ok = true;
+    for (int i = 0; i < 2048; i++) {
+      if (dst[i] != sender * 900000 + i) { ok = false; break; }
+    }
+    if (ok) recordPass(result);
+    else recordFail(result, "TMA thread put wrong data");
+  }
+}
+
+// Put sourced from shared memory: no staging, straight smem -> peer gmem.
+__global__ void test_tma_put_from_smem(niinContext* ctx, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  nvshmemx_give_smem(niinTestSmemBase(), nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM));
+  __syncthreads();
+
+  int pe = niin_device_my_pe();
+  int peer = (pe + 1) % npes;
+  int* stage = (int*)(niinTestSmemBase() + NIIN_SMEM_DATA_REGION_OFFSET);
+  for (int i = threadIdx.x; i < 1024; i += blockDim.x) stage[i] = pe * 700000 + i;
+  __syncthreads();
+  // Publish the generic shared-memory stores to the async proxy before TMA
+  // reads them. NIIN inherits this caller obligation from NVSHMEM.
+  niin_tma_fence_proxy_async_shared_cta();
+
+  int* dst = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_SDST);
+  nvshmemx_int_put_block(dst, stage, 1024, peer);
+  nvshmem_quiet();
+
+  __syncthreads();
+  nvshmemx_release_smem();
+  __syncthreads();
+}
+
+__global__ void test_tma_put_from_smem_verify(niinContext* ctx, TestResult* result, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    int sender = (nvshmem_my_pe() - 1 + npes) % npes;
+    int* dst = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_SDST);
+    bool ok = true;
+    for (int i = 0; i < 1024; i++) {
+      if (dst[i] != sender * 700000 + i) { ok = false; break; }
+    }
+    if (ok) recordPass(result);
+    else recordFail(result, "TMA smem-sourced put wrong data");
+  }
+}
+
+// Get landing directly in shared memory: peer gmem -> smem, no staging.
+__global__ void test_tma_get_to_smem(niinContext* ctx, TestResult* result, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  nvshmemx_give_smem(niinTestSmemBase(), nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM));
+  __syncthreads();
+
+  int pe = niin_device_my_pe();
+  int peer = (pe + 1) % npes;
+  int* remoteSrc = (int*)((char*)niin_heap_base() + NIIN_TEST_TMA_SRC);
+  int* landing = (int*)(niinTestSmemBase() + NIIN_SMEM_DATA_REGION_OFFSET);
+  nvshmemx_int_get_block(landing, remoteSrc, 1024, peer);
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    bool ok = true;
+    for (int i = 0; i < 1024; i++) {
+      if (landing[i] != peer * 900000 + i) { ok = false; break; }
+    }
+    if (ok) recordPass(result);
+    else recordFail(result, "TMA get into smem wrong data");
+  }
+  __syncthreads();
+  nvshmemx_release_smem();
+  __syncthreads();
+}
+
+// Unaligned transfer while smem is registered: TMA declines it and the copy
+// must still land correctly through the load/store fallback.
+__global__ void test_tma_fallback(niinContext* ctx, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  nvshmemx_give_smem(niinTestSmemBase(), nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM));
+  __syncthreads();
+
+  int pe = niin_device_my_pe();
+  int peer = (pe + 1) % npes;
+  char* src = (char*)niin_heap_base() + NIIN_TEST_TMA_SRC + 3;
+  char* dst = (char*)niin_heap_base() + NIIN_TEST_TMA_UDST + 3;
+  nvshmemx_putmem_block(dst, src, 1000, peer);
+  nvshmem_quiet();
+
+  __syncthreads();
+  nvshmemx_release_smem();
+  __syncthreads();
+}
+
+__global__ void test_tma_fallback_verify(niinContext* ctx, TestResult* result, int npes) {
+  if (threadIdx.x == 0) niin_g_ctx = ctx;
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    int sender = (nvshmem_my_pe() - 1 + npes) % npes;
+    const char* dst = (const char*)niin_heap_base() + NIIN_TEST_TMA_UDST + 3;
+    bool ok = true;
+    for (int i = 0; i < 1000; i++) {
+      // The sender's source region holds int-sized values sender*900000 + idx,
+      // read back here one byte at a time starting 3 bytes in.
+      int byteOff = 3 + i;
+      int word = sender * 900000 + (byteOff / 4);
+      char want = (char)((word >> (8 * (byteOff % 4))) & 0xFF);
+      if (dst[i] != want) { ok = false; break; }
+    }
+    if (ok) recordPass(result);
+    else recordFail(result, "TMA fallback (unaligned) wrong data");
+  }
+}
+
+// ============================================================================
 
 void printResult(const char* name, TestResult& r) {
   if (r.failed == 0)
@@ -1078,14 +1306,32 @@ int main() {
   }
 
   // Step 3: Initialize NIIN (two-phase: NCCL collectives, then device copy)
-  niinContext_host hostCtxs[2];
+  niinContext_host hostCtxs[2] = {};
   NCCLCHECK(ncclGroupStart());
   for (int i = 0; i < nPes; i++) {
     CUDACHECK(cudaSetDevice(i));
+    // niinInit takes enableGin before the GIN tuning args; passing only three
+    // trailing values silently bound 0 to enableGin and disabled GIN entirely.
     NCCLCHECK(niinInit(comms[i], heapBufs[i], heapSize, &hostCtxs[i],
-                        /*ginContextIndex=*/0, /*barrierCount=*/1, /*ginSignalCount=*/0));
+                        /*enableGin=*/true, /*barrierCount=*/1,
+                        /*ginSignalCount=*/0));
   }
   NCCLCHECK(ncclGroupEnd());
+
+  // TMA needs sm_90 or newer. Turn it on where available so the TMA tests
+  // exercise cp.async.bulk; elsewhere give_smem is inert and those same tests
+  // cover the load/store fallback.
+  int capMajor = 0;
+  CUDACHECK(cudaDeviceGetAttribute(&capMajor, cudaDevAttrComputeCapabilityMajor, 0));
+  bool tmaEnabled = capMajor >= 9;
+  if (tmaEnabled) {
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      NCCLCHECK(niinTmaEnable(&hostCtxs[i], NVSHMEMX_TMA_ENABLE));
+    }
+  }
+  printf("TMA: %s\n\n", tmaEnabled ? "enabled (sm_90+)"
+                                   : "unavailable below sm_90 — TMA tests cover the fallback");
 
   // Phase 2: copy to device (after groupEnd so NCCL results are finalized)
   for (int i = 0; i < nPes; i++) {
@@ -1470,6 +1716,102 @@ int main() {
   syncAll();
   reportTest("Misaligned block get");
 
+  // Test 17h: TMA-backed RMA. give_smem needs the whole CTA, and the
+  // double-buffered staging path needs at least two warps, so launch 128
+  // threads with NVSHMEMX_SMEM_MINIMUM (32 KB) of dynamic shared memory.
+  // 32 KB stays under the 48 KB static cap, so no cudaFuncSetAttribute opt-in
+  // is needed; NVSHMEMX_SMEM_RECOMMENDED (64 KB) would require one.
+  {
+    const int tmaSmem = nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM);
+
+    clearResults();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_setup<<<1, 128, 0, streams[i]>>>(ctxs[i]);
+    }
+    syncAll();
+
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_put_block<<<1, 128, tmaSmem, streams[i]>>>(ctxs[i], nPes);
+    }
+    syncAll();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_put_block_verify<<<1, 1, 0, streams[i]>>>(ctxs[i], results[i], nPes);
+    }
+    syncAll();
+    reportTest("TMA block put (64KB)");
+
+    clearResults();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_put_thread<<<1, 128, tmaSmem, streams[i]>>>(ctxs[i], nPes);
+    }
+    syncAll();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_put_thread_verify<<<1, 1, 0, streams[i]>>>(ctxs[i], results[i], nPes);
+    }
+    syncAll();
+    reportTest("TMA thread put (8KB)");
+
+    clearResults();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_put_from_smem<<<1, 128, tmaSmem, streams[i]>>>(ctxs[i], nPes);
+    }
+    syncAll();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_put_from_smem_verify<<<1, 1, 0, streams[i]>>>(ctxs[i], results[i], nPes);
+    }
+    syncAll();
+    reportTest("TMA put from shared memory");
+
+    clearResults();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_get_to_smem<<<1, 128, tmaSmem, streams[i]>>>(ctxs[i], results[i], nPes);
+    }
+    syncAll();
+    reportTest("TMA get into shared memory");
+
+    clearResults();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_fallback<<<1, 128, tmaSmem, streams[i]>>>(ctxs[i], nPes);
+    }
+    syncAll();
+    for (int i = 0; i < nPes; i++) {
+      CUDACHECK(cudaSetDevice(i));
+      test_tma_fallback_verify<<<1, 1, 0, streams[i]>>>(ctxs[i], results[i], nPes);
+    }
+    syncAll();
+    reportTest("TMA unaligned fallback");
+  }
+
+  // Test 17i: nvshmemx_ask_smem on the host
+  {
+    TestResult askResult = {};
+    int recommended = nvshmemx_ask_smem(NVSHMEMX_SMEM_RECOMMENDED);
+    int minimum = nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM);
+    int barriers = nvshmemx_ask_smem(NVSHMEMX_SMEM_BARRIERS_ONLY);
+
+    if (recommended > minimum && minimum > barriers) askResult.passed++;
+    else { askResult.failed++; snprintf(askResult.failMsg, 256,
+             "ask_smem not ordered: %d %d %d", recommended, minimum, barriers); }
+
+    if (barriers == NIIN_SMEM_DATA_REGION_OFFSET) askResult.passed++;
+    else { askResult.failed++; snprintf(askResult.failMsg, 256,
+             "ask_smem(BARRIERS_ONLY) got %d expected %d",
+             barriers, NIIN_SMEM_DATA_REGION_OFFSET); }
+
+    printResult("nvshmemx_ask_smem [host]", askResult);
+    totalPassed += askResult.passed;
+    totalFailed += askResult.failed;
+  }
+
   // Test 18: Team operations (host-side)
   {
     TestResult teamResult = {};
@@ -1577,6 +1919,7 @@ int main() {
   for (int i = 0; i < nPes; i++) {
     CUDACHECK(cudaSetDevice(i));
     niinFinalize(comms[i], ctxs[i]);
+    niinTmaDisable(&hostCtxs[i]);
   }
 
   for (int i = 0; i < nPes; i++) {

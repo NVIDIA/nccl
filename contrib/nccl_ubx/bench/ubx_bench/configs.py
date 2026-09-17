@@ -65,7 +65,7 @@ class BenchConfig:
     hidden_size: int = 0
 
     # Graph/Correctness
-    cudagraph: int = 10000
+    cudagraph: int = 1000
     check: int = 1
 
     # Output

@@ -66,9 +66,9 @@ goes through the network.
 ncclDevComm devComm;
 ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
 // GIN barriers enable cross-node synchronization over the network
-reqs.railGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
+reqs.worldGinBarrierCount = NCCL_DEVICE_CTA_COUNT;
 // GIN signals provide completion notifications for asynchronous operations
-reqs.ginSignalCount = 1;
+reqs.ginSignalCount = NCCL_DEVICE_CTA_COUNT;
 // Enable full GIN connectivity, i.e., connect each rank to all other ranks
 reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
 
@@ -100,17 +100,16 @@ to progress independently while coordinating with corresponding blocks on other 
 ncclGinBarrierSession<ncclCoopCta> bar {
     ncclCoopCta(),                    // Barrier scope: entire CTA (thread block)
     gin,                              // GIN context for network operations
-    ncclTeamWorld(devComm),          // Team spanning all ranks
-    devComm.railGinBarrier,          // GIN barrier handle
+    ncclTeamTagWorld(),              // Team spanning all ranks
     blockIdx.x                       // Barrier index: matches our CTA index
 };
-bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::Relaxed);
+bar.sync(ncclCoopCta(), cuda::memory_order_acquire, ncclGinFenceLevel::None);
 ```
 
 ### GIN Put Operations (Device-side)
 
 GIN provides one-sided put operations for direct remote memory writes over the
-network. The `ncclGin_SignalInc` parameter increments a signal counter, enabling
+network. The `ncclGin_WeakSignalInc` parameter increments a signal counter, enabling
 asynchronous completion detection.
 
 ```cpp
@@ -120,7 +119,7 @@ for (int r = tid; r < devComm.nRanks; r += nthreads) {
     gin.put(ncclTeamWorld(devComm), r,
         recvwin, recvoffset + devComm.rank * size,  // Destination: peer r's buffer
         sendwin, sendoffset + r * size,             // Source: data for peer r
-        size, ncclGin_SignalInc{signalIndex});      // Signal increment for completion
+        size, ncclGin_WeakSignalInc{signalIndex});  // Signal increment for completion
 }
 ```
 

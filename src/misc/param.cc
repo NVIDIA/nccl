@@ -92,10 +92,12 @@ int64_t ncclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized, i
 
   if (str && strlen(str) > 0) {
     errno = 0;
-    value = strtoll(str, nullptr, 0);
-    if (errno) {
+    char* end = nullptr;
+    value = strtoll(str, &end, 0);
+    // Preserve numeric-prefix parsing while rejecting non-numeric values.
+    if (errno || end == str) {
       value = deftVal;
-      INFO(NCCL_ALL, "Invalid value %s for %s, using default %lld.", str, env, (long long)deftVal);
+      ATTN("Invalid value %s for %s, using default %lld.", str, env, (long long)deftVal);
     } else {
       INFO(NCCL_ENV, "%s set by environment to %lld.", env, (long long)value);
     }

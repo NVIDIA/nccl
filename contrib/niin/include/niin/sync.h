@@ -9,23 +9,96 @@
 #define NIIN_SYNC_H_
 
 #include "niin/context.h"
+#include "niin/tma.h"
 
 static __device__ unsigned long long niin_test_any_cursor = 0;
 
 // ---------------------------------------------------------------------------
 // Device-side fence/quiet implementations
 // ---------------------------------------------------------------------------
+// Complete every context. A thread cannot know which QPs carried its own
+// operations once selection is per operation, and the on-stream and host paths
+// complete work issued by other threads entirely.
+__device__ __forceinline__ void niin_device_drain_all_contexts() {
+  ncclDevComm const& comm = niin_comm();
+  if (niin_world_is_lsa_only() || !niin_has_gin()) return;
+  uint32_t nCtx = niin_gin_context_count();
+  if (nCtx == 1) {  // the common single-QP case: one flush, no loop
+    ncclGin gin(comm, 0);
+    gin.flush(ncclCoopThread{});
+    return;
+  }
+  for (uint32_t ctx = 0; ctx < nCtx; ctx++) {
+    ncclGin gin(comm, (int)ctx);
+    gin.flush(ncclCoopThread{});
+  }
+}
+
+// fence orders operations; it does not have to complete them. On a single GIN
+// context the transport already provides that ordering: every operation goes to
+// the same RC QP per peer, and an RC QP processes its work queue in order, so
+// consecutive puts to a PE land in order with no completion wait. A local
+// memory fence is then all fence owes the caller.
+//
+// Completion is only needed when something outside that one queue can reorder
+// against it:
+//   - several contexts, because operations rotate across QPs and two QPs are
+//     unordered against each other at the receiving NIC;
+//   - a bound GPUNetIO atomic sidecar, whose QPs are a separate network domain
+//     from GIN, so a pending put is not ordered against a following AMO.
+// Either of those turns fence into the same all-contexts drain quiet does.
+__device__ __forceinline__ bool niin_fence_needs_completion() {
+  if (niin_world_is_lsa_only() || !niin_has_gin()) return false;
+  if (niin_gin_context_count() > 1) return true;
+  return niin_gpunetio_atomic_context() != nullptr;
+}
+
+NIIN_NOINLINE_DEVICE void niin_device_fence_slow() {
+  // Drain this thread's TMA bulk ops first. Unlike the context drain below this
+  // is not gated on connectivity: in a mixed topology, TMA puts to LSA peers
+  // are invisible to GIN, so a fence after a TMA put must order it either way.
+  const bool hadTma = niin_tma_smem_registered();
+  niin_tma_drain_if_registered();
+  const bool hadLsaStores = niin_consume_lsa_store_pending();
+  const bool hadGinOps = !niin_world_is_lsa_only() && niin_has_gin_ops_pending();
+  if (hadGinOps && niin_fence_needs_completion()) {
+    (void)niin_take_gin_ops_pending();
+    niin_device_drain_all_contexts();
+  }
+  if (hadTma || hadLsaStores || hadGinOps) __threadfence_system();
+}
+
 __device__ __forceinline__ void niin_device_fence() {
-  __threadfence_system();
+  if (niin_world_is_lsa_only() && niin_tma_policy() == NVSHMEMX_TMA_DISABLE) {
+    if (niin_consume_lsa_store_pending()) __threadfence_system();
+    return;
+  }
+  niin_device_fence_slow();
+}
+
+NIIN_NOINLINE_DEVICE void niin_device_quiet_slow() {
+  const bool hadTma = niin_tma_smem_registered();
+  niin_tma_drain_if_registered();
+  const bool hadLsaStores = niin_consume_lsa_store_pending();
+  const bool hadGinOps = !niin_world_is_lsa_only() && (niin_take_gin_ops_pending() != 0u);
+  if (hadGinOps) niin_device_drain_all_contexts();
+  if (hadTma || hadLsaStores || hadGinOps) __threadfence_system();
 }
 
 __device__ __forceinline__ void niin_device_quiet() {
-  ncclDevComm const& comm = niin_comm();
-  if (comm.ginConnectionCount > 0) {
-    ncclGin gin(comm, niin_gin_context_index());
-    gin.flush(ncclCoopThread{});
+  if (niin_world_is_lsa_only() && niin_tma_policy() == NVSHMEMX_TMA_DISABLE) {
+    if (niin_consume_lsa_store_pending()) __threadfence_system();
+    return;
   }
-  __threadfence_system();
+  niin_device_quiet_slow();
+}
+
+// Kernel form of quiet for host-side paths. Templated so each translation unit
+// including NIIN gets its own weak instantiation rather than a duplicate symbol
+// at link time.
+template<int = 0>
+__global__ void niin_quiet_kernel() {
+  niin_device_quiet();
 }
 
 // ---------------------------------------------------------------------------

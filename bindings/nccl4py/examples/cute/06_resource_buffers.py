@@ -92,19 +92,21 @@ def resource_buffers_kernel(
         cute.printf(f"resource buffer multimem={mm} lsa_multimem={lsa_mm}")
         cute.printf(f"local == lsa(self): {local == lsa}, local == peer(self): {local == peer}")
 
-    # Live barrier storage: reading it around a barrier shows NCCL updating
-    # it. Never write through it.
+    # Live barrier storage; never write through it. For this non-multimem
+    # session, destroy() writes the uint32 epoch at n_barriers + index.
     state = cute.make_tensor(
-        cute.make_ptr(cutlass.Uint64, dev_comm.resource_buffer_local_pointer(handle)),
-        cute.make_layout(1))
-    before = state[0]
+        cute.make_ptr(cutlass.Uint32, dev_comm.resource_buffer_local_pointer(handle)),
+        cute.make_layout(2 * lsa_handle.n_barriers))
+    epoch_slot = lsa_handle.n_barriers + INDEX
+    before = state[epoch_slot]
 
-    nccl_cute.lsa_session(
-        coop, dev_comm, dev_comm.team_lsa, lsa_handle, index=INDEX
-    ).sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
+    bar = nccl_cute.lsa_session(
+        coop, dev_comm, dev_comm.team_lsa, lsa_handle, index=INDEX)
+    bar.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
+    bar.destroy()
 
     if 0 == tidx:
-        cute.printf(f"barrier state before={before} after={state[0]}")
+        cute.printf(f"barrier epoch before={before} after={state[epoch_slot]}")
 
 
 @cute.jit

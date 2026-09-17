@@ -28,7 +28,20 @@ ncclResult_t ncclCollNetSetVirtDevCount(int netPluginIndex, int nVirtDev);
 // Test whether the current GPU support GPU Direct RDMA.
 ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport);
 
-extern ncclNet_t ncclNetIb;
-extern ncclNet_t ncclNetSocket;
+#if defined(NCCL_OS_LINUX)
+#define NCCL_NET_DATA_IMPORT
+#elif defined(NCCL_OS_WINDOWS)
+#if defined(nccl_EXPORTS)
+#define NCCL_NET_DATA_IMPORT
+#else
+#define NCCL_NET_DATA_IMPORT __declspec(dllimport)
+#endif
+#endif
+
+extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetIb;
+extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetSocket;
+extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetNd;
+
+#undef NCCL_NET_DATA_IMPORT
 
 #endif

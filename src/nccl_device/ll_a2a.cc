@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "core.h"
+#include "nccl_device/host.h"
 #include "nccl_device/impl/ll_a2a__funcs.h"
 
 NCCL_API(int, ncclLLA2ACalcSlots, int maxElts, int maxEltSize);

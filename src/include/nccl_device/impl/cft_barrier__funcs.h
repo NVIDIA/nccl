@@ -91,7 +91,8 @@ NCCL_DEVICE_INLINE ncclResult_t ncclCftBarrierSession_internal<Coop>::waitIntern
   Coop, cuda::memory_order order, ncclMemProxyType producer, ncclMemProxyType consumer, uint64_t timeoutCycles) {
   using nccl::utility::testAbort;
   uint32_t steps = 0;
-  uint64_t startCycle = 0;
+  uint64_t startCycle;
+  (void)startCycle;
   ncclResult_t ret = ncclSuccess;
   if NCCL_IF_CONSTEXPR (EnableTimeout) {
     startCycle = clock64();

@@ -156,6 +156,8 @@ typedef struct {
 
   uint32_t* lastIssuedGet; // per-peer index of most recent get
   uint32_t* lastVisibleGet; // per-peer index of last get for which the payload is guaranteed visible (via flush GFD)
+
+  bool flushesAllPutsOnAnySignal;
 } ncclGinProxyGpuCtx_t;
 
 #endif

@@ -16,5 +16,6 @@ ncclResult_t ncclRmaGetDevCount(int ginPluginIndex, int* nPhysDev, int* nVirtDev
 ncclResult_t ncclRmaFinalize(struct ncclComm* comm);
 
 extern ncclRma_t ncclRmaIbProxy;
+extern ncclRma_t ncclRmaSocketProxy;
 
 #endif

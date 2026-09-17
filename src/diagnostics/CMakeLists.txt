@@ -8,6 +8,7 @@ add_subdirectory(device)
 
 set(DIAGNOSTICS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/p2p.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/ib_write_bw.cc
 )
 
 # Add diagnostics sources to parent scope

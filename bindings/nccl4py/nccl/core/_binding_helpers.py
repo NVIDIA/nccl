@@ -9,10 +9,10 @@ A "lowpp" is the low-level Python object cybind generates for a C struct
 (e.g. ``nccl.bindings.nccl.Config``); it holds a ``.ptr`` to the struct and
 exposes its members as properties. Two roles sit above it:
 
-- :class:`LowppSpec` — a user-facing dataclass whose fields are the source of
+- :class:`LowppSpec` -- a user-facing dataclass whose fields are the source of
   truth. ``obj._to_lowpp()`` builds a fresh lowpp struct from the current field
   values, to pass *into* a binding wrapper function.
-- :class:`LowppView` — a read-only, live view over a lowpp struct *returned from*
+- :class:`LowppView` -- a read-only, live view over a lowpp struct *returned from*
   a binding wrapper. Each field reads the lowpp directly, so a value NCCL writes
   later (e.g. non-blocking completion) is always current. The wrapped struct is
   available as ``obj._lowpp``.
@@ -38,7 +38,7 @@ class PassBy(Enum):
     """How a field's value is written into the lowpp struct.
 
     ``VALUE`` assigns the value (or a nested facade's lowpp) by value.
-    ``POINTER`` assigns ``int(value.ptr)`` — a borrowed pointer. The referent
+    ``POINTER`` assigns ``int(value.ptr)`` -- a borrowed pointer. The referent
     must outlive any native use of the materialization.
     """
 
@@ -116,7 +116,7 @@ class LowppSpec:
     class, re-running ``__init_subclass__`` without the ``lowpp_cls`` keyword.
 
     ``_to_lowpp()`` builds a fresh ``lowpp_cls`` from the current field values.
-    A field whose value is ``None`` — or that has been ``del``-eted — is left at
+    A field whose value is ``None`` -- or that has been ``del``-eted -- is left at
     the lowpp default, so a facade may mirror a subset of the lowpp members and
     add Python-only fields: an
     implicitly-named field not naming a writable lowpp member is Python-only,

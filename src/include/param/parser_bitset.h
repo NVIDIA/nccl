@@ -21,6 +21,7 @@ template <typename OptionT, size_t N>
 struct bitsetCtx {
   ncclOptionSet<OptionT, N> options;
   char delimiter;
+  bool ignoreUnknown;
 };
 
 template <typename OptionT, typename ResultT, size_t N>
@@ -48,7 +49,7 @@ ncclResult_t bitsetResolve(const void* ctx, const char* input, ResultT& out) {
           break;
         }
       }
-      if (!found) return ncclInvalidArgument;
+      if (!found && !bc.ignoreUnknown) return ncclInvalidArgument;
     }
     if (end == str.size()) break;
     start = end + 1;
@@ -100,9 +101,11 @@ std::string bitsetToString(const void* ctx, const ResultT& value) {
 // cannot do bit-wise operation.
 template <typename OptionT, typename ResultT = std::make_unsigned_t<OptionT>, size_t N>
 // template <typename ResultT, typename OptionT, size_t N>
-ncclParamParser<ResultT> ncclParamBitsetOf(ncclOptionSet<OptionT, N> options, char delimiter = ',') {
+ncclParamParser<ResultT> ncclParamBitsetOf(ncclOptionSet<OptionT, N> options, char delimiter = ',',
+                                           bool ignoreUnknown = false) {
   using namespace nccl::param::parser;
-  auto ctx = std::make_shared<bitsetCtx<OptionT, N>>(bitsetCtx<OptionT, N>{std::move(options), delimiter});
+  auto ctx =
+    std::make_shared<bitsetCtx<OptionT, N>>(bitsetCtx<OptionT, N>{std::move(options), delimiter, ignoreUnknown});
   std::string d = "Comma-separated list of:";
   for (const auto& opt : ctx->options) {
     d += "\n        ";

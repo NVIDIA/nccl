@@ -306,7 +306,7 @@ def dequantize_nvfp4_back_to_bfloat16(x_nvfp4: torch.Tensor, x_scales: torch.Ten
     if x_nvfp4.numel() == 0:
         ratio = int(x_nvfp4.dtype.itemsize * 8 / 4)
         return x_nvfp4.to(torch.bfloat16).view(x_nvfp4.size(0), x_nvfp4.size(1) * ratio)
-    NVFP4_TABLE = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1.0, -1.5, -2, -3, -4, -6], dtype=torch.float32, device=x_nvfp4.device)   
+    NVFP4_TABLE = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, 0, -0.5, -1.0, -1.5, -2, -3, -4, -6], dtype=torch.float32, device=x_nvfp4.device)
     if use_ue8m0_for_nvfp4_sf:
         x_scales = x_scales.view(dtype=torch.int8).to(torch.int) << 23
         x_scales = x_scales.view(dtype=torch.float)
@@ -314,9 +314,9 @@ def dequantize_nvfp4_back_to_bfloat16(x_nvfp4: torch.Tensor, x_scales: torch.Ten
         x_scales = x_scales.view(dtype=torch.float8_e4m3fn).to(torch.float32)
     x_sf_scale = 1 / x_sf_scale
     x_scales = x_scales * x_sf_scale
-    
+
     x_fp32 = int32_to_8floats_lookup(x_nvfp4, NVFP4_TABLE)
-    
+
     x_fp32 = x_fp32.view(*x_fp32.shape[:-1], -1, 16)
     x_scales = x_scales.view(*x_scales.shape[:-1], -1, 1)
     x_fp32 = x_fp32 * x_scales

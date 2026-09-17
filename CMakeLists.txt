@@ -101,6 +101,8 @@ elseif(NCCL_COMPILER_MSVC)
     set(DEBUG_HOST_FLAGS "/Od /Zi /FS" CACHE STRING "Host CXX flags applied when DEBUG=ON (overrides default)")
 endif()
 set(DEBUG_DEVICE_FLAGS "-O0 -g -lineinfo" CACHE STRING "Device (NVCC) flags applied when DEBUG=ON (overrides default)")
+set(TLS_BACKEND "$ENV{TLS_BACKEND}" CACHE STRING "TLS backend (empty or OPENSSL3)")
+set_property(CACHE TLS_BACKEND PROPERTY STRINGS "" OPENSSL3)
 
 find_package(CUDAToolkit REQUIRED)
 find_package(Threads REQUIRED)
@@ -157,10 +159,14 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
             set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;120")
         endif()
     elseif(${CUDA_MAJOR} EQUAL 13)
-        set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;110;120")
+        if(${CUDA_MINOR} LESS 4)
+            set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;110;120")
+        else()
+            set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;107;110;120")
+        endif()
     else()
         # For future CUDA versions, include all architectures up to the latest known
-        set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;110;120")
+        set(CMAKE_CUDA_ARCHITECTURES "50;60;61;70;80;90;100;107;110;120")
     endif()
 endif()
 message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -168,7 +174,7 @@ message(STATUS "Using CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 # Compiler-specific flags
 if(NCCL_COMPILER_GCC)
     # GCC/Clang-specific flags
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wno-unused-function -Wno-sign-compare -Wvla -g")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare -Wvla -g")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
 elseif(NCCL_COMPILER_MSVC)
     # MSVC-specific flags
@@ -179,6 +185,9 @@ elseif(NCCL_COMPILER_MSVC)
     # /wd4805 disables "unsafe mix of type 'bool' and type 'int'" - intentional bool/int mixing for flags
     # /wd4018 disables "signed/unsigned mismatch" - safe comparisons where signed value is always positive
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /wd4267 /wd4244 /wd4996 /wd4146 /wd4197 /wd5105 /wd4805 /wd4018 /FS /Zc:preprocessor")
+    # CUDA's static runtime links LIBCMT in all configurations, so use /MT consistently
+    # for C++, CUDA, and test targets to avoid mixing incompatible CRT libraries.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
     # --compress-mode=balance is not supported by ptxas in CUDA 13.1 on Windows; omit for compatibility.
     # -Xcompiler /Zc:preprocessor passes the conformant preprocessor flag to cl.exe when invoked by nvcc
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda --compress-mode=balance --ptxas-options=-maxrregcount=96 -Xcompiler /Zc:preprocessor")
@@ -219,6 +228,7 @@ if(WERROR)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /WX")
     else()
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Werror=all-warnings -Xcompiler -Werror")
     endif()
 endif()
 
@@ -227,6 +237,15 @@ if(PROFAPI)
 endif()
 
 set(EXTRA_LIBS)
+
+set(NCCL_TLS_INCLUDE_DIRS)
+if(TLS_BACKEND STREQUAL "OPENSSL3")
+    find_package(OpenSSL 3.0 REQUIRED COMPONENTS SSL Crypto)
+    add_compile_definitions(NCCL_TLS_BACKEND_OPENSSL3=1)
+    list(APPEND NCCL_TLS_INCLUDE_DIRS ${OPENSSL_INCLUDE_DIR})
+elseif(NOT TLS_BACKEND STREQUAL "")
+    message(FATAL_ERROR "Unsupported TLS_BACKEND '${TLS_BACKEND}'; expected OPENSSL3 or empty")
+endif()
 
 # RDMA and MLX5DV are Linux-specific features
 if(RDMA_CORE)

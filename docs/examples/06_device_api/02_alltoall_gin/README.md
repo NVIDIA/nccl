@@ -37,7 +37,7 @@ The C variant can be built with either pthreads or MPI. It can run on a single n
 
 ### Device communicator with GIN resources
 For pure GIN communication, the device communicator is configured with GIN-specific
-resources: `railGinBarrierCount` for network barriers, `ginSignalCount` for async
+resources: `worldGinBarrierCount` for world-team network barriers, `ginSignalCount` for async
 completion signals, and `ginConnectionType` (e.g., `NCCL_GIN_CONNECTION_FULL`) to
 establish connectivity to all peers. Unlike LSA, no LSA barriers are needed since all
 communication goes through the network.
@@ -50,7 +50,7 @@ memory access.
 
 ### GIN put operations
 GIN provides one-sided put operations for direct remote memory writes over the network.
-Each put increments a signal counter (`ncclGin_SignalInc`), enabling asynchronous
+Each put increments a signal counter (`ncclGin_WeakSignalInc`), enabling asynchronous
 completion detection without blocking.
 
 ### Signal-based completion

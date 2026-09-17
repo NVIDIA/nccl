@@ -111,6 +111,12 @@ struct inspectorOtelDevice {
   inspectorOtelCollBucketMap collBuckets;
   inspectorOtelP2pBucketMap p2pBuckets;
   bool hasData = false;
+  // Cumulative counts summed across this device's communicators: total ops
+  // ever enqueued and total dropped (overwritten before being dumped).
+  uint64_t collTotal = 0;
+  uint64_t collDroppedTotal = 0;
+  uint64_t p2pTotal = 0;
+  uint64_t p2pDroppedTotal = 0;
 };
 
 static const char* inspectorOtelFirstEnv(const char* name0,
@@ -530,6 +536,51 @@ static inspectorResult_t inspectorOtelBuildAggregatedPoints(
                                         p2pEntry.first,
                                         p2pEntry.second));
     }
+  }
+  return inspectorSuccess;
+}
+
+// Emits the per-device ring-buffer stats (cumulative op totals and drop
+// counters) for one device. Low-cardinality (node/gpu), and monotonic so
+// rate(dropped)/rate(total) yields the fraction of operations lost.
+static inspectorResult_t inspectorOtelAddDeviceTotals(
+    std::vector<inspectorOtelMetricPoint>& points,
+    const inspectorOtelDevice& device,
+    uint64_t timestampUsec) {
+  std::vector<inspectorOtelAttribute> attrs;
+  inspectorOtelAddAttr(attrs, "version",
+                       inspectorOtelFormatVersion(INSPECTOR_OTEL_DEFAULT_FORMAT_MINOR));
+  inspectorOtelAddAttr(attrs, "node", gOtelNodeName);
+  inspectorOtelAddAttr(attrs, "gpu",
+                       device.gpuName.empty() ? "unknown" : device.gpuName);
+
+  inspectorOtelAddMetricPoint(points, "nccl_collectives_total",
+                              "NCCL collectives enqueued into the inspector ring buffer",
+                              "1", attrs,
+                              static_cast<double>(device.collTotal), timestampUsec);
+  inspectorOtelAddMetricPoint(points, "nccl_collectives_dropped_total",
+                              "NCCL collectives overwritten in the ring buffer before being dumped",
+                              "1", attrs,
+                              static_cast<double>(device.collDroppedTotal), timestampUsec);
+  inspectorOtelAddMetricPoint(points, "nccl_p2p_total",
+                              "NCCL P2P operations enqueued into the inspector ring buffer",
+                              "1", attrs,
+                              static_cast<double>(device.p2pTotal), timestampUsec);
+  inspectorOtelAddMetricPoint(points, "nccl_p2p_dropped_total",
+                              "NCCL P2P operations overwritten in the ring buffer before being dumped",
+                              "1", attrs,
+                              static_cast<double>(device.p2pDroppedTotal), timestampUsec);
+  return inspectorSuccess;
+}
+
+// Emits per-device stats for every known device so the counters stay
+// continuous (usable with rate()) even across dumps with no new records.
+static inspectorResult_t inspectorOtelBuildDeviceStatsPoints(
+    const std::map<std::string, inspectorOtelDevice>& devices,
+    std::vector<inspectorOtelMetricPoint>& points,
+    uint64_t timestampUsec) {
+  for (const auto& entry : devices) {
+    INS_CHK(inspectorOtelAddDeviceTotals(points, entry.second, timestampUsec));
   }
   return inspectorSuccess;
 }
@@ -1040,6 +1091,8 @@ static inspectorResult_t inspectorOtelCommInfoDumpColl(
                                                         drainedColl));
     commInfo->dump_coll = inspectorRingNonEmpty(&commInfo->completedCollRing);
   }
+  device.collTotal += commInfo->completedCollRing.enqueued;
+  device.collDroppedTotal += commInfo->completedCollRing.dropped;
   inspectorUnlockRWLock(&commInfo->guard);
 
   if (!drainedColl.empty()) {
@@ -1100,6 +1153,8 @@ static inspectorResult_t inspectorOtelCommInfoDumpP2p(
                                                         drainedP2p));
     commInfo->dump_p2p = inspectorRingNonEmpty(&commInfo->completedP2pRing);
   }
+  device.p2pTotal += commInfo->completedP2pRing.enqueued;
+  device.p2pDroppedTotal += commInfo->completedP2pRing.dropped;
   inspectorUnlockRWLock(&commInfo->guard);
 
   if (!drainedP2p.empty()) {
@@ -1222,6 +1277,11 @@ inspectorResult_t inspectorOtelCommInfoListDump(struct inspectorCommInfoList* co
                  res, unlock);
     if (!verbose) {
       INS_CHK_GOTO(inspectorOtelBuildAggregatedPoints(devices, points),
+                   res, unlock);
+    } else {
+      // Per-device ring-buffer stats (totals + drops) ride under verbose mode
+      // so the default aggregated output stays minimal.
+      INS_CHK_GOTO(inspectorOtelBuildDeviceStatsPoints(devices, points, currentTime),
                    res, unlock);
     }
     shouldExport = true;

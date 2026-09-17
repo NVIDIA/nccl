@@ -40,7 +40,7 @@ guide is meant to carry.
 
 **Not a good fit:**
 - **Performance marketing** that compares NCCL with something else and draws conclusions that can be
-  misleading other users. 
+  misleading other users.
 
 ## Making Your Contribution Successful
 

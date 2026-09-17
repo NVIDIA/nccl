@@ -1700,7 +1700,7 @@ ncclResult_t ncclCollNetSetup(ncclComm_t comm, ncclComm_t parent, struct ncclTop
 
   comm->collNetChainSupport = 1;
 
-  if (!comm->nvlsSupport) {
+  if (!ncclNvlsTransportEnabled(comm)) {
     collNetGraph = graphs[NCCL_ALGO_COLLNET_DIRECT];
     NCCLCHECKGOTO(ncclCalloc(&comm->collNetHeads, collNetGraph->nChannels), ret, fail);
     uint64_t mask = 0;

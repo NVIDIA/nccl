@@ -106,7 +106,7 @@ def gin_ops_kernel(
     recv_tail = recv_win.tensor(cutlass.Int64, scalar, offset=(NUM_ELEMS - 1) * 8)
 
     if SRC_RANK == dev_comm.rank:
-        # is_counter bumps a *local* counter on local completion — the
+        # is_counter bumps a *local* counter on local completion -- the
         # sender-side notification, unlike the receiver-side signal below.
         # The release scopes say what the caller has released, and what the
         # transfer needs released before it reads the source.
@@ -146,7 +146,7 @@ def gin_ops_kernel(
                 f"rank 1: signal={gin.read_signal(signal=SIGNAL_ID)} "
                 f"recv[0]={recv[0]} tail={recv_tail[0]}")
 
-            # A user-managed uint64 next to the signal — NCCL never writes
+            # A user-managed uint64 next to the signal -- NCCL never writes
             # it, and reset_signal zeroes both. The natural place to record
             # how much of the signal this rank has consumed.
             shadow = cute.make_tensor(

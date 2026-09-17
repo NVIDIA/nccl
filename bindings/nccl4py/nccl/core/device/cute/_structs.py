@@ -1,7 +1,7 @@
 """CuTeDSL bindings for C struct types declared in
 ``bindings/ir/nccl_device_wrapper.h`` and ``src/include/nccl_device/``.
 
-Codegen target — each entry is 1:1 with a C struct definition.
+Codegen target -- each entry is 1:1 with a C struct definition.
 ``_LLVMPtrType`` and ``_array_i8`` are MLIR-type adapters used as
 ``@cute.native_struct`` field annotations.
 """
@@ -29,8 +29,8 @@ class _LLVMPtrType:
     def isinstance(cls, value):
         """Match an ``!llvm.ptr`` ir.Value during ``@cute.extern`` dispatch.
 
-        Callers pass pointers as bare ``!llvm.ptr`` ir.Values — a wrapper's
-        ``.ptr``, or ``_to_ptr`` for an integer address — so the extern
+        Callers pass pointers as bare ``!llvm.ptr`` ir.Values -- a wrapper's
+        ``.ptr``, or ``_to_ptr`` for an integer address -- so the extern
         overload matcher needs this hook to recognize them against a
         ``_LLVMPtrType`` annotation.
         """
@@ -119,9 +119,9 @@ class ncclResourceWindow_vidmem:
 class DevCommValue:
     """By-value ABI mirror of ``struct ncclDevComm``.
 
-    Field order and types must stay synchronized with
-    ``nccl_device_expanded.h`` used to generate the low-level bindings. The
-    unpacked LLVM struct supplies the same natural padding as the C structure.
+    Field order and types must stay synchronized with ``struct ncclDevComm``
+    in ``nccl_device/impl/comm__types.h``. The unpacked LLVM struct supplies
+    the same natural padding as the C structure.
     """
 
     magic: cutlass.Uint32
@@ -182,7 +182,7 @@ class _ncclCoopStorage:
 
 @cute.native_struct
 class ncclCoopAny:
-    """``struct ncclCoopAny`` — 16-byte aligned-to-ptr storage + vtable ptr
+    """``struct ncclCoopAny`` -- 16-byte aligned-to-ptr storage + vtable ptr
     (src/include/nccl_device/coop.h)."""
 
     storage: _ncclCoopStorage

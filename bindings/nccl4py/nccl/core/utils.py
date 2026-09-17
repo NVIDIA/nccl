@@ -160,7 +160,7 @@ class UniqueId:
 
     * **Bytes**: ``bytes(uid)`` (or :py:attr:`as_bytes`) on the producer,
       :py:meth:`from_bytes` on receivers. The bytes of unique ID can be
-      transmitted through any byte-oriented channel — a TCP socket, a
+      transmitted through any byte-oriented channel -- a TCP socket, a
       shared filesystem, etc.
     * **NumPy**: :py:attr:`as_ndarray` returns an in-place view of the
       underlying buffer, suitable for NumPy-aware buffer transports such

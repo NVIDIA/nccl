@@ -186,19 +186,33 @@ static void inspectorPluginCollInfoCleanup(struct inspectorCollInfo *collInfo) {
   inspectorEventPoolReleaseColl(collInfo);
 }
 
+// Set once (per process) when the first ring overwrite is detected, so the
+// overflow condition is reported exactly once rather than per dropped entry.
+static bool ringDropWarned = false;
+
 static void inspectorUpdateCommOpInfo(struct inspectorCommInfo *commInfo,
                                       struct inspectorCompletedOpInfo *completedOp) {
   struct inspectorCompletedRing *ring =
     completedOp->isP2p ? &commInfo->completedP2pRing : &commInfo->completedCollRing;
   inspectorLockWr(&commInfo->guard);
   inspectorComputeOpBw(commInfo, completedOp);
+  uint64_t droppedBefore = ring->dropped;
   inspectorRingEnqueue(ring, completedOp);
+  bool overflowed = ring->dropped != droppedBefore;
   if (completedOp->isP2p) {
     commInfo->dump_p2p = inspectorRingNonEmpty(&commInfo->completedP2pRing);
   } else {
     commInfo->dump_coll = inspectorRingNonEmpty(&commInfo->completedCollRing);
   }
   inspectorUnlockRWLock(&commInfo->guard);
+  if (overflowed && !__atomic_exchange_n(&ringDropWarned, true, __ATOMIC_RELAXED)) {
+    WARN_INSPECTOR(
+      "NCCL Inspector: completed-op ring buffer overflowed on comm %s (%s ring size %u); "
+      "oldest entries are being dropped before they can be dumped. Increase "
+      "NCCL_INSPECTOR_DUMP_COLL_RING_SIZE/NCCL_INSPECTOR_DUMP_P2P_RING_SIZE to retain more. "
+      "Dropped counts are reported in the output.",
+      commInfo->commHashStr, completedOp->isP2p ? "p2p" : "coll", ring->size);
+  }
 }
 
 inspectorResult_t inspectorPluginP2pInfoRef(struct inspectorP2pInfo *p2pInfo) {

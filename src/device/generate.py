@@ -269,6 +269,7 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
     index += 1
   out("nullptr};\n")
   out("\n")
+
   out("#if defined(NCCL_OS_WINDOWS)\n")
   out("__device__ ncclDevFuncPtr_t const * ncclDevFuncTable = ncclDevFuncTableData;\n")
   out("#endif\n")
@@ -281,6 +282,10 @@ with open(os.path.join(gensrc, "device_table.cu"), "w") as f:
 with open(os.path.join(gensrc, "host_table.cc"), "w") as f:
   out = f.write
   out('#include "device.h"\n')
+  out("\n")
+
+  out("static_assert(%d <= (1 << NCCL_DEV_WORK_BATCH_FUNC_ID_BITS), " % len(primary_funcs))
+  out('"Device function IDs must fit in ncclDevWorkBatch");\n')
   out("\n")
 
   out("extern int const ncclDevFuncIdCount = %d;\n" % len(primary_funcs))

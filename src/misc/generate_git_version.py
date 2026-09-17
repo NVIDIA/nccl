@@ -35,7 +35,7 @@ def run_git(cmd, fallback="unknown"):
         return fallback
 
 def main(output_path):
-    git_hash = run_git(["git", "describe", "--dirty", "--always"])
+    git_hash = run_git(["git", "describe", "--dirty", "--always", "--exclude", "*"])
     git_branch = run_git(["git", "rev-parse", "--abbrev-ref", "HEAD"])
 
     content = f"""\

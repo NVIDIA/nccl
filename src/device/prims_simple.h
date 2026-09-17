@@ -61,8 +61,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
     }
   }
 
-  __device__ void patBarrier() {
-    barrier_sync(15, NCCL_PAT_NWORKERS);
+  template <bool isHierarchical>
+  __device__ __forceinline__ void patBarrier() {
+    barrier_sync(15, isHierarchical ? NCCL_PAT_MULTI_RPN_NWORKERS : NCCL_PAT_NWORKERS);
   }
 
   __device__ bool barrierAny(int vote) {
@@ -775,7 +776,11 @@ public:
           }
         }
       }
-      patBarrier();
+      if (localRanks > 1) {
+        patBarrier</*isHierarchical=*/true>();
+      } else {
+        patBarrier</*isHierarchical=*/false>();
+      }
     }
   }
 
@@ -1108,11 +1113,11 @@ public:
       }
     }
     if (ps->flags & PatSkipped) {
-      patBarrier();
+      patBarrier</*isHierarchical=*/needsNvlsReduce>();
       if (nvlsPoster) {
         nvlsReducePeer->step += StepPerSlice;
       }
-      patBarrier();
+      patBarrier</*isHierarchical=*/needsNvlsReduce>();
       if (nvlsPoster) {
         st_relaxed_sys_global(nvlsReducePeer->headPtr, nvlsReducePeer->step);
       }
@@ -1177,7 +1182,7 @@ public:
         ncclShmem.groups[group].srcs[needsNvlsReduce ? 0 : 1] = ncclShmem.groups[group].dsts[0];
       }
     }
-    patBarrier();
+    patBarrier</*isHierarchical=*/needsNvlsReduce>();
     int nSrcs = (ps->recvDim < 0) ? 1 : 2;
     void** srcs =
       needsNvlsReduce ? ncclShmem.groups[group].srcs : ncclShmem.groups[group].srcs + (ps->recvDim < 0 ? 1 : 0);
@@ -1215,7 +1220,7 @@ public:
       nvlsReducePeer->step += StepPerSlice;
     }
 
-    patBarrier();
+    patBarrier</*isHierarchical=*/needsNvlsReduce>();
 
     if (postSend && (flags & RolePostSend)) {
       if (nelem > 0 || peer->connFifo) fence_acq_rel_sys();
@@ -1244,13 +1249,13 @@ public:
       ncclShmem.groups[group].dsts[1] =
         ((T*)nvlsBcastPeer->buff) + (nvlsBcastPeer->step % NCCL_STEPS) * nvlsBcastPeer->connStepSize + ps->nvlsOffset;
     }
-    patBarrier();
+    patBarrier</*isHierarchical=*/true>();
     if (workSize > 0) {
       reduceCopy<Unroll, RedOp, T, 0, 1, 1, 1, 1, 1, /*PreOpSrcs*/ 0>(tid, nthreads, ncclShmem.groups[group].redOpArgs,
                                                                       /*postOp=*/false, 1, ncclShmem.groups[group].srcs,
                                                                       1, ncclShmem.groups[group].dsts + 1, workSize);
     }
-    patBarrier();
+    patBarrier</*isHierarchical=*/true>();
 
     if (flags & RolePostPatNvls) {
       nvlsBcastPeer->step += StepPerSlice;
@@ -1264,8 +1269,8 @@ public:
   __device__ __forceinline__ void patCopy(struct ncclPatStep* ps, struct ncclPatShmem* shmem) {
     bool skipped = ps->flags & PatSkipped;
     if (skipped) {
-      patBarrier();
-      patBarrier();
+      patBarrier</*isHierarchical=*/needsBcast>();
+      patBarrier</*isHierarchical=*/needsBcast>();
       if (needsBcast) patNvlsBcast(ps, shmem, 0, /*skipped=*/true);
       return;
     } // Skipped
@@ -1324,7 +1329,7 @@ public:
         ncclShmem.groups[group].dsts[1] = ncclShmem.groups[group].srcs[0]; // Already done
       }
     }
-    patBarrier();
+    patBarrier</*isHierarchical=*/needsBcast>();
 
     int workSize = ncclShmem.aborted ? 0 : nelem;
 
@@ -1366,7 +1371,7 @@ public:
     if (ps->recvDim >= 0 && (flags & RoleWaitRecv))
       atomicMax(&peer->accSize, ps->recvOffset + nelem + (step + ps->stepOffset) * peer->connStepSize);
 
-    patBarrier();
+    patBarrier</*isHierarchical=*/needsBcast>();
 
     if (postSend && (flags & RolePostSend)) {
       if (nelem > 0 || peer->connFifo) fence_acq_rel_sys();

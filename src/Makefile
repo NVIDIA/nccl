@@ -28,6 +28,7 @@ LIBSRCFILES := \
 	$(wildcard enqueue/task_sched/*.cc) \
 	$(wildcard misc/*.cc) \
 	$(TRANSPORT_CC) \
+	$(wildcard transport/net_socket/*.cc) \
 	$(wildcard transport/net_ib/*.cc) \
 	$(wildcard transport/net_ib/gdaki/*.cc) \
 	$(wildcard transport/net_ib/gdaki/gpucontext/*.cc) \
@@ -46,6 +47,7 @@ LIBSRCFILES := \
 	$(wildcard rma/*.cc) \
 	$(wildcard devcomm/*.cc) \
 	$(wildcard tuning/*.cc) \
+	$(wildcard tuning/sym_model/*.cc) \
 	$(filter-out param/ncclparam.cc,$(wildcard param/*.cc)) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc
@@ -296,8 +298,8 @@ $(OBJDIR)/misc/git_version.o: $(GIT_VERSION_FILE)
 $(DOCA_OBJDIR)/%.o : $(DOCA_HOME)/src/%.cpp
 	@printf "Compiling  %-35s > %s\n" $< $@
 	mkdir -p `dirname $@`
-	$(CXX) -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -c $< -o $@
-	@$(CXX) -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -MM $< > $(@:%.o=%.d.tmp)
+	$(CXX) -Iinclude -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -c $< -o $@
+	@$(CXX) -Iinclude -I$(DOCA_HOME)/src -I$(DOCA_HOME)/include $(CXXFLAGS) -MM $< > $(@:%.o=%.d.tmp)
 	@sed "0,/^.*:/s//$(subst /,\/,$@):/" $(@:%.o=%.d.tmp) > $(@:%.o=%.d)
 	@sed -e 's/.*://' -e 's/\\$$//' < $(@:%.o=%.d.tmp) | fmt -1 | \
                 sed -e 's/^ *//' -e 's/$$/:/' >> $(@:%.o=%.d)

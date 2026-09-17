@@ -37,7 +37,8 @@ enum {
 static int status = tunerPluginLoadReady;
 
 ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
-  const char* tunerName;
+  const char* tunerName = nullptr;
+  bool tunerPluginRequested = false;
   // Initialize to nullptr by default if plugin tuner cannot be loaded.
   comm->tuner = nullptr;
   if (tunerPluginLoadFailed == status) {
@@ -56,6 +57,7 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
   }
 
   if ((tunerName = ncclGetEnv("NCCL_TUNER_PLUGIN")) != nullptr) {
+    tunerPluginRequested = true;
     INFO(NCCL_ENV | NCCL_TUNING, "NCCL_TUNER_PLUGIN set by environment to %s", tunerName);
     if (strcasecmp(tunerName, "none") == 0) goto fail;
   }
@@ -84,7 +86,10 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
     tunerSymbol = getNcclTuner_v2(tunerPluginLib);
   }
   if (tunerSymbol == NULL) {
-    if (tunerName) INFO(NCCL_INIT | NCCL_TUNING, "External tuner plugin %s is unsupported", tunerName);
+    if (tunerName) {
+      if (tunerPluginRequested) ATTN("External tuner plugin %s is unsupported", tunerName);
+      else INFO(NCCL_INIT | NCCL_TUNING, "External tuner plugin %s is unsupported", tunerName);
+    }
     goto fail;
   }
   if (tunerName) INFO(NCCL_INIT | NCCL_TUNING, "Successfully loaded external tuner plugin %s", tunerName);

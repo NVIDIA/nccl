@@ -17,7 +17,7 @@ from enum import IntEnum, IntFlag
 from typing import Any, Protocol, TypeAlias, Union
 
 import numpy as _np
-from cuda.core import Buffer, Device, Stream
+from cuda.core import Buffer, Device, Event, Stream
 from cuda.core.typing import IsStreamType
 
 __all__ = [
@@ -26,6 +26,7 @@ __all__ = [
     "NcclGinType",
     "NcclGinConnectionType",
     "NcclHostCftMode",
+    "NcclNvlsHostMode",
     "NcclCftTeamMode",
     "NcclCftCap",
     "NcclCommMemStat",
@@ -33,6 +34,7 @@ __all__ = [
     "NcclScalarSpec",
     "NcclDeviceSpec",
     "NcclStreamSpec",
+    "NcclEventSpec",
     "NcclInvalid",
     # Data type constants
     "INT8",
@@ -206,6 +208,24 @@ class NcclHostCftMode(IntEnum):
     FALLBACK = 3
     """Try to create the logical endpoints; on error, disable host-side CFT
     instead of failing."""
+
+
+class NcclNvlsHostMode(IntFlag):
+    """Host-side NVLS mode, mirroring :c:type:`ncclNvlsHostMode_t`.
+
+    Set on :py:attr:`NCCLConfig.nvls_host_mode` to select which host NVLS
+    components the communicator uses. The two ``DISABLE_`` members combine;
+    leave the field unset for the library default.
+    """
+
+    ENABLE = 0
+    """Enable all host NVLS components."""
+    DISABLE_TRANSPORT = 1
+    """Disable the NVLS transport and the registered-buffer optimization."""
+    DISABLE_SYMMETRIC_MULTIMEM = 2
+    """Disable multimem in NCCL's symmetric kernels and copy-engine paths."""
+    DISABLE = 2147483647
+    """Disable all present and future host NVLS components."""
 
 
 class NcclCftTeamMode(IntEnum):
@@ -472,4 +492,9 @@ NcclDeviceSpec: TypeAlias = Union[Device, int]
 
 NcclStreamSpec: TypeAlias = Union[Stream, IsStreamType, int]
 """A CUDA stream: a :py:class:`cuda.core.Stream`, an object implementing
-``__cuda_stream__``, or an integer stream handle."""
+``__cuda_stream__``, or an integer ``cudaStream_t`` handle. Integer 0 denotes
+the default stream."""
+
+NcclEventSpec: TypeAlias = Union[Event, int]
+"""A CUDA event: a :py:class:`cuda.core.Event` or an integer ``cudaEvent_t``
+handle. Integer 0 is invalid."""

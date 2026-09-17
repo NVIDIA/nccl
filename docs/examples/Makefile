@@ -8,7 +8,7 @@
 # NCCL Examples Main Makefile
 
 # Define all category directories
-CATEGORIES := 01_communicators 02_point_to_point 03_collectives 04_user_buffer_registration 05_symmetric_memory 06_device_api 07_kernel_fusion
+CATEGORIES := 01_communicators 02_point_to_point 03_collectives 04_user_buffer_registration 05_symmetric_memory 06_device_api 07_kernel_fusion 09_gin_optimizations
 
 # The RAS examples require MPI; only build them when MPI=1
 ifeq ($(MPI), 1)

@@ -190,7 +190,7 @@ NCCL_DEVICE_INLINE void* ncclGetLsaMultimemPointer(ncclWindow_t w, size_t offset
 NCCL_DEVICE_INLINE void ncclGetCftLeInfo(ncclWindow_t w, size_t offset, int peerCft, ncclTeam cftTeam,
                                          ncclDevComm const& comm, ncclCftLeId* leId, size_t* leOffset) {
   ncclTeam flatTeam = ncclTeamCft(comm);
-  *leId = nccl::utility::loadConst(&comm.ucLeId) + flatTeam.rank + (peerCft - cftTeam.rank) * cftTeam.stride;
+  *leId = nccl::utility::loadConst(&w->ucLeIdBase) + flatTeam.rank + (peerCft - cftTeam.rank) * cftTeam.stride;
   *leOffset = (size_t(w->mcOffset4K) << 12) + offset;
 }
 #endif
@@ -201,7 +201,7 @@ NCCL_DEVICE_INLINE void ncclGetPeerLeInfo(ncclWindow_t w, size_t offset, int pee
   int worldRank = nccl::utility::loadConst(&w->worldRank);
   ncclTeam cftTeam = ncclTeamCft(comm);
   int i = cftTeam.rank * cftTeam.stride + (peerWorld - worldRank);
-  *leId = nccl::utility::loadConst(&comm.ucLeId) + i;
+  *leId = nccl::utility::loadConst(&w->ucLeIdBase) + i;
   *leOffset = (size_t(w->mcOffset4K) << 12) + offset;
 }
 #endif
@@ -209,7 +209,8 @@ NCCL_DEVICE_INLINE void ncclGetPeerLeInfo(ncclWindow_t w, size_t offset, int pee
 #ifdef __CUDACC__
 NCCL_DEVICE_INLINE void ncclGetMultimemLeInfo(ncclWindow_t w, size_t offset, ncclDevComm const& comm, ncclCftLeId* leId,
                                               size_t* leOffset) {
-  *leId = nccl::utility::loadConst(&comm.mcLeId);
+  bool cftCounted = nccl::utility::loadConst(&w->winFlags) & NCCL_WIN_CFT_COUNTED;
+  *leId = nccl::utility::loadConst(&comm.mcLeId) + ncclCftLeId(cftCounted);
   *leOffset = (size_t(w->mcOffset4K) << 12) + offset;
 }
 #endif

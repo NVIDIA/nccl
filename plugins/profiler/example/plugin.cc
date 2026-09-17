@@ -761,6 +761,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     if (eventBase->type == ncclProfileColl) {
       struct collective* parent = (struct collective *)eDescr->parentObj;
       int channelId = eDescr->proxyOp.channelId;
+      if (channelId >= MAX_CHANNELS) return ncclSuccess;
       struct proxyOp* event = &parent->op[channelId][parent->nProxyOps[channelId]++];
 
       event->type = ncclProfileProxyOp;
@@ -780,6 +781,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     } else { // ncclProfileP2p
       struct p2p* parent = (struct p2p *)eDescr->parentObj;
       int channelId = eDescr->proxyOp.channelId;
+      if (channelId >= MAX_CHANNELS) return ncclSuccess;
       struct proxyOp* event = &parent->op[channelId];
       event->type = ncclProfileProxyOp;
       event->channelId = channelId;
@@ -815,6 +817,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
   } else if (eDescr->type == ncclProfileKernelCh) {
     struct taskEventBase* eventBase = (struct taskEventBase *)eDescr->parentObj;
     if (eventBase == NULL) return ncclSuccess;
+    if (eDescr->kernelCh.channelId >= MAX_CHANNELS) return ncclSuccess;
     if (eventBase->type == ncclProfileColl) {
       struct collective* parent = (struct collective *)eDescr->parentObj;
       struct kernelCh* event = &parent->kernel[eDescr->kernelCh.channelId];

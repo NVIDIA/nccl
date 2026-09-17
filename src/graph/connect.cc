@@ -388,7 +388,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
   int nNodes = comm->nNodes;
   int nChannels = comm->nChannels;
   int minHeadNum = INT_MAX;
-  int shared = parent && parent->nvlsSupport && parent->shareResources;
+  int shared = parent && ncclNvlsTransportEnabled(parent) && parent->shareResources;
   NCCLCHECK(ncclCalloc(&ringRecv, nNodes * MAXCHANNELS));
   NCCLCHECKGOTO(ncclCalloc(&ringSend, nNodes * MAXCHANNELS), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&ringPrev, nranks * MAXCHANNELS), ret, fail);

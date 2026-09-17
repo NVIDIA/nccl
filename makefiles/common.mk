@@ -7,6 +7,7 @@
 
 CUDA_HOME ?= /usr/local/cuda
 PREFIX ?= /usr/local
+TLS_BACKEND ?=
 VERBOSE ?= 0
 KEEP ?= 0
 DEBUG ?= 0
@@ -47,6 +48,12 @@ NVCC ?= $(CUDA_HOME)/bin/nvcc
 
 CUDA_LIB ?= $(CUDA_HOME)/lib64
 CUDA_INC ?= $(CUDA_HOME)/include
+ifeq ($(TLS_BACKEND),OPENSSL3)
+CXXFLAGS += -DNCCL_TLS_BACKEND_OPENSSL3=1
+else ifneq ($(strip $(TLS_BACKEND)),)
+$(error Unsupported TLS_BACKEND '$(TLS_BACKEND)'; expected OPENSSL3 or empty)
+endif
+NCCL_STATIC_DL_LIBS ?= -ldl
 CUDA_VERSION = $(strip $(shell which $(NVCC) >/dev/null && $(NVCC) --version | grep release | sed 's/.*release //' | sed 's/\,.*//'))
 #CUDA_VERSION ?= $(shell ls $(CUDA_LIB)/libcudart.so.* | head -1 | rev | cut -d "." -f -2 | rev)
 CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)
@@ -64,6 +71,7 @@ CUDA12_GENCODE = -gencode=arch=compute_90,code=sm_90
 CUDA12_8_GENCODE = -gencode=arch=compute_100,code=sm_100 \
                    -gencode=arch=compute_120,code=sm_120
 CUDA13_GENCODE = -gencode=arch=compute_110,code=sm_110
+CUDA13_4_GENCODE = -gencode=arch=compute_107,code=sm_107
 
 CUDA8_PTX     = -gencode=arch=compute_61,code=compute_61
 CUDA9_PTX     = -gencode=arch=compute_70,code=compute_70
@@ -71,7 +79,10 @@ CUDA11_PTX    = -gencode=arch=compute_80,code=compute_80
 CUDA12_PTX    = -gencode=arch=compute_90,code=compute_90
 CUDA13_PTX    = -gencode=arch=compute_120,code=compute_120
 
-ifeq ($(shell test "0$(CUDA_MAJOR)" -ge 13; echo $$?),0)
+ifeq ($(shell test "0$(CUDA_MAJOR)" -ge 13 -a "0$(CUDA_MINOR)" -ge 4 -o "0$(CUDA_MAJOR)" -gt 13; echo $$?),0)
+# Include Rubin support from CUDA 13.4 onwards
+  NVCC_GENCODE ?= $(CUDA10_GENCODE) $(CUDA11_GENCODE) $(CUDA12_GENCODE) $(CUDA12_8_GENCODE) $(CUDA13_GENCODE) $(CUDA13_4_GENCODE) $(CUDA13_PTX)
+else ifeq ($(shell test "0$(CUDA_MAJOR)" -ge 13; echo $$?),0)
 # Prior to SM75 is deprecated from CUDA13.0 onwards
   NVCC_GENCODE ?= $(CUDA10_GENCODE) $(CUDA11_GENCODE) $(CUDA12_GENCODE) $(CUDA12_8_GENCODE) $(CUDA13_GENCODE) $(CUDA13_PTX)
 else ifeq ($(shell test "0$(CUDA_MAJOR)" -eq 12 -a "0$(CUDA_MINOR)" -ge 8; echo $$?),0)
@@ -98,7 +109,8 @@ else
 endif
 
 CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \
-              -Wall -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
+              -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter \
+              -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
               -I $(CUDA_INC) -I $(CUDA_INC)/cccl \
               $(CXXFLAGS)
 # Maxrregcount needs to be set accordingly to NCCL_MAX_NTHREADS (otherwise it will cause kernel launch errors)
@@ -175,6 +187,7 @@ endif
 
 ifneq ($(WERROR), 0)
 CXXFLAGS  += -Werror
+NVCUFLAGS += -Werror=all-warnings -Xcompiler -Werror
 endif
 
 ifneq ($(KEEP), 0)

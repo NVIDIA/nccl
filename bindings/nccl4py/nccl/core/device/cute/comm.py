@@ -53,7 +53,7 @@ def _materialize_dev_comm(value, *, loc=None, ip=None) -> ir.Value:
     # The store has to follow both operands. The struct is a block argument
     # while it stays within one block, and then it already dominates the
     # alloca. But a DevComm used on both sides of a conditional is threaded
-    # through the region by the DSL, making the value an scf.if result — so
+    # through the region by the DSL, making the value an scf.if result -- so
     # anchor the store to whatever defines it.
     owner = struct_value.owner
     after = ptr.owner if isinstance(owner, ir.Block) else owner
@@ -278,7 +278,7 @@ class DevComm:
 
         Args:
             handle: ``ncclDevResourceHandle`` from ``DevCommResource``.
-            mm_handle: Multimem handle covering the resource window —
+            mm_handle: Multimem handle covering the resource window --
                 :py:attr:`lsa_multimem`, or one passed in from the host for
                 a non-LSA team.
 

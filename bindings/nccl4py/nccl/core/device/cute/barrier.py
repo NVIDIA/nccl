@@ -2,13 +2,13 @@
 
 Three session types:
 
-  * :class:`LsaBarrierSession` — LSA-only (intra-node, NVLink/peer-access).
-  * :class:`GinBarrierSession` — GIN-only (inter-node, network).
-  * :class:`BarrierSession`    — hybrid (LSA inner + GIN outer).
+  * :class:`LsaBarrierSession` -- LSA-only (intra-node, NVLink/peer-access).
+  * :class:`GinBarrierSession` -- GIN-only (inter-node, network).
+  * :class:`BarrierSession`    -- hybrid (LSA inner + GIN outer).
 
 Construct via the module-level factories:
 
-  * Explicit — caller supplies the team and barrier handle::
+  * Explicit -- caller supplies the team and barrier handle::
 
         sess = barrier.lsa_session(coop, dev_comm, team, lsa_handle, index=0)
         sess = barrier.gin_session(coop, gin, dev_comm, team, gin_handle,
@@ -16,7 +16,7 @@ Construct via the module-level factories:
         sess = barrier.hybrid_session(coop, inner_team, outer_team, gin,
                                        lsa_handle, gin_handle, index=0)
 
-  * DevComm-derived — team and handle pulled from ``dev_comm``::
+  * DevComm-derived -- team and handle pulled from ``dev_comm``::
 
         sess = barrier.lsa_default(coop, dev_comm, index=0)
         sess = barrier.world_gin(coop, gin, dev_comm, index=0)
@@ -28,6 +28,12 @@ The three GIN factories also accept :data:`GIN_ALL_CONTEXTS` in place of a
 
         sess = barrier.world_gin(coop, barrier.GIN_ALL_CONTEXTS, dev_comm,
                                  index=0)
+
+Call ``destroy()`` exactly once after the session's final operation. All
+threads in the session's cooperative group must call it from uniform control
+flow. For LSA and hybrid sessions, this makes the same handle and index safe to
+reuse. Omitting it can cause a later barrier to stop synchronizing without
+hanging.
 """
 
 import cutlass
@@ -54,7 +60,7 @@ from .handles import (
 from .types import MemoryOrder, GinFenceLevel
 
 
-# Session storage alignment. Conservatively chosen — covers ncclCoopAny
+# Session storage alignment. Conservatively chosen -- covers ncclCoopAny
 # (ptr-aligned) and any wider fields any future session struct might add.
 _SESSION_ALIGN = 16
 
@@ -94,7 +100,7 @@ def _zero_multimem_handle() -> ncclMultimemHandle:
 
 @cute.native_struct
 class LsaBarrierSession:
-    """LSA (Load/Store Accessible) barrier session — intra-node, peer-access
+    """LSA (Load/Store Accessible) barrier session -- intra-node, peer-access
     based. Constructed via :func:`lsa_session`."""
 
     ptr: _LLVMPtrType
@@ -125,6 +131,14 @@ class LsaBarrierSession:
             order: ``cuda::memory_order``. See :class:`MemoryOrder`.
         """
         _bindings.nccl_lsa_barrier_session_sync(self.ptr, _to_coop_value(coop), cutlass.Int32(int(order)))
+
+    def destroy(self) -> None:
+        """Finalize the session so its handle and index can be safely reused.
+
+        All threads in the session's cooperative group must call this exactly
+        once.
+        """
+        _bindings.nccl_lsa_barrier_session_destroy(self.ptr)
 
 
 def lsa_session(
@@ -164,7 +178,7 @@ def lsa_session(
 
 @cute.native_struct
 class GinBarrierSession:
-    """GIN (network) barrier session — inter-node. Constructed via
+    """GIN (network) barrier session -- inter-node. Constructed via
     :func:`gin_session`. Only ``sync`` is supported."""
 
     ptr: _LLVMPtrType
@@ -179,6 +193,14 @@ class GinBarrierSession:
         """
         _bindings.nccl_gin_barrier_session_sync(
             self.ptr, _to_coop_value(coop), cutlass.Int32(int(order)), cutlass.Int32(int(fence)))
+
+    def destroy(self) -> None:
+        """Finalize the session.
+
+        All threads in the session's cooperative group must call this exactly
+        once.
+        """
+        _bindings.nccl_gin_barrier_session_destroy(self.ptr)
 
 
 class _GinAllContexts:
@@ -236,7 +258,7 @@ def gin_session(
 
 @cute.native_struct
 class BarrierSession:
-    """Hybrid barrier — LSA inner stage + GIN outer stage. Constructed
+    """Hybrid barrier -- LSA inner stage + GIN outer stage. Constructed
     via :func:`hybrid_session`. Only ``sync`` is supported."""
 
     ptr: _LLVMPtrType
@@ -252,6 +274,14 @@ class BarrierSession:
         """
         _bindings.nccl_barrier_session_sync(
             self.ptr, _to_coop_value(coop), cutlass.Int32(int(order)), cutlass.Int32(int(fence)))
+
+    def destroy(self) -> None:
+        """Finalize the session so its handles and index can be safely reused.
+
+        All threads in the session's cooperative group must call this exactly
+        once.
+        """
+        _bindings.nccl_barrier_session_destroy(self.ptr)
 
 
 def hybrid_session(

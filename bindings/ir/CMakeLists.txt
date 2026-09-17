@@ -35,6 +35,11 @@ set(LTO_IR_ARCH ${BITCODE_LIB_ARCH} CACHE STRING "CUDA architecture for LTO IR")
 set(BITCODE_CXX_STD gnu++17 CACHE STRING "C++ standard for LLVM IR")
 set(LTO_IR_CXX_STD c++17 CACHE STRING "C++ standard for LTO IR")
 
+# Enable all ReduceCopy type and block-size combinations in generated IR.
+set(NCCL_DEVICE_DEFINES
+    -DNCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1
+)
+
 # Find required tools
 find_program(CLANG_EXECUTABLE clang REQUIRED)
 find_program(OPT_EXECUTABLE opt REQUIRED)
@@ -62,6 +67,7 @@ set(CLANG_COMPAT_INCLUDES
 )
 
 # Common clang flags used for both preprocessing and IR generation
+# Clang supports extended device lambdas but does not define nvcc's feature macro.
 set(COMMON_CLANG_FLAGS
     -std=${BITCODE_CXX_STD}
     -x cuda
@@ -72,6 +78,8 @@ set(COMMON_CLANG_FLAGS
     ${NCCL_INCLUDES}
     ${CUDA_INCLUDES}
     -D__clang_llvm_bitcode_lib__
+    -D__CUDACC_EXTENDED_LAMBDA__
+    ${NCCL_DEVICE_DEFINES}
     -DCUDA_MAJOR=${CUDA_MAJOR}
     -DCUDA_MINOR=${CUDA_MINOR}
     -D_NV_RSQRT_SPECIFIER=
@@ -98,7 +106,7 @@ add_custom_command(
     OUTPUT ${UNOPTIMIZED_BC}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${OBJDIR}
     COMMAND ${CLANG_EXECUTABLE} ${CLANG_FLAGS} ${LLVM_SRC} -o ${UNOPTIMIZED_BC}
-    DEPENDS ${LLVM_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.h
+    DEPENDS ${LLVM_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.h ${CMAKE_CURRENT_SOURCE_DIR}/util.h
     COMMENT "Generating unoptimized LLVM bitcode..."
     VERBATIM
 )
@@ -173,16 +181,18 @@ add_custom_command(
     COMMAND ${CUDAToolkit_NVCC_EXECUTABLE}
         -std=${LTO_IR_CXX_STD}
         -arch=${LTO_IR_ARCH}
+        --extended-lambda
         -dlto --ltoir
         -x cu
         ${NCCL_INCLUDES}
         ${CUDA_INCLUDES}
+        ${NCCL_DEVICE_DEFINES}
         -DCUDA_MAJOR=${CUDA_MAJOR}
         -DCUDA_MINOR=${CUDA_MINOR}
         -D__NCCL_DEVICE_LTOIR_LIB__
         -o ${FINAL_LTO_IR}
         ${LLVM_SRC}
-    DEPENDS ${LLVM_SRC} ${WRAPPER_HEADER}
+    DEPENDS ${LLVM_SRC} ${WRAPPER_HEADER} ${CMAKE_CURRENT_SOURCE_DIR}/util.h
     COMMENT "Generating LTO IR..."
     VERBATIM
 )

@@ -19,6 +19,11 @@
 #include "../gin_device_host_common.h"
 #include "gin_proxy_device_host_common.h"
 
+static_assert(sizeof(ncclGinProxyGfd_t) <= sizeof(ncclGinDescriptorSmem),
+              "ncclGinDescriptorSmem must be large enough for ncclGinProxyGfd_t");
+static_assert(alignof(ncclGinProxyGfd_t) <= alignof(ncclGinDescriptorSmem),
+              "ncclGinDescriptorSmem must satisfy ncclGinProxyGfd_t alignment");
+
 struct ncclGinCpuProxyRequest {
   int peer;
   uint32_t nextGfdIdx;
@@ -431,6 +436,14 @@ struct ncclGinApi_GetSignalPtr<NCCL_NET_DEVICE_GIN_PROXY> {
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
     return {nccl::utility::loadConst(&proxyCtx->signals) + signalId,
             nccl::utility::loadConst(&proxyCtx->signalOffsets)[signalId]};
+  }
+};
+
+template <>
+struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_PROXY> {
+  NCCL_DEVICE_INLINE static bool call(ncclGinCtx ctx) {
+    ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
+    return nccl::utility::loadConst(&proxyCtx->flushesAllPutsOnAnySignal);
   }
 };
 

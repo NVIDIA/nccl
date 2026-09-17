@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "core.h"
+#include "nccl_device/host.h"
 #include "../device/symmetric/gin_scratch__funcs.h"
 
 NCCL_API(ncclResult_t, ncclGinOutboxCreateRequirement, int nBlocks, int size_log2, ncclGinOutboxHandle* outHandle,

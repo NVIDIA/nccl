@@ -319,6 +319,13 @@ class SymmAllocator:
         garbage collection but should be invoked explicitly in tests /
         lifecycle-sensitive code.
         """
+        # Drop the external aliases FIRST. NcclSymPool.close() frees the
+        # pool, and these views are built over that memory -- nulling them
+        # afterwards leaves a live tensor over a freed allocation for the
+        # rest of this function.
+        self.internal_pool = None
+        self.pool_ptr = 0
+        self.mc0_ptr = 0
         if getattr(self, "_nccl_pool", None) is not None:
             self._nccl_pool.close()
             self._nccl_pool = None
@@ -333,10 +340,6 @@ class SymmAllocator:
                 pass
         self._nccl_comm = None
         self._owns_comm = False
-        # Drop external aliases to fail loudly if anyone keeps using them.
-        self.internal_pool = None
-        self.pool_ptr = 0
-        self.mc0_ptr = 0
 
     def __del__(self):
         try:

@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include <assert.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -51,11 +52,13 @@
 
 #define VERBS_TEST_DBR_SIZE (8)
 #define MAX_PCI_ADDRESS_LEN 32U
+#define DEFAULT_HOP_LIMIT (255)
 
 NCCL_PARAM(GinGdakiNicHandler, "GIN_GDAKI_NIC_HANDLER", 0);
 NCCL_PARAM(GinGdakiQpDepth, "GIN_GDAKI_QP_DEPTH", 128);
 NCCL_PARAM(GinGdakiMaxDestRdAtomic, "GIN_GDAKI_MAX_DEST_RD_ATOMIC", -2);
 NCCL_PARAM(GinGdakiMaxQpRdAtomic, "GIN_GDAKI_MAX_QP_RD_ATOMIC", -2);
+NCCL_PARAM(GinGdakiLAGAwareDisable, "GIN_GDAKI_LAG_AWARE_DISABLE", 0);
 NCCL_PARAM(GinErrorQuerySec, "GIN_ERROR_QUERY_SEC", 10);
 NCCL_PARAM(GinIbOooAll, "GIN_IB_OOO_OPT", 0);
 extern int64_t ncclParamIbTimeout();
@@ -408,7 +411,6 @@ static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context* ctx, int ib_sl, int
 
   // set_port_num?
   DOCACHECKGOTO(doca_verbs_ah_attr_set_sgid_index(ctx->ah, ib_gid_index), status, destroy_verbs_ah);
-  DOCACHECKGOTO(doca_verbs_ah_attr_set_hop_limit(ctx->ah, 255), status, destroy_verbs_ah);
 
   return ncclSuccess;
 
@@ -463,7 +465,7 @@ static ncclResult_t gdakiGetPathMtu(enum ibv_mtu local_active_mtu, enum ibv_mtu 
 }
 
 static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_verbs_qp_hl* gqp,
-                                   struct gdaki_exch_info* exch_info) {
+                                   struct gdaki_exch_info* exch_info, uint8_t lagTxPortAffinity = 0) {
   ncclResult_t status = ncclSuccess;
   doca_verbs_qp_attr_t* verbs_qp_attr = nullptr;
   int max_dest_rd_atomic =
@@ -472,6 +474,9 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
     ncclParamGinGdakiMaxQpRdAtomic() > 0 ? ncclParamGinGdakiMaxQpRdAtomic() : ctx->ib_dev_attr.max_qp_rd_atom;
   enum doca_verbs_mtu_size path_mtu;
   int dlid = exch_info->lid;
+
+  int attrMask = DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE |
+                 DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ | DOCA_VERBS_QP_ATTR_PKEY_INDEX | DOCA_VERBS_QP_ATTR_PORT_NUM;
 
   if (ctx->port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
     bool sameSubnet = (ncclIbExtractLocalSubnetPrefix(ctx->rgid.global.subnet_prefix) ==
@@ -489,9 +494,13 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
         }
       }
       DOCACHECK(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IB_GRH));
+      DOCACHECK(doca_verbs_ah_attr_set_hop_limit(ctx->ah, DEFAULT_HOP_LIMIT));
     } else {
       DOCACHECK(doca_verbs_ah_attr_set_addr_type(ctx->ah, DOCA_VERBS_ADDR_TYPE_IB_NO_GRH));
+      DOCACHECK(doca_verbs_ah_attr_set_hop_limit(ctx->ah, 0));
     }
+  } else {
+    DOCACHECK(doca_verbs_ah_attr_set_hop_limit(ctx->ah, DEFAULT_HOP_LIMIT));
   }
 
   NCCLCHECK(gdakiGetPathMtu(ctx->port_attr.active_mtu, exch_info->active_mtu, &path_mtu));
@@ -528,11 +537,13 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
   DOCACHECKGOTO(doca_verbs_qp_attr_set_dest_qp_num(verbs_qp_attr, exch_info->qpn), status, destroy_verbs_qp_attr);
   DOCACHECKGOTO(doca_verbs_qp_attr_set_pkey_index(verbs_qp_attr, ctx->pkey_index), status, destroy_verbs_qp_attr);
 
-  DOCACHECKGOTO(doca_verbs_qp_modify(gqp->qp, verbs_qp_attr,
-                                     DOCA_VERBS_QP_ATTR_NEXT_STATE | DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_WRITE |
-                                       DOCA_VERBS_QP_ATTR_ALLOW_REMOTE_READ | DOCA_VERBS_QP_ATTR_PKEY_INDEX |
-                                       DOCA_VERBS_QP_ATTR_PORT_NUM),
-                status, destroy_verbs_qp_attr);
+  if (lagTxPortAffinity > 0) {
+    DOCACHECKGOTO(doca_verbs_qp_attr_set_lag_tx_port_affinity(verbs_qp_attr, lagTxPortAffinity), status,
+                  destroy_verbs_qp_attr);
+    attrMask |= DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY;
+  }
+
+  DOCACHECKGOTO(doca_verbs_qp_modify(gqp->qp, verbs_qp_attr, attrMask), status, destroy_verbs_qp_attr);
 
   DOCACHECKGOTO(doca_verbs_qp_attr_set_max_dest_rd_atomic(verbs_qp_attr, max_dest_rd_atomic), status,
                 destroy_verbs_qp_attr);
@@ -572,6 +583,7 @@ destroy_verbs_qp_attr:
 }
 
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
+NCCL_PARAM(GinGdakiForceMcst, "GDAKI_FORCE_MCST", 0);
 
 ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void** outGinCtx,
                                        ncclNetDeviceHandle_t** outDevHandle) {
@@ -631,9 +643,18 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   CUmemGenericAllocationHandle sink_buffer_mhandle;
 
   bool need_cpu_proxy = false;
+  int rdmaWritesOrder = 0;
+  bool preHopper = true;
+  bool dataDirectNic = false;
+  char dataDirectPath[PATH_MAX];
 
   struct doca_gpu_verbs_qp** gverbs_qps = nullptr;
   struct doca_gpu_verbs_qp** contiguous_gverbs_qps = nullptr;
+
+  struct doca_verbs_device_attr* devAttr = nullptr;
+
+  uint8_t isLagTxPortAffinitySupported = 0;
+  uint8_t numLagPorts = 0;
 
   GdakiHostGPUMemHandle<char>* gin_gdaki_gpu_ctx_hd_mhandle = new GdakiHostGPUMemHandle<char>();
   GdakiGlobalGPUBufferTable<uint64_t>* counters_table = new GdakiGlobalGPUBufferTable<uint64_t>();
@@ -692,6 +713,26 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   CUDACHECK(cudaGetDevice(&gdaki_ctx->cuda_id));
   CUDACHECK(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, gdaki_ctx->cuda_id));
 
+  CUDACHECK(cudaDeviceGetAttribute(&rdmaWritesOrder, cudaDevAttrGPUDirectRDMAWritesOrdering, gdaki_ctx->cuda_id));
+  preHopper = (rdmaWritesOrder < CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER);
+  if (ncclParamIbDataDirect() > 0) {
+    ncclResult_t result =
+      wrap_mlx5dv_get_data_direct_sysfs_path(cComm->ib.context, dataDirectPath, sizeof(dataDirectPath));
+    if (result == ncclSuccess) {
+      dataDirectNic = true;
+      INFO(NCCL_NET, "GIN/GDAKI: Data Direct DMA Interface is detected for device %s (%s)", gdaki_ctx->ib_dev_name,
+           dataDirectPath);
+    } else if (result == ncclInvalidArgument) {
+      TRACE(NCCL_NET, "GIN/GDAKI: Device %s does not support Data Direct DMA.", gdaki_ctx->ib_dev_name);
+    } else {
+      // Query unvailable for older driver versions
+      INFO(NCCL_NET, "GIN/GDAKI: mlx5dv_get_data_direct_sysfs_path unavailable for device %s, assuming no Data Direct",
+           gdaki_ctx->ib_dev_name);
+    }
+  }
+  INFO(NCCL_NET | NCCL_INIT, "GIN/GDAKI: device %s preHopper=%d dataDirectNic=%d mcst=%d", gdaki_ctx->ib_dev_name,
+       (int)preHopper, (int)dataDirectNic, (int)(preHopper || dataDirectNic));
+
   DOCACHECKGOTO(doca_gpu_create(pciBusId, &gdaki_ctx->gdev), status, out);
 
   NCCLCHECKGOTO(wrap_ibv_query_device(cComm->ib.context, &gdaki_ctx->ib_dev_attr), status, out);
@@ -718,6 +759,15 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   NCCLCHECKGOTO(wrap_ibv_query_gid(cComm->ib.context, 1, ib_gid_index, &gdaki_ctx->rgid), status, out);
 
   DOCACHECKGOTO(doca_verbs_dev_open(cComm->ib.pd, &gdaki_ctx->ndev), status, out);
+
+  if ((ncclParamGinGdakiLAGAwareDisable() == 0) && (gdaki_ctx->gdev->type == DOCA_GPU_LIB_TYPE_OPEN)) {
+    DOCACHECKGOTO(doca_verbs_query_device(cComm->ib.context, &devAttr), status, out);
+    isLagTxPortAffinitySupported = doca_verbs_device_attr_get_lag_tx_port_affinity(devAttr);
+
+    if (isLagTxPortAffinitySupported) {
+      numLagPorts = doca_verbs_device_attr_get_num_lag_ports(devAttr);
+    }
+  }
 
   {
     doca_error_t docaStatus = doca_verbs_comp_channel_create(gdaki_ctx->ndev, &gdaki_ctx->docaEvent);
@@ -862,10 +912,14 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
       int qp_idx = rank_idx + ctx_idx * nranks;
       struct gdaki_exch_info* peer_info = &remote_exch_info[ctx_idx * nranks + rank_idx];
-      NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->gqps[qp_idx], peer_info), status, out);
+
+      uint8_t lagTxPortAffinity = (numLagPorts > 0) ? (ctx_idx % numLagPorts) + 1 : 0;
+
+      NCCLCHECKGOTO(gdakiConnectQp(gdaki_ctx, gdaki_ctx->gqps[qp_idx], peer_info, lagTxPortAffinity), status, out);
       DOCACHECKGOTO(doca_verbs_qp_get_qpn(gdaki_ctx->gqps[qp_idx]->qp, &qpn), status, out);
-      INFO(NCCL_NET, "[%d] Connected main QP: qp_idx=%d, main_qpn=%#x, remote_rank=%d, remote_qpn=%#x", rank, qp_idx,
-           qpn, rank_idx, peer_info->qpn);
+      INFO(NCCL_NET,
+           "[%d] Connected main QP: qp_idx=%d, main_qpn=%#x, remote_rank=%d, remote_qpn=%#x, lagTxPortAffinity=%u%s",
+           rank, qp_idx, qpn, rank_idx, peer_info->qpn, lagTxPortAffinity, (numLagPorts > 0) ? " (LAG enabled)" : "");
     }
   }
 
@@ -979,11 +1033,13 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     gin_gdaki_gpu_ctx->last_issued_get = gdaki_ctx->last_issued_get + ctx_idx * nranks;
     gin_gdaki_gpu_ctx->last_visible_get = gdaki_ctx->last_visible_get + ctx_idx * nranks;
 
+    // MCST is needed on pre-Hopper or on post-Hopper with Data Direct
+    bool use_mcst = ncclParamGinGdakiForceMcst() ? true : (preHopper || dataDirectNic);
     NCCLCHECKGOTO(ncclGinGdakiGPUContext_init(backendVersion, gin_gdaki_gpu_ctx_hd_mhandle->host_buf, ctx_idx,
                                               gin_gdaki_gpu_ctx->gdqp, gin_gdaki_gpu_ctx->companion_gdqp,
                                               gin_gdaki_gpu_ctx->counters_table, gin_gdaki_gpu_ctx->signals_table,
                                               gin_gdaki_gpu_ctx->sink_buffer_lkey, gin_gdaki_gpu_ctx->last_issued_get,
-                                              gin_gdaki_gpu_ctx->last_visible_get),
+                                              gin_gdaki_gpu_ctx->last_visible_get, use_mcst),
                   status, out);
   }
 
@@ -1082,6 +1138,8 @@ out:
       free(gdaki_ctx);
     }
   }
+
+  if (devAttr) doca_verbs_device_attr_free(devAttr);
 
   if (local_exch_info) free(local_exch_info);
 

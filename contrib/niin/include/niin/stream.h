@@ -226,8 +226,10 @@ __global__ void niin_stream_put_signal_complete_kernel(uint64_t* sig_addr, uint6
                                                        int sig_op, int pe) {
   if (threadIdx.x == 0) {
     __threadfence_system();
+    // The payload kernels chose their own contexts, so complete all of them
+    // before the flag rather than one this thread never issued on.
     if (pe != nvshmem_my_pe() && !niin_is_lsa_peer(pe))
-      niin_gin_flush_thread();
+      niin_device_quiet();
     niin_deliver_signal(sig_addr, signal, sig_op, pe);
   }
 }

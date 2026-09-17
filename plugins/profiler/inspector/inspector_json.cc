@@ -58,7 +58,7 @@ static inspectorResult_t inspectorCommInfoHeader(jsonFileOutput* jfo,
 static inspectorResult_t inspectorCommInfoMetaHeader(jsonFileOutput* jfo) {
   JSON_CHK(jsonStartObject(jfo));
   {
-    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.0"));
+    JSON_CHK(jsonKey(jfo, "inspector_output_format_version")); JSON_CHK(jsonStr(jfo, "v4.1"));
     JSON_CHK(jsonKey(jfo, "git_rev")); JSON_CHK(jsonStr(jfo, get_git_version_info()));
     JSON_CHK(jsonKey(jfo, "rec_mechanism")); JSON_CHK(jsonStr(jfo, "nccl_profiler_interface"));
     JSON_CHK(jsonKey(jfo, "dump_timestamp_us")); JSON_CHK(jsonUint64(jfo, inspectorGetTime()));
@@ -278,94 +278,117 @@ static inline inspectorResult_t inspectorCompletedP2p(jsonFileOutput* jfo,
  *   inspectorResult_t - success or error code.
  *
  */
-static inspectorResult_t inspectorCommInfoDumpColl(jsonFileOutput* jfo,
-                                                   inspectorCommInfo* commInfo,
-                                                   bool* needs_writing) {
-  if (commInfo == nullptr) {
-    return inspectorSuccess;
-  }
+// Per-dump statistics for one communicator: records written this dump and
+// cumulative / since-last-dump ring drop counts for each op type.
+struct inspectorCommDumpStats {
+  uint64_t collRecords = 0;
+  uint64_t collDroppedTotal = 0;
+  uint64_t collDroppedSinceLastDump = 0;
+  uint64_t p2pRecords = 0;
+  uint64_t p2pDroppedTotal = 0;
+  uint64_t p2pDroppedSinceLastDump = 0;
+};
 
-  thread_local std::vector<inspectorCompletedOpInfo> drainedColl;
-  drainedColl.clear();
+/*
+ * Description:
+ *   Snapshots a ring's drop counters and advances its reported watermark so the
+ *   next dump reports only newly dropped entries.
+ *
+ * Thread Safety:
+ *   Not thread-safe (caller must hold commInfo->guard).
+ */
+static inline void inspectorCommInfoUpdateDropStats(struct inspectorCompletedRing* ring,
+                                                    uint64_t* total,
+                                                    uint64_t* sinceLastDump) {
+  *total = ring->dropped;
+  *sinceLastDump = ring->dropped - ring->droppedReported;
+  ring->droppedReported = ring->dropped;
+}
 
+// Drains the collective ring under the comm guard (one lock hold for this ring)
+// and snapshots its drop stats. Records are appended to drained.
+static inspectorResult_t inspectorCommInfoDrainColl(inspectorCommInfo* commInfo,
+                                                    std::vector<inspectorCompletedOpInfo>& drained,
+                                                    inspectorCommDumpStats* stats) {
   inspectorLockWr(&commInfo->guard);
   if (commInfo->dump_coll) {
     // Make sure we won't allocate while draining (steady-state: no-op).
     if (commInfo->completedCollRing.size > 0
-        && drainedColl.capacity() < commInfo->completedCollRing.size) {
-      drainedColl.reserve(commInfo->completedCollRing.size);
+        && drained.capacity() < commInfo->completedCollRing.size) {
+      drained.reserve(commInfo->completedCollRing.size);
     }
     INS_CHK(inspectorRingDrain<inspectorCompletedOpInfo>(&commInfo->completedCollRing,
-                                                         drainedColl));
+                                                         drained));
     commInfo->dump_coll = inspectorRingNonEmpty(&commInfo->completedCollRing);
   }
+  inspectorCommInfoUpdateDropStats(&commInfo->completedCollRing,
+                                   &stats->collDroppedTotal,
+                                   &stats->collDroppedSinceLastDump);
   inspectorUnlockRWLock(&commInfo->guard);
-
-  if (!drainedColl.empty()) {
-    *needs_writing = true;
-    JSON_CHK(jsonLockOutput(jfo));
-    for (size_t i = 0; i < drainedColl.size(); i++) {
-      JSON_CHK(jsonStartObject(jfo));
-      {
-        JSON_CHK(jsonKey(jfo, "header"));
-        inspectorCommInfoHeader(jfo, commInfo);
-
-        JSON_CHK(jsonKey(jfo, "metadata"));
-        inspectorCommInfoMetaHeader(jfo);
-
-        JSON_CHK(jsonKey(jfo, "coll_perf"));
-        INS_CHK(inspectorCompletedColl(jfo, &drainedColl[i]));
-      }
-      JSON_CHK(jsonFinishObject(jfo));
-      JSON_CHK(jsonNewline(jfo));
-    }
-    JSON_CHK(jsonUnlockOutput(jfo));
-  }
+  stats->collRecords = drained.size();
   return inspectorSuccess;
 }
 
-static inspectorResult_t inspectorCommInfoDumpP2p(jsonFileOutput* jfo,
-                                                  inspectorCommInfo* commInfo,
-                                                  bool* needs_writing) {
-  if (commInfo == nullptr) {
-    return inspectorSuccess;
-  }
-
-  thread_local std::vector<inspectorCompletedOpInfo> drainedP2p;
-  drainedP2p.clear();
-
+// Drains the P2P ring under the comm guard (one lock hold for this ring)
+// and snapshots its drop stats.
+static inspectorResult_t inspectorCommInfoDrainP2p(inspectorCommInfo* commInfo,
+                                                   std::vector<inspectorCompletedOpInfo>& drained,
+                                                   inspectorCommDumpStats* stats) {
   inspectorLockWr(&commInfo->guard);
   if (commInfo->dump_p2p) {
     if (commInfo->completedP2pRing.size > 0
-        && drainedP2p.capacity() < commInfo->completedP2pRing.size) {
-      drainedP2p.reserve(commInfo->completedP2pRing.size);
+        && drained.capacity() < commInfo->completedP2pRing.size) {
+      drained.reserve(commInfo->completedP2pRing.size);
     }
     INS_CHK(inspectorRingDrain<inspectorCompletedOpInfo>(&commInfo->completedP2pRing,
-                                                        drainedP2p));
+                                                         drained));
     commInfo->dump_p2p = inspectorRingNonEmpty(&commInfo->completedP2pRing);
   }
+  inspectorCommInfoUpdateDropStats(&commInfo->completedP2pRing,
+                                   &stats->p2pDroppedTotal,
+                                   &stats->p2pDroppedSinceLastDump);
   inspectorUnlockRWLock(&commInfo->guard);
+  stats->p2pRecords = drained.size();
+  return inspectorSuccess;
+}
 
-  if (!drainedP2p.empty()) {
-    *needs_writing = true;
-    JSON_CHK(jsonLockOutput(jfo));
-    for (size_t i = 0; i < drainedP2p.size(); i++) {
-      JSON_CHK(jsonStartObject(jfo));
-      {
-        JSON_CHK(jsonKey(jfo, "header"));
-        inspectorCommInfoHeader(jfo, commInfo);
+/*
+ * Description:
+ *   Writes a single per-dump stats record for a communicator: a marker at the
+ *   start of the comm's dump cycle carrying records-written and drop counts.
+ *   Emitted once per dump per comm, so consumers must not assume every record
+ *   carries coll_perf/p2p_perf — the "dump_stats" key identifies this record.
+ *
+ * Thread Safety:
+ *   Not thread-safe (caller must hold the JSON output lock).
+ */
+static inspectorResult_t inspectorCommInfoDumpStats(jsonFileOutput* jfo,
+                                                    inspectorCommInfo* commInfo,
+                                                    const inspectorCommDumpStats* stats) {
+  JSON_CHK(jsonStartObject(jfo));
+  {
+    JSON_CHK(jsonKey(jfo, "header"));
+    inspectorCommInfoHeader(jfo, commInfo);
 
-        JSON_CHK(jsonKey(jfo, "metadata"));
-        inspectorCommInfoMetaHeader(jfo);
+    JSON_CHK(jsonKey(jfo, "metadata"));
+    inspectorCommInfoMetaHeader(jfo);
 
-        JSON_CHK(jsonKey(jfo, "p2p_perf"));
-        INS_CHK(inspectorCompletedP2p(jfo, &drainedP2p[i]));
-      }
-      JSON_CHK(jsonFinishObject(jfo));
-      JSON_CHK(jsonNewline(jfo));
+    JSON_CHK(jsonKey(jfo, "dump_stats"));
+    JSON_CHK(jsonStartObject(jfo));
+    {
+      JSON_CHK(jsonKey(jfo, "coll_records")); JSON_CHK(jsonUint64(jfo, stats->collRecords));
+      JSON_CHK(jsonKey(jfo, "coll_dropped_total")); JSON_CHK(jsonUint64(jfo, stats->collDroppedTotal));
+      JSON_CHK(jsonKey(jfo, "coll_dropped_since_last_dump"));
+      JSON_CHK(jsonUint64(jfo, stats->collDroppedSinceLastDump));
+      JSON_CHK(jsonKey(jfo, "p2p_records")); JSON_CHK(jsonUint64(jfo, stats->p2pRecords));
+      JSON_CHK(jsonKey(jfo, "p2p_dropped_total")); JSON_CHK(jsonUint64(jfo, stats->p2pDroppedTotal));
+      JSON_CHK(jsonKey(jfo, "p2p_dropped_since_last_dump"));
+      JSON_CHK(jsonUint64(jfo, stats->p2pDroppedSinceLastDump));
     }
-    JSON_CHK(jsonUnlockOutput(jfo));
+    JSON_CHK(jsonFinishObject(jfo));
   }
+  JSON_CHK(jsonFinishObject(jfo));
+  JSON_CHK(jsonNewline(jfo));
   return inspectorSuccess;
 }
 
@@ -373,9 +396,61 @@ static inspectorResult_t inspectorCommInfoDump(jsonFileOutput* jfo,
                                                inspectorCommInfo* commInfo,
                                                bool* needs_writing) {
   *needs_writing = false;
+  if (commInfo == nullptr) {
+    return inspectorSuccess;
+  }
 
-  INS_CHK(inspectorCommInfoDumpColl(jfo, commInfo, needs_writing));
-  INS_CHK(inspectorCommInfoDumpP2p(jfo, commInfo, needs_writing));
+  thread_local std::vector<inspectorCompletedOpInfo> drainedColl;
+  thread_local std::vector<inspectorCompletedOpInfo> drainedP2p;
+  drainedColl.clear();
+  drainedP2p.clear();
+
+  inspectorCommDumpStats stats;
+  // One guard hold per ring, matching the original per-ring locking.
+  INS_CHK(inspectorCommInfoDrainColl(commInfo, drainedColl, &stats));
+  INS_CHK(inspectorCommInfoDrainP2p(commInfo, drainedP2p, &stats));
+
+  // Emit only when this comm produced records or has newly dropped entries to
+  // report, so idle communicators don't generate empty stats records.
+  bool haveDrops = stats.collDroppedSinceLastDump != 0 || stats.p2pDroppedSinceLastDump != 0;
+  if (drainedColl.empty() && drainedP2p.empty() && !haveDrops) {
+    return inspectorSuccess;
+  }
+
+  *needs_writing = true;
+  JSON_CHK(jsonLockOutput(jfo));
+  INS_CHK(inspectorCommInfoDumpStats(jfo, commInfo, &stats));
+  for (size_t i = 0; i < drainedColl.size(); i++) {
+    JSON_CHK(jsonStartObject(jfo));
+    {
+      JSON_CHK(jsonKey(jfo, "header"));
+      inspectorCommInfoHeader(jfo, commInfo);
+
+      JSON_CHK(jsonKey(jfo, "metadata"));
+      inspectorCommInfoMetaHeader(jfo);
+
+      JSON_CHK(jsonKey(jfo, "coll_perf"));
+      INS_CHK(inspectorCompletedColl(jfo, &drainedColl[i]));
+    }
+    JSON_CHK(jsonFinishObject(jfo));
+    JSON_CHK(jsonNewline(jfo));
+  }
+  for (size_t i = 0; i < drainedP2p.size(); i++) {
+    JSON_CHK(jsonStartObject(jfo));
+    {
+      JSON_CHK(jsonKey(jfo, "header"));
+      inspectorCommInfoHeader(jfo, commInfo);
+
+      JSON_CHK(jsonKey(jfo, "metadata"));
+      inspectorCommInfoMetaHeader(jfo);
+
+      JSON_CHK(jsonKey(jfo, "p2p_perf"));
+      INS_CHK(inspectorCompletedP2p(jfo, &drainedP2p[i]));
+    }
+    JSON_CHK(jsonFinishObject(jfo));
+    JSON_CHK(jsonNewline(jfo));
+  }
+  JSON_CHK(jsonUnlockOutput(jfo));
   return inspectorSuccess;
 }
 

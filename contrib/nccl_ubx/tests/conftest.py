@@ -29,6 +29,26 @@ requires_sm9 = pytest.mark.requires_sm9
 
 
 @pytest.fixture
+def nccl_backend():
+    """UB-X's nccl4py backend module, with one skip-vs-fail policy.
+
+    Skip only when nccl4py is genuinely not installed. When it IS installed but
+    UB-X can no longer import what it needs, fail: that is the shape of the
+    nccl4py 0.3.0 change, which shipped precisely because a broken build still
+    looked healthy. Every test touching the backend goes through here, so the
+    two cases can never drift apart between test classes.
+    """
+    from ubx import _nccl_backend as backend
+
+    if backend.nccl4py_available():
+        return backend
+    err = backend.nccl4py_import_error()
+    if backend.nccl4py_missing():
+        pytest.skip(f"nccl4py is not installed here: {err!r}")
+    pytest.fail(f"nccl4py is installed but UB-X cannot import from it: {err!r}")
+
+
+@pytest.fixture
 def cuda_device():
     """Provide a CUDA device for testing."""
     if not torch.cuda.is_available():

@@ -19,6 +19,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <getopt.h>
+#include <strings.h>  // strcasecmp
 
 #include "nvshmem.h"
 #include "nvshmemx.h"
@@ -50,6 +51,26 @@ static size_t warmup_iters = 50;
 static size_t threads_per_block = 256;
 static size_t num_blocks = 4;
 static size_t max_size_log = 0;
+// Used only by atomic perftests.  Keep the upstream spelling so scripts can
+// select the same operation with -a/--atomic_op.
+static const char* atomic_op = "inc";
+
+// ---------------------------------------------------------------------------
+// TMA
+// ---------------------------------------------------------------------------
+
+// Dynamic shared memory to request per CTA so kernels can register it with
+// nvshmemx_give_smem(). Returns 0 unless NVSHMEM_TMA_POLICY asks for TMA, so a
+// default run allocates no extra shared memory and keeps its usual occupancy.
+//
+// NVSHMEMX_SMEM_MINIMUM (32 KB) stays under the 48 KB cap on dynamic shared
+// memory, so no cudaFuncSetAttribute opt-in is needed.
+static size_t tma_smem_bytes() {
+  const char* env = getenv("NVSHMEM_TMA_POLICY");
+  if (env == nullptr) return 0;
+  if (strcasecmp(env, "ENABLE") != 0 && strcasecmp(env, "FORCE") != 0) return 0;
+  return (size_t)nvshmemx_ask_smem(NVSHMEMX_SMEM_MINIMUM);
+}
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing (matching NVSHMEM perftest conventions)
@@ -63,11 +84,12 @@ static void read_args(int argc, char** argv) {
     {"warmup",     required_argument, 0, 'w'},
     {"threads",    required_argument, 0, 't'},
     {"blocks",     required_argument, 0, 'n'},
+    {"atomic_op",  required_argument, 0, 'a'},
     {"help",       no_argument,       0, 'h'},
     {0, 0, 0, 0}
   };
   int c, option_index = 0;
-  while ((c = getopt_long(argc, argv, "b:e:f:i:w:t:n:h", long_options, &option_index)) != -1) {
+  while ((c = getopt_long(argc, argv, "b:e:f:i:w:t:n:a:h", long_options, &option_index)) != -1) {
     switch (c) {
       case 'b': min_size = atol(optarg); break;
       case 'e': max_size = atol(optarg); break;
@@ -76,6 +98,7 @@ static void read_args(int argc, char** argv) {
       case 'w': warmup_iters = atol(optarg); break;
       case 't': threads_per_block = atol(optarg); break;
       case 'n': num_blocks = atol(optarg); break;
+      case 'a': atomic_op = optarg; break;
       case 'h':
         printf("Usage: [options]\n"
                "  -b, --min_size <bytes>    Minimum message size (default: 4)\n"
@@ -84,10 +107,15 @@ static void read_args(int argc, char** argv) {
                "  -i, --iters <n>           Iterations (default: 200)\n"
                "  -w, --warmup <n>          Warmup iterations (default: 50)\n"
                "  -t, --threads <n>         Threads per block (default: 256)\n"
-               "  -n, --blocks <n>          Number of blocks (default: 4)\n");
+               "  -n, --blocks <n>          Number of blocks (default: 4)\n"
+               "  -a, --atomic_op <op>      Atomic operation (atomic tests only)\n");
         exit(0);
       default: break;
     }
+  }
+  if (step_factor < 2) {
+    fprintf(stderr, "--step must be at least 2\n");
+    exit(1);
   }
   // Compute log2 of max_size for table allocation
   size_t tmp = max_size;

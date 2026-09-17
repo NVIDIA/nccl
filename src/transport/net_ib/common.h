@@ -82,10 +82,21 @@ struct ncclIbGidInfo {
 };
 
 extern int ncclNIbDevs;
+
+enum ncclIbRailPolicy {
+  NCCL_IB_RAIL_POLICY_NONE,
+  NCCL_IB_RAIL_POLICY_CX9_FLIP, // Enable CX9 rail flipped layout
+  NCCL_IB_RAIL_POLICY_CX9_ALT, // Enable CX9 rail alternate layout
+  NCCL_IB_RAIL_POLICY_CX9_BLOCK, // Enable CX9 rail blocked layout
+};
+
 struct alignas(64) ncclIbDev {
   std::mutex mutex;
   int device;
   uint64_t guid;
+  uint32_t vendorId;
+  uint32_t vendorPartId;
+  char fwVer[64];
   uint8_t portNum;
   uint8_t link;
   int speed;
@@ -533,6 +544,11 @@ struct ncclIbSendComm {
   int ar; // Use adaptive routing when all merged devices have it enabled
   uint64_t putSignalScratchpad;
 
+  struct {
+    uint64_t posted;
+    uint64_t completed;
+  } ginSeq;
+
   struct ncclIbRemoteSpeedBuf remoteSpeedBuf;
   struct ibv_mr* remoteSpeedMr;
   uint64_t remoteSpeedCounter;
@@ -621,6 +637,10 @@ struct ncclIbRecvComm {
   uint16_t lastSentSpeeds[NCCL_IB_MAX_DEVS_PER_NIC];
   uint64_t lastSentCounter;
   bool postedSpeedUpdate;
+  struct {
+    uint64_t posted;
+    uint64_t completed;
+  } ginSeq;
 };
 static_assert((offsetof(struct ncclIbRecvComm, remCtsFifo) % 32) == 0,
               "ncclIbRecvComm ctsFifo must be 32-byte aligned");

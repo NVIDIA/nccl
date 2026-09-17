@@ -64,6 +64,10 @@ typedef enum { ncclSuccess                 =  0,
 #define NCCL_WIN_DEFAULT 0x00
 #define NCCL_WIN_COLL_SYMMETRIC 0x01
 #define NCCL_WIN_STRICT_ORDERING 0x02
+/* Restrict window registration to GIN only. By default, register for all supported capabilities. */
+#define NCCL_WIN_GIN_ONLY 0x04
+/* Restrict window registration to CFT COUNTED only. By default, register for non-COUNTED LEs. */
+#define NCCL_WIN_CFT_COUNTED 0x08
 
 #define NCCL_WIN_REQUIRED_ALIGNMENT 4096
 
@@ -85,6 +89,15 @@ typedef enum {
   ncclHostCftDisable = 2,
   ncclHostCftFallback = 3
 } ncclHostCftMode_t;
+
+/* Host NVLS component-disable flags. Individual component flags may be combined. */
+typedef enum {
+  ncclNvlsHostModeDefault = NCCL_CONFIG_UNDEF_INT, /* library default */
+  ncclNvlsHostModeEnable = 0,                      /* enable all host NVLS components */
+  ncclNvlsHostModeDisableTransport = 1 << 0,       /* disable NVLS transport and registered-buffer optimization */
+  ncclNvlsHostModeDisableSymmetricMultimem = 1 << 1, /* disable multimem in internal symmetric kernels and CE */
+  ncclNvlsHostModeDisable = INT_MAX,               /* disable all present and future host NVLS components */
+} ncclNvlsHostMode_t;
 
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
@@ -116,6 +129,7 @@ typedef struct ncclConfig_v23100 {
   int numRmaSig;
   int rmaEagerInit;
   int hostCftMode;
+  int nvlsHostMode;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -145,7 +159,8 @@ typedef struct ncclConfig_v23100 {
   NCCL_CONFIG_UNDEF_INT,                    /* launchOrderImplicit */   \
   NCCL_CONFIG_UNDEF_INT,                    /* numRmaSig */             \
   NCCL_CONFIG_UNDEF_INT,                    /* rmaEagerInit */          \
-  NCCL_CONFIG_UNDEF_INT,                    /* hostCftMode */          \
+  NCCL_CONFIG_UNDEF_INT,                    /* hostCftMode */           \
+  NCCL_CONFIG_UNDEF_INT,                    /* nvlsHostMode */          \
 }
 
 /* A single vendor-specific option expressed as a key-value pair. Multiple options can be
@@ -175,7 +190,7 @@ typedef struct ncclConfigExt {
  * reordered. The user owns the storage and must keep the struct (and any linked ncclConfigExt_t)
  * valid for the duration of every call that uses it. The same configuration must be
  * set on every rank; NCCL validates it only locally. */
-typedef struct ncclCollConfig_v23100 {
+typedef struct ncclCollConfig_v23200 {
   /* attributes that users should never touch. */
   size_t size;
   unsigned int magic;
@@ -198,6 +213,12 @@ typedef struct ncclCollConfig_v23100 {
    * profiler-tag values with the most-significant bit set (>= 0x8000000000000000) for possible future
    * predefined tags; applications should use values with the MSB clear. */
   uint64_t userProfilerTag;
+  /* Caller-owned, rank-local CUDA event recorded at collective kernel launch completion.
+   * Create it with cudaEventDisableTiming; interprocess and interop events are unsupported.
+   * Every rank must provide a non-NULL event or every rank must provide NULL. Keep the event
+   * alive through all queued waits and captured-graph executions. At most one non-NULL event
+   * per communicator is supported in a group. CUDA < 12.3 records it before launch. */
+  cudaEvent_t launchCompletionEvent;
 } ncclCollConfig_t;
 
 /* NCCL_COLLCONFIG_INITIALIZER must be used to initialize a ncclCollConfig_t when it is
@@ -215,6 +236,7 @@ typedef struct ncclCollConfig_v23100 {
   1,                                        /* forceAlgSelection */   \
   NCCL_CONFIG_UNDEF_INT,                    /* CTAPolicy */           \
   0,                                        /* userProfilerTag */     \
+  NCCL_CONFIG_UNDEF_PTR,                    /* launchCompletionEvent */ \
 }
 
 /* This struct will be used by ncclGroupSimulateEnd() API to query information about simulation. */
@@ -868,6 +890,37 @@ ncclResult_t pncclGroupEnd();
  */
 ncclResult_t  ncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
 ncclResult_t pncclGroupSimulateEnd(ncclSimInfo_t* simInfo);
+
+/*
+ * Encryption
+ *
+ * Request encryption of NCCL TCP sockets via user code.
+ */
+typedef enum {
+  NCCL_ENCRYPTION_MODE_NONE = 0,                        // plaintext
+  NCCL_ENCRYPTION_MODE_PSK = 1                          // PSK is set
+} ncclEncryptionMode_t;
+
+typedef struct ncclEncryptionConfig_v23200 {
+  /* attributes that users should never touch. */
+  size_t size;
+  unsigned int magic;
+  unsigned int version;
+  /* attributes that users are able to customize. */
+  int mode;
+  const char* psk;
+} ncclEncryptionConfig_t;
+
+#define NCCL_ENCRYPTION_CONFIG_INITIALIZER {                            \
+  sizeof(ncclEncryptionConfig_t),           /* size */                  \
+  NCCL_API_MAGIC,                           /* magic */                 \
+  NCCL_VERSION_CODE,                        /* version */               \
+  NCCL_ENCRYPTION_MODE_NONE,                /* encryption mode */       \
+  NCCL_CONFIG_UNDEF_PTR,                    /* tls psk */               \
+}
+
+ncclResult_t  ncclSetEncryption(const ncclEncryptionConfig_t* config);
+ncclResult_t pncclSetEncryption(const ncclEncryptionConfig_t* config);
 
 /*
  * Parameter access

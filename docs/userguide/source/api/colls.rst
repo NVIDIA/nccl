@@ -117,3 +117,45 @@ ncclScatter
  In-place operation will happen if ``recvbuff == sendbuff + root * count``.
 
 Related links: :ref:`scatter`.
+
+Per-Collective Configuration Variants
+--------------------------------------
+
+Every collective above also has an ``*Config`` variant that takes a trailing
+:c:type:`ncclCollConfig_t` argument for per-call customization (algorithm
+selection, CTA counts, and similar overrides described under
+:ref:`ncclcollconfig`). Initialize the config with
+:c:macro:`NCCL_COLLCONFIG_INITIALIZER` and set it identically on every rank.
+Passing ``config == NULL`` is equivalent to calling the plain API.
+
+.. c:function:: ncclResult_t  ncclAllReduceConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclAllReduce`.
+
+.. c:function:: ncclResult_t  ncclBroadcastConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclBroadcast`.
+
+.. c:function:: ncclResult_t  ncclReduceConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclReduce`.
+
+.. c:function:: ncclResult_t  ncclAllGatherConfig(const void* sendbuff, void* recvbuff, size_t sendcount, ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclAllGather`.
+
+.. c:function:: ncclResult_t  ncclReduceScatterConfig(const void* sendbuff, void* recvbuff, size_t recvcount, ncclDataType_t datatype, ncclRedOp_t op, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclReduceScatter`.
+
+.. c:function:: ncclResult_t  ncclAlltoAllConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclAlltoAll`.
+
+.. c:function:: ncclResult_t  ncclGatherConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclGather`.
+
+.. c:function:: ncclResult_t  ncclScatterConfig(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root, ncclComm_t comm, cudaStream_t stream, const ncclCollConfig_t* config)
+
+ Configurable variant of :c:func:`ncclScatter`.

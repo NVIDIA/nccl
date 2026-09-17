@@ -987,7 +987,9 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 
     u8 stat_rate_support[0x10];
     u8 sig_block_4048[0x1];
-    u8 reserved_at_1f1[0xb];
+    u8 reserved_at_1f1[0x7];
+    u8 init2_lag_tx_port_affinity[0x1];
+    u8 reserved_at_1f9[0x3];
     u8 cqe_version[0x4];
 
     u8 compact_address_vector[0x1];

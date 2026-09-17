@@ -36,10 +36,12 @@ enum {
 static int envPluginStatus = envPluginLoadReady;
 
 static ncclResult_t ncclEnvPluginLoad(void) {
-  const char* envName;
+  const char* envName = nullptr;
+  bool envPluginRequested = false;
   if (envPluginStatus != envPluginLoadReady) goto exit;
 
   if ((envName = std::getenv("NCCL_ENV_PLUGIN")) != nullptr) {
+    envPluginRequested = true;
     INFO(NCCL_ENV, "NCCL_ENV_PLUGIN set by environment to %s", envName);
     if (strcasecmp(envName, "none") == 0) {
       goto fail;
@@ -56,7 +58,8 @@ static ncclResult_t ncclEnvPluginLoad(void) {
   if (ncclEnvPlugins[EXT_ENV_PLUGIN] == nullptr) {
     ncclEnvPlugins[EXT_ENV_PLUGIN] = getNcclEnv_v1(envPluginLib);
     if (ncclEnvPlugins[EXT_ENV_PLUGIN] == nullptr) {
-      INFO(NCCL_INIT, "External env plugin %s is unsupported", envName);
+      if (envPluginRequested) ATTN("External env plugin %s is unsupported", envName);
+      else INFO(NCCL_INIT, "External env plugin %s is unsupported", envName);
       goto fail;
     }
   }

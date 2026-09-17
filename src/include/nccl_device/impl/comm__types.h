@@ -71,8 +71,8 @@ struct ncclDevComm {
   int cftRank, cftSize;
   int cftMultimemRank, cftMultimemSize;
   uint32_t cftMultimemSize_rcp32;
-  ncclCftLeId ucLeId;
-  ncclCftLeId mcLeId;
+  ncclCftLeId ucLeId; // base UC LE ID, +cftSize for counted UC LE ID base
+  ncclCftLeId mcLeId; // MC LE ID, +1 for counted MC LE ID
   ncclCftBarrierHandle_t cftBarrier;
   ncclCftBarrierHandle_t cftMultimemBarrier;
 };

@@ -86,6 +86,8 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=500
   Enables verbose output including event trace information.
 - `NCCL_INSPECTOR_PROM_DUMP=<0|1>` (default: `0`)
   Enables Prometheus format for textfile node exporter output instead of custom JSON.
+- `NCCL_INSPECTOR_PROM_DUMP_STATS=<0|1>` (default: `0`)
+  In Prometheus mode, additionally emit the per-device stats metrics (`nccl_collectives_total`, `nccl_collectives_dropped_total`, `nccl_p2p_total`, `nccl_p2p_dropped_total`). Off by default to keep the default Prometheus output minimal; enable it to plumb drop/rate signals to a dashboard. Has no effect on JSON mode (whose per-dump `dump_stats` record is always emitted) or OTLP mode (whose equivalent stats ride under `NCCL_INSPECTOR_OTEL_VERBOSE`).
 - `NCCL_INSPECTOR_OTEL_EXPORT=<0|1>` (default: `0`)
   Enables OTLP HTTP metrics export. Accepted values are `0` (disabled) and `1` (enabled). Default OTLP export emits aggregated bucket metrics.
 - `NCCL_INSPECTOR_OTEL_VERBOSE=<0|1>` (default: `0`)
@@ -108,6 +110,13 @@ export NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS=500
   Per-communicator completed-collective ring buffer capacity.
 - `NCCL_INSPECTOR_DUMP_P2P_RING_SIZE=<entries>` (default: `1024`)
   Per-communicator completed-P2P ring buffer capacity.
+
+  If operations complete faster than the dump thread drains the ring, the oldest
+  entries are overwritten before they can be dumped. When this happens the
+  Inspector logs a one-time warning and reports drop counts in the output
+  (`dropped_total` / `dropped_since_last_dump` in the JSON `dump_stats` record;
+  `nccl_collectives_dropped_total` / `nccl_p2p_dropped_total` in Prometheus/OTLP
+  stats). Increasing the ring size retains more entries under bursts.
 - `NCCL_INSPECTOR_COLL_POOL_SIZE=<entries>` (default: `256`)
   Collective pool initial size/stride.
 - `NCCL_INSPECTOR_P2P_POOL_SIZE=<entries>` (default: `256`)
@@ -184,9 +193,18 @@ Note: Prometheus mode enforces a minimum dump interval of 30 seconds (30,000,000
 
 When P2P tracking is enabled (`NCCL_INSPECTOR_ENABLE_P2P=1`), Prometheus output includes P2P metrics with a `p2p_operation` label (e.g., `Send`, `Recv`).
 
+**Opt-in per-device stats metrics** (emitted only when `NCCL_INSPECTOR_PROM_DUMP_STATS=1`):
+- `nccl_collectives_total` - Cumulative collectives enqueued into the ring buffer, per device (counter)
+- `nccl_collectives_dropped_total` - Cumulative collective records overwritten before being dumped, per device (counter)
+- `nccl_p2p_total` - Cumulative P2P operations enqueued into the ring buffer, per device (counter)
+- `nccl_p2p_dropped_total` - Cumulative P2P records overwritten before being dumped, per device (counter)
+
+These are cumulative counters (not per-window gauges), so `rate(nccl_collectives_dropped_total[$__rate_interval]) / rate(nccl_collectives_total[$__rate_interval])` gives the fraction of collectives being lost, robust to scrape/dump interval alignment. They are emitted for every known device each dump so the counters stay continuous.
+
 **Labels:**
 - Collectives: `version`, `slurm_job_id`, `node`, `gpu`, `comm_name`, `n_nodes`, `nranks`, `collective`, `message_size`, `algo_proto`
 - P2P: `version`, `slurm_job_id`, `node`, `gpu`, `comm_name`, `n_nodes`, `nranks`, `p2p_operation`, `message_size`
+- Per-device stats metrics: `version`, `slurm_job_id`, `node`, `gpu`
 
 `message_size` is a bucketed range string (for example `4-5GB`).
 
@@ -295,7 +313,7 @@ Each output file contains JSON objects with the following structure:
     "nnodes": 1
   },
   "metadata": {
-    "inspector_output_format_version": "v4.0",
+    "inspector_output_format_version": "v4.1",
     "git_rev": "",
     "rec_mechanism": "profiler_plugin",
     "dump_timestamp_us": 1748030377748202,
@@ -309,6 +327,39 @@ Each output file contains JSON objects with the following structure:
     "coll_exec_time_us": 61974,
     "coll_algobw_gbs": 277.210914,
     "coll_busbw_gbs": 485.119099
+  }
+}
+```
+
+### Per-Dump Stats Record
+
+Once per dump cycle, each communicator also emits a single stats record (identified by the `dump_stats` key) as a marker at the start of its dump. It reports how many records were written and how many were dropped — overwritten in the ring buffer before they could be dumped (see `NCCL_INSPECTOR_DUMP_COLL_RING_SIZE`). `dropped_total` is cumulative for the communicator; `dropped_since_last_dump` covers only the current dump. Non-zero drops mean the output is an incomplete sample and the ring should be enlarged.
+
+Because this record has no `coll_perf`/`p2p_perf` body, consumers that iterate per-collective should filter on the presence of `coll_perf`/`p2p_perf` and read `dump_stats` separately rather than assuming every record is an operation.
+
+```json
+{
+  "header": {
+    "id": "0x7f8c496ae9f661",
+    "rank": 2,
+    "n_ranks": 8,
+    "nnodes": 1
+  },
+  "metadata": {
+    "inspector_output_format_version": "v4.1",
+    "git_rev": "",
+    "rec_mechanism": "nccl_profiler_interface",
+    "dump_timestamp_us": 1748030377748202,
+    "hostname": "example-hostname",
+    "pid": 1639453
+  },
+  "dump_stats": {
+    "coll_records": 1024,
+    "coll_dropped_total": 4096,
+    "coll_dropped_since_last_dump": 512,
+    "p2p_records": 0,
+    "p2p_dropped_total": 0,
+    "p2p_dropped_since_last_dump": 0
   }
 }
 ```
@@ -332,7 +383,7 @@ This will include additional event trace information in the JSON output, showing
     "nnodes": 1
   },
   "metadata": {
-    "inspector_output_format_version": "v4.0",
+    "inspector_output_format_version": "v4.1",
     "git_rev": "9019a1912-dirty",
     "rec_mechanism": "nccl_profiler_interface",
     "dump_timestamp_us": 1752867229276385,

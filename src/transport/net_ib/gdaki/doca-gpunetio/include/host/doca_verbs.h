@@ -464,6 +464,11 @@ enum doca_verbs_qp_send_dbr_mode {
 #define DOCA_VERBS_QP_ATTR_CC_GROUP (1 << 18)
 
 /**
+ * @brief LAG TX port affinity attribute.
+ */
+#define DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY (1 << 19)
+
+/**
  * @brief Specifies the length of a GID (Global ID) in bytes.
  */
 #define DOCA_VERBS_GID_BYTE_LENGTH 16
@@ -1304,6 +1309,24 @@ doca_error_t doca_verbs_qp_attr_set_cc_group(doca_verbs_qp_attr_t *verbs_qp_attr
  */
 doca_error_t doca_verbs_qp_attr_set_counter_set_id(doca_verbs_qp_attr_t *qp_attr,
                                                    uint32_t counter_set_id);
+
+/**
+ * @brief Set lag_tx_port_affinity attribute for verbs_qp_attr
+ *
+ * Note that this attribute is not supported in the SDK mode.
+ *
+ * @param [in] verbs_qp_attr
+ * Pointer to verbs_qp_attr instance.
+ * @param [in] lag_tx_port_affinity
+ * lag_tx_port_affinity attribute.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ */
+doca_error_t doca_verbs_qp_attr_set_lag_tx_port_affinity(doca_verbs_qp_attr_t *qp_attr,
+                                                         uint8_t lag_tx_port_affinity);
 
 /**
  * @brief Create a DOCA Verbs AH instance.
@@ -2526,6 +2549,54 @@ uint8_t doca_verbs_device_attr_get_max_qp_rd_atom(
  * The maximum number of incoming RDMA Read or Atomic requests supported by the device.
  */
 uint8_t doca_verbs_device_attr_get_max_qp_init_rd_atom(
+    const struct doca_verbs_device_attr *verbs_device_attr);
+
+/**
+ * @brief Get the LAG TX port affinity capability flag of the device.
+ *
+ * @param [in] verbs_device_attr
+ * Pointer to doca_verbs_device_attr instance.
+ *
+ * @return
+ * The LAG TX port affinity capability flag.
+ */
+uint8_t doca_verbs_device_attr_get_lag_tx_port_affinity(
+    const struct doca_verbs_device_attr *verbs_device_attr);
+
+/**
+ * @brief Get the number of LAG ports supported by the device.
+ *
+ * @param [in] verbs_device_attr
+ * Pointer to doca_verbs_device_attr instance.
+ *
+ * @return
+ * The number of supported LAG ports.
+ */
+uint8_t doca_verbs_device_attr_get_num_lag_ports(
+    const struct doca_verbs_device_attr *verbs_device_attr);
+
+/**
+ * @brief Get the INIT2 LAG TX port affinity capability flag of the device.
+ *
+ * @param [in] verbs_device_attr
+ * Pointer to doca_verbs_device_attr instance.
+ *
+ * @return
+ * The INIT2 LAG TX port affinity capability flag.
+ */
+uint8_t doca_verbs_device_attr_get_init2_lag_tx_port_affinity(
+    const struct doca_verbs_device_attr *verbs_device_attr);
+
+/**
+ * @brief Get the RTS2RTS LAG TX port affinity capability flag of the device.
+ *
+ * @param [in] verbs_device_attr
+ * Pointer to doca_verbs_device_attr instance.
+ *
+ * @return
+ * The RTS2RTS LAG TX port affinity capability flag.
+ */
+uint8_t doca_verbs_device_attr_get_rts2rts_lag_tx_port_affinity(
     const struct doca_verbs_device_attr *verbs_device_attr);
 
 /**

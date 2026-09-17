@@ -83,6 +83,50 @@ typedef struct ncclProfilerApiState {
 
 extern thread_local ncclProfilerApiState_t ncclProfilerApiState;
 
+// Profiler linkage of one API call, snapshotted on the calling thread by ncclApiProfiler.
+// Task preparation may run on another thread, so it must not read the thread-local
+// ncclProfilerApiState; it carries this snapshot instead.
+struct ncclProfilerApiCtx {
+  int eActivationMask;        // event mask snapshot for the enclosing group
+  struct ncclProfilerEventRef groupApiEventHandle;  // ncclProfileGroupApi event this call belongs to
+  struct ncclProfilerEventRef apiEventHandle;       // ncclProfileCollApi / ncclProfileP2pApi event for this call
+  uint64_t userTag;           // per-call user profiler tag from the CollConfig (0 == untagged)
+};
+
+// Profiler API-event bracket for one collective/p2p/RMA API call. ncclApiProfilerStart opens
+// the group API event and the Coll/P2p API event for info->coll and snapshots their linkage in
+// ctx; ncclApiProfilerStop closes the API event. The destructor calls stop if it was not called
+// explicitly, so every early exit closes what start opened. Call ncclPlannerSetCapturingGraph
+// for the call's stream before start so the group API event reports graph capture correctly.
+//
+//   struct ncclApiProfiler profiler = {comm, info};
+//   NCCLCHECK(ncclApiProfilerStart(&profiler));
+//   ...
+//   NCCLCHECK(ncclApiProfilerStop(&profiler));
+struct ncclApiProfiler;
+ncclResult_t ncclApiProfilerStart(struct ncclApiProfiler* profiler);
+ncclResult_t ncclApiProfilerStop(struct ncclApiProfiler* profiler);
+
+struct ncclApiProfiler {
+  struct ncclComm* comm;
+  struct ncclInfo* info;
+  bool started;
+  struct ncclProfilerApiCtx ctx; // valid after ncclApiProfilerStart succeeds
+
+  ~ncclApiProfiler() {
+    (void)ncclApiProfilerStop(this);
+  }
+};
+
+// Copy an API call's profiler linkage onto a task (ncclTaskColl, ncclTaskBcast, ncclTaskP2p, ...).
+template <typename TaskT>
+inline void ncclTaskCaptureProfilerCtx(TaskT* task, const struct ncclProfilerApiCtx& ctx) {
+  task->eActivationMask = ctx.eActivationMask;
+  task->groupApiEventHandle = ctx.groupApiEventHandle;
+  task->apiEventHandle = ctx.apiEventHandle;
+  task->profilerTag = ctx.userTag;
+}
+
 extern int ncclProfilerEventMask;
 
 // Rebuilds the union of per-plugin masks and returns it. Plugins may write the

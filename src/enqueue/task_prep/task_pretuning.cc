@@ -199,6 +199,7 @@ static ncclResult_t preTuningAddBcastToAllGatherV(struct ncclComm* comm, struct 
 
   if (agv->stream == (cudaStream_t)-1) {
     agv->stream = bcast->stream;
+    agvRaw->profiler = bcastRaw->profiler;
   }
   // Simply use the first bcast's collConfig for now
   if (bcastRaw->collConfig.size != 0 && agvRaw->collConfig.size == 0) {
@@ -209,6 +210,7 @@ static ncclResult_t preTuningAddBcastToAllGatherV(struct ncclComm* comm, struct 
   contrib.sendbuff = (void*)bcast->sendbuff;
   contrib.recvbuff = bcast->recvbuff;
   contrib.count = count;
+  contrib.profiler = bcastRaw->profiler;
   (*agv->bcastTasks)[bcast->root] = contrib;
   ncclMemoryPoolFree(&comm->memPool_ncclRawTask, bcastRaw);
   return ncclSuccess;

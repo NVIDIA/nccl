@@ -250,7 +250,7 @@ struct ncclTaskColl {
   // Profiler plugin
   int eActivationMask;
   struct ncclProfilerEventRef groupApiEventHandle;
-  struct ncclProfilerEventRef collApiEventHandle;
+  struct ncclProfilerEventRef apiEventHandle;
   struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
   // Inclusive channel range this task ran on; mirrors devWork->channelLo/Hi.
@@ -289,7 +289,7 @@ struct ncclTaskBcast {
   // Profiler plugin
   int eActivationMask;
   struct ncclProfilerEventRef groupApiEventHandle;
-  struct ncclProfilerEventRef collApiEventHandle;
+  struct ncclProfilerEventRef apiEventHandle;
   struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
   uint64_t profilerTag; // Per-call profiler annotation (0 == untagged)
@@ -310,7 +310,7 @@ struct ncclTaskP2p {
   // Profiler plugin
   int eActivationMask;
   struct ncclProfilerEventRef groupApiEventHandle;
-  struct ncclProfilerEventRef p2pApiEventHandle;
+  struct ncclProfilerEventRef apiEventHandle;
   struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
   uint64_t profilerTag; // Per-call profiler annotation (0 == untagged)
@@ -350,7 +350,7 @@ struct ncclTaskRma {
   // Profiler plugin
   int eActivationMask;
   struct ncclProfilerEventRef groupApiEventHandle;
-  struct ncclProfilerEventRef rmaApiEventHandle;
+  struct ncclProfilerEventRef apiEventHandle;
   struct ncclProfilerEventRef eventHandle;
   uint8_t nChannels;
 };

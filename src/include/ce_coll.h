@@ -54,7 +54,7 @@ struct alignas(16) ncclCeCollArgs {
   uint8_t* recvBuff;
   struct ncclDevrWindow* sendWin;
   struct ncclDevrWindow* recvWin;
-  struct ncclProfilerEventRef collApiEventHandle;
+  struct ncclProfilerEventRef apiEventHandle;
   struct ncclProfilerEventRef ceCollProfHandle;
   uint64_t userTag;           // Per-call profiler annotation (0 == untagged)
 };

@@ -13,6 +13,7 @@
 #include "sym_kernels.h"
 #include "nccl.h"
 #include "config/collconfig.h"
+#include "profiler.h"
 
 #include <map>
 
@@ -44,6 +45,7 @@ struct ncclRawTaskAllGatherVBcast {
   void* sendbuff;
   void* recvbuff;
   size_t count;
+  struct ncclProfilerApiCtx profiler; // from the originating broadcast call
 };
 
 using ncclRawTaskAllGatherVBcastMap = std::map<int, ncclRawTaskAllGatherVBcast>;
@@ -115,6 +117,7 @@ struct ncclRawTask {
   struct ncclRawTask* next;
   ncclTaskKind kind;
   ncclCollConfig_t collConfig;
+  struct ncclProfilerApiCtx profiler;
   union {
     struct ncclRawTaskColl coll;
     struct ncclRawTaskSendRecv sendRecv;

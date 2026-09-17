@@ -118,7 +118,8 @@ static ncclResult_t ceSchedCollArgsFromTuningInfo(
   }
   args->sendBuff = (uint8_t*)raw->sendbuff;
   args->recvBuff = (uint8_t*)raw->recvbuff;
-  args->collApiEventHandle = {};
+  args->apiEventHandle = tInfo->raw->profiler.apiEventHandle;
+  args->userTag = tInfo->raw->profiler.userTag;
   args->ceCollProfHandle = {};
   return ncclSuccess;
 }

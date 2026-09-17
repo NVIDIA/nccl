@@ -1338,6 +1338,60 @@ ncclResult_t ncclProfilerStopCollApiEvent() {
   return ncclSuccess;
 }
 
+ncclResult_t ncclApiProfilerStart(struct ncclApiProfiler* profiler) {
+  struct ncclComm* comm = profiler->comm;
+  struct ncclInfo* info = profiler->info;
+  struct ncclProfilerApiCtx* ctx = &profiler->ctx;
+
+  // The caller has already set comm->planner.capturingGraph for this call's stream.
+  bool isGraphCaptured = ncclCudaGraphValid(comm->planner.capturingGraph);
+  NCCLCHECK(ncclProfilerStartGroupApiEvent(info, isGraphCaptured));
+  NCCLCHECK(ncclProfilerRecordGroupApiEventState(ncclProfilerGroupStartApiStop));
+  // From here on ncclApiProfilerStop has something to close, even if the API event start below fails.
+  profiler->started = true;
+  switch (info->coll) {
+  case ncclFuncSend:
+  case ncclFuncRecv:
+    NCCLCHECK(ncclProfilerStartP2pApiEvent(info, isGraphCaptured));
+    ctx->apiEventHandle = ncclProfilerApiState.p2pApiEventHandle;
+    break;
+  case ncclFuncPutSignal:
+  case ncclFuncSignal:
+  case ncclFuncWaitSignal:
+    ctx->apiEventHandle = {}; // no per-call API event type exists for RMA
+    break;
+  default:
+    NCCLCHECK(ncclProfilerStartCollApiEvent(info, isGraphCaptured));
+    ctx->apiEventHandle = ncclProfilerApiState.collApiEventHandle;
+    break;
+  }
+  ctx->eActivationMask = ncclProfilerApiState.eActivationMask;
+  ctx->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
+  ctx->userTag = info->collConfig.userProfilerTag;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclApiProfilerStop(struct ncclApiProfiler* profiler) {
+  struct ncclInfo* info = profiler->info;
+
+  if (!profiler->started) return ncclSuccess;
+  profiler->started = false;
+  switch (info->coll) {
+  case ncclFuncSend:
+  case ncclFuncRecv:
+    NCCLCHECK(ncclProfilerStopP2pApiEvent());
+    break;
+  case ncclFuncPutSignal:
+  case ncclFuncSignal:
+  case ncclFuncWaitSignal:
+    break;
+  default:
+    NCCLCHECK(ncclProfilerStopCollApiEvent());
+    break;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cudaStream_t stream) {
   ncclProfilerEventDescr_t eDescr = {0};
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
@@ -1451,7 +1505,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
           eDescr.coll.kernelVariant = nullptr;
         }
         eDescr.coll.userTag = ct->profilerTag;
-        profilerStart(plan->comm->profilerContext, &ct->eventHandle, &eDescr, &ct->collApiEventHandle,
+        profilerStart(plan->comm->profilerContext, &ct->eventHandle, &eDescr, &ct->apiEventHandle,
                       &plan->groupEventHandle);
       }
     }
@@ -1460,7 +1514,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
     // on every rank, which would mismatch counters and false-positive in RAS.
     // KernelCh is the exception because it forces proxy events on all ranks.
     if (!plan->persistent || (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-                              (profilerLive(&plan->groupEventHandle) || profilerLive(&ct->collApiEventHandle)) &&
+                              (profilerLive(&plan->groupEventHandle) || profilerLive(&ct->apiEventHandle)) &&
                               (ct->eActivationMask & ncclProfileKernelCh)))
       COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
     ct = ct->next;
@@ -1482,7 +1536,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
         eDescr.p2p.peer = pt->root;
         eDescr.p2p.nChannels = profNChannels;
         eDescr.p2p.userTag = pt->profilerTag;
-        profilerStart(plan->comm->profilerContext, &pt->eventHandle, &eDescr, &pt->p2pApiEventHandle,
+        profilerStart(plan->comm->profilerContext, &pt->eventHandle, &eDescr, &pt->apiEventHandle,
                       &plan->groupEventHandle);
       }
       pt = pt->next;
@@ -2232,7 +2286,7 @@ ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCo
     eDescr.ceColl.ceSeqNum = comm->ceColl.ceSeqNum;
     eDescr.ceColl.stream = (void*)stream;
     eDescr.ceColl.userTag = args->userTag;
-    profilerStartNone(comm->profilerContext, &args->ceCollProfHandle, &eDescr, &args->collApiEventHandle, nullptr);
+    profilerStartNone(comm->profilerContext, &args->ceCollProfHandle, &eDescr, &args->apiEventHandle, nullptr);
   }
   return ncclSuccess;
 }

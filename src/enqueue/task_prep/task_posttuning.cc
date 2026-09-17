@@ -61,9 +61,7 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
   task->opDev = raw->opDev;
   postTuningSetChunkSteps(task);
   task->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&tInfo->raw->collConfig);
-  task->eActivationMask = ncclProfilerCurrentEventMask();
-  task->groupApiEventHandle = {};
-  task->collApiEventHandle = {};
+  ncclTaskCaptureProfilerCtx(task, tInfo->raw->profiler);
 
   const ncclCollConfig_t* cfg = &tInfo->raw->collConfig;
   bool ctaPolicyEnvOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
@@ -163,9 +161,7 @@ static ncclResult_t fillP2pTaskFromRaw(struct ncclComm* comm, struct ncclTaskTun
   } else {
     task->allowUB = true;
   }
-  task->eActivationMask = ncclProfilerCurrentEventMask();
-  task->groupApiEventHandle = {};
-  task->p2pApiEventHandle = {};
+  ncclTaskCaptureProfilerCtx(task, tInfo->raw->profiler);
   return ncclSuccess;
 }
 
@@ -452,7 +448,7 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   task->datatype = ncclInt8;
   task->trafficBytes = task->count * ncclFuncTrafficPerByte(task->func, comm->nRanks);
   postTuningSetChunkSteps(task);
-  task->eActivationMask = ncclProfilerCurrentEventMask();
+  ncclTaskCaptureProfilerCtx(task, bcast->profiler);
   task->opHost = ncclSum;
   // Carry over the AllGatherV's resolved channel budget. scheduleCollTasksToPlan clamps
   // nMaxChannels by these caps unconditionally, so memset-zeroed caps would clamp it to 0.
@@ -524,9 +520,7 @@ static ncclResult_t postTuneAllGatherVTasks(
       t->count = bcast->count;
       t->datatype = ncclInt8;
       t->root = root;
-      t->eActivationMask = ncclProfilerCurrentEventMask();
-      t->groupApiEventHandle = {};
-      t->collApiEventHandle = {};
+      ncclTaskCaptureProfilerCtx(t, bcast->profiler);
       t->eventHandle = {};
 
       planner->bcast_info.minBcastPeer = std::min(planner->bcast_info.minBcastPeer, root);

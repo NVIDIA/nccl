@@ -286,6 +286,16 @@ ncclResult_t ncclProfilerStopCollApiEvent(void) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclApiProfilerStart(struct ncclApiProfiler* profiler) {
+  (void)profiler;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclApiProfilerStop(struct ncclApiProfiler* profiler) {
+  (void)profiler;
+  return ncclSuccess;
+}
+
 ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cudaStream_t stream) {
   (void)plan;
   (void)stream;

@@ -2601,7 +2601,7 @@ ncclResult_t scheduleCeCollTaskToPlan(struct ncclComm* comm, struct ncclKernelPl
   plan->ceCollArgs->func = task->func;
   plan->ceCollArgs->sendWin = task->sendWin;
   plan->ceCollArgs->recvWin = task->recvWin;
-  plan->ceCollArgs->collApiEventHandle = task->collApiEventHandle;
+  plan->ceCollArgs->apiEventHandle = task->apiEventHandle;
   plan->ceCollArgs->userTag = task->profilerTag;
 
   if (comm->rank == 0) {

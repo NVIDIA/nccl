@@ -456,7 +456,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       t->profilerTag = bcastTask->profilerTag;
       t->eActivationMask = bcastTask->eActivationMask;
       t->groupApiEventHandle = bcastTask->groupApiEventHandle;
-      t->collApiEventHandle = bcastTask->collApiEventHandle;
+      t->apiEventHandle = bcastTask->apiEventHandle;
       t->trafficBytes = t->count * ncclFuncTrafficPerByte(t->func, comm->nRanks);
       t->chunkSteps = BROADCAST_CHUNKSTEPS;
       t->sliceSteps = BROADCAST_SLICESTEPS;
@@ -2714,7 +2714,7 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
   p2p->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
   p2p->eActivationMask = ncclProfilerApiState.eActivationMask;
   p2p->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
-  p2p->p2pApiEventHandle = ncclProfilerApiState.p2pApiEventHandle;
+  p2p->apiEventHandle = ncclProfilerApiState.p2pApiEventHandle;
   p2p->profilerTag = info->collConfig.userProfilerTag;
   ncclIntruQueueEnqueue(isSendNotRecv ? &planner->peers[peer].sendQueue : &planner->peers[peer].recvQueue, p2p);
   planner->nTasksP2p += 1;
@@ -2805,7 +2805,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->profilerTag = info->collConfig.userProfilerTag;
     t->eActivationMask = ncclProfilerApiState.eActivationMask;
     t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
-    t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
+    t->apiEventHandle = ncclProfilerApiState.collApiEventHandle;
 
     // update bcast min/max peer
     planner->bcast_info.minBcastPeer = std::min(planner->bcast_info.minBcastPeer, info->root);
@@ -2862,7 +2862,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
     t->eActivationMask = ncclProfilerApiState.eActivationMask;
     t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
-    t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
+    t->apiEventHandle = ncclProfilerApiState.collApiEventHandle;
 
     planner->nTasksColl += 1;
     ncclTaskCollSorterInsert(&planner->collSorter, t, t->trafficBytes);
@@ -2955,7 +2955,7 @@ static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* inf
   t->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
   t->eActivationMask = ncclProfilerCurrentEventMask();
   t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
-  t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
+  t->apiEventHandle = ncclProfilerApiState.collApiEventHandle;
   t->sendWin = sendWin;
   t->recvWin = recvWin;
 
@@ -3211,10 +3211,46 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
 static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) {
   struct ncclRawTaskQueue* rtq = &comm->rawTaskQueue;
   struct ncclRawTask* t;
+  struct ncclDevRedOpFull opDev;
+  uint64_t algMask = 0;
+  bool isColl = !(info->coll == ncclFuncSend || info->coll == ncclFuncRecv || info->coll == ncclFuncPutSignal ||
+                  info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal);
+
+  // Collectives that produce no task are handled before the comm joins the group.
+  if (isColl) {
+    if (info->count == 0) return ncclSuccess;
+
+    // Validate any per-call algorithm selection up front.
+    NCCLCHECK(ncclCollConfigGetAlgMask(&info->collConfig, info->coll, &algMask));
+
+    // Reductions in FP8 require sm90+.
+    if (info->datatype == ncclFloat8e4m3 || info->datatype == ncclFloat8e5m2) {
+      if (comm->minCompCap < 90 &&
+          (info->coll == ncclFuncReduce || info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAllReduce)) {
+        WARN("FP8 reduction support begins with sm90 capable devices.");
+        return ncclInvalidArgument;
+      }
+    }
+
+    NCCLCHECK(hostToDevRedOp(&opDev, info->op, info->datatype, comm));
+    if (comm->nRanks == 1) {
+      NCCLCHECK(ncclLaunchOneRank(info->recvbuff, info->sendbuff, info->count, opDev, info->datatype, info->stream,
+                                  ncclCollConfigGetLaunchCompletionEvent(&info->collConfig)));
+      return ncclSuccess;
+    }
+  }
+
+  // Must be in thread local group before tasks can be alloc'd in `comm->memScoped`.
+  ncclGroupCommJoin(comm, ncclGroupTaskTypeRawTask);
+  // Set capturing graph. Called here so that profiler can emit a group API event with this information
+  NCCLCHECK(ncclPlannerSetCapturingGraph(comm, info));
+  struct ncclApiProfiler profiler = {comm, info};
+  NCCLCHECK(ncclApiProfilerStart(&profiler));
 
   if (info->coll == ncclFuncSend || info->coll == ncclFuncRecv) {
     t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
     t->kind = ncclTaskKindSendRecv;
+    t->profiler = profiler.ctx;
     t->sendRecv.func = info->coll;
     t->sendRecv.collAPI = info->coll;
     t->sendRecv.buff = info->recvbuff;
@@ -3335,6 +3371,7 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
       for (int i = 0; i < info->nDesc; i++) {
         t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
         t->kind = ncclTaskKindRma;
+        t->profiler = profiler.ctx;
         t->rma.func = ncclFuncWaitSignal;
         t->rma.rmaOp.waitSignal.signalDesc = info->signalDescs[i];
         t->rma.rmaOp.waitSignal.stream = info->stream;
@@ -3343,6 +3380,7 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     } else {
       t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
       t->kind = ncclTaskKindRma;
+      t->profiler = profiler.ctx;
       t->rma.func = info->coll;
       if (info->coll == ncclFuncPutSignal) {
         struct ncclRawTaskPutSignal* put = &t->rma.rmaOp.putSignal;
@@ -3367,31 +3405,9 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
       ncclIntruQueueEnqueue(&rtq->genericQueue, t);
     }
   } else {
-    struct ncclDevRedOpFull opDev;
-
-    if (info->count == 0) return ncclSuccess;
-
-    // Validate any per-call algorithm selection up front.
-    uint64_t algMask;
-    NCCLCHECK(ncclCollConfigGetAlgMask(&info->collConfig, info->coll, &algMask));
-
-    // Reductions in FP8 require sm90+.
-    if (info->datatype == ncclFloat8e4m3 || info->datatype == ncclFloat8e5m2) {
-      if (comm->minCompCap < 90 &&
-          (info->coll == ncclFuncReduce || info->coll == ncclFuncReduceScatter || info->coll == ncclFuncAllReduce)) {
-        WARN("FP8 reduction support begins with sm90 capable devices.");
-        return ncclInvalidArgument;
-      }
-    }
-
-    NCCLCHECK(hostToDevRedOp(&opDev, info->op, info->datatype, comm));
-    if (comm->nRanks == 1) {
-      NCCLCHECK(ncclLaunchOneRank(info->recvbuff, info->sendbuff, info->count, opDev, info->datatype, info->stream,
-                                  ncclCollConfigGetLaunchCompletionEvent(&info->collConfig)));
-      return ncclSuccess;
-    }
     t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
     t->kind = ncclTaskKindColl;
+    t->profiler = profiler.ctx;
     t->collConfig = info->collConfig;
     t->coll.func = info->coll;
     t->coll.sendbuff = info->sendbuff;
@@ -3410,10 +3426,7 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     }
   }
 
-  ncclGroupCommJoin(comm, ncclGroupTaskTypeRawTask);
-
-  NCCLCHECK(ncclPlannerSetCapturingGraph(comm, info));
-
+  NCCLCHECK(ncclApiProfilerStop(&profiler));
   return ncclSuccess;
 }
 

@@ -197,6 +197,7 @@ static doca_error_t create_gpu_umem(doca_gpu_t *gpu_dev, doca_dev_t *net_dev,
 
 destroy_resources:
     if (*umem) doca_verbs_umem_destroy(*umem);
+    *umem = nullptr;
 
     return status;
 }
@@ -458,6 +459,7 @@ static doca_error_t create_cq(doca_gpu_t *gpu_dev, doca_dev_t *net_dev, struct i
                 (*umem_dev_ptr), (void *)(cq_ring_haddr), external_umem_size, cudaMemcpyDefault));
             if (status_cuda != cudaSuccess) {
                 DOCA_LOG(LOG_ERR, "Failed to cudaMempy gpu cq cq ring buffer ret %d", status_cuda);
+                status = DOCA_ERROR_DRIVER;
                 goto destroy_resources;
             }
         }
@@ -555,10 +557,6 @@ destroy_resources:
                 DOCA_LOG(LOG_ERR, "Failed to destroy gpu ring buffer umem");
         }
 
-        if (cq_ring_haddr) {
-            free(cq_ring_haddr);
-        }
-
         if (gpu_umem_dev_ptr != 0) {
             tmp_status = doca_gpu_mem_free(gpu_dev, gpu_umem_dev_ptr);
             if (tmp_status != DOCA_SUCCESS)
@@ -569,6 +567,8 @@ destroy_resources:
 
     if (cq_ring_haddr) free(cq_ring_haddr);
 
+    *gpu_umem = nullptr;
+    *umem_dev_ptr = nullptr;
     return status;
 }
 

@@ -237,7 +237,7 @@ def main():
     device.sync()
     comm_mpi.Barrier()
 
-    # Host-side validation on the receiver — compare the full 1 MiB payload.
+    # Host-side validation on the receiver -- compare the full 1 MiB payload.
     mismatches = 0
     if rank == DST_RANK:
         expected = cp.arange(NUM_ELEMS, dtype='int64')

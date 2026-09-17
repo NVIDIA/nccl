@@ -39,8 +39,8 @@ NCCLCollConfig
 ==============
 
 Accepted as the ``config`` argument of every collective on
-:py:class:`Communicator`. Fields left unset fall back to the communicator's
-value for the resource knobs, and to NCCL's own default otherwise.
+:py:class:`Communicator`. See the individual field documentation for unset
+behavior and usage requirements.
 
 .. autoclass:: NCCLCollConfig
    :members:

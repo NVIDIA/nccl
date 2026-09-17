@@ -1,12 +1,12 @@
 """User-facing types shared by the rest of the device API.
 
-  - :class:`CftLeInfo` — logical endpoint address returned by CFT queries.
-  - :class:`MemoryOrder`   — argument to barrier ``arrive`` / ``wait`` / ``sync``.
-  - :class:`ThreadScope`   — release-scope argument to GIN ``put`` / ``signal``.
-  - :class:`GinFenceLevel` — fence-level argument to GIN barrier ``sync``.
-  - :class:`GinBackendMask` — backend selection for :meth:`DevComm.gin`.
-  - :class:`CftTeamMode` — team layout for :meth:`DevComm.team_cft`.
-  - :class:`GinResourceSharingMode` — resource-sharing mode for :meth:`DevComm.gin`.
+  - :class:`CftLeInfo` -- logical endpoint address returned by CFT queries.
+  - :class:`MemoryOrder`   -- argument to barrier ``arrive`` / ``wait`` / ``sync``.
+  - :class:`ThreadScope`   -- release-scope argument to GIN ``put`` / ``signal``.
+  - :class:`GinFenceLevel` -- fence-level argument to GIN barrier ``sync``.
+  - :class:`GinBackendMask` -- backend selection for :meth:`DevComm.gin`.
+  - :class:`CftTeamMode` -- team layout for :meth:`DevComm.team_cft`.
+  - :class:`GinResourceSharingMode` -- resource-sharing mode for :meth:`DevComm.gin`.
 """
 
 from dataclasses import dataclass
@@ -81,7 +81,7 @@ class GinBackendMask(IntFlag):
 
 
 class CftTeamMode(IntEnum):
-    """Mirrors ``enum ncclCftTeamMode_t`` — the layout
+    """Mirrors ``enum ncclCftTeamMode_t`` -- the layout
     :meth:`DevComm.team_cft` returns.
     """
 

@@ -78,13 +78,13 @@ def _to_ptr(x, *, loc=None, ip=None):
     """Coerce an address ``x`` to an ``!llvm.ptr`` ir.Value.
 
     Callers pass materialized pointers (``.ptr``) to the bindings directly;
-    this only handles the arguments given as an address — a null
+    this only handles the arguments given as an address -- a null
     ``descriptor_ptr=0`` or an explicit descriptor pointer:
 
-        * ``!llvm.ptr`` ir.Value — passthrough.
-        * cutlass numeric (has ``.ir_value()``) — ``inttoptr``.
-        * integer ``ir.Value`` — ``inttoptr``.
-        * Python int — wrap in ``cutlass.Int64``, then ``inttoptr``.
+        * ``!llvm.ptr`` ir.Value -- passthrough.
+        * cutlass numeric (has ``.ir_value()``) -- ``inttoptr``.
+        * integer ``ir.Value`` -- ``inttoptr``.
+        * Python int -- wrap in ``cutlass.Int64``, then ``inttoptr``.
 
     Returns:
         ``!llvm.ptr`` ir.Value.
@@ -112,11 +112,11 @@ def _to_coop_value(x, *, loc=None, ip=None):
     annotation.
 
     Args:
-        x: accepted forms —
+        x: accepted forms --
 
-            * ``ncclCoopAny`` struct ir.Value — passthrough.
+            * ``ncclCoopAny`` struct ir.Value -- passthrough.
             * ``@cute.native_struct`` pointer-wrapper around alloca'd
-              ``ncclCoopAny`` storage (e.g. :class:`Coop`) — load it.
+              ``ncclCoopAny`` storage (e.g. :class:`Coop`) -- load it.
 
     Returns:
         ``ncclCoopAny`` struct ir.Value.
@@ -133,7 +133,7 @@ def _to_value(x):
 
     ``@cute.extern`` matches a native struct only as a bare struct ir.Value
     (a value-mode wrapper is rejected), so teams and barrier handles passed
-    by value — which ``cute.ffi`` accepted as wrappers — are unwrapped here.
+    by value -- which ``cute.ffi`` accepted as wrappers -- are unwrapped here.
 
     Args:
         x: a struct ir.Value (passthrough) or a value-mode native-struct

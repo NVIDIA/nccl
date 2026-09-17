@@ -14,7 +14,7 @@ arguments; this runs both spellings of all three.
 
 The factories that take a :class:`Gin` need NCCL 2.31.0, where the C
 entry points behind them changed from taking ``ncclGin_C`` by value to
-taking a pointer. Below that they are skipped — passing a pointer to the
+taking a pointer. Below that they are skipped -- passing a pointer to the
 older entry point corrupts memory instead of failing to link.
 ``GIN_ALL_CONTEXTS`` goes through a different, unchanged entry point and
 always runs.
@@ -53,7 +53,7 @@ NAME = os.path.basename(__file__)
 
 # ncclGinBarrierSessionInit / ncclBarrierSessionInit took ncclGin_C by value up
 # to 2.30.7 and take a pointer from 2.31.0. The bindings pass a pointer, which
-# an older library reads as the struct's first field — silent corruption, so it
+# an older library reads as the struct's first field -- silent corruption, so it
 # must be guarded rather than caught. ncclGinBarrierSessionInitAllContexts is
 # unchanged, so the GIN_ALL_CONTEXTS form works either way.
 # get_version() reports the loaded libnccl, which is what the device
@@ -112,7 +112,7 @@ def barriers_kernel(
     # === GIN ===
 
     # GIN_ALL_CONTEXTS fences every context on the comm rather than the one
-    # `gin` is bound to — needed when puts span several, at a flush per
+    # `gin` is bound to -- needed when puts span several, at a flush per
     # (context, peer). The fence level says what the barrier drains besides
     # synchronizing: NONE nothing, PUT inbound puts, GET this rank's gets.
     all_contexts = nccl_cute.world_gin(

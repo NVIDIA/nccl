@@ -9,8 +9,8 @@
 
 A multimem (multicast) mapping lets one store reach every LSA peer's copy
 of a window. This requests one for the LSA team and shows the two places
-the handle comes from — embedded in the devcomm, or returned to the host
-by ``create_dev_comm`` — and the three places it is consumed.
+the handle comes from -- embedded in the devcomm, or returned to the host
+by ``create_dev_comm`` -- and the three places it is consumed.
 
 The CuTeDSL layer exposes multimem *addresses*; the multimem load-reduce
 and store instructions themselves are PTX and are not wrapped here.

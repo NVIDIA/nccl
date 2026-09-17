@@ -6,7 +6,7 @@ rank's local destination buffer.
 
 Run with two or more MPI ranks::
 
-    mpirun -n 2 python 07_reduce_copy.py
+    mpirun -n 2 python 08_reduce_copy.py
 """
 
 import sys

@@ -17,7 +17,7 @@ from enum import IntEnum, IntFlag
 from typing import Any, Protocol, TypeAlias, Union
 
 import numpy as _np
-from cuda.core import Buffer, Device, Stream
+from cuda.core import Buffer, Device, Event, Stream
 from cuda.core.typing import IsStreamType
 
 __all__ = [
@@ -34,6 +34,7 @@ __all__ = [
     "NcclScalarSpec",
     "NcclDeviceSpec",
     "NcclStreamSpec",
+    "NcclEventSpec",
     "NcclInvalid",
     # Data type constants
     "INT8",
@@ -491,4 +492,9 @@ NcclDeviceSpec: TypeAlias = Union[Device, int]
 
 NcclStreamSpec: TypeAlias = Union[Stream, IsStreamType, int]
 """A CUDA stream: a :py:class:`cuda.core.Stream`, an object implementing
-``__cuda_stream__``, or an integer stream handle."""
+``__cuda_stream__``, or an integer ``cudaStream_t`` handle. Integer 0 denotes
+the default stream."""
+
+NcclEventSpec: TypeAlias = Union[Event, int]
+"""A CUDA event: a :py:class:`cuda.core.Event` or an integer ``cudaEvent_t``
+handle. Integer 0 is invalid."""

@@ -22,8 +22,8 @@ struct ncclWindow_vidmem;
 struct ncclDevrTeam {
   struct ncclDevrTeam* next;
   struct ncclTeam team;
-  struct ncclMcGroup* mcGroup;         // NULL until multimem is enabled for this team
-  struct ncclMcPartition mcPartition;  // whole-group partition; .ptr is the team's MC base VA
+  struct ncclMcGroup* mcGroup;         // team-owned MC object; NULL when mcPartition borrows the NVLS group
+  struct ncclMcPartition mcPartition;  // .ptr is the team's MC base VA; NULL until multimem is enabled
   ncclCftLeId ucLeId[2]; // 0: UC LE ID, 1: counted UC LE ID
   ncclCftLeId mcLeId[2]; // 0: MC LE ID, 1: counted MC LE ID
 #if defined(NCCL_OS_WINDOWS)

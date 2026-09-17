@@ -13,6 +13,7 @@
 #include "allocator.h"
 #include "bitops.h"
 #include "utils.h"
+#include "multicast.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // ncclDevr[_]: runtime implements for symmetric API.
@@ -88,6 +89,9 @@ struct ncclDevrState {
   int winSortedCapacity, winSortedCount;
   struct ncclDevrTeam* teamHead;
   size_t bigSize; // size of our big logical space (128GB?)
+  // bigSize slice of the NVLS transport's MC group, for a multimem team over exactly the comm's
+  // local ranks. Empty on a comm that reuses a parent's NVLS resources instead of building the group.
+  struct ncclMcPartition nvlsMcPartition;
   struct ncclSpace bigSpace; // allocates our big VA space.
   void* lsaFlatBase; // base ptr for all lsa ranks big VA's concatenated together: size = lsaRanks*bigSize
   struct ncclShadowPool shadows;
@@ -109,6 +113,8 @@ struct ncclDevCommCompat {
 bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
 
 int computeLsaSize(struct ncclComm* comm);
+// Compute the symmetric VA size (bigSize) from the comm's peer info without any side effects.
+size_t computeBigSize(struct ncclComm* comm);
 
 // Check if there is only one LSA team. This function uses the cached value of comm or computes the
 // value from the comm topology.

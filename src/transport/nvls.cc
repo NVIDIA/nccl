@@ -15,6 +15,7 @@
 #include "register.h"
 #include "transport.h"
 #include "register_inline.h"
+#include "dev_runtime.h"
 
 #if CUDART_VERSION >= 12010
 
@@ -445,12 +446,16 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
       size_t buffSize = nvlsStepSize * NCCL_STEPS;
       size_t dataSize = nChannels * 2 * buffSize * nHeads;
       size_t ubSize = ncclNvlsUbSize(comm);
-      struct ncclMcRequest requests[3] = {{creditSize, 0}, {dataSize, 0}, {ubSize, 0}};
-      struct ncclMcPartition partitions[3];
+      // Slice 3 is the device runtime's (see ncclDevrState::nvlsMcPartition).
+      struct ncclMcRequest requests[4] = {
+        {creditSize, 0}, {dataSize, 0}, {ubSize, 0}, {computeBigSize(comm), NCCL_MAX_PAGE_SIZE}
+      };
+      struct ncclMcPartition partitions[4];
       struct ncclMcRankSet ranks = {comm->localRank, comm->localRanks, comm->localRankToRank};
-      NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, &ranks, requests, 3, &resources->mcGroup, partitions), res, fail);
+      NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, &ranks, requests, 4, &resources->mcGroup, partitions), res, fail);
       resources->creditPartition = partitions[0];
       resources->dataPartition = partitions[1];
+      comm->devrState.nvlsMcPartition = partitions[3];
       if (ubSize) {
         resources->ubPartition = partitions[2];
         NCCLCHECKGOTO(ncclMcArenaInit(comm, &resources->ubArena, &resources->ubPartition), res, fail);

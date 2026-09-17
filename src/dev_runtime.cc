@@ -152,6 +152,17 @@ int computeLsaSize(struct ncclComm* comm) {
   return lsaSize;
 }
 
+size_t computeBigSize(struct ncclComm* comm) {
+  int64_t bigSize = ncclParamWinStride();
+  if (bigSize <= 0) {
+    bigSize = 1;
+    for (int r = 0; r < comm->nRanks; ++r) {
+      bigSize = std::max<int64_t>(bigSize, comm->peerInfo[r].totalGlobalMem);
+    }
+  }
+  return alignUp((size_t)bigSize, size_t(1) << 32);
+}
+
 bool ncclDevrIsOneLsaTeam(struct ncclComm* comm) {
   int lsaSize = computeLsaSize(comm);
   return lsaSize == comm->nRanks; // Same as comm->nRanks / comm->devrState.lsaSize == 1
@@ -190,14 +201,7 @@ ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
   CUCHECKGOTO(cuMemGetAllocationGranularity(&devr->granularity, &memProp, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED), ret,
               fail_lsaRankList);
 
-  devr->bigSize = ncclParamWinStride();
-  if (-devr->bigSize <= 1) {
-    devr->bigSize = 1;
-    for (int r = 0; r < comm->nRanks; ++r) {
-      devr->bigSize = std::max<size_t>(devr->bigSize, comm->peerInfo[r].totalGlobalMem);
-    }
-  }
-  devr->bigSize = alignUp(devr->bigSize, size_t(1) << 32);
+  devr->bigSize = computeBigSize(comm);
   INFO(NCCL_INIT, "Symmetric VA size=%ldGB", (long)devr->bigSize >> 30);
 
   ncclSpaceConstruct(&devr->bigSpace);
@@ -420,7 +424,8 @@ fail:
 }
 
 static ncclResult_t symBindTeamMemory(struct ncclComm* comm, struct ncclDevrTeam* tm, struct ncclDevrMemory* mem) {
-  if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterLsa) && comm->nvlsSupport && tm->mcGroup != nullptr) {
+  if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterLsa) && comm->nvlsSupport &&
+      tm->mcPartition.ptr != nullptr) {
 #if CUDART_VERSION >= 12010
     // Multimem teams are currently unsupported for memory containing CPU-backed physical segments
     if (mem->globalHasSysmemSegment) {
@@ -445,13 +450,20 @@ static ncclResult_t symBindTeamMemory(struct ncclComm* comm, struct ncclDevrTeam
 }
 
 static ncclResult_t symUnbindTeamMemory(struct ncclComm* comm, struct ncclDevrTeam* tm, struct ncclDevrMemory* mem) {
-  if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterLsa) && comm->nvlsSupport && tm->mcGroup != nullptr &&
-      !mem->globalHasSysmemSegment) {
+  if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterLsa) && comm->nvlsSupport &&
+      tm->mcPartition.ptr != nullptr && !mem->globalHasSysmemSegment) {
 #if CUDART_VERSION >= 12010
     NCCLCHECK(ncclMcPartitionUnbind(&tm->mcPartition, mem->bigOffset, mem->lsaMinSize));
 #endif
   }
   return ncclSuccess;
+}
+
+// Whether the team is exactly the comm's NVLS local ranks, and so can bind into the slice
+// the NVLS transport reserved for it. Both lists are in ascending comm-rank order.
+static bool symTeamIsNvlsDomain(struct ncclComm* comm, struct ncclDevrTeam* t) {
+  return comm->devrState.nvlsMcPartition.ptr != nullptr && t->team.nRanks == comm->localRanks &&
+         memcmp(t->worldRankList, comm->localRankToRank, t->team.nRanks * sizeof(int)) == 0;
 }
 
 // Caller must barrier the team afterward unless *needBarrier == false on return.
@@ -477,7 +489,7 @@ ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool mul
       }
       break;
     } else if (t->team.rank == team.rank && t->team.nRanks == team.nRanks && t->team.stride == team.stride) {
-      bool needsMultimem = multimem && t->mcGroup == nullptr;
+      bool needsMultimem = multimem && t->mcPartition.ptr == nullptr;
       bool needsCft =
         (cftUc && t->ucLeId[counted] == NCCL_LE_ID_INVALID) || (cftMc && t->mcLeId[counted] == NCCL_LE_ID_INVALID);
       if (!needsMultimem && !needsCft) {
@@ -497,11 +509,17 @@ ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool mul
       goto fail;
     } else {
 #if CUDART_VERSION >= 12010
-      // One MC object per team, exclusively owned: a single partition spanning the
-      // whole group, so a memory's bigOffset is also its offset within the partition.
-      struct ncclMcRequest request = {devr->bigSize, NCCL_MAX_PAGE_SIZE};
-      struct ncclMcRankSet ranks = {team.rank, team.nRanks, t->worldRankList};
-      NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, &ranks, &request, 1, &t->mcGroup, &t->mcPartition), ret, fail);
+      // Either way the team gets one bigSize partition, so a memory's bigOffset is also
+      // its offset within the partition (see ncclDevrState::nvlsMcPartition).
+      if (symTeamIsNvlsDomain(comm, t)) {
+        t->mcPartition = devr->nvlsMcPartition;
+        INFO(NCCL_NVLS, "Team {%d x %d} shares the NVLS transport's MC group %llx", team.nRanks, team.stride,
+             t->mcPartition.mcHandle);
+      } else {
+        struct ncclMcRequest request = {devr->bigSize, NCCL_MAX_PAGE_SIZE};
+        struct ncclMcRankSet ranks = {team.rank, team.nRanks, t->worldRankList};
+        NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, &ranks, &request, 1, &t->mcGroup, &t->mcPartition), ret, fail);
+      }
 
       // Bind new team with all existing memories.
       for (struct ncclDevrMemory* mem = devr->memHead; mem != nullptr; mem = mem->next) {
@@ -516,6 +534,7 @@ ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool mul
           symUnbindTeamMemory(comm, t, mem);
         }
         NCCLCHECKIGNORE(ncclMcGroupDestroy(&t->mcGroup), ret);
+        t->mcPartition = {};
         goto fail; // silence unused label warning
       }
 #else
@@ -552,7 +571,7 @@ static ncclResult_t symTeamDestroyAll(struct ncclComm* comm) {
     devr->teamHead = t->next;
     bool hasLe = false;
     hasLe |= t->mcLeId[0] != NCCL_LE_ID_INVALID || t->mcLeId[1] != NCCL_LE_ID_INVALID;
-    if (t->mcGroup != nullptr || hasLe) {
+    if (t->mcPartition.ptr != nullptr || hasLe) {
       for (struct ncclDevrMemory* m = devr->memHead; m != nullptr; m = m->next) {
         symUnbindTeamMemory(comm, t, m);
         for (int i = 0; i <= 1; i++) {
@@ -561,6 +580,7 @@ static ncclResult_t symTeamDestroyAll(struct ncclComm* comm) {
       }
     }
 #if CUDART_VERSION >= 12010
+    // No-op (mcGroup == NULL) for a team bound into the NVLS transport's group.
     NCCLCHECKIGNORE(ncclMcGroupDestroy(&t->mcGroup), ret);
 #endif
     bool relMcLeIds = false;

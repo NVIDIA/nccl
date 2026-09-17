@@ -134,6 +134,9 @@ static ncclResult_t ceSchedProxyWaitBuildDesc(
   desc->rmaDescType = ncclRmaDescTypeWaitSignal;
   desc->rmaDescState = ncclRmaDescStateReady;
   desc->waitSignal.npeers = npeers;
+  // The internal collectives always put on signal index 0; the waiter polls the
+  // matching slot, so the per-peer index array is all zeros.
+  NCCLCHECKGOTO(ncclCalloc(&desc->waitSignal.waitSignalIdxs, npeers), ret, fail);
   desc->waitSignal.waitPeers = *peers;
   desc->waitSignal.waitSignals = *nsignals;
   *peers = nullptr;

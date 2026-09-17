@@ -176,7 +176,7 @@ static void rmaSchedFreeTuningInfoRaw(struct ncclComm* comm, struct ncclTaskTuni
 static ncclResult_t rmaSchedProxyWaitBuildDesc(
     struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
     struct ncclRmaSchedStreamPlan* streamPlan,
-    int npeers, int** peers, int** nsignals,
+    int npeers, int** peers, int** nsignals, int** signalIdxs,
     struct ncclRmaProxyDesc* desc) {
   ncclResult_t ret = ncclSuccess;
   bool captured = streamPlan->captured;
@@ -186,8 +186,10 @@ static ncclResult_t rmaSchedProxyWaitBuildDesc(
   desc->waitSignal.npeers = npeers;
   desc->waitSignal.waitPeers = *peers;
   desc->waitSignal.waitSignals = *nsignals;
+  desc->waitSignal.waitSignalIdxs = *signalIdxs;
   *peers = nullptr;
   *nsignals = nullptr;
+  *signalIdxs = nullptr;
   desc->persistPlan = nullptr;
   desc->persistDescValid = false;
   if (captured) {
@@ -226,6 +228,7 @@ static ncclResult_t rmaSchedProxyWaitLaunch(
   struct ncclRmaProxyDesc* desc = nullptr;
   int* peers = nullptr;
   int* nsignals = nullptr;
+  int* signalIdxs = nullptr;
   CUstreamBatchMemOpParams* batchParams = nullptr;
   int nElems = queue->nElems;
   cudaStream_t stream = streamPlan->stream;
@@ -242,6 +245,7 @@ static ncclResult_t rmaSchedProxyWaitLaunch(
   NCCLCHECKGOTO(ncclCalloc(&desc, 1), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&peers, nElems), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&nsignals, nElems), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&signalIdxs, nElems), ret, fail);
 
   for (int i = 0; i < nElems; i++) {
     struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
@@ -249,12 +253,13 @@ static ncclResult_t rmaSchedProxyWaitLaunch(
 
     peers[i] = wait->signalDesc.peer;
     nsignals[i] = wait->signalDesc.opCnt;
+    signalIdxs[i] = wait->signalDesc.sigIdx;
 
     rmaSchedFreeTuningInfoRaw(comm, taskInfo);
   }
 
   NCCLCHECKGOTO(rmaSchedProxyWaitBuildDesc(
-      comm, rmaProxyCtx, streamPlan, nElems, &peers, &nsignals, desc), ret, fail);
+      comm, rmaProxyCtx, streamPlan, nElems, &peers, &nsignals, &signalIdxs, desc), ret, fail);
 
   {
     int nOps = ncclRmaProxyWaitNumStreamOps(desc);
@@ -273,6 +278,7 @@ exit:
 fail:
   free(peers);
   free(nsignals);
+  free(signalIdxs);
   goto exit;
 }
 
@@ -283,6 +289,7 @@ struct rmaSchedPutFields {
   ncclDataType_t datatype;
   int peer;
   int ctx;
+  int sigIdx;
   size_t peerWinOffset;
   ncclSignalMode_t signalMode;
   struct ncclDevrWindow* srcWinHost;
@@ -307,6 +314,7 @@ static ncclResult_t rmaSchedPutFieldsFromTuningInfo(
     fields->datatype = put->datatype;
     fields->peer = put->peer;
     fields->ctx = put->ctx;
+    fields->sigIdx = put->sigIdx;
     fields->peerWinOffset = put->peerWinOffset;
     NCCLCHECK(ncclDevrFindWindow(comm, put->localbuff, &fields->srcWinHost));
     if (fields->srcWinHost != NULL) {
@@ -322,6 +330,7 @@ static ncclResult_t rmaSchedPutFieldsFromTuningInfo(
     fields->datatype = ncclInt8;
     fields->peer = sig->peer;
     fields->ctx = sig->ctx;
+    fields->sigIdx = sig->sigIdx;
     fields->peerWinOffset = 0;
   } else {
     return ncclInternalError;
@@ -332,6 +341,7 @@ static ncclResult_t rmaSchedPutFieldsFromTuningInfo(
 struct rmaSchedCeWaitFields {
   int peer;
   int opCnt;
+  int sigIdx;
   ncclSignalMode_t signalMode;
 };
 
@@ -344,6 +354,7 @@ static ncclResult_t rmaSchedCeWaitFieldsFromTuningInfo(
   struct ncclRawTaskWaitSignal* wait = &raw->rma.rmaOp.waitSignal;
   fields->peer = wait->signalDesc.peer;
   fields->opCnt = wait->signalDesc.opCnt;
+  fields->sigIdx = wait->signalDesc.sigIdx;
   fields->signalMode = NCCL_SIGNAL;
   return ncclSuccess;
 }
@@ -353,7 +364,7 @@ static ncclResult_t rmaSchedProxyPutBuildOp(
     int ctx, bool captured,
     struct ncclDevrWindow* srcWin, size_t srcOff,
     struct ncclDevrWindow* peerWin, size_t peerOff,
-    size_t size, int peer,
+    size_t size, int peer, int signalIdx,
     ncclSignalMode_t signalMode,
     struct ncclRmaPutSignalOp* op) {
   op->srcOff = srcOff;
@@ -368,7 +379,7 @@ static ncclResult_t rmaSchedProxyPutBuildOp(
     op->signal.op = 0;
   } else if (signalMode == NCCL_SIGNAL) {
     op->signal.op = NCCL_NET_SIGNAL_OP_ADD;
-    op->signal.offset = comm->rank * sizeof(uint64_t);
+    op->signal.offset = ncclRmaSignalOffset(comm->nRanks, signalIdx, comm->rank);
     op->signal.signalMhandle = captured ? rmaProxyCtx->cpuAccessSignalsMhandle
                                           : rmaProxyCtx->signalsMhandle;
     op->signal.val = 1;
@@ -381,7 +392,7 @@ static ncclResult_t rmaSchedProxyPutBuildDesc(
     struct ncclRmaSchedStreamPlan* streamPlan,
     struct ncclDevrWindow* srcWinHost, size_t srcWinOffset,
     struct ncclDevrWindow* peerWinHost, size_t peerWinOffset,
-    size_t size, int peer, int ctx,
+    size_t size, int peer, int ctx, int signalIdx,
     ncclSignalMode_t signalMode,
     struct ncclRmaProxyDesc* desc) {
   ncclResult_t ret = ncclSuccess;
@@ -395,7 +406,7 @@ static ncclResult_t rmaSchedProxyPutBuildDesc(
   NCCLCHECKGOTO(rmaSchedProxyPutBuildOp(
       comm, rmaProxyCtx, ctx, captured,
       srcWinHost, srcWinOffset, peerWinHost, peerWinOffset,
-      size, peer, signalMode, &desc->putSignal), ret, fail);
+      size, peer, signalIdx, signalMode, &desc->putSignal), ret, fail);
 
   if (!captured) {
     desc->opSeq = ++rmaProxyCtx->opSeqs[peer];
@@ -467,7 +478,7 @@ static ncclResult_t rmaSchedProxyPutLaunch(
         comm, rmaProxyCtx, streamPlan,
         fields.srcWinHost, fields.srcWinOffset,
         fields.peerWinHost, fields.peerWinOffset,
-        fields.count * ncclTypeSize(fields.datatype), fields.peer, fields.ctx,
+        fields.count * ncclTypeSize(fields.datatype), fields.peer, fields.ctx, fields.sigIdx,
         fields.signalMode, descs[i]), ret, fail);
     NCCLCHECKGOTO(ncclRmaProxyPutStartParams(descs[i], &batchParams[i * startOps]), ret, fail);
     NCCLCHECKGOTO(ncclRmaProxyPutDoneParams(descs[i], &batchParams[nRmaTasksProxy * startOps + i * doneOps]), ret, fail);
@@ -536,6 +547,8 @@ static ncclResult_t rmaSchedCePutLaunchPersist(
   ncclResult_t ret = ncclSuccess;
   int nRmaTasksCe = queue->nElems;
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
+  int lsaSize = comm->devrState.lsaTeamSize;
+  int lsaSelf = comm->devrState.lsaTeamSelf;
   // A batched memcpy does not guarantee order of execution within the batch, so the signal
   // must not share a batch with its payload: it could land first and release the peer's
   // wait before the data arrives.
@@ -559,7 +572,8 @@ static ncclResult_t rmaSchedCePutLaunchPersist(
     size_t bytes = fields.count * ncclTypeSize(fields.datatype);
 
     if (fields.signalMode != NCCL_SIGNAL_NONE) {
-      CUdeviceptr ackAddr = (CUdeviceptr)&ceCtx->graphAckDev[fields.peer];
+      size_t ackSlot = ncclRmaSignalSlot(lsaSize, fields.sigIdx, peerLsaRank);
+      CUdeviceptr ackAddr = (CUdeviceptr)&ceCtx->graphAckDev[ackSlot];
       CUstreamBatchMemOpParams ackOps[2] = {};
       ackOps[0].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
       ackOps[0].waitValue.address = ackAddr;
@@ -590,9 +604,9 @@ static ncclResult_t rmaSchedCePutLaunchPersist(
     }
 
     if (fields.signalMode != NCCL_SIGNAL_NONE) {
-      size_t rankSlot = comm->rank * sizeof(uint64_t);
+      size_t signalOffset = ncclRmaSignalOffset(lsaSize, fields.sigIdx, lsaSelf);
       void* peerGraphSignal;
-      NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphSignalOffset + rankSlot, peerLsaRank, &peerGraphSignal), ret, fail);
+      NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphSignalOffset + signalOffset, peerLsaRank, &peerGraphSignal), ret, fail);
       signalParams.srcs[signalParams.numOps]  = ceCtx->signalConstOneDev;
       signalParams.dsts[signalParams.numOps]  = peerGraphSignal;
       signalParams.sizes[signalParams.numOps] = sizeof(uint64_t);
@@ -701,14 +715,15 @@ static ncclResult_t rmaSchedCePutLaunchNonPersist(
       }
 
       if (fields.signalMode != NCCL_SIGNAL_NONE) {
-        size_t rankSlot = comm->rank * sizeof(uint64_t);
+        size_t signalOffset = ncclRmaSignalOffset(lsaSize, fields.sigIdx, lsaSelf);
+        size_t signalSlot = ncclRmaSignalSlot(lsaSize, fields.sigIdx, peerLsaRank);
         void* peerSignal;
-        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->signalOffset + rankSlot, peerLsaRank, &peerSignal), ret, fail);
-        ceCtx->signalOpSeqs[fields.peer]++;
+        NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->signalOffset + signalOffset, peerLsaRank, &peerSignal), ret, fail);
+        ceCtx->signalOpSeqs[signalSlot]++;
 
         seqStageOps[nSeqStageOps].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_64;
         seqStageOps[nSeqStageOps].writeValue.address   = (CUdeviceptr)&ceCtx->signalOpSeqsDev[nSeqStageOps];
-        seqStageOps[nSeqStageOps].writeValue.value64   = ceCtx->signalOpSeqs[fields.peer];
+        seqStageOps[nSeqStageOps].writeValue.value64   = ceCtx->signalOpSeqs[signalSlot];
         seqStageOps[nSeqStageOps].writeValue.flags     = CU_STREAM_WRITE_VALUE_DEFAULT;
 
         signalParams.srcs[signalParams.numOps]  = &ceCtx->signalOpSeqsDev[nSeqStageOps];
@@ -814,6 +829,8 @@ static ncclResult_t rmaSchedCeWaitLaunch(
   }
 
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
+  int lsaSize = comm->devrState.lsaTeamSize;
+  int lsaSelf = comm->devrState.lsaTeamSelf;
 
   if (!captured) {
     NCCLCHECKGOTO(ncclCalloc(&batchParams, nElems), ret, fail);
@@ -826,11 +843,13 @@ static ncclResult_t rmaSchedCeWaitLaunch(
       rmaSchedFreeTuningInfoRaw(comm, taskInfo);
 
       if (fields.signalMode == NCCL_SIGNAL) {
-        int peerRank = fields.peer;
-        uint64_t waitValue = ceCtx->signalsHost[peerRank] + fields.opCnt;
-        ceCtx->signalsHost[peerRank] = waitValue;
+        int peerLsaRank;
+        NCCLCHECKGOTO(ncclDevrWorldToLsaRank(comm, fields.peer, &peerLsaRank), ret, fail);
+        size_t signalSlot = ncclRmaSignalSlot(lsaSize, fields.sigIdx, peerLsaRank);
+        uint64_t waitValue = ceCtx->signalsHost[signalSlot] + fields.opCnt;
+        ceCtx->signalsHost[signalSlot] = waitValue;
 
-        CUdeviceptr signalAddr = (CUdeviceptr)&ceCtx->signalsDev[peerRank];
+        CUdeviceptr signalAddr = (CUdeviceptr)&ceCtx->signalsDev[signalSlot];
         batchParams[opIdx].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
         batchParams[opIdx].waitValue.address = signalAddr;
         batchParams[opIdx].waitValue.value64 = waitValue;
@@ -852,12 +871,12 @@ static ncclResult_t rmaSchedCeWaitLaunch(
       rmaSchedFreeTuningInfoRaw(comm, taskInfo);
 
       if (fields.signalMode == NCCL_SIGNAL) {
-        int peerRank = fields.peer;
         int peerLsaRank;
-        NCCLCHECKGOTO(ncclDevrWorldToLsaRank(comm, peerRank, &peerLsaRank), ret, fail);
+        NCCLCHECKGOTO(ncclDevrWorldToLsaRank(comm, fields.peer, &peerLsaRank), ret, fail);
+        size_t signalSlot = ncclRmaSignalSlot(lsaSize, fields.sigIdx, peerLsaRank);
 
         for (int s = 0; s < fields.opCnt; s++) {
-          CUdeviceptr graphSignalAddr = (CUdeviceptr)&ceCtx->graphSignalsDev[peerRank];
+          CUdeviceptr graphSignalAddr = (CUdeviceptr)&ceCtx->graphSignalsDev[signalSlot];
           CUstreamBatchMemOpParams signalOps[2] = {};
           signalOps[0].waitValue.operation = CU_STREAM_MEM_OP_WAIT_VALUE_64;
           signalOps[0].waitValue.address = graphSignalAddr;
@@ -870,7 +889,8 @@ static ncclResult_t rmaSchedCeWaitLaunch(
           NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, 2, signalOps), ret, fail);
 
           void* peerAck;
-          NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphAckOffset + comm->rank * sizeof(uint64_t), peerLsaRank, &peerAck), ret, fail);
+          size_t ackOffset = ncclRmaSignalOffset(lsaSize, fields.sigIdx, lsaSelf);
+          NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, ceCtx->signalsWin, ceCtx->graphAckOffset + ackOffset, peerLsaRank, &peerAck), ret, fail);
           ceParams.numOps = 0;
           ceParams.srcs[ceParams.numOps]  = ceCtx->signalConstOneDev;
           ceParams.dsts[ceParams.numOps]  = peerAck;

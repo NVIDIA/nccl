@@ -3225,68 +3225,145 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     t->sendRecv.stream = info->stream;
     t->sendRecv.launchCompletionEvent = nullptr;
     ncclIntruQueueEnqueue(&rtq->genericQueue, t);
-  } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal) {
-    if (info->ctx < 0 || info->ctx >= comm->config.numRmaCtx) {
-      WARN("ncclPutSignal/ncclSignal: invalid context %d (must be in [0, %d))", info->ctx, comm->config.numRmaCtx);
+  } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) {
+    if (!comm->hostRmaSupport) {
+      WARN("One sided RMA: host RMA is not supported in this communicator.");
       return ncclInvalidArgument;
     }
-    t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
-    t->kind = ncclTaskKindRma;
-    t->rma.func = info->coll;
+
+    int driverVersion;
+    NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
+    if (driverVersion < 12050) {
+      WARN("One-sided RMA requires CUDA driver 12.5 or later (found %d.%d).", driverVersion / 1000,
+           (driverVersion % 1000) / 10);
+      return ncclInvalidUsage;
+    }
+
+    // Put/Signal use info->ctx; WaitSignal validates ctx per descriptor below.
+    if (info->coll != ncclFuncWaitSignal && (info->ctx < 0 || info->ctx >= comm->config.numRmaCtx)) {
+      WARN("Context %d is invalid (must be in [0, %d))", info->ctx, comm->config.numRmaCtx);
+      return ncclInvalidArgument;
+    }
+
+    if (info->coll != ncclFuncWaitSignal && (info->sigIdx < 0 || info->sigIdx >= comm->config.numRmaSig)) {
+      WARN("Signal index %d is invalid (must be in [0, %d))", info->sigIdx, comm->config.numRmaSig);
+      return ncclInvalidArgument;
+    }
+
+    if (info->flags != 0) {
+      WARN("Flags %u is invalid (must be 0)", info->flags);
+      return ncclInvalidArgument;
+    }
+
     if (info->coll == ncclFuncPutSignal) {
-      struct ncclRawTaskPutSignal* put = &t->rma.rmaOp.putSignal;
-      put->localbuff = info->sendbuff;
-      put->count = info->count;
-      put->datatype = info->datatype;
-      put->peer = info->root;
-      put->peerWin = info->peerWin;
-      put->peerWinOffset = info->peerWinOffset;
-      put->sigIdx = info->sigIdx;
-      put->ctx = info->ctx;
-      put->flags = info->flags;
-      put->stream = info->stream;
-    } else {
+      if (info->peerWin == NULL) {
+        WARN("ncclPutSignal: peerWin is NULL");
+        return ncclInvalidArgument;
+      }
+
+      struct ncclWindow_vidmem* peerWinDevHost = NULL;
+      struct ncclDevrWindow* peerWinHost = NULL;
+      struct ncclDevrWindow* srcWinHost = NULL;
+      NCCLCHECK(ncclShadowPoolToHost(&comm->devrState.shadows, info->peerWin, &peerWinDevHost));
+      peerWinHost = (struct ncclDevrWindow*)peerWinDevHost->winHost;
+      if (!ncclDevrWinRegEnabled(peerWinHost->winFlags, ncclDevrRegisterRma)) {
+        WARN("ncclPutSignal requires a window registered for RMA");
+        return ncclInvalidArgument;
+      }
+
+      if (info->sendbuff == NULL) {
+        WARN("ncclPutSignal: srcBuff is NULL");
+        return ncclInvalidArgument;
+      }
+      NCCLCHECK(ncclDevrFindWindow(comm, info->sendbuff, &srcWinHost));
+      if (srcWinHost == NULL || !(srcWinHost->winFlags & NCCL_WIN_COLL_SYMMETRIC)) {
+        WARN("ncclPutSignal: srcWinHost is not in a valid symmetric window");
+        return ncclInvalidArgument;
+      }
+      if (!ncclDevrWinRegEnabled(srcWinHost->winFlags, ncclDevrRegisterRma)) {
+        WARN("ncclPutSignal requires a window registered for RMA");
+        return ncclInvalidArgument;
+      }
+
+      bool isMultiSegment = ncclDevrWindowIsMultiSegment(srcWinHost) || ncclDevrWindowIsMultiSegment(peerWinHost);
+      bool hasSysmemSegment = ncclDevrWindowHasSysmemSegment(srcWinHost) || ncclDevrWindowHasSysmemSegment(peerWinHost);
+      if (isMultiSegment) {
+        WARN("ncclPutSignal currently does not support VAs backed by multiple physical cuMem segments");
+        return ncclInvalidArgument;
+      }
+      if (hasSysmemSegment) {
+        WARN("ncclPutSignal currently does not support VAs with host-backed cuMem segments");
+        return ncclInvalidArgument;
+      }
+    } else if (info->coll == ncclFuncSignal) {
       if (info->count != 0) {
         WARN("ncclSignal: count must be 0");
         return ncclInvalidArgument;
       }
-      struct ncclRawTaskSignal* sig = &t->rma.rmaOp.signal;
-      sig->peer = info->root;
-      sig->sigIdx = info->sigIdx;
-      sig->ctx = info->ctx;
-      sig->flags = info->flags;
-      sig->stream = info->stream;
-    }
-    ncclIntruQueueEnqueue(&rtq->genericQueue, t);
-  } else if (info->coll == ncclFuncWaitSignal) {
-    if (info->nDesc <= 0 || info->signalDescs == NULL) {
-      WARN("ncclWaitSignal: invalid arguments");
-      return ncclInvalidArgument;
-    }
-    for (int i = 0; i < info->nDesc; i++) {
-      if (info->signalDescs[i].opCnt <= 0) {
-        WARN("ncclWaitSignal: descriptor %d has invalid opCnt %d", i, info->signalDescs[i].opCnt);
+    } else {
+      if (info->signalDescs == NULL || info->nDesc == 0) {
+        WARN("ncclWaitSignal: invalid arguments");
         return ncclInvalidArgument;
       }
-      if (info->signalDescs[i].sigIdx < 0 || info->signalDescs[i].sigIdx >= comm->config.numRmaSig) {
-        WARN("ncclWaitSignal: descriptor %d has invalid sigIdx %d (must be in [0, %d))", i, info->signalDescs[i].sigIdx,
-             comm->config.numRmaSig);
-        return ncclInvalidArgument;
-      }
-      if (info->signalDescs[i].ctx < 0 || info->signalDescs[i].ctx >= comm->config.numRmaCtx) {
-        WARN("ncclWaitSignal: descriptor %d has invalid context %d (must be in [0, %d))", i, info->signalDescs[i].ctx,
-             comm->config.numRmaCtx);
-        return ncclInvalidArgument;
+      for (int i = 0; i < info->nDesc; i++) {
+        if (info->signalDescs[i].opCnt <= 0) {
+          WARN("ncclWaitSignal: descriptor %d has invalid opCnt %d", i, info->signalDescs[i].opCnt);
+          return ncclInvalidArgument;
+        }
+        if (info->signalDescs[i].sigIdx < 0 || info->signalDescs[i].sigIdx >= comm->config.numRmaSig) {
+          WARN("ncclWaitSignal: descriptor %d has invalid sigIdx %d (must be in [0, %d))", i,
+               info->signalDescs[i].sigIdx, comm->config.numRmaSig);
+          return ncclInvalidArgument;
+        }
+        if (info->signalDescs[i].ctx < 0 || info->signalDescs[i].ctx >= comm->config.numRmaCtx) {
+          WARN("ncclWaitSignal: descriptor %d has invalid context %d (must be in [0, %d))", i,
+               info->signalDescs[i].ctx, comm->config.numRmaCtx);
+          return ncclInvalidArgument;
+        }
       }
     }
-    // Each descriptor has its own ctx and peer, so capture one task per descriptor and
-    // let the scheduler route them independently.
-    for (int i = 0; i < info->nDesc; i++) {
+
+    if ((info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) && !ncclRmaInitialized(comm)) {
+      WARN("ncclSignal/ncclWaitSignal called before RMA is initialized. Register a symmetric window "
+           "first, or set NCCL_RMA_EAGER_INIT=1 to initialize RMA at communicator creation.");
+      return ncclInvalidUsage;
+    }
+
+    if (info->coll == ncclFuncWaitSignal) {
+      // Each descriptor has its own ctx and peer, so capture one task per descriptor and
+      // let the scheduler route them independently.
+      for (int i = 0; i < info->nDesc; i++) {
+        t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
+        t->kind = ncclTaskKindRma;
+        t->rma.func = ncclFuncWaitSignal;
+        t->rma.rmaOp.waitSignal.signalDesc = info->signalDescs[i];
+        t->rma.rmaOp.waitSignal.stream = info->stream;
+        ncclIntruQueueEnqueue(&rtq->genericQueue, t);
+      }
+    } else {
       t = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
       t->kind = ncclTaskKindRma;
-      t->rma.func = ncclFuncWaitSignal;
-      t->rma.rmaOp.waitSignal.signalDesc = info->signalDescs[i];
-      t->rma.rmaOp.waitSignal.stream = info->stream;
+      t->rma.func = info->coll;
+      if (info->coll == ncclFuncPutSignal) {
+        struct ncclRawTaskPutSignal* put = &t->rma.rmaOp.putSignal;
+        put->localbuff = info->sendbuff;
+        put->count = info->count;
+        put->datatype = info->datatype;
+        put->peer = info->root;
+        put->peerWin = info->peerWin;
+        put->peerWinOffset = info->peerWinOffset;
+        put->sigIdx = info->sigIdx;
+        put->ctx = info->ctx;
+        put->flags = info->flags;
+        put->stream = info->stream;
+      } else {
+        struct ncclRawTaskSignal* sig = &t->rma.rmaOp.signal;
+        sig->peer = info->root;
+        sig->sigIdx = info->sigIdx;
+        sig->ctx = info->ctx;
+        sig->flags = info->flags;
+        sig->stream = info->stream;
+      }
       ncclIntruQueueEnqueue(&rtq->genericQueue, t);
     }
   } else {

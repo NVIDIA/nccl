@@ -36,6 +36,13 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   in->comm = comm;
   in->tuningMask = raw->algMask != 0 ? raw->algMask & ncclCommDefaultAlgoMask(comm) : ncclCommDefaultAlgoMask(comm);
   in->forceAlgSelection = raw->algMask != 0 ? collConfig->forceAlgSelection : 0;
+  // AllGather and Broadcast are counted in bytes from here on, matching the legacy enqueue
+  // path: their device kernels are type agnostic and read the work count as a byte count.
+  // Normalizing the raw task keeps every consumer downstream of pre-tuning in those units.
+  if (raw->func == ncclFuncAllGather || raw->func == ncclFuncBroadcast) {
+    raw->count *= ncclTypeSize(raw->datatype);
+    raw->datatype = ncclInt8;
+  }
   in->func = raw->func;
   in->redOp = raw->opHost;
   in->devRedOp = raw->opDev.op;

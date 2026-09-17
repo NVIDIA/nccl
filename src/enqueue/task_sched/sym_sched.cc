@@ -220,7 +220,8 @@ static ncclResult_t symSchedEnqueueKernelTask(
   while (subQueue != nullptr) {
     if (!isLLKernel && subQueue->symKernelId == symKernelId) {
       ncclIntruQueueEnqueue(&subQueue->taskQueue, taskInfo);
-      if (maxChannels > subQueue->maxChannels) subQueue->maxChannels = maxChannels;
+      subQueue->maxChannels += maxChannels;
+      if (subQueue->maxChannels > comm->nChannels) subQueue->maxChannels = comm->nChannels;
       return ncclSuccess;
     }
     tail = subQueue;

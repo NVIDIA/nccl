@@ -445,7 +445,7 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
 
   memset(task, 0, sizeof(*task));
   task->func = ncclFuncBroadcast;
-  task->sendbuff = (root == comm->rank) ? bcast->sendbuff : nullptr;
+  task->sendbuff = bcast->sendbuff;
   task->recvbuff = bcast->recvbuff;
   task->count = bcast->count;
   task->root = root;
@@ -519,7 +519,7 @@ static ncclResult_t postTuneAllGatherVTasks(
       struct ncclTaskBcast* t =
         ncclMemoryPoolAlloc<struct ncclTaskBcast>(&comm->memPool_ncclTaskBcast, &comm->memPermanent);
       t->func = ncclFuncAllGatherV;
-      t->sendbuff = (root == comm->rank) ? bcast->sendbuff : nullptr;
+      t->sendbuff = bcast->sendbuff;
       t->recvbuff = bcast->recvbuff;
       t->count = bcast->count;
       t->datatype = ncclInt8;

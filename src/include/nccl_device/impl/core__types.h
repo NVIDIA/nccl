@@ -19,6 +19,7 @@ typedef void* ncclGinWindow_t;
 
 // CFT Logical Endpoint ID
 #define NCCL_LE_ID_INVALID ((ncclCftLeId_t) - 1)
+#define NCCL_LSA_PEER_DELTA4G_INVALID INT_MIN
 
 struct ncclSegmentWindow {
   ncclGinWindow_t ginWins[NCCL_GIN_MAX_CONNECTIONS];
@@ -29,7 +30,7 @@ struct ncclSegmentWindow {
 // nccl.h has: typedef ncclWindow_vidmem* ncclWindow_t;
 struct ncclWindow_vidmem {
   void* winHost;
-  char* lsaFlatBase; // pointer to first byte for rank 0 of lsa team
+  char* lsaFlatBase; // pointer to first byte for rank 0 of the regular LSA team
   int lsaRank;
   int worldRank;
   uint32_t stride4G;
@@ -41,6 +42,7 @@ struct ncclWindow_vidmem {
   int numSegments;
   int cftFlatRank;
   ncclCftLeId_t ucLeIdBase;
+  int const* lsaPeerDelta4G; // indexed by world rank
 };
 
 // Inlined resource-window. A subset of ncclWindow_vidmem with only the fields used

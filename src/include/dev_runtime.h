@@ -80,6 +80,8 @@ struct ncclDevrState {
   int cftMcSize;
   struct ncclDevrStateCftUc le[2]; // 0: UC LE ID base, 1: Counted UC LE ID base (rank_i le = base + i)
 
+  int* lsaPeerDelta4GDev;
+
   size_t granularity; // cuMemGetAllocationGranularity
   bool ginEnabled;
   bool rmaProxyEnabled;
@@ -93,7 +95,7 @@ struct ncclDevrState {
   // local ranks. Empty on a comm that reuses a parent's NVLS resources instead of building the group.
   struct ncclMcPartition nvlsMcPartition;
   struct ncclSpace bigSpace; // allocates our big VA space.
-  void* lsaFlatBase; // base ptr for all lsa ranks big VA's concatenated together: size = lsaRanks*bigSize
+  void* lsaFlatBase; // base ptr for all local ranks big VA's concatenated together: size = localRanks*bigSize
   struct ncclShadowPool shadows;
   struct ncclDevCommWindowTable* windowTable;
 

@@ -1166,6 +1166,12 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
   char* msg = nullptr;
   int msgLen;
   struct rasCollective* coll = client->coll;
+
+  if (coll == nullptr || coll->nFwdSent != coll->nFwdRecv) {
+    INFO(NCCL_RAS, "RAS invalid collective operation status; client status %d -- internal error?", client->status);
+    return ncclInternalError;
+  }
+
   struct rasCollComms* commsData = (struct rasCollComms*)coll->data;
   struct rasCollComms::comm* comm;
   struct rasAuxCommRank* auxCommRanks = nullptr;
@@ -1195,10 +1201,6 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
   TRACE(NCCL_RAS, "RAS: coll nLegTimeouts %d, nPeers %d, nData %d; commsData nComms %d", coll->nLegTimeouts,
         coll->nPeers, coll->nData, commsData->nComms);
 
-  if (coll == nullptr || coll->nFwdSent != coll->nFwdRecv) {
-    INFO(NCCL_RAS, "RAS invalid collective operation status; client status %d -- internal error?", client->status);
-    return ncclInternalError;
-  }
   client->coll = nullptr;
 
   rasOutReset();

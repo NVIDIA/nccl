@@ -96,7 +96,7 @@ NCCL_DEVICE_INLINE ncclResult_t flush(ncclGinProxyGpuCtx_t* proxyCtx, uint32_t p
 }
 
 template <typename Coop>
-NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclGinProxyGfd_t* gfd, uint32_t pe,
+NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclGinProxyGfdShort_t* gfd, uint32_t pe,
                                 bool isGet = false) {
   using nccl::utility::loadConst;
   uint32_t* gpuQueueIndices = loadConst(&proxyCtx->pis);
@@ -110,7 +110,7 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
   if (coop.thread_rank() == 0) {
     // claim a slot in the gfd queue
     uint32_t idx = pi.fetch_add(1, cuda::memory_order_relaxed);
-    // Read the host-updated index only after exhausting cached credits.
+    // Read the host-updated indices only after exhausting cached credits.
     uint32_t consumed = cachedCi.load(cuda::memory_order_acquire);
     if (queueSize <= idx - consumed) {
       do {
@@ -121,10 +121,10 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
     uint32_t gfdIdx = idx & (queueSize - 1);
     // 16-byte vector stores with the write-through cache hint. Both sides cast
     // through (uint4*), which emits v4.b32 PTX requiring 16-byte alignment.
-    // ncclGinProxyGfd_t is declared __attribute__((packed, aligned(16))) in
-    // gin_proxy_device_host_common.h; static_asserts there enforce the contract.
+    // Both descriptor types are declared __attribute__((packed, aligned(16)))
+    // in gin_proxy_device_host_common.h.
     NVCC_PRAGMA_UNROLL_AUTO
-    for (uint8_t i = 0; i < sizeof(ncclGinProxyGfd_t) / sizeof(uint4); i++) {
+    for (uint8_t i = 0; i < sizeof(ncclGinProxyGfdShort_t) / sizeof(uint4); i++) {
       __stwt((uint4*)&q[gfdIdx] + i, ((uint4*)gfd)[i]);
     }
     if (isGet) {
@@ -145,12 +145,12 @@ NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclG
 template <typename T>
 // Descriptor must be at least GWQ_GFD_SIZE bytes and it should be aligned
 // Assumes little-endian, which is okay.
-__device__ __forceinline__ void buildGfd(ncclGinProxyGfd_t* gfd, ncclGinProxyOp_t op, T srcVal, bool hasInline,
+__device__ __forceinline__ void buildGfd(ncclGinProxyGfdShort_t* gfd, ncclGinProxyOp_t op, T srcVal, bool hasInline,
                                          size_t srcOff, ncclGinWindow_t srcHandle, size_t dstOff,
                                          ncclGinWindow_t dstHandle, size_t size, ncclGinCounter_t counterId,
                                          ncclGinSignal_t signalId, uint64_t signalVal, ncclGinWindow_t signalWindow,
                                          size_t signalOff, bool isStrongSignal = false) {
-  for (int i = 0; i < ncclGinProxyGfdQwords; i++) {
+  for (int i = 0; i < ncclGinProxyGfdShortQwords; i++) {
     gfd->qword[i].flag.v = 1;
   }
 
@@ -231,7 +231,7 @@ __device__ __forceinline__ void constructProxyOp(ncclGinProxyOp_t& op, bool isGe
 template <typename Coop>
 NCCL_DEVICE_INLINE void get(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, int peer, ncclGinWindow_t remoteWnd,
                             size_t remoteOff, ncclGinWindow_t localWnd, size_t localOff, size_t bytes,
-                            ncclGinProxyGfd_t* desc) {
+                            ncclGinProxyGfdShort_t* desc) {
   using nccl::gin::proxy::DataChunkSize;
   while (bytes > 0) {
     size_t sendSize = min(bytes, DataChunkSize);
@@ -249,7 +249,7 @@ NCCL_DEVICE_INLINE void get(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, int peer,
 }
 
 template <typename Coop, typename T>
-NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfd_t* gfd, ncclGinProxyGpuCtx_t* proxyCtx, int peer,
+NCCL_DEVICE_INLINE void put(Coop coop, ncclGinProxyGfdShort_t* gfd, ncclGinProxyGpuCtx_t* proxyCtx, int peer,
                             ncclGinWindow_t dstWnd, size_t dstOff, T srcVal, bool hasInline, ncclGinWindow_t srcWnd,
                             size_t srcOff, size_t bytes, ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
                             uint64_t signalVal, bool hasCounter, ncclGinCounter_t counterId,
@@ -335,7 +335,7 @@ NCCL_DEVICE_INLINE static ncclResult_t waitImplCore(ncclGinCtx ctx, ncclGinReque
   cuda::atomic_ref<uint32_t, cuda::thread_scope_device> lastVisibleGet(visibleGets[req.peer]);
   uint32_t visible = lastVisibleGet.load(cuda::memory_order_relaxed);
   if (rollingLessThan<uint32_t>(visible, req.lastIssuedGet)) {
-    ncclGinProxyGfd_t gfd;
+    ncclGinProxyGfdShort_t gfd;
     ncclGinProxyOp_t op;
     nccl::gin::proxy::constructProxyOp(op, /*isGet*/ false, /*isFlush*/ true, /*hasInline*/ false,
                                        NCCL_GIN_SIGNAL_TYPE_NONE, ncclGinSignalInc, /*hasCounter*/ false);
@@ -364,8 +364,8 @@ struct ncclGinApi_Get<NCCL_NET_DEVICE_GIN_PROXY> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin, size_t remoteOff,
                                       ncclGinWindow_t localWin, size_t localOff, size_t bytes, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor, uint32_t optFlags) {
-    ncclGinProxyGfd_t tmpDesc;
-    ncclGinProxyGfd_t* desc = hasDescriptor ? (ncclGinProxyGfd_t*)descriptor : &tmpDesc;
+    ncclGinProxyGfdShort_t tmpDesc;
+    ncclGinProxyGfdShort_t* desc = hasDescriptor ? (ncclGinProxyGfdShort_t*)descriptor : &tmpDesc;
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
     nccl::gin::proxy::get<Coop>(coop, proxyCtx, peer, remoteWin, remoteOff, localWin, localOff, bytes, desc);
   }
@@ -516,8 +516,8 @@ struct ncclGinApi_Put<NCCL_NET_DEVICE_GIN_PROXY> {
                                       bool hasCounter, ncclGinCounter_t counterId, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
                                       cuda::thread_scope given, uint32_t optFlags = ncclGinOptFlagsDefault) {
-    ncclGinProxyGfd_t tmpDesc;
-    ncclGinProxyGfd_t* desc = hasDescriptor ? (ncclGinProxyGfd_t*)descriptor : &tmpDesc;
+    ncclGinProxyGfdShort_t tmpDesc;
+    ncclGinProxyGfdShort_t* desc = hasDescriptor ? (ncclGinProxyGfdShort_t*)descriptor : &tmpDesc;
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
     nccl::gin::proxy::put<Coop, uint64_t>(coop, desc, proxyCtx, peer, dstWin, dstOff, 0, false, srcWin, srcOff, bytes,
                                           signal, signalOp, signalOpArg, hasCounter, counterId, required, given);
@@ -532,8 +532,8 @@ struct ncclGinApi_PutValue<NCCL_NET_DEVICE_GIN_PROXY> {
                                       uint64_t signalOpArg, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       cuda::thread_scope required, cuda::thread_scope given,
                                       uint32_t optFlags = ncclGinOptFlagsDefault) {
-    ncclGinProxyGfd_t tmpDesc;
-    ncclGinProxyGfd_t* desc = hasDescriptor ? (ncclGinProxyGfd_t*)descriptor : &tmpDesc;
+    ncclGinProxyGfdShort_t tmpDesc;
+    ncclGinProxyGfdShort_t* desc = hasDescriptor ? (ncclGinProxyGfdShort_t*)descriptor : &tmpDesc;
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];
     nccl::gin::proxy::put<Coop, T>(coop, desc, proxyCtx, peer, dstWin, dstOff, srcVal, true, nullptr, 0, sizeof(T),
                                    signal, signalOp, signalOpArg, false, 0, required, given);

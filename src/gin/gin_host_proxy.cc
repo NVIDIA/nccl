@@ -224,17 +224,20 @@ static int proxyGinPollGfd(ginProxyHostGpuCtx* hostGpuCtx, int targetRank, ncclG
 
   // We know for sure that the first qword is there, copy it.
   gfd->qword[ncclGinProxyGfdHeader] = q[idx].qword[ncclGinProxyGfdHeader];
+  int nQwords = ncclGinProxyGfdQwords;
+  uint8_t const version = gfd->qword[ncclGinProxyGfdHeader].header.version;
+  if (version >= NCCL_GIN_PROXY_GFD_SHORT_VERSION) nQwords = ncclGinProxyGfdShortQwords;
   // Wait for and copy the other qwords.
-  for (int k = 1; k < ncclGinProxyGfdQwords; k++) {
+  for (int k = 1; k < nQwords; k++) {
     do {
       COMPILER_ATOMIC_LOAD_DEST(&q[idx].qword[k].raw, &qword.raw, std::memory_order_relaxed);
     } while (qword.flag.v == 0);
     gfd->qword[k] = qword;
   }
-  // Now we have the full GFD in the local struct.
+  // Now we have the complete GFD in the local struct.
 
   // Reset the GFD in the queue. This ensures that the proxy doesn't try to process the GFD again.
-  for (int k = 0; k < ncclGinProxyGfdQwords; k++) {
+  for (int k = 0; k < nQwords; k++) {
     COMPILER_ATOMIC_STORE(&q[idx].qword[k].raw, 0ULL, std::memory_order_relaxed);
   }
 

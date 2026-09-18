@@ -353,9 +353,8 @@ NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclSymPtr<T> dst, 
     return;
   }
 #endif
-#if NCCL_DEVICE_DEBUG_CHECKS || __CUDA_ARCH__ >= 1000
-  auto dstLambda = [=] __device__(int i) -> T* { return dst.peerPtr(team, i); };
-#endif
+  // Referenced only under NCCL_DEVICE_DEBUG_CHECKS or on sm100+.
+  [[maybe_unused]] auto dstLambda = [=] __device__(int i) -> T* { return dst.peerPtr(team, i); };
 
 #if NCCL_DEVICE_DEBUG_CHECKS
   if (coop.thread_rank() == 0) {

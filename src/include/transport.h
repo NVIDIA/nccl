@@ -72,6 +72,7 @@ struct ncclPeerInfo {
   bool gpuCftMulticastSupport;
   bool gpuCftCountedSupport;
   uint32_t gitVersionHash;
+  bool cuMemHostSupport;
 };
 
 #define CONNECT_SIZE 256

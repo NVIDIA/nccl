@@ -1914,7 +1914,7 @@ void* ncclProxyService(void* _args) {
       if (pollfds[s].fd == NCCL_INVALID_SOCKET) continue;
 
       // Progress all ops for this ncclProxyLocalPeer
-      if (stop == PROXY_ABORT && ncclCuMemEnable() && ncclCuMemHostEnable() && !proxyState->directMode &&
+      if (stop == PROXY_ABORT && proxyState->cuMemHostEnabled && !proxyState->directMode &&
           COMPILER_ATOMIC_LOAD(&proxyState->stop, std::memory_order_acquire)) {
         closeConn = 1;
       }

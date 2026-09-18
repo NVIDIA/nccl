@@ -10,6 +10,7 @@
 #include "debug.h"
 #include "param.h"
 #include "cudawrap.h"
+#include "device.h"
 #include "nvmlwrap.h"
 #include <cstdio>
 #include <mutex>
@@ -64,63 +65,85 @@ ncclResult_t ncclCuMemGdrSupport(int cudaDev, bool* support) {
   return ncclSuccess;
 }
 
-static int ncclCumemHostEnable = -1;
-int ncclCuMemHostEnable() {
-  if (ncclCumemHostEnable != -1) return ncclCumemHostEnable;
+#if CUDART_VERSION >= 12020
+enum ncclCuMemHostState {
+  ncclCuMemHostUninitialized = 0,
+  ncclCuMemHostDisabled = 1,
+  ncclCuMemHostEnabled = 2
+};
+static int ncclCuMemHostProbeCache[NCCL_MAX_LOCAL_RANKS] = {};
+#endif
+
+// Return whether the CUDA version and NCCL_CUMEM_HOST_ENABLE policy allow
+// attempting cuMem host allocations. This does not probe the current device.
+static bool ncclCuMemHostAllowed(int cudaApiVersion) {
 #if CUDART_VERSION < 12020
-  ncclCumemHostEnable = 0;
-  return ncclCumemHostEnable;
+  (void)cudaApiVersion;
+  return false;
 #else
+  if (cudaApiVersion < 12020) return false;
+  int paramValue = ncclParamCuMemHostEnable();
+  if (paramValue != -1) return paramValue;
+
+  char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
+  int major, minor, patch = 0;
+  return ncclNvmlSystemGetDriverVersion(version, sizeof(version)) == ncclSuccess &&
+         sscanf(version, "%d.%d.%d", &major, &minor, &patch) >= 2 &&
+         (major > 560 || (major == 560 && (minor > 28 || (minor == 28 && patch >= 3))));
+#endif
+}
+
+bool ncclCuMemHostEnable() {
+#if CUDART_VERSION < 12020
+  return false;
+#else
+  int cudaDev;
+  if (!CUDASUCCESS(cudaGetDevice(&cudaDev))) return false;
+  if (cudaDev < 0 || cudaDev >= NCCL_MAX_LOCAL_RANKS) return false;
+  int state = COMPILER_ATOMIC_LOAD(&ncclCuMemHostProbeCache[cudaDev], std::memory_order_relaxed);
+  if (state != ncclCuMemHostUninitialized) return state == ncclCuMemHostEnabled;
+  // ret is only used by CHECKGOTO and is not returned.
   ncclResult_t ret = ncclSuccess;
   int cudaApiVersion;
-  int paramValue = -1;
+  bool ncclCumemHostEnable = false;
   NCCLCHECKGOTO(ncclCudaDriverVersion(&cudaApiVersion), ret, error);
-  if (cudaApiVersion < 12020) {
-    ncclCumemHostEnable = 0;
-  } else {
-    paramValue = ncclParamCuMemHostEnable();
-    if (paramValue != -1) ncclCumemHostEnable = paramValue;
-    else {
-      char version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE];
-      int major, minor, patch = 0;
-      ncclCumemHostEnable = ncclNvmlSystemGetDriverVersion(version, sizeof(version)) == ncclSuccess &&
-                            sscanf(version, "%d.%d.%d", &major, &minor, &patch) >= 2 &&
-                            (major > 560 || (major == 560 && (minor > 28 || (minor == 28 && patch >= 3))));
-    }
-    if (ncclCumemHostEnable) {
-      // Verify that host allocations actually work.  Docker in particular is known to disable "get_mempolicy",
-      // causing such allocations to fail (this can be fixed by invoking Docker with "--cap-add SYS_NICE").
-      int cudaDev;
-      CUdevice currentDev;
-      int cpuNumaNodeId = -1;
-      CUmemAllocationProp prop = {};
-      size_t granularity = 0;
-      size_t size;
-      CUmemGenericAllocationHandle handle;
-      CUDACHECK(cudaGetDevice(&cudaDev));
-      CUCHECK(cuDeviceGet(&currentDev, cudaDev));
-      CUCHECK(cuDeviceGetAttribute(&cpuNumaNodeId, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, currentDev));
-      if (cpuNumaNodeId < 0) cpuNumaNodeId = 0;
-      prop.location.type = CU_MEM_LOCATION_TYPE_HOST_NUMA;
-      prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
-      prop.requestedHandleTypes = ncclCuMemHandleType;
-      prop.location.id = cpuNumaNodeId;
-      CUCHECK(cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM));
-      size = 1;
-      ALIGN_SIZE(size, granularity);
-      if (CUPFN(cuMemCreate(&handle, size, &prop, 0)) != CUDA_SUCCESS) {
-        INFO(NCCL_INIT, "cuMem host allocations do not appear to be working; falling back to a /dev/shm/ based "
-                        "implementation. This could be due to the container runtime disabling NUMA support. "
-                        "To disable this warning, set NCCL_CUMEM_HOST_ENABLE=0");
-        ncclCumemHostEnable = 0;
-      } else {
-        CUCHECK(cuMemRelease(handle));
-      }
+  ncclCumemHostEnable = ncclCuMemHostAllowed(cudaApiVersion);
+  if (ncclCumemHostEnable) {
+    // Verify that host allocations actually work.  Docker in particular is known to disable "get_mempolicy",
+    // causing such allocations to fail (this can be fixed by invoking Docker with "--cap-add SYS_NICE").
+    CUdevice currentDev;
+    int cpuNumaNodeId = -1;
+    CUmemAllocationProp prop = {};
+    size_t granularity = 0;
+    size_t size;
+    CUmemGenericAllocationHandle handle;
+    CUCHECKGOTO(cuDeviceGet(&currentDev, cudaDev), ret, error);
+    CUCHECKGOTO(cuDeviceGetAttribute(&cpuNumaNodeId, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, currentDev), ret, error);
+    if (cpuNumaNodeId < 0) cpuNumaNodeId = 0;
+    prop.location.type = CU_MEM_LOCATION_TYPE_HOST_NUMA;
+    prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+    prop.requestedHandleTypes = ncclCuMemHandleType;
+    prop.location.id = cpuNumaNodeId;
+    CUCHECKGOTO(cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM), ret, error);
+    size = 1;
+    ALIGN_SIZE(size, granularity);
+    if (CUPFN(cuMemCreate(&handle, size, &prop, 0)) != CUDA_SUCCESS) {
+      ATTN("cuMem host allocations do not appear to be working; falling back to a /dev/shm/ based "
+           "implementation. This could be due to the container runtime disabling NUMA support. "
+           "To disable this notice, set NCCL_CUMEM_HOST_ENABLE=0");
+      ncclCumemHostEnable = 0;
+    } else {
+      CUCHECKGOTO(cuMemRelease(handle), ret, error);
     }
   }
+exit:
+  COMPILER_ATOMIC_STORE(&ncclCuMemHostProbeCache[cudaDev],
+                        static_cast<int>(ncclCumemHostEnable ? ncclCuMemHostEnabled : ncclCuMemHostDisabled),
+                        std::memory_order_relaxed);
   return ncclCumemHostEnable;
 error:
-  return (ret == ncclSuccess);
+  ncclCumemHostEnable = false;
+  goto exit;
 #endif
 }
 
@@ -357,7 +380,8 @@ static void initOnceFunc() {
 
   /* To use cuMem* for host memory allocation, we need to create context on each visible device.
    * This is a workaround needed in CUDA 12.2 and CUDA 12.3 which is fixed in 12.4. */
-  if (ncclCuMemSupported && ncclCuMemHostEnable() && 12020 <= driverVersion && driverVersion <= 12030) {
+  if (ncclCuMemSupported && ncclCuMemEnable() && 12020 <= driverVersion && driverVersion <= 12030 &&
+      ncclCuMemHostAllowed(driverVersion)) {
     int deviceCnt, saveDevice;
     cudaGetDevice(&saveDevice);
     cudaGetDeviceCount(&deviceCnt);

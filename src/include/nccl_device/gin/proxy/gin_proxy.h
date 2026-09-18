@@ -78,7 +78,9 @@ template <bool HasTimeout>
 NCCL_DEVICE_INLINE ncclResult_t flushCore(ncclGinProxyGpuCtx_t* proxyCtx, uint32_t pe, cuda::memory_order ord,
                                           uint32_t* abortFlag, uint64_t startCycle, uint64_t timeoutCycles) {
   using nccl::utility::loadConst;
-  cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(loadConst(&proxyCtx->pis)[pe]);
+  uint32_t* gpuQueueIndices = loadConst(&proxyCtx->pis);
+  int const nRanks = loadConst(&proxyCtx->nranks);
+  cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(gpuQueueIndices[ncclGinProxyGpuPeerQueuePi * nRanks + pe]);
   uint32_t p = pi.load(cuda::memory_order_relaxed);
   return waitForGfdCompleteCore<HasTimeout>(proxyCtx, pe, p, ord, abortFlag, startCycle, timeoutCycles);
 }
@@ -97,15 +99,24 @@ template <typename Coop>
 NCCL_DEVICE_INLINE void postGfd(Coop coop, ncclGinProxyGpuCtx_t* proxyCtx, ncclGinProxyGfd_t* gfd, uint32_t pe,
                                 bool isGet = false) {
   using nccl::utility::loadConst;
-  cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(loadConst(&proxyCtx->pis)[pe]);
+  uint32_t* gpuQueueIndices = loadConst(&proxyCtx->pis);
+  int const nRanks = loadConst(&proxyCtx->nranks);
+  cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(gpuQueueIndices[ncclGinProxyGpuPeerQueuePi * nRanks + pe]);
+  cuda::atomic_ref<uint32_t, cuda::thread_scope_device> cachedCi(
+    gpuQueueIndices[ncclGinProxyGpuPeerQueueCachedCi * nRanks + pe]);
   cuda::atomic_ref<uint32_t, cuda::thread_scope_system> ci(loadConst(&proxyCtx->cis)[pe]);
   ncclGinProxyGfd_t* q = &loadConst(&proxyCtx->queues)[pe * proxyCtx->queueSize];
   uint32_t queueSize = loadConst(&proxyCtx->queueSize);
   if (coop.thread_rank() == 0) {
     // claim a slot in the gfd queue
     uint32_t idx = pi.fetch_add(1, cuda::memory_order_relaxed);
-    // wait for credits
-    while (queueSize <= idx - ci.load(cuda::memory_order_relaxed)) {
+    // Read the host-updated index only after exhausting cached credits.
+    uint32_t consumed = cachedCi.load(cuda::memory_order_acquire);
+    if (queueSize <= idx - consumed) {
+      do {
+        consumed = ci.load(cuda::memory_order_acquire);
+      } while (queueSize <= idx - consumed);
+      cachedCi.store(consumed, cuda::memory_order_release);
     }
     uint32_t gfdIdx = idx & (queueSize - 1);
     // 16-byte vector stores with the write-through cache hint. Both sides cast
@@ -374,7 +385,10 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_PROXY> {
     // Must be before pi is loaded in case of concurrent gets
     req->lastIssuedGet = lastIssuedGet.load(cuda::memory_order_acquire);
 
-    cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(loadConst(&proxyCtx->pis)[peer]);
+    uint32_t* gpuQueueIndices = loadConst(&proxyCtx->pis);
+    int const nRanks = loadConst(&proxyCtx->nranks);
+    cuda::atomic_ref<uint32_t, cuda::thread_scope_system> pi(
+      gpuQueueIndices[ncclGinProxyGpuPeerQueuePi * nRanks + peer]);
     req->nextGfdIdx = pi.load(cuda::memory_order_relaxed);
   }
 };

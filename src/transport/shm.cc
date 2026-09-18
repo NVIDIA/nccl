@@ -254,8 +254,8 @@ static ncclResult_t shmSendProxySetup(struct ncclProxyConnection* connection, st
   struct shmProxyResources* proxyRes;
 
   NCCLCHECK(ncclCalloc(&proxyRes, 1));
-  NCCLCHECKGOTO(ncclShmAllocateShareableBuffer(req->size, req->legacy, &proxyRes->desc, &info->buf.hptr,
-                                               &info->buf.dptr),
+  NCCLCHECKGOTO(ncclShmAllocateShareableBuffer(req->size, req->legacy || !proxyState->cuMemHostEnabled, &proxyRes->desc,
+                                               &info->buf.hptr, &info->buf.dptr),
                 result, fail);
   memcpy(&info->desc, &proxyRes->desc, sizeof(ncclShmIpcDesc_t));
   connection->transportResources = proxyRes;
@@ -278,8 +278,8 @@ static ncclResult_t shmRecvProxySetup(struct ncclProxyConnection* connection, st
   struct shmProxyResources* proxyRes;
 
   NCCLCHECK(ncclCalloc(&proxyRes, 1));
-  NCCLCHECKGOTO(ncclShmAllocateShareableBuffer(req->size, req->legacy, &proxyRes->desc, &info->buf.hptr,
-                                               &info->buf.dptr),
+  NCCLCHECKGOTO(ncclShmAllocateShareableBuffer(req->size, req->legacy || !proxyState->cuMemHostEnabled, &proxyRes->desc,
+                                               &info->buf.hptr, &info->buf.dptr),
                 result, fail);
   memcpy(&info->desc, &proxyRes->desc, sizeof(ncclShmIpcDesc_t));
   connection->transportResources = proxyRes;
@@ -302,6 +302,7 @@ static void initShmLocality() {
   }
 }
 
+// legacy is the final allocation mode (proxy callers must set it to true when proxyState->cuMemHostEnabled is false)
 ncclResult_t ncclShmAllocateShareableBuffer(size_t size, bool legacy, ncclShmIpcDesc_t* desc, void** hptr,
                                             void** dptr) {
   if (desc == NULL || hptr == NULL) {
@@ -309,7 +310,7 @@ ncclResult_t ncclShmAllocateShareableBuffer(size_t size, bool legacy, ncclShmIpc
     return ncclInvalidArgument;
   }
 #if CUDART_VERSION >= 12020
-  if (ncclCuMemEnable() && ncclCuMemHostEnable() && !legacy) {
+  if (!legacy) {
     // cuMem API support
     CUmemAllocationHandleType type = SHM_HANDLE_TYPE;
     CUmemGenericAllocationHandle handle;
@@ -362,7 +363,7 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm* comm, int proxyRank, 
     return ncclInvalidArgument;
   }
 #if CUDART_VERSION >= 12020
-  if (ncclCuMemEnable() && ncclCuMemHostEnable() && !desc->legacy) {
+  if (!desc->legacy) {
     // cuMem API support
     CUdeviceptr hostptr = 0;
     CUmemAllocationHandleType type = SHM_HANDLE_TYPE;
@@ -454,7 +455,7 @@ ncclResult_t ncclShmImportShareableBuffer(struct ncclComm* comm, int proxyRank, 
 ncclResult_t ncclShmIpcClose(ncclShmIpcDesc_t* desc) {
   if (desc) {
 #if CUDART_VERSION >= 12020
-    if (ncclCuMemEnable() && ncclCuMemHostEnable() && !desc->legacy) {
+    if (!desc->legacy) {
       NCCLCHECK(ncclCuMemHostFree(desc->shmci.ptr));
     } else {
       NCCLCHECK(ncclShmClose(desc->shmli.handle));

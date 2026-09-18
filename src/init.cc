@@ -898,6 +898,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->hostHash = getHostHash() + commHash;
   info->pidHash = getPidHash() + commHash;
   info->cuMemSupport = ncclCuMemEnable();
+  info->cuMemHostSupport = info->cuMemSupport && ncclCuMemHostEnable();
   info->fabricHandleSupport = 0;
   CUdevice currentDev;
   CUCHECK(cuDeviceGet(&currentDev, comm->cudaDev));
@@ -1222,6 +1223,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   bool globalCrossNicSupport = true;
   bool globalRmaPluginSupport = true;
   bool isOneLsaTeams = false;
+  bool cuMemHostEnabled = true;
 
   int localNetDeviceCount = 0;
   int localNetCountByBw = 0;
@@ -1280,6 +1282,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     }
     if (comm->peerInfo[i].hostHash != comm->peerInfo[rank].hostHash) nNodes++;
     if (!comm->peerInfo[i].cuMemSupport) comm->cuMemSupport = 0;
+    cuMemHostEnabled &= comm->peerInfo[i].cuMemHostSupport;
     if (comm->peerInfo[i].gpuCftSupport < comm->gpuCftSupport) {
       comm->gpuCftSupport = comm->peerInfo[i].gpuCftSupport;
     }
@@ -1303,6 +1306,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->cuMemGdrSupport &= comm->peerInfo[i].cuMemGdrSupport;
     comm->minDriverVersion = std::min(comm->peerInfo[i].cudaDriverVersion, comm->minDriverVersion);
   }
+  // child communicators may share the proxy state, thus only its owner initializes the agreed mode
+  if (comm->sharedRes->owner == comm) comm->sharedRes->proxyState->cuMemHostEnabled = cuMemHostEnabled;
   if (rank == 0) {
     for (int i = 1; i < nranks; i++) {
       if (comm->peerInfo[0].gitVersionHash != comm->peerInfo[i].gitVersionHash) {

@@ -11,7 +11,8 @@
 #include <stddef.h>
 
 #define NCCL_GIN_PROXY_VERSION 100
-#define NCCL_GIN_PROXY_GFD_VERSION 2
+#define NCCL_GIN_PROXY_GFD_SHORT_VERSION 3
+#define NCCL_GIN_PROXY_GFD_VERSION 3
 
 typedef enum {
   ncclGinProxyOpPut = 1 << 0,
@@ -113,6 +114,8 @@ typedef union {
 } ncclGinProxyQword_t;
 static_assert(sizeof(ncclGinProxyQword_t) == sizeof(uint64_t), "sizeof(ncclGinProxyQword_t) != sizeof(uint64_t)");
 static_assert(NCCL_GIN_PROXY_GFD_VERSION < (1 << 4), "NCCL_GIN_PROXY_GFD_VERSION must be less than 2^4");
+static_assert(NCCL_GIN_PROXY_GFD_SHORT_VERSION <= NCCL_GIN_PROXY_GFD_VERSION,
+              "The current GFD version must support short descriptors");
 
 typedef enum {
   ncclGinProxyGfdHeader = 0,
@@ -127,20 +130,28 @@ typedef enum {
   ncclGinProxyGfdCompletion = 5,
   ncclGinProxyGfdSignalVal = 6,
   ncclGinProxyGfdHeaderExt = 7,
+  ncclGinProxyGfdShortQwords = 8,
   ncclGinProxyGfdQwords = 16,
 } ncclGinProxyGfdQwordIdx_t;
+static_assert(ncclGinProxyGfdHeaderExt + 1 == ncclGinProxyGfdShortQwords,
+              "All GFD fields must fit in a short descriptor");
 
-// aligned(16) is required because gin_proxy.h casts (uint4*)&gfd to emit
-// st.global.wt.v4.u32 / ld.local.v4.b32 PTX, which require 16-byte alignment.
-// packed is needed to preserve the no-padding guarantee the inner bitfield layouts depend on.
+// Queue slots remain 128 bytes so device code using older GFD versions keeps
+// the same stride. GFD versions NCCL_GIN_PROXY_GFD_SHORT_VERSION and later use
+// only the first 64 bytes of each slot. aligned(16) is required because
+// gin_proxy.h casts descriptors to uint4. packed preserves the no-padding
+// guarantee used by the bitfield layouts.
+typedef struct __attribute__((packed, aligned(16))) {
+  ncclGinProxyQword_t qword[ncclGinProxyGfdShortQwords];
+} ncclGinProxyGfdShort_t;
+static_assert(sizeof(ncclGinProxyGfdShort_t) == 64, "sizeof(ncclGinProxyGfdShort_t) != 64");
+static_assert(alignof(ncclGinProxyGfdShort_t) >= 16, "ncclGinProxyGfdShort_t must be at least 16-byte aligned");
+
 typedef struct __attribute__((packed, aligned(16))) {
   ncclGinProxyQword_t qword[ncclGinProxyGfdQwords];
 } ncclGinProxyGfd_t;
-static_assert(sizeof(ncclGinProxyGfd_t) == 128,
-              "sizeof(ncclGinProxyGfd_t) != 128 - Backwards compat requires ncclGinProxyGfd to be 128 bytes!");
-static_assert(alignof(ncclGinProxyGfd_t) >= 16, "ncclGinProxyGfd_t must be at least 16-byte aligned: gin_proxy.h "
-                                                "casts to (uint4*) for v4 PTX load/store; lower alignment causes "
-                                                "cudaErrorMisalignedAddress.");
+static_assert(sizeof(ncclGinProxyGfd_t) == 128, "sizeof(ncclGinProxyGfd_t) != 128");
+static_assert(alignof(ncclGinProxyGfd_t) >= 16, "ncclGinProxyGfd_t must be at least 16-byte aligned");
 
 typedef enum {
   ncclGinProxyGpuPeerQueuePi = 0,

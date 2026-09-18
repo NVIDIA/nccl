@@ -15,6 +15,7 @@
 // connections write directly into the peer's receive FIFO. Receive connections consume the local FIFO. Flow-level
 // code assigns threads and maps topology edges to these resources.
 #ifdef __CUDACC__
+template <ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
 struct ncclLsaFlowConn {
   const int nSlots;
   const size_t slotSize;
@@ -22,7 +23,9 @@ struct ncclLsaFlowConn {
   uint32_t* abortFlag;
   ncclFlowConnState* state;
   char* fifo;
+  // Transport credits are shared across protocols; LL slots and flags follow their own wrapping sequence.
   uint64_t step;
+  uint32_t llStep;
   uint64_t signalValue;
   uint64_t cache;
   uint64_t* localSignal;
@@ -36,11 +39,13 @@ struct ncclLsaFlowConn {
 
   NCCL_DEVICE_INLINE void close();
   NCCL_DEVICE_INLINE void* waitSend();
-  NCCL_DEVICE_INLINE void postSend();
+  NCCL_DEVICE_INLINE void postSend(size_t bytes);
   NCCL_DEVICE_INLINE void* waitRecv();
   NCCL_DEVICE_INLINE void postRecv();
 
-  NCCL_DEVICE_INLINE void advanceStep();
+  NCCL_DEVICE_INLINE uint64_t advanceStep();
+  NCCL_DEVICE_INLINE void* advanceFifoSlot();
+  NCCL_DEVICE_INLINE uint64_t stepFlag() const;
 };
 
 #endif

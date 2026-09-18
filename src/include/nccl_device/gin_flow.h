@@ -13,7 +13,7 @@
 #include "ptr.h"
 
 #ifdef __CUDACC__
-template <unsigned GinBackendMask = NCCL_GIN_BACKEND_MASK_ALL>
+template <unsigned GinBackendMask = NCCL_GIN_BACKEND_MASK_ALL, ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
 struct ncclGinFlowConn {
   const int nSlots;
   const size_t slotSize;
@@ -26,7 +26,9 @@ struct ncclGinFlowConn {
   ncclSymPtr<char> peerFifo;
   ncclGinSignal_t localSignal;
   ncclGinSignal_t peerSignal;
+  // Transport credits are shared across protocols; LL slots and flags follow their own wrapping sequence.
   uint64_t step;
+  uint32_t llStep;
   uint64_t signalValue;
   NCCL_DEVICE_INLINE ncclGinFlowConn(ncclDevComm const& comm, int contextId, ncclTeam team, int peer,
                                      ncclSymPtr<char> recvFifo, ncclSymPtr<char> sendFifo,
@@ -39,9 +41,11 @@ struct ncclGinFlowConn {
   NCCL_DEVICE_INLINE void* waitRecv();
   NCCL_DEVICE_INLINE void postRecv();
 
-  NCCL_DEVICE_INLINE void advanceStep();
+  NCCL_DEVICE_INLINE uint64_t advanceStep();
   NCCL_DEVICE_INLINE void postSendSimple(size_t bytes, ncclSymPtr<char> source, ncclSymPtr<char> destination);
   NCCL_DEVICE_INLINE void signal(uint64_t value);
+  NCCL_DEVICE_INLINE void* advanceFifoSlot();
+  NCCL_DEVICE_INLINE uint64_t stepFlag() const;
 };
 
 #endif

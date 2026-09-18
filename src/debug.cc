@@ -16,6 +16,8 @@
 #include "param.h"
 #include "param/param.h"
 #include <mutex>
+#include <shared_mutex>
+#include <atomic>
 #include "os.h"
 #include "utils.h"
 #include "env.h"
@@ -29,21 +31,71 @@ static uint64_t ncclDebugTimestampMaxSubseconds;  // Max number of subseconds pl
 static int ncclDebugTimestampSubsecondDigits;     // Number of digits to display
 static int pid = -1;
 static char hostname[1024];
+static bool hostnameCached = false;
 thread_local int ncclDebugNoWarn = 0;
-char ncclLastError[1024] = ""; // Global string for the last error in human readable form
+// Global string for the last error in human readable form, and the result code of the last error
+// ORIGIN. These are two separate records, deliberately.
+//
+// Every WARN and ERROR updates the message, but only a record that actually names a code -- an ERR() at
+// an origin -- updates the code. NCCL reports a failure at the site that detects it and again at each
+// layer that propagates it out, and those re-reports are plain WARNs carrying no code. If they shared a
+// slot, the re-report would always land last and erase the origin's code, so the accessor would return
+// ncclSuccess for precisely the failure shape this is meant to describe.
+//
+// Each has its own ticket, taken before the mutex, so that concurrent failures resolve by which record
+// entered the logger later rather than by which thread won the mutex.
+static char ncclLastError[1024] = "";
+static std::atomic<uint64_t> ncclLastErrorSeq{0};
+static uint64_t ncclLastErrorWrittenSeq = 0;  // ticket of the record currently in ncclLastError
+// Read without ncclDebugMutex: that mutex is held across the write to ncclDebugFile, and reporting an
+// error must not be able to block behind another thread's log I/O.
+static std::atomic<ncclResult_t> ncclLastErrorCode{ncclSuccess};
+static uint64_t ncclLastErrorCodeSeq = 0;  // ticket of the record that set ncclLastErrorCode
 uint64_t ncclDebugMask = 0;
 FILE* ncclDebugFile = stdout;
 static std::mutex ncclDebugMutex;
 static std::chrono::steady_clock::time_point ncclEpoch;
-static bool ncclWarnSetDebugInfo = false;
+// Published by ncclDebugInit() and read on the logging path without holding ncclDebugMutex, so that a
+// record that does not escalate anything does not have to take the lock to find that out.
+static std::atomic<bool> ncclWarnSetDebugInfo{false};
+// Optional caller-supplied destination for log records, installed by ncclSetDebugLogSink().
+//
+// Guarded by a reader/writer lock rather than ncclDebugMutex, and the read side is held across the whole
+// onRecord call. That is what makes removing a sink safe: the exclusive lock in ncclSetDebugLogSink()
+// cannot be taken until every in-flight dispatch has returned, so a sink's finalize() -- and, for a
+// plugin, the dlclose that follows it -- can never run while another thread is still inside it.
+//
+// ncclDebugSinkPresent is a lock-free fast path for the common case of no sink at all, so a build that
+// never registers one pays one acquire load per record and nothing else.
+// std::shared_timed_mutex rather than std::shared_mutex: NCCL targets C++14 for CUDA < 13, and
+// std::shared_mutex is C++17. Same rule, and the same reason, as gin_host.h's devCommRwMutex.
+static std::shared_timed_mutex ncclDebugSinkLock;
+static std::atomic<bool> ncclDebugSinkPresent{false};
+static const ncclLogSink_v1_t* ncclDebugSink = nullptr;  // guarded by ncclDebugSinkLock
+static void* ncclDebugSinkCtx = nullptr;                 // guarded by ncclDebugSinkLock
 
 static thread_local int tid = -1;
+
+// Sets a flag for the duration of a sink callback, so that a sink which logs is not dispatched back into
+// itself. Scoped rather than a bare assignment so the flag is cleared even if the callback unwinds.
+namespace {
+struct SinkDispatchGuard {
+  bool& flag;
+  explicit SinkDispatchGuard(bool& f) : flag(f) {
+    flag = true;
+  }
+  ~SinkDispatchGuard() {
+    flag = false;
+  }
+};
+}  // namespace
 
 // clang-format off
 DEFINE_NCCL_PARAM(ncclParamDebugLevel, ncclDebugLogLevel, NCCL_DEBUG, NCCL_LOG_NONE,
                   NCCL_PARAM_FLAG_PUBLISHED | NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT,
                   ncclParamOneOf<ncclDebugLogLevel>(makeOptions(
                     makeOption("VERSION", NCCL_LOG_VERSION, "Prints NCCL version information only."),
+                    makeOption("ERROR", NCCL_LOG_ERROR, "Prints root-cause error messages only."),
                     makeOption("WARN", NCCL_LOG_WARN, "Prints error messages."),
                     makeOption("ATTN", NCCL_LOG_ATTN, "Prints error messages plus informational notices."),
                     makeOption("INFO", NCCL_LOG_INFO, "Prints debug information."),
@@ -55,13 +107,15 @@ DEFINE_NCCL_PARAM(ncclParamDebugLevels, uint32_t, NCCL_DEBUG_LEVELS, 0,
                   NCCL_PARAM_FLAG_PUBLISHED | NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT,
                   ncclParamBitsetOf<uint32_t>(makeOptions(
                     makeOption("VERSION", (1u << NCCL_LOG_VERSION), "Prints NCCL version information only."),
+                    makeOption("ERROR", (1u << NCCL_LOG_ERROR), "Prints root-cause error messages only."),
                     makeOption("WARN", (1u << NCCL_LOG_WARN), "Prints error messages."),
                     makeOption("ATTN", (1u << NCCL_LOG_ATTN), "Prints error messages plus informational notices."),
                     makeOption("INFO", (1u << NCCL_LOG_INFO), "Prints debug information."),
                     makeOption("ABORT", (1u << NCCL_LOG_ABORT), ""),
                     makeOption("TRACE", (1u << NCCL_LOG_TRACE), "Prints replayable trace information on all calls."),
-                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_WARN | 1u << NCCL_LOG_ATTN |
-                                      1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT | 1u << NCCL_LOG_TRACE),
+                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_ERROR | 1u << NCCL_LOG_WARN |
+                                      1u << NCCL_LOG_ATTN | 1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT |
+                                      1u << NCCL_LOG_TRACE),
                                "Prints all debug messages")), ',', true),
                   "Add comma-separated debug levels to NCCL_DEBUG.");
 
@@ -92,20 +146,23 @@ DEFINE_NCCL_PARAM(ncclParamDebugSubsys, uint64_t, NCCL_DEBUG_SUBSYS,
 
 DEFINE_NCCL_PARAM(ncclParamWarnEnableDebugInfo, bool, NCCL_WARN_ENABLE_DEBUG_INFO, false,
                   NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT, NCCL_PARAM_DEFAULT,
-                  "If enabled, the debug level will be set to INFO after a WARN level debug message is logged.");
+                  "If enabled, the debug level will be set to INFO after an ERROR or WARN level debug message "
+                  "is logged.");
 
 DEFINE_NCCL_PARAM(ncclParamDebugTimestampLevel, uint32_t, NCCL_DEBUG_TIMESTAMP_LEVELS,
-                  (1u << NCCL_LOG_WARN) | (1u << NCCL_LOG_ATTN),
+                  (1u << NCCL_LOG_ERROR) | (1u << NCCL_LOG_WARN) | (1u << NCCL_LOG_ATTN),
                   NCCL_PARAM_FLAG_PUBLISHED | NCCL_PARAM_FLAG_NO_ENVPLUGIN_INIT,
                   ncclParamBitsetOf<uint32_t>(makeOptions(
                     makeOption("VERSION", (1u << NCCL_LOG_VERSION), "NCCL version information"),
+                    makeOption("ERROR", (1u << NCCL_LOG_ERROR), "Root-cause error messages"),
                     makeOption("WARN", (1u << NCCL_LOG_WARN), "Error messages"),
                     makeOption("ATTN", (1u << NCCL_LOG_ATTN), "Informational notices"),
                     makeOption("INFO", (1u << NCCL_LOG_INFO), "Debug messages"),
                     makeOption("ABORT", (1u << NCCL_LOG_ABORT), ""),
                     makeOption("TRACE", (1u << NCCL_LOG_TRACE), "Replayable trace messages"),
-                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_WARN | 1u << NCCL_LOG_ATTN |
-                                      1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT | 1u << NCCL_LOG_TRACE),
+                    makeOption("ALL", (1u << NCCL_LOG_VERSION | 1u << NCCL_LOG_ERROR | 1u << NCCL_LOG_WARN |
+                                      1u << NCCL_LOG_ATTN | 1u << NCCL_LOG_INFO | 1u << NCCL_LOG_ABORT |
+                                      1u << NCCL_LOG_TRACE),
                                "All messages")
                   )), "Set the log levels that include timestamps.");
 // clang-format on
@@ -142,13 +199,49 @@ static ncclResult_t getHostNameForLog(char* hostname, int maxlen, const char del
   return ncclSuccess;
 }
 
+// Short symbolic name for a result code, for use inside a log line. Deliberately not
+// ncclGetErrorString(), which returns user-facing prose; this is the identifier a reader greps for.
+static const char* ncclErrorSymbol(ncclResult_t code) {
+  switch (code) {
+  case ncclSuccess:
+    return "ncclSuccess";
+  case ncclUnhandledCudaError:
+    return "ncclUnhandledCudaError";
+  case ncclSystemError:
+    return "ncclSystemError";
+  case ncclInternalError:
+    return "ncclInternalError";
+  case ncclInvalidArgument:
+    return "ncclInvalidArgument";
+  case ncclInvalidUsage:
+    return "ncclInvalidUsage";
+  case ncclRemoteError:
+    return "ncclRemoteError";
+  case ncclInProgress:
+    return "ncclInProgress";
+  case ncclTimeout:
+    return "ncclTimeout";
+  default:
+    return "ncclUnknownError";
+  }
+}
+
 // Convert the legacy scalar setting to its logical inclusive level set.
 static uint32_t ncclDebugLevelToMask(ncclDebugLogLevel level) {
   if (level < NCCL_LOG_VERSION) return 0;
   uint32_t mask = 1u << NCCL_LOG_VERSION;
+  // ERROR and ATTN are appended to the enum for ABI compatibility, so their numeric values do not reflect
+  // their severity and they cannot take part in the >= comparisons below. ERROR is the most severe level:
+  // selecting it selects nothing else. Checked first because its value is greater than INFO's and would
+  // otherwise satisfy the ATTN test.
+  if (level == NCCL_LOG_ERROR) return mask | (1u << NCCL_LOG_ERROR);
   if (level >= NCCL_LOG_INFO) mask |= 1u << NCCL_LOG_ATTN;
   if (level == NCCL_LOG_ATTN) level = NCCL_LOG_WARN;
-  if (level >= NCCL_LOG_WARN) mask |= 1u << NCCL_LOG_WARN;
+  // Selecting WARN through the scalar also selects ERROR, so a job asking for warnings keeps seeing the
+  // sites that now log at ERROR instead. This applies to NCCL_DEBUG only: the bitset variables are a
+  // literal set of levels, and folding an implication into them would make "^ERROR" and "^WARN" unable to
+  // turn error output off.
+  if (level >= NCCL_LOG_WARN) mask |= (1u << NCCL_LOG_WARN) | (1u << NCCL_LOG_ERROR);
   if (level >= NCCL_LOG_INFO) mask |= 1u << NCCL_LOG_INFO;
   if (level >= NCCL_LOG_ABORT) mask |= 1u << NCCL_LOG_ABORT;
   if (level >= NCCL_LOG_TRACE) mask |= 1u << NCCL_LOG_TRACE;
@@ -165,12 +258,16 @@ static void ncclDebugInit() {
     ncclDebugFile = stdout;
   }
 
-  tempNcclDebugLevelMask = ncclDebugLevelToMask(ncclParamDebugLevel()) | ncclParamDebugLevels();
+  // Masked to the defined level bits. NCCL_DEBUG_LEVELS is user-settable and its negated form can
+  // otherwise compose to ~0u, which is NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED -- leaving the logger
+  // permanently "uninitialized", bypassing NCCL_DEBUG_SUBSYS and reopening NCCL_DEBUG_FILE per record.
+  tempNcclDebugLevelMask =
+    (ncclDebugLevelToMask(ncclParamDebugLevel()) | ncclParamDebugLevels()) & NCCL_DEBUG_LEVEL_MASK_DEFINED;
 
-  ncclWarnSetDebugInfo = ncclParamWarnEnableDebugInfo();
+  ncclWarnSetDebugInfo.store(ncclParamWarnEnableDebugInfo(), std::memory_order_relaxed);
 
   // Determine which debug levels will have timestamps.
-  ncclDebugTimestampLevels = ncclParamDebugTimestampLevel();
+  ncclDebugTimestampLevels = ncclParamDebugTimestampLevel() & NCCL_DEBUG_LEVEL_MASK_DEFINED;
 
   // Store a copy of the timestamp format with space for the subseconds, if used.
   const char* tsFormat = ncclParamDebugTsFormat();
@@ -218,9 +315,16 @@ static void ncclDebugInit() {
     if (ncclDebugTimestampFormat[i] == '_') ncclDebugTimestampFormat[i] = ' ';
   }
 
-  // Cache pid and hostname
-  getHostNameForLog(hostname, 1024, '.');
+  // Re-read the pid on every init: it changes across fork(), and a launcher that forks and then calls
+  // ncclResetDebugInit() must expand NCCL_DEBUG_FILE's %p to its own pid. Caching it would make the child
+  // reopen the parent's file in "w" mode and truncate it.
   pid = ncclOsGetPid();
+  // The hostname, by contrast, is written once. It cannot change, and a log sink is handed this buffer
+  // without holding ncclDebugMutex, so rewriting it in place would race a deliberately lock-free reader.
+  if (!hostnameCached) {
+    getHostNameForLog(hostname, 1024, '.');
+    hostnameCached = true;
+  }
 
   /* Parse and expand the NCCL_DEBUG_FILE path and
    * then create the debug file. But don't bother unless the
@@ -279,34 +383,119 @@ static void ncclDebugInit() {
   COMPILER_ATOMIC_STORE(&ncclDebugLevelMask, tempNcclDebugLevelMask, std::memory_order_release);
 }
 
-// Internal logging helper used by the INFO, WARN, ATTN and TRACE macros.
+// Internal logging helper used by the INFO, WARN, ATTN, ERR and TRACE macros.
+// `code` is the ncclResult_t recorded by ERR() at a root-cause site, or ncclSuccess when the call site did not
+// supply one (every level other than ERR).
 static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const char* file, const char* func, int line,
-                          const char* fmt, va_list vargs) {
-  if (ncclDebugNoWarn != 0 && level == NCCL_LOG_WARN) {
+                          ncclResult_t code, const char* fmt, va_list vargs) {
+  // NOWARN suppresses expected failures, which includes the ERR at their origin.
+  if (ncclDebugNoWarn != 0 && (level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR)) {
     level = NCCL_LOG_INFO;
     flags = ncclDebugNoWarn;
+    // The caller is suppressing an expected failure, so this is no longer an error origin. Dropping the
+    // code keeps a NOWARN-wrapped probe from being counted as a root cause by anything reading the code.
+    code = ncclSuccess;
   }
 
-  // Save the last error (WARN) as a human readable string. ATTN does not set lastError.
-  if (level == NCCL_LOG_WARN) {
+  // Save the last error (ERROR or WARN) as a human readable string. ATTN does not set lastError.
+  //
+  // The ticket is taken here, before the mutex, so that the record kept is the one that entered the logger
+  // last rather than the one whose thread happened to win the mutex. Two threads failing at the same moment
+  // otherwise leave behind whichever reached the lock second, which need not be the later failure.
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR) {
+    uint64_t seq = ncclLastErrorSeq.fetch_add(1, std::memory_order_relaxed) + 1;
     std::lock_guard<std::mutex> lock(ncclDebugMutex);
-    va_list vcopy;
-    va_copy(vcopy, vargs);
-    (void)vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vcopy);
-    va_end(vcopy);
+    if (seq > ncclLastErrorWrittenSeq) {
+      va_list vcopy;
+      va_copy(vcopy, vargs);
+      (void)vsnprintf(ncclLastError, sizeof(ncclLastError), fmt, vcopy);
+      va_end(vcopy);
+      ncclLastErrorWrittenSeq = seq;
+    }
+    // Only an origin updates the code; see the declaration for why it is not kept with the message.
+    if (code != ncclSuccess && seq > ncclLastErrorCodeSeq) {
+      ncclLastErrorCodeSeq = seq;
+      ncclLastErrorCode.store(code, std::memory_order_relaxed);
+    }
   }
 
   if (!ncclDebugShouldLog(level, flags, ncclDebugMask)) {
     return;
+  }
+
+  // Initialize the masks on the first record only. Double-checked so that steady-state logging does not
+  // take ncclDebugMutex here at all; the acquire load below pairs with the release store at the end of
+  // ncclDebugInit(), which also publishes ncclWarnSetDebugInfo, hostname, pid and the timestamp settings.
+  uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_acquire);
+  if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED) {
+    std::lock_guard<std::mutex> lock(ncclDebugMutex);
+    levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
+    if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED)
+      ncclDebugInit();
+  }
+  if (!ncclDebugShouldLog(level, flags, ncclDebugMask)) {
+    return;
+  }
+
+  // An ERROR or WARN can turn on INFO for everything that follows. Hoisted out of the formatting branch
+  // below, which a record delivered to a sink never reaches, so that the behavior is the same either way.
+  // Held under ncclDebugMutex because this is a read-modify-write on a mask that ncclDebugInit() -- and
+  // therefore ncclResetDebugInit() -- also writes under that mutex; unsynchronised, an escalation racing
+  // a reset can swallow the reset's sentinel and the reset is silently lost.
+  if ((level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR) && ncclWarnSetDebugInfo.load(std::memory_order_relaxed)) {
+    std::lock_guard<std::mutex> lock(ncclDebugMutex);
+    uint32_t mask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
+    if (mask != NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED && mask != NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED) {
+      COMPILER_ATOMIC_STORE(&ncclDebugLevelMask, mask | ncclDebugLevelToMask(NCCL_LOG_INFO), std::memory_order_release);
+    }
+  }
+
+  // A sink takes ownership of the record: it receives the message plus the structured fields that NCCL
+  // would otherwise flatten into the text of a log line, and NCCL does not write it to ncclDebugFile.
+  //
+  // The shared lock is held across onRecord so the sink cannot be finalized or unloaded underneath it. It
+  // is a shared lock, so concurrent logging threads do not serialize on each other, and it is why a sink
+  // must not log: re-entering here on the same thread can deadlock against a waiting registration.
+  // inSinkDispatch guards against a sink that logs. Without it the record re-enters here, takes the
+  // shared lock recursively -- undefined behaviour, and a deadlock outright on a writer-preferring rwlock
+  // with a registration pending -- and recurses until the stack is exhausted. A re-entrant record falls
+  // through to the file instead of being lost.
+  static thread_local bool inSinkDispatch = false;
+  if (!inSinkDispatch && ncclDebugSinkPresent.load(std::memory_order_acquire)) {
+    std::shared_lock<std::shared_timed_mutex> sinkLock(ncclDebugSinkLock);
+    if (ncclDebugSink != nullptr) {
+      char message[sizeof(ncclLastError)];
+      va_list vcopy;
+      va_copy(vcopy, vargs);
+      (void)vsnprintf(message, sizeof(message), fmt, vcopy);
+      va_end(vcopy);
+
+      if (tid == -1) tid = ncclOsGetTid();
+      int sinkCudaDev = 0;
+      if (!(level == NCCL_LOG_TRACE && flags == NCCL_CALL)) (void)cudaGetDevice(&sinkCudaDev);
+
+      ncclDebugLogRecord_v1_t record;
+      record.level = (int)level;
+      record.subSys = flags;
+      record.file = file;
+      record.func = func;
+      record.line = line;
+      record.code = code;
+      record.format = fmt;
+      record.message = message;
+      record.hostname = hostname;
+      record.pid = pid;
+      record.tid = tid;
+      record.cudaDev = sinkCudaDev;
+      {
+        SinkDispatchGuard guard(inSinkDispatch);
+        (void)ncclDebugSink->onRecord(ncclDebugSinkCtx, &record);
+      }
+      return;
+    }
   }
 
   std::lock_guard<std::mutex> lock(ncclDebugMutex);
-  uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
-  if (levelMask == NCCL_DEBUG_LEVEL_MASK_UNINITIALIZED || levelMask == NCCL_DEBUG_LEVEL_MASK_RESET_TRIGGERED)
-    ncclDebugInit();
-  if (!ncclDebugShouldLog(level, flags, ncclDebugMask)) {
-    return;
-  }
 
   if (tid == -1) {
     tid = ncclOsGetTid();
@@ -315,8 +504,8 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   char buffer[1024];
   size_t len = 0;
 
-  // WARN and ATTN messages come with an extra newline at the beginning.
-  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN) {
+  // ERROR, WARN and ATTN messages come with an extra newline at the beginning.
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN || level == NCCL_LOG_ERROR) {
     buffer[len++] = '\n';
   }
 
@@ -368,18 +557,26 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   const char* fileStr = file ? file : "<unknown>";
   const char* funcStr = func ? func : "<unknown>";
 
+  // A root-cause ERR() site names the error it is about to return; a plain WARN() renders exactly as
+  // before. The symbolic name is used rather than ncclGetErrorString(), whose strings are user-facing
+  // prose ending in "run with NCCL_DEBUG=INFO for details" -- unhelpful inside the line that IS the
+  // detail, and long enough to need a much larger buffer.
+  char codeBuf[32 + NCCL_ERROR_SYMBOL_MAXLEN];
+  const char* codeStr = "";
+  if (code != ncclSuccess) {
+    snprintf(codeBuf, sizeof(codeBuf), "[%s] ", ncclErrorSymbol(code));
+    codeStr = codeBuf;
+  }
+
   // Add level specific formatting. The format string from the call site is incorporated into this prefix.
-  if (level == NCCL_LOG_WARN) {
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ERROR) {
+    const char* levelStr = (level == NCCL_LOG_ERROR) ? "ERROR" : "WARN";
     if (func && func[0]) {
-      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d (%s) NCCL WARN %s\n", cudaDev, fileStr, line,
-                      funcStr, fmt);
+      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d (%s) NCCL %s %s%s\n", cudaDev, fileStr, line,
+                      funcStr, levelStr, codeStr, fmt);
     } else {
-      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d NCCL WARN %s\n", cudaDev, fileStr, line, fmt);
-    }
-    if (ncclWarnSetDebugInfo) {
-      uint32_t levelMask = COMPILER_ATOMIC_LOAD(&ncclDebugLevelMask, std::memory_order_relaxed);
-      COMPILER_ATOMIC_STORE(&ncclDebugLevelMask, levelMask | ncclDebugLevelToMask(NCCL_LOG_INFO),
-                            std::memory_order_release);
+      len += snprintf(buffer + len, sizeof(buffer) - len, "[%d] %s:%d NCCL %s %s%s\n", cudaDev, fileStr, line, levelStr,
+                      codeStr, fmt);
     }
   } else if (level == NCCL_LOG_ATTN) {
     if (func && func[0]) {
@@ -415,13 +612,79 @@ static void ncclDebugLogV(ncclDebugLogLevel level, unsigned long flags, const ch
   va_end(vcopy);
 }
 
+// Backs ncclGetLastError(). Returns the process-global buffer itself, as it always has: a concurrent
+// error on another thread can overwrite it while the caller reads it.
+const char* ncclLastErrorMessage() {
+  return ncclLastError;
+}
+
+// Backs ncclGetLastErrorCode(). Returns the code of the last error ORIGIN, which is not necessarily the
+// error whose message ncclLastErrorMessage() returns -- a propagated report carries no code of its own.
+ncclResult_t ncclLastErrorResult() {
+  return ncclLastErrorCode.load(std::memory_order_relaxed);
+}
+
 // Internal only Common logging function used by the INFO, WARN, ATTN and TRACE macros
 void ncclDebugLogInternal(ncclDebugLogLevel level, unsigned long flags, const char* file, const char* func, int line,
                           const char* fmt, ...) {
   va_list vargs;
   va_start(vargs, fmt);
-  ncclDebugLogV(level, flags, file, func, line, fmt, vargs);
+  ncclDebugLogV(level, flags, file, func, line, ncclSuccess, fmt, vargs);
   va_end(vargs);
+}
+
+// Internal only logging function used by the ERR macro, for the site where an error originates.
+void ncclDebugLogErrorInternal(ncclResult_t code, unsigned long flags, const char* file, const char* func, int line,
+                               const char* fmt, ...) {
+  va_list vargs;
+  va_start(vargs, fmt);
+  ncclDebugLogV(NCCL_LOG_ERROR, flags, file, func, line, code, fmt, vargs);
+  va_end(vargs);
+}
+
+/* Routes log records to a caller-supplied sink instead of ncclDebugFile. Passing NULL restores the
+ * default file output. See the contract on ncclLogSink_v1_t in nccl.h.
+ */
+NCCL_API(ncclResult_t, ncclSetDebugLogSink, const ncclLogSink_v1_t* sink);
+ncclResult_t ncclSetDebugLogSink(const ncclLogSink_v1_t* sink) {
+  if (sink != nullptr && sink->onRecord == nullptr) return ncclInvalidArgument;
+
+  const ncclLogSink_v1_t* previous = nullptr;
+  void* previousCtx = nullptr;
+
+  {
+    // Taking the lock exclusively waits for every in-flight onRecord to return, so once the swap
+    // completes no thread can still be inside the outgoing sink.
+    std::unique_lock<std::shared_timed_mutex> sinkLock(ncclDebugSinkLock);
+
+    // There is one sink slot and more than one possible claimant -- an application registering directly,
+    // and a log plugin loaded from NCCL_LOG_PLUGIN. Silently replacing the incumbent would run its
+    // finalize() and redirect its records with no indication to either party, so installing over a live
+    // sink is refused. Remove the current one with NULL first if replacement is intended.
+    //
+    // Tested before init() runs, so a refused registration really does change nothing: the rejected sink
+    // is never initialized and never finalized.
+    if (sink != nullptr && ncclDebugSink != nullptr) return ncclInvalidUsage;
+
+    void* context = nullptr;
+    if (sink != nullptr && sink->init != nullptr) {
+      // Running init() under the exclusive lock is safe precisely because this point is only reached
+      // with no sink installed: ncclDebugSinkPresent is false, so anything the sink logs while
+      // initializing takes the lock-free path to ncclDebugFile rather than re-entering this lock.
+      ncclResult_t res = sink->init(&context);
+      if (res != ncclSuccess) return res;
+    }
+
+    previous = ncclDebugSink;
+    previousCtx = ncclDebugSinkCtx;
+    ncclDebugSink = sink;
+    ncclDebugSinkCtx = context;
+    ncclDebugSinkPresent.store(sink != nullptr, std::memory_order_release);
+  }
+
+  // The outgoing sink is detached and drained, so finalize() runs outside the lock, where it may log.
+  if (previous != nullptr && previous->finalize != nullptr) (void)previous->finalize(previousCtx);
+  return ncclSuccess;
 }
 
 /* Exported ABI logging function exported to the dynamically loadable Net
@@ -432,12 +695,12 @@ void ncclDebugLog(ncclDebugLogLevel level, unsigned long flags, const char* file
   va_start(vargs, fmt);
   const char* file = nullptr;
   const char* func = nullptr;
-  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN) {
+  if (level == NCCL_LOG_WARN || level == NCCL_LOG_ATTN || level == NCCL_LOG_ERROR) {
     file = filefunc;
   } else if (level == NCCL_LOG_TRACE) {
     func = filefunc;
   }
-  ncclDebugLogV(level, flags, file, func, line, fmt, vargs);
+  ncclDebugLogV(level, flags, file, func, line, ncclSuccess, fmt, vargs);
   va_end(vargs);
 }
 

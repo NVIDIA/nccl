@@ -15,18 +15,21 @@
 
 #define MAX_STR_LEN 255
 
-#define NUM_LIBS 6
+#define NUM_LIBS 7
 static char* libNames[NUM_LIBS];
 char* ncclPluginLibPaths[NUM_LIBS];
 static void* libHandles[NUM_LIBS];
-static const char* pluginNames[NUM_LIBS] = {"NET", "GIN", "RMA", "TUNER", "PROFILER", "ENV"};
-static const char* pluginPrefix[NUM_LIBS] = {"libnccl-net",   "libnccl-gin",      "libnccl-rma",
-                                             "libnccl-tuner", "libnccl-profiler", "libnccl-env"};
-static const char* pluginFallback[NUM_LIBS] = {"", "", "", "", "", ""};
-static unsigned long subsys[NUM_LIBS] = {
-  NCCL_INIT | NCCL_NET, NCCL_INIT | NCCL_NET, NCCL_INIT | NCCL_NET, NCCL_INIT | NCCL_TUNING, NCCL_INIT,
-  NCCL_INIT | NCCL_ENV
-};
+static const char* pluginNames[NUM_LIBS] = {"NET", "GIN", "RMA", "TUNER", "PROFILER", "ENV", "LOG"};
+static const char* pluginPrefix[NUM_LIBS] = {"libnccl-net",      "libnccl-gin", "libnccl-rma", "libnccl-tuner",
+                                             "libnccl-profiler", "libnccl-env", "libnccl-log"};
+static const char* pluginFallback[NUM_LIBS] = {"", "", "", "", "", "", ""};
+static unsigned long subsys[NUM_LIBS] = {NCCL_INIT | NCCL_NET,
+                                         NCCL_INIT | NCCL_NET,
+                                         NCCL_INIT | NCCL_NET,
+                                         NCCL_INIT | NCCL_TUNING,
+                                         NCCL_INIT,
+                                         NCCL_INIT | NCCL_ENV,
+                                         NCCL_INIT};
 
 static void* tryOpenLib(char* name, int* err, char* errStr) {
   *err = 0;
@@ -151,6 +154,10 @@ void* ncclOpenProfilerPluginLib(const char* name) {
 
 void* ncclOpenEnvPluginLib(const char* name) {
   return openPluginLib(ncclPluginTypeEnv, name);
+}
+
+void* ncclOpenLogPluginLib(const char* name) {
+  return openPluginLib(ncclPluginTypeLog, name);
 }
 
 void* ncclGetGinPluginLib(enum ncclPluginType type) {

@@ -39,6 +39,7 @@
 #include "nvtx.h"
 #include "os.h"
 #include "env.h"
+#include "log.h"
 #include "rma/rma.h"
 #include "tuning.h"
 
@@ -192,6 +193,9 @@ static std::once_flag envInitOnceFlag;
 
 static void envInitOnceFunc() {
   NCCLCHECKGOTO(ncclEnvPluginInit(), envInitResult, exit);
+  // After the env plugin, so NCCL_LOG_PLUGIN can be supplied by it, and outside the logging path so a
+  // plugin that logs while initializing cannot re-enter the logger installing it.
+  NCCLCHECKGOTO(ncclLogPluginInit(), envInitResult, exit);
 exit:;
 }
 
@@ -4000,7 +4004,19 @@ const char* ncclGetErrorString(ncclResult_t code) {
  */
 NCCL_API(const char*, ncclGetLastError, const ncclComm_t comm);
 const char* ncclGetLastError(ncclComm_t comm) {
-  return ncclLastError;
+  return ncclLastErrorMessage();
+}
+
+/* Returns the ncclResult_t that accompanied the error reported by ncclGetLastError.
+ *
+ * Returns ncclSuccess when no error has been recorded, or when the error came from a call site that did
+ * not name its result code -- a propagated WARN rather than an ERR at the origin. Like the message, it
+ * describes the last error raised anywhere in the process, so it is a hint for diagnostics rather than a
+ * substitute for the code returned by the failing call.
+ */
+NCCL_API(ncclResult_t, ncclGetLastErrorCode, const ncclComm_t comm);
+ncclResult_t ncclGetLastErrorCode(ncclComm_t comm) {
+  return ncclLastErrorResult();
 }
 
 NCCL_API(ncclResult_t, ncclCommGetAsyncError, ncclComm_t comm, ncclResult_t* asyncError);

@@ -263,7 +263,7 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_ST_impl(ncclSymkDevWorkArg
 
   bool waitNeeded = !EnableProfiler;
   handler.forEachWork<char>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts,
-                                           ncclSymPtr<char> input, ncclSymPtr<char> output) {
+                                           ncclSymPtr<char> input, ncclSymPtr<char> output, uint64_t /*redOpArg*/) {
         // Threads numbered over rank.
     int bt =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);
@@ -296,7 +296,7 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_STMC_impl(ncclSymkDevWorkA
   if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
   handler.forEachWork<char>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts,
-                                           ncclSymPtr<char> input, ncclSymPtr<char> output) {
+                                           ncclSymPtr<char> input, ncclSymPtr<char> output, uint64_t /*redOpArg*/) {
     // Round robin memory to blocks.
     int t =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);

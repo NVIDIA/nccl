@@ -23,8 +23,10 @@ static double softplus(double x, double softness) {
   return 100.0 <= z ? x : softness * std::log1p(std::exp(z));
 }
 
-bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int nBlocks,
-                          struct ncclSymkLsaEstimate* estimate) {
+ncclResult_t ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
+                                  int nBlocks, struct ncclSymkLsaEstimate* estimate, bool* modeled) {
+  *modeled = false;
+  *estimate = {};
   constexpr double LL_BusFactor = 9; // 2X the bytes, plus some processing, plus no unrolling
 
   struct ncclComm* comm = input->comm;
@@ -115,5 +117,6 @@ bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId
   estimate->ctaSelectionTimeUs = baseLat + softplus(busBytes / bw - 1, 1);
   estimate->timeUs = static_cast<float>(estimate->ctaSelectionTimeUs);
   estimate->selectionTimeUs = estimate->timeUs;
-  return std::isfinite(estimate->timeUs) && estimate->timeUs > 0.0f;
+  *modeled = std::isfinite(estimate->timeUs) && estimate->timeUs > 0.0f;
+  return ncclSuccess;
 }

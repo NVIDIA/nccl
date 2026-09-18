@@ -101,6 +101,14 @@ NCCL_DEVICE_INLINE int ncclTeamRankToLsa(ncclDevComm const& comm, ncclTeam tm, i
 }
 #endif
 
+#ifdef __CUDACC__
+NCCL_DEVICE_INLINE bool ncclDevCommCanGetPeerPointer(ncclDevComm const& comm, int peer) {
+  using nccl::utility::loadConst;
+  int const* peerDelta4G = loadConst(&comm.resourceWindow->lsaPeerDelta4G);
+  return loadConst(&peerDelta4G[peer]) != NCCL_LSA_PEER_DELTA4G_INVALID;
+}
+#endif
+
 NCCL_HOST_DEVICE_INLINE ncclTeam_t ncclTeamInnerFactor(ncclTeam_t parent, int innerSize) {
   ncclTeam_t ans;
   ans.nRanks = innerSize;
@@ -153,22 +161,17 @@ NCCL_DEVICE_INLINE void* ncclGetLsaPointer(ncclWindow_t w, size_t offset, int pe
 
 #ifdef __CUDACC__
 NCCL_DEVICE_INLINE void* ncclGetPeerPointer(ncclWindow_t w, size_t offset, int peer) {
-  char* base = nccl::utility::loadConst(&w->lsaFlatBase);
-  uint32_t stride4G = nccl::utility::loadConst(&w->stride4G);
-  int worldRank = nccl::utility::loadConst(&w->worldRank);
-  int lsaRank = nccl::utility::loadConst(&w->lsaRank);
-  int i = lsaRank + (peer - worldRank);
-  return (void*)(nccl::utility::add4G(base, i * stride4G) + offset);
+  using nccl::utility::loadConst;
+  int const* peerDelta4G = loadConst(&w->lsaPeerDelta4G);
+  char* base = loadConst(&w->lsaFlatBase);
+  return (void*)(nccl::utility::add4G(base, loadConst(&peerDelta4G[peer])) + offset);
 }
 #endif
 
 #ifdef __CUDACC__
 NCCL_DEVICE_INLINE void* ncclGetPeerPointer(ncclWindow_t w, size_t offset, ncclTeam tm, int peer) {
-  char* base = nccl::utility::loadConst(&w->lsaFlatBase);
-  uint32_t stride4G = nccl::utility::loadConst(&w->stride4G);
-  int lsaRank = nccl::utility::loadConst(&w->lsaRank);
-  int i = lsaRank + (peer - tm.rank) * tm.stride;
-  return (void*)(nccl::utility::add4G(base, i * stride4G) + offset);
+  int worldRank = nccl::utility::loadConst(&w->worldRank) + (peer - tm.rank) * tm.stride;
+  return ncclGetPeerPointer(w, offset, worldRank);
 }
 #endif
 
@@ -273,10 +276,10 @@ NCCL_DEVICE_INLINE void* ncclGetResourceBufferLsaPointer(ncclDevComm const& comm
 #ifdef __CUDACC__
 NCCL_DEVICE_INLINE void* ncclGetResourceBufferPeerPointer(ncclDevComm const& comm, ncclDevResourceHandle h,
                                                           ncclTeam team, int peer) {
-  int r = comm.lsaRank + (peer - team.rank) * team.stride;
+  int worldRank = comm.rank + (peer - team.rank) * team.stride;
+  int const* peerDelta4G = nccl::utility::loadConst(&comm.resourceWindow->lsaPeerDelta4G);
   void* lsaFlatBase = comm.resourceWindow_inlined.lsaFlatBase;
-  uint32_t stride4G = comm.resourceWindow_inlined.stride4G;
-  void* local = nccl::utility::add4G(lsaFlatBase, r * stride4G);
+  void* local = nccl::utility::add4G(lsaFlatBase, nccl::utility::loadConst(&peerDelta4G[worldRank]));
   return (void*)(reinterpret_cast<char (*)[128]>(local) + h);
 }
 #endif

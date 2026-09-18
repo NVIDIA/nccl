@@ -40,7 +40,8 @@ struct ginProxyHostGpuCtx {
   // size = nRanks * queueSize
   ncclGinProxyGfd_t* queues;
   void* cisGdrHandle;
-  // Produced Indices, one per rank. Only accessed by the GPU side, here only for freeing
+  // Produced indices followed by cached copies of cis, one each per rank.
+  // Only accessed by the GPU side; the host retains the pointer for freeing.
   uint32_t* pis;
   // Consumed Indices, one per rank
   uint32_t* cis;
@@ -605,7 +606,8 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
                   ret, fail);
     NCCLCHECKGOTO(ncclCalloc(&hostGpuCtx->cisShadow, cComm->nRanks), ret, fail);
     NCCLCHECKGOTO(ncclCalloc(&hostGpuCtx->sis, cComm->nRanks), ret, fail);
-    NCCLCHECKGOTO(ncclCudaCalloc(&hostGpuCtx->pis, cComm->nRanks, NULL), ret, fail);
+    NCCLCHECKGOTO(ncclCudaCalloc(&hostGpuCtx->pis, ncclGinProxyGpuPeerQueueIndexCount * cComm->nRanks, NULL), ret,
+                  fail);
     NCCLCHECKGOTO(ncclCudaCalloc(&hostGpuCtx->lastIssuedGet, cComm->nRanks, NULL), ret, fail);
     NCCLCHECKGOTO(ncclCudaCalloc(&hostGpuCtx->lastVisibleGet, cComm->nRanks, NULL), ret, fail);
 

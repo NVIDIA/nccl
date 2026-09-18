@@ -142,12 +142,21 @@ static_assert(alignof(ncclGinProxyGfd_t) >= 16, "ncclGinProxyGfd_t must be at le
                                                 "casts to (uint4*) for v4 PTX load/store; lower alignment causes "
                                                 "cudaErrorMisalignedAddress.");
 
+typedef enum {
+  ncclGinProxyGpuPeerQueuePi = 0,
+  ncclGinProxyGpuPeerQueueCachedCi = 1,
+  ncclGinProxyGpuPeerQueueIndexCount = 2,
+} ncclGinProxyGpuPeerQueueIndex_t;
+
 typedef struct {
   int nranks;
   uint32_t queueSize;
   ncclGinProxyGfd_t* queues;
+  // GPU-resident producer indices followed by cached copies of cis. Keeping
+  // both arrays in this allocation preserves the context layout.
   uint32_t* pis;
-  // The consumer indices will reside in CPU or GPU memory depending on the availability of GDR
+  // The consumer indices reside in CPU or GPU memory depending on the
+  // availability of GDR.
   uint32_t* cis;
 
   uint64_t* counters;

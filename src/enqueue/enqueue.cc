@@ -1024,8 +1024,18 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     stepSize[dir] = comm->buffSizes[protocol[dir]] / NCCL_STEPS;
     if (protocol[dir] == NCCL_PROTO_SIMPLE) stepSize[dir] = comm->p2pChunkSize;
     chunkSize[dir] = stepSize[dir];
-    if (paramChunkSize != 0) {
-      chunkSize[dir] = paramChunkSize;
+    if (paramChunkSize > 0) {
+      // The kernel moves one chunk per step into a buffer slot of stepSize bytes; keep the chunk within it.
+      chunkSize[dir] = std::max<ssize_t>(16, std::min<ssize_t>(paramChunkSize, stepSize[dir]));
+      if (paramChunkSize > stepSize[dir] && protocol[dir] == NCCL_PROTO_SIMPLE) {
+        static bool warned = false;
+        if (!warned) {
+          warned = true;
+          WARN("NCCL_CHUNK_SIZE %ld is larger than the P2P step size %d, clamping to %d (the step is the smaller of "
+               "NCCL_P2P_NET_CHUNKSIZE/NCCL_P2P_PCI_CHUNKSIZE/NCCL_P2P_NVL_CHUNKSIZE and NCCL_BUFFSIZE/%d)",
+               (long)paramChunkSize, stepSize[dir], stepSize[dir], NCCL_STEPS);
+        }
+      }
     } else if (network[dir]) {
       // Tune chunk size for the network
       if (protocol[dir] == NCCL_PROTO_SIMPLE && bytes[dir] < stepSize[dir]) chunkSize[dir] /= 4;

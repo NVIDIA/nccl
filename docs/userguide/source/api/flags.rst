@@ -67,3 +67,22 @@ These flags modify the behavior of the ``ncclCommShrink`` operation.
    This is used for error recovery scenarios where the parent communicator might be in a hung state.
    Resources of parent comm are still not freed, users should decide whether to call ncclCommAbort on the parent communicator after shrink.
    Value: ``0x01``.
+
+.. _gin_opt_flags:
+
+GIN Optimization Flags
+----------------------
+
+These flags modify the behavior of GIN Device API operations (see :ref:`device_api_gin`).
+Flags may be combined with a bitwise OR.
+
+.. cpp:enumerator:: ncclGinOptFlagsDefault
+
+   Default behavior; no optional flags are given to the backend.
+
+.. cpp:enumerator:: ncclGinOptFlagsAggregateRequests
+
+   A user can specify this flag if more requests are expected in the near future.
+   Implementations can reduce overhead by delaying some logic until after the batch is complete.
+   For example, if a user posts N requests, this flag can be used for (N - 1) requests.
+   However, the Nth request must not use this flag to ensure correctness.

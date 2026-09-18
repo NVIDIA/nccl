@@ -190,7 +190,7 @@ struct ncclSymkArgsHandler {
 
       fn(block, nBlocks, currentIndexHi - currentIndexLo, nAllElts,
          ncclSymPtr<T>(dw.inputWin, dw.inputOff) + currentIndexLo,
-         ncclSymPtr<T>(dw.outputWin, dw.outputOff) + currentIndexLo);
+         ncclSymPtr<T>(dw.outputWin, dw.outputOff) + currentIndexLo, dw.redOpArg);
 
       currentIndexLo = 0;
     }

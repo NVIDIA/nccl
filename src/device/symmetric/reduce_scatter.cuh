@@ -373,7 +373,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LD_impl(ncclSymkDevWor
 
   bool waitNeeded = !EnableProfiler;
   handler.forEachWork<T>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts, ncclSymPtr<T> input,
-                                        ncclSymPtr<T> output) {
+                                        ncclSymPtr<T> output, uint64_t /*redOpArg*/) {
         // Round robin warps over blocks.
     int t =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);
@@ -471,7 +471,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LDMC(ncclSymkDevWorkAr
   if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
   handler.forEachWork<T>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts, ncclSymPtr<T> input,
-                                        ncclSymPtr<T> output) {
+                                        ncclSymPtr<T> output, uint64_t /*redOpArg*/) {
         // Round robin warps over blocks.
     int t =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);

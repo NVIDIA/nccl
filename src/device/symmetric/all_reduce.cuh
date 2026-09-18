@@ -409,7 +409,7 @@ __device__ __forceinline__ void ncclSymkRun_AllReduce_RSxLD_AGxST_impl(ncclSymkD
 
   bool waitNeeded = !EnableProfiler;
   handler.forEachWork<T>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts, ncclSymPtr<T> input,
-                                        ncclSymPtr<T> output) {
+                                        ncclSymPtr<T> output, uint64_t /*redOpArg*/) {
         // Threads numbered globally such that we round robin warps by rank then block.
     int gt = flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, rank, nRanks, block, nBlocks, threadIdx.x / WARP_SIZE,
                        blockDim.x / WARP_SIZE);
@@ -498,7 +498,7 @@ __device__ __forceinline__ void ncclSymkRun_AllReduce_RSxLDMC_AGxSTMC(ncclSymkDe
   if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
   handler.forEachWork<T>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts, ncclSymPtr<T> input,
-                                        ncclSymPtr<T> output) {
+                                        ncclSymPtr<T> output, uint64_t /*redOpArg*/) {
         // Threads numbered globally such that we round robin warps by rank then block.
     int gt = flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, rank, nRanks, block, nBlocks, threadIdx.x / WARP_SIZE,
                        blockDim.x / WARP_SIZE);

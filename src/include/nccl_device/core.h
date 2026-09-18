@@ -25,6 +25,7 @@ typedef struct ncclMultimemHandle ncclMultimemHandle_t;
 
 typedef uint32_t ncclDevResourceHandle;
 typedef ncclDevResourceHandle ncclDevResourceHandle_t;
+#define NCCL_DEV_RESOURCE_HANDLE_INVALID UINT32_MAX
 
 typedef uint32_t ncclGinSignal_t;
 typedef uint32_t ncclGinCounter_t;

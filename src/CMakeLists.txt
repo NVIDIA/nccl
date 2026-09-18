@@ -141,9 +141,10 @@ add_custom_command(
 
 file(GLOB_RECURSE SRC_DEVICE_HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include/nccl_device/*.h)
 # On Windows, do not copy GIN device headers (GIN is Linux-only).
-# Exclude nccl_device/gin.h and nccl_device/gin/* but keep nccl_device/gin_barrier.h etc.
+# Exclude nccl_device/gin.h, nccl_device/gin_flow.h, and nccl_device/gin/* but keep nccl_device/gin_barrier.h etc.
 if(NCCL_OS_WINDOWS)
     list(FILTER SRC_DEVICE_HEADERS EXCLUDE REGEX "nccl_device/gin\\.h")
+    list(FILTER SRC_DEVICE_HEADERS EXCLUDE REGEX "nccl_device/gin_flow\\.h")
     list(FILTER SRC_DEVICE_HEADERS EXCLUDE REGEX "nccl_device/gin/")
 endif()
 

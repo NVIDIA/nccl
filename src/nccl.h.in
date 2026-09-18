@@ -393,24 +393,24 @@ ncclResult_t  ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
 ncclResult_t pncclCommGetAsyncError(ncclComm_t comm, ncclResult_t *asyncError);
 
 /* Gets the number of ranks in the communicator clique. */
-ncclResult_t  ncclCommCount(const ncclComm_t comm, int* count);
-ncclResult_t pncclCommCount(const ncclComm_t comm, int* count);
+ncclResult_t  ncclCommCount(ncclComm_t comm, int* count);
+ncclResult_t pncclCommCount(ncclComm_t comm, int* count);
 
 /* Returns the cuda device number associated with the communicator. */
-ncclResult_t  ncclCommCuDevice(const ncclComm_t comm, int* device);
-ncclResult_t pncclCommCuDevice(const ncclComm_t comm, int* device);
+ncclResult_t  ncclCommCuDevice(ncclComm_t comm, int* device);
+ncclResult_t pncclCommCuDevice(ncclComm_t comm, int* device);
 
 /* Returns the user-ordered "rank" associated with the communicator. */
-ncclResult_t  ncclCommUserRank(const ncclComm_t comm, int* rank);
-ncclResult_t pncclCommUserRank(const ncclComm_t comm, int* rank);
+ncclResult_t  ncclCommUserRank(ncclComm_t comm, int* rank);
+ncclResult_t pncclCommUserRank(ncclComm_t comm, int* rank);
 
 /* Register CUDA buffer for zero-copy operation */
-ncclResult_t  ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
-ncclResult_t pncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t  ncclCommRegister(ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t pncclCommRegister(ncclComm_t comm, void* buff, size_t size, void** handle);
 
 /* Deregister CUDA buffer */
-ncclResult_t  ncclCommDeregister(const ncclComm_t comm, void* handle);
-ncclResult_t pncclCommDeregister(const ncclComm_t comm, void* handle);
+ncclResult_t  ncclCommDeregister(ncclComm_t comm, void* handle);
+ncclResult_t pncclCommDeregister(ncclComm_t comm, void* handle);
 
 /* Communicator suspend flags */
 #define NCCL_SUSPEND_MEM 0x01       // Suspend memory (release dynamic allocations)

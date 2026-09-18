@@ -146,8 +146,8 @@ ncclResult_t ncclRegCleanup(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-NCCL_API(ncclResult_t, ncclCommRegister, const ncclComm_t comm, void* buff, size_t size, void** handle);
-ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
+NCCL_API(ncclResult_t, ncclCommRegister, ncclComm_t comm, void* buff, size_t size, void** handle);
+ncclResult_t ncclCommRegister(ncclComm_t comm, void* buff, size_t size, void** handle) {
   if (!ncclParamLocalRegister() || ncclP2pUsesMemcpy()) {
     *handle = NULL;
     INFO(NCCL_REG, "Skipping registration for buffer %p size %zi (LocalRegister=%ld, P2pUsesMemcpy=%d)", buff, size,
@@ -158,7 +158,7 @@ ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, vo
   return ncclSuccess;
 }
 
-ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
+ncclResult_t ncclCommGraphRegister(ncclComm_t comm, void* buff, size_t size, void** handle) {
   if (ncclP2pUsesMemcpy()) {
     *handle = NULL;
     INFO(NCCL_REG, "Skipping graph registration for buffer %p size %zi (P2pUsesMemcpy=%d)", buff, size,
@@ -194,13 +194,13 @@ exit:
   return ncclSuccess;
 }
 
-NCCL_API(ncclResult_t, ncclCommDeregister, const ncclComm_t comm, void* handle);
-ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle) {
+NCCL_API(ncclResult_t, ncclCommDeregister, ncclComm_t comm, void* handle);
+ncclResult_t ncclCommDeregister(ncclComm_t comm, void* handle) {
   NCCLCHECK(commDeregister(comm, false, (struct ncclReg*)handle));
   return ncclSuccess;
 }
 
-ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg* handle) {
+ncclResult_t ncclCommGraphDeregister(ncclComm_t comm, struct ncclReg* handle) {
   NCCLCHECK(commDeregister(comm, true, handle));
   return ncclSuccess;
 }

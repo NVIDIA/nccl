@@ -238,28 +238,28 @@ enqueued on that communicator.
 ncclCommCount
 -------------
 
-.. c:function:: ncclResult_t ncclCommCount(const ncclComm_t comm, int* count)
+.. c:function:: ncclResult_t ncclCommCount(ncclComm_t comm, int* count)
 
 Returns in *count* the number of ranks in the NCCL communicator *comm*.
 
 ncclCommCuDevice
 ----------------
 
-.. c:function:: ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* device)
+.. c:function:: ncclResult_t ncclCommCuDevice(ncclComm_t comm, int* device)
 
 Returns in *device* the CUDA device associated with the NCCL communicator *comm*.
 
 ncclCommUserRank
 ----------------
 
-.. c:function:: ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank)
+.. c:function:: ncclResult_t ncclCommUserRank(ncclComm_t comm, int* rank)
 
 Returns in *rank* the rank of the caller in the NCCL communicator *comm*.
 
 ncclCommRegister
 ----------------
 
-.. c:function:: ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle)
+.. c:function:: ncclResult_t ncclCommRegister(ncclComm_t comm, void* buff, size_t size, void** handle)
 
 Registers the buffer *buff* with *size* under communicator *comm* for zero-copy communication; *handle* is
 returned for future deregistration. See *buff* and *size* requirements and more instructions in :ref:`user_buffer_reg`.
@@ -267,7 +267,7 @@ returned for future deregistration. See *buff* and *size* requirements and more 
 ncclCommDeregister
 ------------------
 
-.. c:function:: ncclResult_t ncclCommDeregister(const ncclComm_t comm, void* handle)
+.. c:function:: ncclResult_t ncclCommDeregister(ncclComm_t comm, void* handle)
 
 Deregister buffer represented by *handle* under communicator *comm*.
 

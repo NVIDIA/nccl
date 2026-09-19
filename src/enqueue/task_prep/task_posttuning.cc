@@ -157,15 +157,16 @@ static ncclResult_t postTuneP2pRecordPreconnect(struct ncclComm* comm, int peer,
 
   if (peer < 0 || peer >= comm->nRanks) return ncclInvalidArgument;
   if (comm->rank == peer) return ncclSuccess;
-  if (isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen) return ncclSuccess;
+  if ((isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen) == ncclP2pPlanChannels(comm))
+    return ncclSuccess;
 
   NCCLCHECK(postTuneP2pChannelBase(comm, peer, isSendNotRecv, &base));
 
   // Mark channels that need pre-connect. planner->peers[peer].send/recvSeen is
   // private to each comm, so we need to set it anyway.
-  (isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen) = true;
-  for (int c = 0; c < comm->p2pnChannelsPerPeer; c++) {
-    int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, c);
+  (isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen) = ncclP2pPlanChannels(comm);
+  for (int c = 0; c < std::min(comm->p2pnChannelsPerPeer, ncclP2pPlanChannels(comm)); c++) {
+    int channelId = ncclP2pChannelForPart(ncclP2pPlanChannels(comm), base, c);
 
     // P2P uses only 1 connector. The send/recv connector is shared among split
     // shared comms, so set hasSeen to avoid duplicate connection setup if user
@@ -229,7 +230,7 @@ static ncclResult_t postTuneP2pRegisterBuffer(struct ncclComm* comm, struct nccl
 
   NCCLCHECK(postTuneP2pChannelBase(comm, peer, isSendNotRecv, &base));
 
-  int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, 0);
+  int channelId = ncclP2pChannelForPart(ncclP2pPlanChannels(comm), base, 0);
   struct ncclChannelPeer** channelPeers = comm->channels[channelId].peers;
   struct ncclConnector* conn =
     isSendNotRecv ? &channelPeers[peer]->send[connIndex] : &channelPeers[peer]->recv[connIndex];
@@ -240,8 +241,8 @@ static ncclResult_t postTuneP2pRegisterBuffer(struct ncclComm* comm, struct nccl
   if (network) {
     bool pxnUsed = !ncclPxnDisable(comm) && comm->isAllNvlink && comm->maxLocalRanks > 1;
     if (proxySameProcess && !pxnUsed && (conn->conn.flags & NCCL_DIRECT_NIC)) {
-      for (int part = 0; part < comm->p2pnChannelsPerPeer; part++) {
-        int partChannelId = ncclP2pChannelForPart(comm->p2pnChannels, base, part);
+      for (int part = 0; part < std::min(comm->p2pnChannelsPerPeer, ncclP2pPlanChannels(comm)); part++) {
+        int partChannelId = ncclP2pChannelForPart(ncclP2pPlanChannels(comm), base, part);
         struct ncclConnector* partConn = isSendNotRecv ? &comm->channels[partChannelId].peers[peer]->send[connIndex] :
                                                          &comm->channels[partChannelId].peers[peer]->recv[connIndex];
         int regFlag = 0;

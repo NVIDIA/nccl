@@ -18,6 +18,12 @@ ncclResult_t initCollnetChannel(struct ncclComm* comm, int channelId, struct ncc
 ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRanks, int nvlsNRanks,
                          struct ncclComm* comm);
 
+inline int ncclP2pPlanChannels(struct ncclComm* comm) {
+  int cap = comm->planner.p2pMaxCTAs;
+  // Channel-to-part mapping requires a power-of-two channel count.
+  return cap == 0 ? comm->p2pnChannels : 1 << log2Down(std::min(cap, comm->p2pnChannels));
+}
+
 inline uint8_t ncclP2pChannelBaseForRound(struct ncclComm* comm, int p2pRound) {
   int base;
   if (comm->nNodes > 1) {
@@ -29,7 +35,7 @@ inline uint8_t ncclP2pChannelBaseForRound(struct ncclComm* comm, int p2pRound) {
   } else {
     base = p2pRound;
   }
-  return reverseBits(base, log2Up(comm->p2pnChannels));
+  return reverseBits(base, log2Up(ncclP2pPlanChannels(comm)));
 }
 
 #endif

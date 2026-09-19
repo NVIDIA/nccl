@@ -2792,6 +2792,12 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t* config) {
                       "hostCftMode", "%d");
   NCCL_CONFIG_DEFAULT(internalConfigPtr, nvlsHostMode, NCCL_CONFIG_UNDEF_INT, 0, "nvlsHostMode", "%d");
 
+  if ((internalConfigPtr->workAllocator.alloc == nullptr) != (internalConfigPtr->workAllocator.free == nullptr)) {
+    WARN("Config workAllocator requires both alloc and free callbacks");
+    ret = ncclInvalidArgument;
+    goto fail;
+  }
+
   /* assign config to communicator */
   comm->config.blocking = internalConfigPtr->blocking;
   comm->config.cgaClusterSize = internalConfigPtr->cgaClusterSize;
@@ -2816,6 +2822,7 @@ static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t* config) {
   comm->config.rmaEagerInit = internalConfigPtr->rmaEagerInit;
   comm->config.hostCftMode = internalConfigPtr->hostCftMode;
   comm->config.nvlsHostMode = internalConfigPtr->nvlsHostMode;
+  comm->config.workAllocator = internalConfigPtr->workAllocator;
   NCCLCHECKGOTO(envConfigOverride(comm), ret, fail);
 
   // Resolve to system default (serialize) if neither user config nor env var set it.

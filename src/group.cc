@@ -1081,6 +1081,11 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
     }
   }
 
+  for (struct ncclComm* comm = ncclGroupCommHead[ncclGroupTaskTypeCollective]; comm != nullptr;
+       comm = comm->groupNext[ncclGroupTaskTypeCollective]) {
+    ncclPrepareP2pConnections(comm);
+  }
+
   NEW_NOTHROW_GOTO(groupJob, ncclGroupJob, ret, fail);
   ncclIntruQueueConstruct(&groupJob->asyncJobs);
   groupJob->groupRefCount = 0;

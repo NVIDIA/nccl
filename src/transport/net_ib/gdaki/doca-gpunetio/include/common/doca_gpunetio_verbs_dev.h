@@ -37,6 +37,7 @@
 #ifndef DOCA_GPUNETIO_VERBS_DEV_H
 #define DOCA_GPUNETIO_VERBS_DEV_H
 
+#include <stddef.h>
 #include "doca_gpunetio_verbs_def.h"
 
 #ifdef __cplusplus
@@ -188,11 +189,18 @@ struct doca_gpu_dev_verbs_qp {
     uint8_t *sq_wqe_daddr;         /**< SQ WQE address */
     __be32 *sq_dbrec;              /**< SQ DBREC address */
     uint64_t *sq_db;               /**< SQ DB address */
-    uint8_t reserved1[8];          /**< Reserved */
-    uint8_t reserved2[64];         /**< Reserved */
+    uint64_t rq_wqe_pi;           /**< RQ producer index */
+    uint64_t rq_wqe_ci;           /**< RQ consumer index */
+    uint8_t *rq_wqe_daddr;        /**< RQ WQE address */
+    __be32 *rq_dbrec;             /**< RQ doorbell record */
+    uint32_t rq_wqe_num;          /**< RQ depth; zero when disabled */
+    uint32_t rq_wqe_mask;         /**< RQ depth minus one */
+    uint32_t rq_wqe_stride;       /**< Receive WQE size in bytes */
+    int recv_lock;               /**< Serializes receive completion consumers */
+    uint8_t rq_reserved[24];      /**< Reserved */
 
     struct doca_gpu_dev_verbs_cq cq_sq; /**< SQ CQ connected to QP */
-    uint8_t reserved3[64];              /**< Reserved */
+    struct doca_gpu_dev_verbs_cq cq_rq; /**< RQ CQ connected to QP */
 
     enum doca_gpu_dev_verbs_nic_handler nic_handler; /**< NIC handler */
     enum doca_gpu_dev_verbs_mem_type mem_type;       /**< Memory type of the completion */
@@ -200,6 +208,12 @@ struct doca_gpu_dev_verbs_qp {
 
 #ifdef __cplusplus
 }
+
+// Preserve the existing device QP layout when using reserved space for the RQ.
+static_assert(sizeof(doca_gpu_dev_verbs_cq) == 64, "Unexpected CQ size");
+static_assert(sizeof(doca_gpu_dev_verbs_qp) == 296, "Unexpected QP size");
+static_assert(offsetof(doca_gpu_dev_verbs_qp, cq_sq) == 160, "Unexpected SQ CQ offset");
+static_assert(offsetof(doca_gpu_dev_verbs_qp, nic_handler) == 288, "Unexpected NIC handler offset");
 #endif
 
 #endif /* DOCA_GPUNETIO_VERBS_DEV_H */

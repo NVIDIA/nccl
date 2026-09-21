@@ -97,25 +97,27 @@ template <typename T, typename Coop, typename IntCount, int UNROLL = 4 * 16 / si
 NCCL_DEVICE_INLINE void ncclLsaCopy(Coop, T*, ncclWindow_t, size_t, IntCount, ncclDevComm_t);
 
 // TMA Copy/Broadcast (1->N), sm100+ only
+// Each form takes the staging buffer pointer followed by its capacity in bytes.
+// Coop is Thread, Warp, or CTA, optionally wrapped in ncclCoopAny.
 // 4.1T] LSA TMA Copy (lambda-based)
-template <typename T, typename Coop, typename DstLambda, typename IntCount, int SmemBytesTotal>
-NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, DstLambda, int, IntCount, char*);
+template <typename T, typename Coop, typename DstLambda, typename IntCount>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, DstLambda, int, IntCount, char*, int);
 
 // 4.2Ta] LSA TMA Copy (with ncclSymPtr + team)
-template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
-NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclSymPtr<T>, IntCount, ncclTeam, char*);
+template <typename T, typename Coop, typename IntCount>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclSymPtr<T>, IntCount, ncclTeam, char*, int);
 
 // 4.2Tb] LSA TMA Copy (with ncclSymPtr + devComm)
-template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
-NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclSymPtr<T>, IntCount, ncclDevComm_t, char*);
+template <typename T, typename Coop, typename IntCount>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclSymPtr<T>, IntCount, ncclDevComm_t, char*, int);
 
 // 4.2Tc] LSA TMA Copy (with window + offset + team)
-template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
-NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclWindow_t, size_t, IntCount, ncclTeam, char*);
+template <typename T, typename Coop, typename IntCount>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclWindow_t, size_t, IntCount, ncclTeam, char*, int);
 
 // 4.2Td] LSA TMA Copy (with window + offset + devComm)
-template <typename T, typename Coop, typename IntCount, int SmemBytesTotal>
-NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclWindow_t, size_t, IntCount, ncclDevComm_t, char*);
+template <typename T, typename Coop, typename IntCount>
+NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, ncclWindow_t, size_t, IntCount, ncclDevComm_t, char*, int);
 
 // 4.3a] Multimem Copy (with ncclSymPtr)
 template <typename T, typename Coop, typename IntCount, int UNROLL = 4 * 16 / sizeof(T)>

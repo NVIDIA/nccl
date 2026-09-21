@@ -422,18 +422,26 @@ NCCL_DEVICE_INLINE void reduceCopy(Coop coop, SrcLambda srcLambda, int nSrc, Dst
 }
 
 #if __CUDA_ARCH__ >= 1000
-// TMA-based Copy (Broadcast) Loop (sm100+ only). SmemBytesTotal is the size of the caller's staging
+// TMA-based Copy (Broadcast) Loop (sm100+ only). smemBytesTotal is the size of the caller's staging
 // buffer for the whole coop. It is split into as many 16B-aligned [data tile][mbarrier] slots as
 // fit (each at least 32B). Extra warps stay idle and rejoin at coop.sync().
-template <int SmemBytesTotal, typename T, typename IntCount, typename Coop, typename DstLambda>
-NCCL_DEVICE_INLINE void lsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count, char* smemPtr) {
+template <typename T, typename IntCount, typename Coop, typename DstLambda>
+NCCL_DEVICE_INLINE void lsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count, char* smemPtr,
+                                   int smemBytesTotal) {
   using Pack = EltPackForBytes<T, 16>;
   using Bar = cuda::barrier<cuda::thread_scope_block>;
   constexpr int warpSize = 32;
   constexpr int barFootprint = (int)((sizeof(Bar) + 15) & ~size_t(15)); // rounds sizeof(Bar) up to a multiple of 16
   constexpr int minSlotBytes = barFootprint + 16;
 
-  static_assert(SmemBytesTotal >= minSlotBytes, "SmemBytesTotal must be at least 32 bytes");
+  if (smemBytesTotal < minSlotBytes) {
+#if NCCL_DEVICE_DEBUG_CHECKS
+    if (coop.thread_rank() == 0) {
+      assert(false && "smemBytesTotal must be at least 32 bytes");
+    }
+#endif
+    return;
+  }
 
   const IntCount totalPacks = safeDiv<IntCount>(count, Pack::Count);
   const int nWarps = (coop.size() + warpSize - 1) / warpSize;
@@ -441,8 +449,8 @@ NCCL_DEVICE_INLINE void lsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, in
   const int groupId = coop.thread_rank() / warpSize;
 
   // We try to use as many warps as we can to get a minSlotBytes slice
-  const int nActiveWarps = (nWarps < SmemBytesTotal / minSlotBytes) ? nWarps : (SmemBytesTotal / minSlotBytes);
-  const int smemBytesPerWarp = (SmemBytesTotal / nActiveWarps) & ~15;
+  const int nActiveWarps = (nWarps < smemBytesTotal / minSlotBytes) ? nWarps : (smemBytesTotal / minSlotBytes);
+  const int smemBytesPerWarp = (smemBytesTotal / nActiveWarps) & ~15;
   const size_t tileSize = (size_t)(smemBytesPerWarp - barFootprint);
   const IntCount packsPerWarpTile = (IntCount)(tileSize / sizeof(Pack));
   const IntCount packsPerIter = (IntCount)nActiveWarps * packsPerWarpTile;

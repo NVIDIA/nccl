@@ -91,7 +91,9 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v4_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v5_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v7_t;
+typedef ncclProfilerEventState_t ncclProfilerEventState_v8_t;
 
+#include "profiler_v8.h"
 #include "profiler_v7.h"
 #include "profiler_v6.h"
 #include "profiler_v5.h"
@@ -101,8 +103,14 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v7_t;
 #include "profiler_v1.h"
 #include "profiler_net.h"
 
-typedef ncclProfiler_v7_t ncclProfiler_t;
-typedef ncclProfilerEventDescr_v7_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_t;
+// Inspector consumes the v8 interface: NCCL stamps authoritative timestamps on
+// every event, so the plugin no longer derives event start/stop from its own
+// host clock (which is meaningless in lossy mode, where the poller emits events
+// long after the kernel ran).
+typedef ncclProfiler_v8_t ncclProfiler_t;
+typedef ncclProfilerEventDescr_v8_t ncclProfilerEventDescr_t;
+typedef ncclProfilerEventStateArgs_v8_t ncclProfilerEventStateArgs_t;
+typedef ncclProfilerEventStopDescr_v8_t ncclProfilerEventStopDescr_t;
+typedef ncclProfilerConfig_v8_t ncclProfilerConfig_t;
 
 #endif // end include guard

@@ -21,6 +21,7 @@
 #include <thread>
 #include <condition_variable>
 #include <chrono>
+#include <time.h>
 #include "os.h"
 
 extern ncclProfiler_t* getNcclProfiler_v1(void* lib);
@@ -30,15 +31,38 @@ extern ncclProfiler_t* getNcclProfiler_v4(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v5(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v6(void* lib);
 extern ncclProfiler_t* getNcclProfiler_v7(void* lib);
+extern ncclProfiler_t* getNcclProfiler_v8(void* lib);
 
 // Observability threshold for pending+active ops. We keep enqueueing beyond
 // this so KernelCh events stay paired with their parent task events.
 #define NCCL_PROFILER_DEFAULT_MAX_INFLIGHT (MAXCHANNELS * MAX_PROFILER_EVENTS_PER_CHANNEL * 4)
 
+// GPU->CPU time calibration, owned and used solely by one profiler thread.
+//
+// The device profiler stamps GPU globaltimer ns into KernelCh/slab timestamps.
+// To report those as CPU CLOCK_MONOTONIC/REALTIME (v8), the thread periodically
+// launches a 1-thread probe kernel (ncclProfilerProbeGpuClock) sandwiched
+// between CPU clock reads, takes the lowest-latency (gpu, mono, real) anchor,
+// and fits a near-unity linear map cpu = ref + slope*(gpu - gpuRef). The slope
+// is refined from consecutive anchors (clamped near 1.0 to reject bad samples).
+struct ncclProfilerClockCalib {
+  bool ready;                 // probe stream + pinned buffer allocated
+  bool valid;                 // at least one good anchor taken
+  cudaStream_t stream;
+  unsigned long long* pinned; // probe output (host-pinned, kernel-visible)
+  uint64_t gpuRef, monoRef, realRef;
+  double slopeMono, slopeReal;
+  bool havePrev;
+  uint64_t prevGpu, prevMono, prevReal;
+  uint64_t nextCalibMono;     // recalibrate once mono reaches this
+};
+
 struct ncclProfilerThread {
   std::thread thread;
   std::mutex mutex;
   std::condition_variable cond;
+  // GPU->CPU time calibration (only touched by this thread).
+  struct ncclProfilerClockCalib clockCalib;
   // Signalled when iterationActive transitions to false; lets a concurrent
   // ncclProfilerThreadDestroy wait for an in-flight progress pass to finish.
   std::condition_variable condIterationInactive;
@@ -79,6 +103,216 @@ static std::mutex profilerMutex;
 static int profilerPluginRefCount;
 static void* profilerPluginLib;
 static ncclProfiler_t* ncclProfiler;
+
+// True once a plugin has asked for NCCL-sourced timings by setting
+// ncclProfilerConfig_t::ncclSourcedTimings during init. Until then NCCL reads
+// no clocks, runs no GPU clock calibration and leaves every timestamp at
+// NCCL_PROFILER_TS_NONE, so a plugin that does not want them pays nothing.
+//
+// Process-wide rather than per-comm: the toggle is negotiated per communicator
+// but the stamping sites (group API, proxy control, net callbacks) have no comm
+// in hand, and one plugin library answers for every comm in the process. The
+// per-comm answer is still recorded in comm->profiler.config. Once any comm has
+// asked, stamping stays on until the plugin is unloaded.
+static bool profilerStampTs = false;
+
+// NCCL-stamped CPU clocks for v8 events. CLOCK_MONOTONIC is the canonical
+// timebase for ordering/durations; CLOCK_REALTIME is a wall-clock anchor for
+// human readability (it can jump and must not be used for durations).
+static inline void profilerCpuNow(uint64_t* tsCpuMono, uint64_t* tsCpuReal) {
+  struct timespec tm, tr;
+  clock_gettime(CLOCK_MONOTONIC, &tm);
+  clock_gettime(CLOCK_REALTIME, &tr);
+  *tsCpuMono = (uint64_t)tm.tv_sec * 1000000000ull + (uint64_t)tm.tv_nsec;
+  *tsCpuReal = (uint64_t)tr.tv_sec * 1000000000ull + (uint64_t)tr.tv_nsec;
+}
+
+// Stop a host-side (CPU-timed) event, stamping the current CPU clocks. tsGpu
+// stays 0 since these events are not GPU-derived. Used for all host-thread,
+// proxy-thread, net and CE stops.
+static inline void profilerStopEventHost(void* eHandle) {
+  ncclProfilerEventStopDescr_t sd = { };
+  if (profilerStampTs) profilerCpuNow(&sd.tsCpuMono, &sd.tsCpuReal);
+  ncclProfiler->stopEvent(eHandle, &sd);
+}
+
+// Stop with no NCCL timestamps (zeroed stop descriptor). Used for CE events,
+// whose completion is tracked by the plugin's own CUDA events rather than by a
+// host clock at the API boundary, so NCCL deliberately does not stamp them.
+static inline void profilerStopEventNone(void* eHandle) {
+  ncclProfilerEventStopDescr_t sd = { };
+  ncclProfiler->stopEvent(eHandle, &sd);
+}
+
+// ---------------------------------------------------------------------------
+// GPU->CPU time calibration (profiler-thread local).
+// ---------------------------------------------------------------------------
+#define NCCL_PROF_CLOCK_PROBES        8                    // best-of-N per anchor
+#define NCCL_PROF_CLOCK_RECALIB_NS    (1000000000ull)      // re-anchor every ~1s
+
+// The active thread's calibration, set at thread start. Only ever
+// read/written by the owning profiler thread.
+static thread_local struct ncclProfilerClockCalib* profilerTlCalib = nullptr;
+
+static void profilerClockCalibInit(struct ncclProfilerClockCalib* c) {
+  memset(c, 0, sizeof(*c));
+  c->slopeMono = 1.0;
+  c->slopeReal = 1.0;
+  if (cudaStreamCreateWithFlags(&c->stream, cudaStreamNonBlocking)
+      != cudaSuccess) {
+    c->stream = nullptr;
+    return;
+  }
+  if (cudaMallocHost((void**)&c->pinned, sizeof(*c->pinned))
+      != cudaSuccess) {
+    cudaStreamDestroy(c->stream);
+    c->stream = nullptr;
+    c->pinned = nullptr;
+    return;
+  }
+  c->ready = true;
+}
+
+static void profilerClockCalibFree(struct ncclProfilerClockCalib* c) {
+  if (c->pinned) { cudaFreeHost(c->pinned); c->pinned = nullptr; }
+  if (c->stream) { cudaStreamDestroy(c->stream); c->stream = nullptr; }
+  c->ready = false;
+  c->valid = false;
+}
+
+// The clock probe can fail when the CUDA context has been poisoned by
+// unrelated GPU work (e.g. a driver-contained NVLink/hardware
+// fault). That is not a profiler bug, so report it as INFO log.
+static inline void profilerClockProbeReport() {
+  INFO(NCCL_INIT | NCCL_PROFILE,
+       "[Profiler Thread] GPU clock probe failed "
+       "(likely a CUDA context error from unrelated GPU work); "
+       "GPU->CPU timestamp calibration paused. "
+       "Informational -- not itself a profiler fault.");
+}
+
+// Fold one completed probe round-trip into the best-so-far
+// anchor. The GPU read its clock (now in *c->pinned) somewhere inside
+// the CPU interval [m0, m1], so the round-trip midpoint is the
+// least-biased CPU estimate of that instant; we keep the sample with
+// the shortest round-trip, whose midpoint is tightest.
+static inline void profilerClockKeepBest(struct ncclProfilerClockCalib* c,
+                                         uint64_t m0, uint64_t r0,
+                                         uint64_t m1, uint64_t r1,
+                                         uint64_t* bestLat,
+                                         uint64_t* gpuOut, uint64_t* monoOut,
+                                         uint64_t* realOut, bool* got) {
+  uint64_t lat = (m1 > m0) ? (m1 - m0) : 0;
+  if (lat >= *bestLat) return;
+  *bestLat = lat;
+  *gpuOut = (uint64_t)*c->pinned;
+  *monoOut = m0 + lat / 2;
+  *realOut = r0 + (r1 > r0 ? (r1 - r0) / 2 : 0);
+  *got = true;
+}
+
+// One lowest-latency (gpu, mono, real) anchor: launch the probe N
+// times and keep the sample whose CPU round-trip was shortest (its
+// midpoint best approximates the instant the GPU read its clock).
+static bool profilerClockProbe(struct ncclProfilerClockCalib* c,
+                               uint64_t* gpuOut,
+                               uint64_t* monoOut,
+                               uint64_t* realOut) {
+  if (!c->ready) return false;
+  uint64_t bestLat = ~0ull;
+  bool got = false;
+  for (int i = 0; i < NCCL_PROF_CLOCK_PROBES; i++) {
+    uint64_t m0, r0;
+    profilerCpuNow(&m0, &r0);
+    if (ncclProfilerProbeGpuClock(c->pinned, c->stream)
+        != ncclSuccess) {
+      profilerClockProbeReport();
+      return got;
+    }
+    if (cudaStreamSynchronize(c->stream) != cudaSuccess) {
+      (void)cudaGetLastError();
+      profilerClockProbeReport();
+      return got;
+    }
+    uint64_t m1, r1;
+    profilerCpuNow(&m1, &r1);
+    profilerClockKeepBest(c, m0, r0, m1, r1,
+                          &bestLat, gpuOut, monoOut, realOut, &got);
+  }
+  return got;
+}
+
+// Take a fresh anchor and (when a prior anchor is far enough away)
+// refine the slope. globaltimer and the CPU clocks both advance
+// ~1ns/tick, so a sane slope is within a few percent of 1.0; values
+// outside that come from a perturbed sample and are rejected.
+static void profilerClockCalibUpdate(struct ncclProfilerClockCalib* c) {
+  uint64_t gpu, mono, real;
+  if (!profilerClockProbe(c, &gpu, &mono, &real)) return;
+  if (c->havePrev && gpu > c->prevGpu) {
+    double dGpu = (double)(gpu - c->prevGpu);
+    double sM = (double)(mono - c->prevMono) / dGpu;
+    double sR = (double)(real - c->prevReal) / dGpu;
+    if (sM > 0.95 && sM < 1.05) c->slopeMono = sM;
+    if (sR > 0.95 && sR < 1.05) c->slopeReal = sR;
+  }
+  c->prevGpu = gpu; c->prevMono = mono; c->prevReal = real; c->havePrev = true;
+  c->gpuRef = gpu;  c->monoRef = mono;  c->realRef = real;
+  c->valid = true;
+}
+
+// Recalibrate on first use and roughly once per
+// NCCL_PROF_CLOCK_RECALIB_NS.
+static void profilerClockCalibMaybe(struct ncclProfilerClockCalib* c) {
+  uint64_t m, r;
+  profilerCpuNow(&m, &r);
+  if (!c->valid || m >= c->nextCalibMono) {
+    profilerClockCalibUpdate(c);
+    c->nextCalibMono = m + NCCL_PROF_CLOCK_RECALIB_NS;
+  }
+}
+
+// Map a GPU globaltimer ns to CPU mono/real ns using this thread's
+// calibration.  Sets both to 0 (NCCL_PROFILER_TS_NONE) when
+// uncalibrated or tsGpu==0.
+static inline void profilerMapGpuToCpu(uint64_t tsGpu,
+                                       uint64_t* tsCpuMono,
+                                       uint64_t* tsCpuReal) {
+  *tsCpuMono = 0;
+  *tsCpuReal = 0;
+  struct ncclProfilerClockCalib* c = profilerTlCalib;
+  if (c == nullptr || !c->valid || tsGpu == 0) return;
+  int64_t d = (int64_t)tsGpu - (int64_t)c->gpuRef;
+  *tsCpuMono
+    = (uint64_t)((int64_t)c->monoRef + (int64_t)(c->slopeMono * (double)d));
+  *tsCpuReal
+    = (uint64_t)((int64_t)c->realRef + (int64_t)(c->slopeReal * (double)d));
+}
+
+// Start a host-side (CPU-timed) event, stamping current CPU clocks into the
+// descriptor (tsGpu stays 0). Used for all app-thread / proxy-thread starts.
+static inline void profilerStartEventHost(void* ctx, void** eHandle, ncclProfilerEventDescr_t* d) {
+  if (profilerStampTs) profilerCpuNow(&d->tsCpuMono, &d->tsCpuReal);
+  ncclProfiler->startEvent(ctx, eHandle, d);
+}
+
+// Fill a descriptor's NCCL timestamps for a GPU-derived event start (KernelCh
+// and KernelPhase): the GPU globaltimer plus its mapped CPU clocks.
+static inline void profilerStampGpuStart(ncclProfilerEventDescr_t* d, uint64_t tsGpu) {
+  if (!profilerStampTs) return;
+  d->tsGpu = tsGpu;
+  profilerMapGpuToCpu(tsGpu, &d->tsCpuMono, &d->tsCpuReal);
+}
+
+// Stop a GPU-derived event with an explicit GPU stop time (+ mapped CPU).
+static inline void profilerStopEventGpu(void* eHandle, uint64_t tsGpu) {
+  ncclProfilerEventStopDescr_t sd = { };
+  if (profilerStampTs) {
+    sd.tsGpu = tsGpu;
+    profilerMapGpuToCpu(tsGpu, &sd.tsCpuMono, &sd.tsCpuReal);
+  }
+  ncclProfiler->stopEvent(eHandle, &sd);
+}
 
 extern thread_local int ncclGroupDepth;
 thread_local ncclProfilerApiState_t ncclProfilerApiState;
@@ -122,7 +356,10 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
     profilerName = ncclPluginLibPaths[ncclPluginTypeProfiler];
   }
 
-  ncclProfiler = getNcclProfiler_v7(profilerPluginLib);
+  ncclProfiler = getNcclProfiler_v8(profilerPluginLib);
+  if (ncclProfiler == nullptr) {
+    ncclProfiler = getNcclProfiler_v7(profilerPluginLib);
+  }
   if (ncclProfiler == nullptr) {
     ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
   }
@@ -177,6 +414,7 @@ static ncclResult_t ncclProfilerPluginUnload(void) {
     NCCLCHECK(ncclClosePluginLib(profilerPluginLib, ncclPluginTypeProfiler));
     profilerPluginLib = nullptr;
     ncclProfiler = nullptr;
+    profilerStampTs = false;
     profilerPluginStatus = profilerPluginLoadReady;
   }
   return ncclSuccess;
@@ -338,11 +576,25 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
   TIME_START_EVENT(init);
   ncclProfilerPluginLoad();
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
+    // Feature handshake: NCCL supplies the defaults, the plugin writes back the
+    // toggles it wants. A pre-v8 plugin never sees this (its adapter drops the
+    // argument), so it keeps every default.
+    ncclProfilerConfig_t config = { };
+    config.size = sizeof(config);
+    config.magic = NCCL_PROFILER_CONFIG_MAGIC;
+    config.version = NCCL_PROFILER_CONFIG_VERSION;
     int err = ncclProfiler->init(&comm->profilerContext, comm->commHash, &ncclProfilerEventMask, comm->config.commName,
-                                 comm->nNodes, comm->nRanks, comm->rank, ncclDebugLog);
+                                 comm->nNodes, comm->nRanks, comm->rank, ncclDebugLog, &config);
     if (err) {
       ncclProfilerPluginUnload();
       ATTN("Profiler init failed with error '%d': %s. Continue without profiler.", err, strerror(errno));
+    } else {
+      comm->profiler.config = config;
+      if (config.ncclSourcedTimings && !profilerStampTs) {
+        profilerStampTs = true;
+        INFO(NCCL_INIT | NCCL_PROFILE,
+             "Profiler: plugin requested NCCL-sourced timings; enabling event timestamps and GPU->CPU clock calibration");
+      }
     }
 
     // KernelPhase requires KernelCh; enable it implicitly (logs if it changes the mask).
@@ -389,7 +641,7 @@ ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphC
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & groupApiMask)) {
     if (ncclProfilerApiState.profilerGroupDepth == 0) {
       eDescr.groupApi.groupDepth = ncclGroupDepth;
-      ncclProfiler->startEvent(info->comm->profilerContext, &ncclProfilerApiState.groupApiEventHandle, &eDescr);
+      profilerStartEventHost(info->comm->profilerContext, &ncclProfilerApiState.groupApiEventHandle, &eDescr);
       ncclProfilerApiState.profilerGroupDepth = ncclGroupDepth;
       ncclProfilerApiState.state = ncclProfilerGroupApiStartStateStarted;
     }
@@ -400,7 +652,7 @@ ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphC
 ncclResult_t ncclProfilerStopGroupApiEvent() {
   void* groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && groupApiEventHandle && ncclProfilerApiState.profilerGroupDepth == 0) {
-    ncclProfiler->stopEvent(groupApiEventHandle);
+    profilerStopEventHost(groupApiEventHandle);
     ncclProfilerApiState.groupApiEventHandle = nullptr;
   }
   return ncclSuccess;
@@ -438,7 +690,7 @@ ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo* info, bool isGraphCap
   int p2pApiMask = ncclProfileP2pApi | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep |
                    ncclProfileKernelCh | ncclProfileNetPlugin;
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & p2pApiMask)) {
-    ncclProfiler->startEvent(info->comm->profilerContext, &ncclProfilerApiState.p2pApiEventHandle, &eDescr);
+    profilerStartEventHost(info->comm->profilerContext, &ncclProfilerApiState.p2pApiEventHandle, &eDescr);
   }
   if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
     INFO(NCCL_P2P | NCCL_ENV,
@@ -451,7 +703,7 @@ ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo* info, bool isGraphCap
 
 ncclResult_t ncclProfilerStopP2pApiEvent() {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ncclProfilerApiState.p2pApiEventHandle) {
-    ncclProfiler->stopEvent(ncclProfilerApiState.p2pApiEventHandle);
+    profilerStopEventHost(ncclProfilerApiState.p2pApiEventHandle);
     ncclProfilerApiState.p2pApiEventHandle = nullptr;
   }
   return ncclSuccess;
@@ -473,7 +725,7 @@ ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo* info, bool isGraphCa
                     ncclProfileKernelCh | ncclProfileNetPlugin | ncclProfileCeColl | ncclProfileCeSync |
                     ncclProfileCeBatch;
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (ncclProfilerApiState.eActivationMask & collApiMask)) {
-    ncclProfiler->startEvent(info->comm->profilerContext, &ncclProfilerApiState.collApiEventHandle, &eDescr);
+    profilerStartEventHost(info->comm->profilerContext, &ncclProfilerApiState.collApiEventHandle, &eDescr);
   }
   if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
     INFO(NCCL_COLL | NCCL_ENV,
@@ -486,7 +738,7 @@ ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo* info, bool isGraphCa
 
 ncclResult_t ncclProfilerStopCollApiEvent() {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ncclProfilerApiState.collApiEventHandle) {
-    ncclProfiler->stopEvent(ncclProfilerApiState.collApiEventHandle);
+    profilerStopEventHost(ncclProfilerApiState.collApiEventHandle);
   }
   return ncclSuccess;
 }
@@ -523,7 +775,7 @@ ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cud
       eDescr.rank = plan->comm->rank;
       eDescr.parentObj = groupApiEventHandle;
       eDescr.kernelLaunch.stream = (void*)stream;
-      ncclProfiler->startEvent(plan->comm->profilerContext, &plan->kernelLaunchEventHandle, &eDescr);
+      profilerStartEventHost(plan->comm->profilerContext, &plan->kernelLaunchEventHandle, &eDescr);
     }
   }
   return ncclSuccess;
@@ -531,7 +783,7 @@ ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cud
 
 ncclResult_t ncclProfilerStopKernelLaunchEvent(struct ncclKernelPlan* plan) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && plan->kernelLaunchEventHandle) {
-    ncclProfiler->stopEvent(plan->kernelLaunchEventHandle);
+    profilerStopEventHost(plan->kernelLaunchEventHandle);
   }
   return ncclSuccess;
 }
@@ -564,7 +816,7 @@ ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan) {
                             ncclProfileProxyStep | ncclProfileKernelCh | ncclProfileNetPlugin)) {
       ncclProfilerEventDescr_t eDescr = {0};
       eDescr.type = ncclProfileGroup;
-      ncclProfiler->startEvent(plan->comm->profilerContext, &plan->groupEventHandle, &eDescr);
+      profilerStartEventHost(plan->comm->profilerContext, &plan->groupEventHandle, &eDescr);
     }
   }
   TIME_STOP_EVENT(groupStart);
@@ -574,7 +826,7 @@ ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan) {
 ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan) {
   TIME_START_EVENT(groupStop);
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && plan->groupEventHandle) {
-    ncclProfiler->stopEvent(plan->groupEventHandle);
+    profilerStopEventHost(plan->groupEventHandle);
     // Null after stopping: the next callback (graph replay) re-creates it, keeping
     // start/stop balanced and making any stray double-stop a safe no-op.
     plan->groupEventHandle = nullptr;
@@ -624,7 +876,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
           eDescr.coll.kernelVariant = nullptr;
         }
         eDescr.coll.userTag = ct->profilerTag;
-        ncclProfiler->startEvent(plan->comm->profilerContext, &ct->eventHandle, &eDescr);
+        profilerStartEventHost(plan->comm->profilerContext, &ct->eventHandle, &eDescr);
       }
     }
     // comm->seqNumber values are updated even if the plugin is not active, since they are used by RAS as well.
@@ -662,7 +914,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
         eDescr.p2p.peer = pt->root;
         eDescr.p2p.nChannels = profNChannels;
         eDescr.p2p.userTag = pt->profilerTag;
-        ncclProfiler->startEvent(plan->comm->profilerContext, &pt->eventHandle, &eDescr);
+        profilerStartEventHost(plan->comm->profilerContext, &pt->eventHandle, &eDescr);
       }
       pt = pt->next;
     }
@@ -679,7 +931,7 @@ ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
     struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
     while (ct) {
       if (ct->eventHandle) {
-        ncclProfiler->stopEvent(ct->eventHandle);
+        profilerStopEventHost(ct->eventHandle);
         ct->eventHandle = nullptr;
       }
       ct = ct->next;
@@ -687,7 +939,7 @@ ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
     struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
     while (pt) {
       if (pt->eventHandle) {
-        ncclProfiler->stopEvent(pt->eventHandle);
+        profilerStopEventHost(pt->eventHandle);
         pt->eventHandle = nullptr;
       }
       pt = pt->next;
@@ -717,7 +969,7 @@ ncclResult_t ncclProfilerStartProxyOpEvent(int s, struct ncclProxyArgs* args) {
       eDescr.proxyOp.nSteps = DIVUP(sub->nsteps, args->sliceSteps);
       eDescr.proxyOp.chunkSize = args->chunkSize * args->sliceSteps;
       eDescr.proxyOp.isSend = args->progress == ncclTransports[TRANSPORT_NET]->send.proxyProgress ? 1 : 0;
-      ncclProfiler->startEvent(sub->profilerContext, &sub->opEventHandle, &eDescr);
+      profilerStartEventHost(sub->profilerContext, &sub->opEventHandle, &eDescr);
     }
   }
   TIME_STOP_EVENT(proxyOpStart);
@@ -728,7 +980,7 @@ ncclResult_t ncclProfilerStopProxyOpEvent(int s, struct ncclProxyArgs* args) {
   TIME_START_EVENT(proxyOpStop);
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && sub->opEventHandle) {
-    ncclProfiler->stopEvent(sub->opEventHandle);
+    profilerStopEventHost(sub->opEventHandle);
     sub->opEventHandle = NULL;
   }
   TIME_STOP_EVENT(proxyOpStop);
@@ -746,7 +998,7 @@ ncclResult_t ncclProfilerStartSendProxyStepEvent(int s, struct ncclProxyArgs* ar
       eDescr.parentObj = sub->opEventHandle;
       eDescr.rank = sub->rank;
       eDescr.proxyStep.step = step_;
-      ncclProfiler->startEvent(sub->profilerContext, &sub->pHandles[step_ % NCCL_STEPS].stepEventHandle, &eDescr);
+      profilerStartEventHost(sub->profilerContext, &sub->pHandles[step_ % NCCL_STEPS].stepEventHandle, &eDescr);
     }
   }
   sub->pHandles[step_ % NCCL_STEPS].subArgPtr = sub;
@@ -765,7 +1017,7 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* ar
       eDescr.parentObj = sub->opEventHandle;
       eDescr.rank = sub->rank;
       eDescr.proxyStep.step = step_;
-      ncclProfiler->startEvent(sub->profilerContext, &sub->pHandles[step_ % NCCL_STEPS].stepEventHandle, &eDescr);
+      profilerStartEventHost(sub->profilerContext, &sub->pHandles[step_ % NCCL_STEPS].stepEventHandle, &eDescr);
     }
   }
   sub->pHandles[step_ % NCCL_STEPS].subArgPtr = sub;
@@ -779,7 +1031,7 @@ ncclResult_t ncclProfilerStopProxyStepEvent(int s, struct ncclProxyArgs* args, i
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     int step_ = DIVUP(stepId, args->sliceSteps);
     if (sub->pHandles[step_ % NCCL_STEPS].stepEventHandle) {
-      ncclProfiler->stopEvent(sub->pHandles[step_ % NCCL_STEPS].stepEventHandle);
+      profilerStopEventHost(sub->pHandles[step_ % NCCL_STEPS].stepEventHandle);
       sub->pHandles[step_ % NCCL_STEPS].stepEventHandle = NULL;
     }
   }
@@ -795,7 +1047,7 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHand
     if (eActivationMaskProxy & ncclProfileProxyCtrl) {
       ncclProfilerEventDescr_t eDescr = {0};
       eDescr.type = ncclProfileProxyCtrl;
-      ncclProfiler->startEvent(profilerContext, eHandle, &eDescr);
+      profilerStartEventHost(profilerContext, eHandle, &eDescr);
       TIME_STOP_EVENT(proxyCtrlStart);
       return ncclSuccess;
     }
@@ -808,7 +1060,7 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, void** eHand
 ncclResult_t ncclProfilerStopProxyCtrlEvent(void* eHandle) {
   TIME_START_EVENT(proxyCtrlStop);
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && eHandle) {
-    ncclProfiler->stopEvent(eHandle);
+    profilerStopEventHost(eHandle);
   }
   TIME_STOP_EVENT(proxyCtrlStop);
   return ncclSuccess;
@@ -822,6 +1074,9 @@ ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint6
       eDescr.parentObj = op->taskEventHandle;
       eDescr.kernelCh.channelId = op->channelId;
       eDescr.kernelCh.pTimer = start;
+      // KernelCh start is GPU-timed: carry the globaltimer 'start' and its
+      // mapped CPU clocks (pTimer is the same value, kept for back-compat).
+      profilerStampGpuStart(&eDescr, start);
       ncclProfiler->startEvent(op->profilerContext, &op->kernelEventHandle, &eDescr);
     }
   }
@@ -834,7 +1089,8 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64
       ncclProfilerEventStateArgs_t a = {};
       a.kernelCh.pTimer = stop;
       ncclProfiler->recordEventState(op->kernelEventHandle, ncclProfilerKernelChStop, &a);
-      ncclProfiler->stopEvent(op->kernelEventHandle);
+      // KernelCh stop is GPU-timed: carry 'stop' (globaltimer) + mapped CPU.
+      profilerStopEventGpu(op->kernelEventHandle, stop);
     }
   }
   return ncclSuccess;
@@ -935,13 +1191,16 @@ static void profilerFireKernelPhaseEvents(struct ncclProfilerWorkOp* op) {
     eDescr.kernelPhase.phaseId = i;
     eDescr.kernelPhase.phaseName = profilerPhaseNames[i];
     eDescr.kernelPhase.pTimer = ts[i];
+    // Phase boundaries are GPU-timed: carry the globaltimer value and its mapped
+    // CPU clocks, same as KernelCh.
+    profilerStampGpuStart(&eDescr, ts[i]);
     ncclProfiler->startEvent(op->profilerContext, &phaseHandle, &eDescr);
     if (phaseHandle) {
       ncclProfilerEventStateArgs_t a = {};
-      // Phase stop reuses kernelCh.pTimer (same single-timestamp shape); see profiler_v7.h.
+      // Phase stop reuses kernelCh.pTimer (same single-timestamp shape); see profiler_v8.h.
       a.kernelCh.pTimer = ts[i + 1];
       ncclProfiler->recordEventState(phaseHandle, ncclProfilerKernelPhaseStop, &a);
-      ncclProfiler->stopEvent(phaseHandle);
+      profilerStopEventGpu(phaseHandle, ts[i + 1]);
     }
   }
   memset(ts, 0, sizeof(uint64_t) * MAX_PROFILER_PHASES);
@@ -1068,13 +1327,28 @@ static void* ncclProfilerThreadFunc(void* arg) {
          cudaGetErrorString(setDevErr));
     (void)cudaGetLastError();
   }
-  INFO(NCCL_INIT, "[Profiler Thread] started (cudaDev=%d, maxInflight=%zu)", pt->cudaDev, pt->maxInflight);
+  INFO(NCCL_INIT, "[Profiler Thread] started (cudaDev=%d, maxInflight=%zu, ncclSourcedTimings=%d)", pt->cudaDev,
+       pt->maxInflight, profilerStampTs ? 1 : 0);
+
+  // With NCCL-sourced timings this thread launches its own GPU work (the clock
+  // probe kernel). Run it in relaxed capture mode so that work stays invisible
+  // to app-thread graph captures, which it would otherwise invalidate. Safe:
+  // the mode is per-thread and this thread never captures.
+  if (profilerStampTs) {
+    cudaStreamCaptureMode captureMode = cudaStreamCaptureModeRelaxed;
+    if (cudaThreadExchangeStreamCaptureMode(&captureMode) != cudaSuccess) {
+      (void)cudaGetLastError();
+    }
+    profilerClockCalibInit(&pt->clockCalib);
+    profilerTlCalib = &pt->clockCalib;
+  }
 
   unsigned spinUs = 1;
   while (true) {
     bool stop;
     ncclProfilerThreadAction action = waitForAction(pt, &stop);
     if (action == NCCL_PROFILER_THREAD_STOP) break;
+    if (profilerStampTs) profilerClockCalibMaybe(&pt->clockCalib);
 
     struct ncclProfilerWorkOp* newActiveTail = nullptr;
     struct ncclProfilerWorkOp* recycled = profilerProgressOps(pt, &newActiveTail);
@@ -1101,6 +1375,8 @@ static void* ncclProfilerThreadFunc(void* arg) {
     INFO(NCCL_INIT | NCCL_PROFILE, "[Profiler Thread] exiting: maxInflightSeen=%zu, droppedOps=%lu, cap=%zu", hwm,
          (unsigned long)drops, pt->maxInflight);
   }
+  profilerClockCalibFree(&pt->clockCalib);
+  profilerTlCalib = nullptr;
   return nullptr;
 }
 
@@ -1396,10 +1672,10 @@ ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64
         eDescr.rank = sub->rank;
         eDescr.netPlugin.id = pluginId;
         eDescr.netPlugin.data = extData;
-        ncclProfiler->startEvent(sub->profilerContext, eHandle, &eDescr);
+        profilerStartEventHost(sub->profilerContext, eHandle, &eDescr);
       }
     } else if (type == ncclProfilerNetEventStop) { // stop
-      ncclProfiler->stopEvent(*eHandle);
+      profilerStopEventHost(*eHandle);
     } else if (type == ncclProfilerNetEventUpdate) { // update
       ncclProfilerEventStateArgs_t args = {};
       args.netPlugin.data = extData;
@@ -1408,7 +1684,7 @@ ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64
       ncclProfilerEventStateArgs_t args = {};
       args.netPlugin.data = extData;
       ncclProfiler->recordEventState(*eHandle, ncclProfilerNetPluginUpdate, &args);
-      ncclProfiler->stopEvent(*eHandle);
+      profilerStopEventHost(*eHandle);
     }
   }
   return ncclSuccess;
@@ -1458,7 +1734,7 @@ ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCo
 ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (args && args->ceCollProfHandle) {
-      ncclProfiler->stopEvent(args->ceCollProfHandle);
+      profilerStopEventNone(args->ceCollProfHandle);
     }
   }
   return ncclSuccess;
@@ -1492,7 +1768,7 @@ ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCo
  */
 ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, void* ceSyncHandle, cudaStream_t stream) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ceSyncHandle) {
-    ncclProfiler->stopEvent(ceSyncHandle);
+    profilerStopEventNone(ceSyncHandle);
   }
   return ncclSuccess;
 }
@@ -1533,7 +1809,7 @@ ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeC
  */
 ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, void* ceBatchHandle, cudaStream_t stream) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ceBatchHandle) {
-    ncclProfiler->stopEvent(ceBatchHandle);
+    profilerStopEventNone(ceBatchHandle);
   }
   return ncclSuccess;
 }

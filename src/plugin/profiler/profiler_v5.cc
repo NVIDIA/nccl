@@ -172,8 +172,15 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
   return ncclProfiler_v5->recordEventState(eHandle, (ncclProfilerEventState_v5_t)eState, &eStateArgs_v5);
 }
 
+static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventStopDescr_t* eStopDescr) {
+  // v5 stopEvent takes no stop timestamps; drop the v7 stop descriptor.
+  (void)eStopDescr;
+  return ncclProfiler_v5->stopEvent(eHandle);
+}
+
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
-                                      int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn) {
+                                      int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn,
+                                      ncclProfilerConfig_t* config __attribute__((unused))) {
   NCCLCHECK(ncclProfiler_v5->init(ctx, commId, eActivationMask, commName, nNodes, nRanks, rank, logfn));
 
   // Clear v6/v7 event bits from the activation mask since v5 doesn't support them
@@ -183,7 +190,7 @@ static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivat
 
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.recordEventState = ncclProfiler_recordEventState;
-  ncclProfiler.stopEvent = ncclProfiler_v5->stopEvent;
+  ncclProfiler.stopEvent = ncclProfiler_stopEvent;
   ncclProfiler.finalize = ncclProfiler_v5->finalize;
   return ncclSuccess;
 }

@@ -86,10 +86,12 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v4_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v5_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v6_t;
 typedef ncclProfilerEventState_t ncclProfilerEventState_v7_t;
+typedef ncclProfilerEventState_t ncclProfilerEventState_v8_t;
 
 /* profiler_v*.h use ncclPid_t, defined in os.h (os/linux.h or os/windows.h) */
 #include "os.h"
 #include <cstdint>
+#include "profiler/profiler_v8.h"
 #include "profiler/profiler_v7.h"
 #include "profiler/profiler_v6.h"
 #include "profiler/profiler_v5.h"
@@ -98,10 +100,16 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v7_t;
 #include "profiler/profiler_v2.h"
 #include "profiler/profiler_v1.h"
 
-// Use v7 as default; older versions remain supported for backward compatibility.
-typedef ncclProfiler_v7_t ncclProfiler_t;
-typedef ncclProfilerEventDescr_v7_t ncclProfilerEventDescr_t;
-typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_t;
+// Use v8 as default: NCCL can stamp authoritative timestamps on every event,
+// which a plugin opts into through ncclProfilerConfig_t::ncclSourcedTimings.
+// v7 and earlier versions are still supported for backward compatibility
+// (older plugins are adapted by dropping the new timestamp fields/argument,
+// and never see the config, so they leave the opt-in at its default of off).
+typedef ncclProfiler_v8_t ncclProfiler_t;
+typedef ncclProfilerEventDescr_v8_t ncclProfilerEventDescr_t;
+typedef ncclProfilerEventStateArgs_v8_t ncclProfilerEventStateArgs_t;
+typedef ncclProfilerEventStopDescr_v8_t ncclProfilerEventStopDescr_t;
+typedef ncclProfilerConfig_v8_t ncclProfilerConfig_t;
 
 #define NCCL_PROFILER_NET_VER_BITS (16)
 #define NCCL_PROFILER_NET_VER_MASK (~0U >> NCCL_PROFILER_NET_VER_BITS)

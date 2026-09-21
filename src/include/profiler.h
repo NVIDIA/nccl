@@ -54,6 +54,8 @@ struct ncclProfilerCommState {
   uint64_t symWorkCounter[MAXCHANNELS];
   // Shared with comm-split children when shareResources is set.
   struct ncclProfilerThread* profilerThread;
+  // What the plugin asked for during init on this communicator.
+  ncclProfilerConfig_t config;
 };
 
 enum groupApiState {
@@ -136,6 +138,12 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
 bool ncclProfilerPluginLoaded(void);
 uint8_t ncclProfilerDeviceMode(int eActivationMask);
+
+// GPU-clock probe (defined in device/onerank.cu): launches a 1-thread kernel
+// that writes the GPU globaltimer into *devOut (host-visible). Used by the
+// profiler thread's GPU->CPU time calibration when a plugin has asked for
+// NCCL-sourced timings.
+ncclResult_t ncclProfilerProbeGpuClock(unsigned long long* devOut, cudaStream_t stream);
 
 // Dedicated profiler thread API
 ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent);

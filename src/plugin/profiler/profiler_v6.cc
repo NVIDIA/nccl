@@ -11,6 +11,14 @@
 #include "checks.h"
 #include "os.h"
 
+// Adapter: the internal interface is v8, which can stamp NCCL timestamps on
+// every event. v6 plugins predate both that and the v7 additions, so this
+// adapter forwards the v8 calls to a v6 plugin by dropping the timestamp
+// fields on startEvent, the stop descriptor argument on stopEvent, the config
+// argument on init, and the v7-only descriptors/fields/states. With no config
+// to write, the plugin leaves ncclSourcedTimings at its default of off and
+// keeps computing its own timestamps internally, exactly as before.
+
 static ncclProfiler_v6_t* ncclProfiler_v6;
 static ncclProfiler_t ncclProfiler;
 
@@ -25,6 +33,7 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
   eDescr_v6.type = eDescr->type;
   eDescr_v6.parentObj = eDescr->parentObj;
   eDescr_v6.rank = eDescr->rank;
+  // v8-only top-level timestamp fields (tsGpu/tsCpuMono/tsCpuReal) are dropped.
 
   switch (eDescr->type) {
   case ncclProfileGroup:
@@ -187,8 +196,15 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
   return ncclProfiler_v6->recordEventState(eHandle, (ncclProfilerEventState_v6_t)eState, &eStateArgs_v6);
 }
 
+static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventStopDescr_t* eStopDescr) {
+  // v6 plugins don't take stop timestamps; drop the stop descriptor.
+  (void)eStopDescr;
+  return ncclProfiler_v6->stopEvent(eHandle);
+}
+
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
-                                      int nNodes, int nranks, int rank, ncclDebugLogger_t logfn) {
+                                      int nNodes, int nranks, int rank, ncclDebugLogger_t logfn,
+                                      ncclProfilerConfig_t* config __attribute__((unused))) {
   ncclResult_t ret = ncclProfiler_v6->init(ctx, commId, eActivationMask, commName, nNodes, nranks, rank, logfn);
   // v6 plugins don't know about kernel phases; strip the bit so the core never
   // generates phase work for them.
@@ -197,7 +213,7 @@ static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivat
   }
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.recordEventState = ncclProfiler_recordEventState;
-  ncclProfiler.stopEvent = ncclProfiler_v6->stopEvent;
+  ncclProfiler.stopEvent = ncclProfiler_stopEvent;
   ncclProfiler.finalize = ncclProfiler_v6->finalize;
   return ret;
 }

@@ -8,6 +8,7 @@
 #include "core.h"
 #include "tuning.h"
 #include "cost_model.h"
+#include "platforms/platforms.h"
 #include "comm.h"
 #include "cudawrap.h"
 
@@ -281,11 +282,13 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   This will return the model entry for the given id.
   If the id is out of bounds, it will return an invalid argument error.
 */
-static ncclResult_t getModelEntry(int id, struct ncclTuningModelEntry_t** entry) {
+static ncclResult_t getModelEntry(int compCap, int id, struct ncclTuningModelEntry_t** entry) {
   if (id < 0 || id >= NCCL_TUNING_COUNT) {
     return ncclInvalidArgument;
   }
-  *entry = &modelMap[id];
+  *entry = &modelMap[id]; // legacy fallback
+
+  NCCLCHECK(ncclTuningGetModelPlatformEntry(compCap, id, entry));
   return ncclSuccess;
 }
 
@@ -295,6 +298,7 @@ static ncclResult_t getModelEntry(int id, struct ncclTuningModelEntry_t** entry)
 */
 ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm) {
   comm->tuningContext.tuningConstants = ncclTunerConstantsDefaults;
+  NCCLCHECK(ncclTuningPlatformPreInit(comm));
   return ncclSuccess;
 }
 
@@ -345,7 +349,7 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   }
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningModelEntry_t* model = nullptr;
-    NCCLCHECKGOTO(getModelEntry(i, &model), ret, fail);
+    NCCLCHECKGOTO(getModelEntry(comm->minCompCap, i, &model), ret, fail);
     if (model == nullptr) {
       ret = ncclInternalError;
       goto fail;
@@ -446,7 +450,7 @@ ncclResult_t ncclTuningCostModelFinalize(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningModelEntry_t* model = nullptr;
-    NCCLCHECKGOTO(getModelEntry(i, &model), ret, fail);
+    NCCLCHECKGOTO(getModelEntry(comm->minCompCap, i, &model), ret, fail);
     if (model == nullptr) {
       ret = ncclInternalError;
       goto fail;
@@ -472,7 +476,7 @@ ncclResult_t ncclTuningCostModelSimModel(int id, struct ncclTuningInput_t* const
   struct ncclTuningModelEntry_t* model = nullptr;
   ncclResult_t ret = ncclSuccess;
   result->forced = input->comm->tuningContext.forced[input->func];
-  NCCLCHECKGOTO(getModelEntry(id, &model), ret, not_valid);
+  NCCLCHECKGOTO(getModelEntry(input->comm->minCompCap, id, &model), ret, not_valid);
   if (model == nullptr) {
     ret = ncclInternalError;
     goto not_valid;

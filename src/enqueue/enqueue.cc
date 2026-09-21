@@ -1017,6 +1017,8 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   }
 
   ssize_t paramChunkSize = ncclParamChunkSize();
+  const int64_t p2pLlThreshold = ncclParamP2pLLThreshold();
+  const int llStoragePerStep = comm->buffSizes[NCCL_PROTO_LL] / NCCL_STEPS;
   // Arrays indexed by dir where recv=0, send=1:
   int nChannels[2];
   int protocol[2];
@@ -1028,6 +1030,7 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   bool ipcRegistered[2] = {false, false};
 
   for (int dir = 0; dir < 2; dir++) {
+    int llChannels = -1;
     // 0=recv, 1=send
     // Assume SIMPLE protocol to start with to determine number of channels
     stepSize[dir] = comm->p2pChunkSize;
@@ -1037,22 +1040,24 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     // Allow LL beyond that cutoff if the payload still fits in one LL data step across the LL
     // channel plan, capped by nChannelsMax * P2P_LL_THRESHOLD.
     if (bytes[dir] != -1 && protoLL[dir]) {
-      protoLL[dir] = bytes[dir] <= (ssize_t)nChannels[dir] * ncclParamP2pLLThreshold();
-      if (!protoLL[dir] && bytes[dir] <= (ssize_t)nChannelsMax * ncclParamP2pLLThreshold()) {
-        int llStoragePerStep = comm->buffSizes[NCCL_PROTO_LL] / NCCL_STEPS;
-        int llChannels = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, llStoragePerStep, comm->nNodes);
+      protoLL[dir] = bytes[dir] <= (ssize_t)nChannels[dir] * p2pLlThreshold;
+      if (!protoLL[dir] && bytes[dir] <= (ssize_t)nChannelsMax * p2pLlThreshold) {
+        llChannels = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, llStoragePerStep, comm->nNodes);
         // NCCL_CHUNK_SIZE overrides the executed chunk only; eligibility still uses the LL FIFO step.
-        int llChunkSize = computeP2pChunkSize(llStoragePerStep, NCCL_PROTO_LL, bytes[dir],
-                                              paramChunkSize == 0 && network[dir], 0);
+        int llChunkSize =
+          computeP2pChunkSize(llStoragePerStep, NCCL_PROTO_LL, bytes[dir], paramChunkSize == 0 && network[dir], 0);
         protoLL[dir] = bytes[dir] <= (ssize_t)llChannels * p2pPayloadPerChunk(llChunkSize, NCCL_PROTO_LL);
       }
     }
     protocol[dir] = protoLL[dir] ? NCCL_PROTO_LL : NCCL_PROTO_SIMPLE;
 
     if (protocol[dir] == NCCL_PROTO_LL) {
-      stepSize[dir] = comm->buffSizes[NCCL_PROTO_LL] / NCCL_STEPS;
-      nChannels[dir] = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, stepSize[dir], comm->nNodes);
+      stepSize[dir] = llStoragePerStep;
+      if (llChannels == -1)
+        llChannels = computeP2pChannels(bytes[dir], nChannelsMin, nChannelsMax, llStoragePerStep, comm->nNodes);
+      nChannels[dir] = llChannels;
     }
+
     chunkSize[dir] = computeP2pChunkSize(stepSize[dir], protocol[dir], bytes[dir], network[dir], paramChunkSize);
     chunkDataSize[dir] = p2pPayloadPerChunk(chunkSize[dir], protocol[dir]);
     chunkDataSize_u32fp8[dir] = u32fp8Encode(chunkDataSize[dir]);

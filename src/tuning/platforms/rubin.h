@@ -18,12 +18,12 @@ Initialize default, static models here
 {mod_init, mod_sim, mod_final, enabled}
 Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
 */
-  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL
-  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL128
-  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/Simple
-  {nullptr, nullptr, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/LL
-  {nullptr, nullptr, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/LL128
-  {nullptr, nullptr, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/Simple
+  {ncclTuningPipelineTreeModelInit, ncclTuningPipelineModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL
+  {ncclTuningPipelineTreeModelInit, ncclTuningPipelineModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL128
+  {ncclTuningPipelineTreeModelInit, ncclTuningPipelineModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/Simple
+  {ncclTuningPipelineRingModelInit, ncclTuningPipelineModelSim, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/LL
+  {ncclTuningPipelineRingModelInit, ncclTuningPipelineModelSim, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/LL128
+  {ncclTuningPipelineRingModelInit, ncclTuningPipelineModelSim, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/Simple
   {nullptr, nullptr, nullptr, {0}, {}}, // CollNetDirect/LL, disabled as there is no implementation
   {nullptr, nullptr, nullptr, {0}, {}}, // CollNetDirect/LL128, disabled as there is no implementation
   {nullptr, nullptr, nullptr, {0, 0, 1, 1, 1}, {}}, // CollNetDirect/Simple
@@ -32,10 +32,10 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}}, // CollNetChain/Simple
   {nullptr, nullptr, nullptr, {0}, {}}, // NVLS/LL, disabled as there is no implementation
   {nullptr, nullptr, nullptr, {0}, {}}, // NVLS/LL128, disabled as there is no implementation
-  {nullptr, nullptr, nullptr, {0, 0, 1, 1, 1}, {}}, // NVLS/Simple
+  {ncclTuningPipelineNvlsModelInit, ncclTuningPipelineModelSim, nullptr, {0, 0, 1, 1, 1}, {}}, // NVLS/Simple
   {nullptr, nullptr, nullptr, {0}, {}}, // NVLSTree/LL, disabled as there is no implementation
   {nullptr, nullptr, nullptr, {0}, {}}, // NVLSTree/LL128, disabled as there is no implementation
-  {nullptr, nullptr, nullptr, {0, 0, 1, 1, 1}, {}}, // NVLSTree/Simple
+  {ncclTuningPipelineNvlsTreeModelInit, ncclTuningPipelineModelSim, nullptr, {0, 0, 1, 1, 1}, {}}, // NVLSTree/Simple
   {nullptr, nullptr, nullptr, {0}, {}}, // PAT/LL
   {nullptr, nullptr, nullptr, {0}, {}}, // PAT/LL128
   {nullptr, nullptr, nullptr, {0, 0, 1, 1, 0}, {}}, // PAT/Simple
@@ -61,7 +61,28 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
 };
 
-static void ncclTuningRubinPreInit(struct ncclComm* comm) {}
+static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL] = 3.49;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL128] = 4.88;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 10.99;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL] = 4.03;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 5.46;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 14.26;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] = 41.35;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] = 40.48;
+
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_LL] = 19.56;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_LL128] = 27.64;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 36.32;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL] = 8.19;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 11.29;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 15.59;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] = 34.37;
+}
+
+static void ncclTuningRubinPreInit(struct ncclComm* comm) {
+  ncclTuningRubinTuningConstants(&comm->tuningContext.tuningConstants);
+}
 
 static ncclResult_t ncclTuningRubinGetModelEntry(int compCap, int id, struct ncclTuningModelEntry_t** entry) {
   if (ncclTuningRubinModelMap[id].model != nullptr) {

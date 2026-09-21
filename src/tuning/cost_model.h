@@ -84,8 +84,16 @@ ncclResult_t ncclTuningCeModelSim(struct ncclTuningInput_t* const inputs, struct
                                   struct ncclTuningModelState* internal);
 
 // Pipeline Model
+ncclResult_t ncclTuningPipelineRingModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                             struct ncclTuningModelState* internal);
+ncclResult_t ncclTuningPipelineTreeModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                             struct ncclTuningModelState* internal);
+ncclResult_t ncclTuningPipelineNvlsModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                             struct ncclTuningModelState* internal);
+ncclResult_t ncclTuningPipelineNvlsTreeModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                                 struct ncclTuningModelState* internal);
 ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
-                                        struct modelState* internal);
+                                        struct ncclTuningModelState* internal);
 
 // Tuning general
 int ncclTuningGetNsteps(int coll, int nRanks);

@@ -27,6 +27,15 @@ inline double ncclSoftPlus(double x, double softness) {
   return 100.0 <= z ? x : softness * std::log1p(std::exp(z));
 }
 
+// NVLS efficiency factor.
+static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
+  0.0f, // Volta
+  0.0f, // Ampere
+  0.85f, // Hopper
+  0.74f, // Blackwell
+  0.87f, // Rubin
+};
+
 inline float ncclTuningProtoBWFactor(int proto) {
   return (proto == NCCL_PROTO_LL) ? 0.5f : (proto == NCCL_PROTO_LL128) ? 120.0f / 128.0f : 1.0f;
 }

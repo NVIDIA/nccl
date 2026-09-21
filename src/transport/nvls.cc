@@ -288,12 +288,16 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   int nChannels = -1;
   cudaStream_t deviceStream, hostStream;
 
-  if (!ncclNvlsTransportEnabled(comm) || comm->nvlsResources->inited) return ncclSuccess;
+  if (!ncclNvlsTransportEnabled(comm) || comm->nvlsResources->nChannelsInited >= comm->nvlsChannels) {
+    return ncclSuccess;
+  }
   // initialize after checking ncclNvlsTransportEnabled(comm)
   nHeads = comm->channels[0].nvls.nHeads;
   headRank = comm->channels[0].nvls.headRank;
   resources = comm->nvlsResources;
-  nChannels = comm->nvlsChannels;
+  // Lay out the buffers by the channel count of the comm that owns the resources. A split child
+  // sharing them may use fewer channels and may reach this point before its parent does.
+  nChannels = resources->nChannels;
   nvlsStepSize = comm->nvlsChunkSize;
   buffSize = nvlsStepSize * NCCL_STEPS;
   nvlsPerRankSize = nChannels * 2 * buffSize;
@@ -303,8 +307,8 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
        "NVLS comm %p headRank %d nHeads %d nvlsRanks %d buffSize %zu nvlsPerRankSize %zu nvlsTotalSize %zu", comm,
        headRank, nHeads, comm->localRanks, buffSize, nvlsPerRankSize, nvlsTotalSize);
 
-  // A prior setup attempt may have bound the data slice and then failed (inited
-  // still false); the slice offset is fixed, so reuse that binding.
+  // A prior setup attempt may have bound the data slice and then failed (nChannelsInited
+  // not advanced); the slice offset is fixed, so reuse that binding.
   if (resources->dataUc.ptr == NULL) {
     NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->dataPartition, nvlsTotalSize, &resources->dataUc), res, fail);
   }
@@ -317,7 +321,9 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
                 res, fail);
   for (int h = 0; h < nHeads; h++) {
     int nvlsPeer = comm->nRanks + 1 + h;
-    for (int c = 0; c < nChannels; c++) {
+    // Channel peers are shared with the other comms using these resources; only wire the ones
+    // that have not been wired yet, and leave those already in use untouched.
+    for (int c = resources->nChannelsInited; c < comm->nvlsChannels; c++) {
       struct ncclChannel* channel = comm->channels + c;
       struct ncclChannelPeer* peer = channel->peers[nvlsPeer];
 
@@ -358,12 +364,11 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
                                           comm->localRankToRank[0]),
                 res, fail);
-  comm->nvlsResources->inited = true;
+  resources->nChannelsInited = comm->nvlsChannels;
 
 exit:
   return res;
 fail:
-  comm->nvlsResources->inited = false;
   goto exit;
 }
 
@@ -409,7 +414,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     int nvlsStepSize = comm->nvlsChunkSize;
 
     NCCLCHECKGOTO(ncclCalloc(&comm->nvlsResources, 1), res, fail);
-    comm->nvlsResources->inited = false;
+    comm->nvlsResources->nChannelsInited = 0;
     comm->nvlsResources->refCount = 1;
     comm->nvlsResources->nChannels = nChannels;
     comm->nvlsResources->nHeads = nHeads;

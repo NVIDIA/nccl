@@ -42,6 +42,10 @@ extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetIb;
 extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetSocket;
 extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetNd;
 
+// IB devices that could not be opened, as "name (reason, errno N), ..."
+#define NCCL_NET_OPEN_FAILED_MAXLEN 128
+extern NCCL_NET_DATA_IMPORT char ncclIbOpenFailedDevs[NCCL_NET_OPEN_FAILED_MAXLEN];
+
 #undef NCCL_NET_DATA_IMPORT
 
 #endif

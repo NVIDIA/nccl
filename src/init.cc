@@ -1203,6 +1203,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     float localNetBw;
     int localCollNetCount;
     int isAllNvlink;
+    char netOpenFailed[NCCL_NET_OPEN_FAILED_MAXLEN];
+    char hostname[64];
   };
 
   int nChannelsOrig;
@@ -1519,6 +1521,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   allGather3Data[rank].p2pMaxPeers = comm->p2pMaxPeers;
 
   allGather3Data[rank].localNetDeviceCount = localNetDeviceCount;
+  // Only the built-in IB transport records open failures; share them so rank 0 can name them on a mismatch
+  if (comm->ncclNet == &ncclNetIb && ncclIbOpenFailedDevs[0]) {
+    memcpy(allGather3Data[rank].netOpenFailed, ncclIbOpenFailedDevs, NCCL_NET_OPEN_FAILED_MAXLEN);
+    (void)getHostName(allGather3Data[rank].hostname, sizeof(allGather3Data[rank].hostname), '.');
+  }
   allGather3Data[rank].localNetCountByBw = localNetCountByBw;
   allGather3Data[rank].localNetBw = localNetBw;
   allGather3Data[rank].localCollNetCount = localCollNetCount;
@@ -1579,6 +1586,15 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
         if (allGather3Data[r].localNetDeviceCount < maxLocalNetCount) {
           INFO(NCCL_INIT, "Rank %d has %d local Net devices (max %d).", r, allGather3Data[r].localNetDeviceCount,
                maxLocalNetCount);
+          // Warn about devices that could not be opened, even when ignoring the mismatch
+          if (allGather3Data[r].netOpenFailed[0]) {
+            WARN("Rank %d on %s could not open %s. Fix device access or restrict NCCL_IB_HCA.", r,
+                 allGather3Data[r].hostname, allGather3Data[r].netOpenFailed);
+            if (ncclParamIgnoreNetMismatch()) {
+              WARN("Rank %d: channels on the extra devices of other ranks have no peer here, so the job may hang "
+                   "without an error.", r);
+            }
+          }
         }
       }
       // Then warn or error based on env var

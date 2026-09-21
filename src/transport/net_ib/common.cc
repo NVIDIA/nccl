@@ -16,6 +16,7 @@ int ncclNIbDevs = -1;
 struct ncclIbMergedDev ncclIbMergedDevs[MAX_IB_VDEVS];
 struct ncclIbDev ncclIbDevs[MAX_IB_DEVS];
 int ncclIbRelaxedOrderingEnabled = 0;
+char ncclIbOpenFailedDevs[NCCL_NET_OPEN_FAILED_MAXLEN] = "";
 uint64_t ncclIbSpeedChangeCounter = 0;
 
 ncclProfilerCallback_t ncclProfilerFunction;

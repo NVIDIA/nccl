@@ -473,7 +473,14 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       for (int d = 0; d < nIbDevs && ncclNIbDevs < MAX_IB_DEVS; d++) {
         struct ibv_context* context = NULL;
         if (ncclSuccess != wrap_ibv_open_device(&context, devices[d]) || context == NULL) {
+          int err = errno;
           WARN("NET/IB : Unable to open device %s", devices[d]->name);
+          // Record devices not excluded by NCCL_IB_HCA
+          if (matchIfList(devices[d]->name, -1, userIfs, nUserIfs, searchExact) ^ searchNot) {
+            size_t len = strlen(ncclIbOpenFailedDevs);
+            snprintf(ncclIbOpenFailedDevs + len, sizeof(ncclIbOpenFailedDevs) - len, "%s%s (%s, errno %d)",
+                     len ? ", " : "", devices[d]->name, err ? strerror(err) : "unknown error", err);
+          }
           continue;
         }
         char dataDirectDevicePath[PATH_MAX] = "/sys";

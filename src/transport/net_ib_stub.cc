@@ -4,6 +4,8 @@
 #include "net.h"
 #include "core.h"
 
+char ncclIbOpenFailedDevs[NCCL_NET_OPEN_FAILED_MAXLEN] = "";
+
 // Stub ncclNetIb implementation - all functions return ncclInternalError
 static ncclResult_t stubInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction,
                              ncclProfilerCallback_t profFunction) {

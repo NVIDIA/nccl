@@ -1258,7 +1258,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
         comm->contiguousRanksPerHost = currentHostSize;
       } else if (currentHostSize != comm->contiguousRanksPerHost) {
         comm->contiguousRanksPerHost = INT_MAX;
-        break;
       }
       prevHostHash = comm->peerInfo[i].hostHash;
       currentHostSize = 1;

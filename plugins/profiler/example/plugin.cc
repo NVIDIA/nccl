@@ -509,22 +509,11 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     if ((groupApiId - __atomic_load_n(&ctx->groupApiPoolBase, __ATOMIC_RELAXED)) < groupApiPoolSize &&
         __atomic_load_n(&event->refCount, __ATOMIC_ACQUIRE) == 0) {
       // if there are available group API events grab one
-      // Make sure all child events of the picked group API event are cleared.
-      // A group can span comms, so each child returns to its own context's pool.
-      while (!profilerQueueEmpty(&event->collApiEvents)) {
-        struct collApi *collApiEvent = profilerQueueDequeue(&event->collApiEvents);
-        resetTaskEvents(collApiEvent, collApiEvent->ctx);
-        __atomic_fetch_add(&collApiEvent->ctx->collApiPoolBase, 1, __ATOMIC_RELAXED);
-      }
-      while (!profilerQueueEmpty(&event->p2pApiEvents)) {
-        struct p2pApi *p2pApiEvent = profilerQueueDequeue(&event->p2pApiEvents);
-        resetTaskEvents(p2pApiEvent, p2pApiEvent->ctx);
-        __atomic_fetch_add(&p2pApiEvent->ctx->p2pApiPoolBase, 1, __ATOMIC_RELAXED);
-      }
-      while (!profilerQueueEmpty(&event->kernelLaunchEvents)) {
-        struct kernelLaunch *kernelLaunchEvent = profilerQueueDequeue(&event->kernelLaunchEvents);
-        __atomic_fetch_add(&kernelLaunchEvent->ctx->kernelLaunchPoolBase, 1, __ATOMIC_RELAXED);
-      }
+      // refCount==0 means every child already retired itself (updateEvent returned it to its own
+      // context's pool), so only forget them here; a child slot may since have been reused.
+      while (!profilerQueueEmpty(&event->collApiEvents)) profilerQueueDequeue(&event->collApiEvents);
+      while (!profilerQueueEmpty(&event->p2pApiEvents)) profilerQueueDequeue(&event->p2pApiEvents);
+      while (!profilerQueueEmpty(&event->kernelLaunchEvents)) profilerQueueDequeue(&event->kernelLaunchEvents);
     } else {
       // else drop this event
       __atomic_fetch_sub(&ctx->groupApiPoolIndex, 1, __ATOMIC_RELAXED);
@@ -533,6 +522,8 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     event->type = ncclProfileGroupApi;
     event->ctx = ctx;
     event->groupApiId = groupApiId;
+    // The group holds a reference on itself until its stop, so that it retires exactly once
+    __atomic_store_n(&event->refCount, 1, __ATOMIC_RELAXED);
     event->graphCaptured = eDescr->groupApi.graphCaptured;
     event->groupDepth = eDescr->groupApi.groupDepth;
     event->startTs = gettime() - startTime;
@@ -901,23 +892,26 @@ void updateEvent(void* handle) {
     }
   } else if (type == ncclProfileCollApi) {
     struct collApi* event = (struct collApi*) handle;
+    // Once the slot is released it may be reused by the application thread, so read the parent first
+    struct groupApi* parent = event->parent;
     if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->collApiPoolBase, 1, __ATOMIC_RELAXED);
     }
-    updateEvent(event->parent);
+    updateEvent(parent);
     return;
   } else if (type == ncclProfileP2pApi) {
     struct p2pApi* event = (struct p2pApi*) handle;
+    struct groupApi* parent = event->parent;
     if (__atomic_sub_fetch(&event->refCount, 1, __ATOMIC_ACQ_REL) == 0) {
       event->stopTs = gettime() - startTime;
       __atomic_fetch_add(&event->ctx->p2pApiPoolBase, 1, __ATOMIC_RELAXED);
     }
-    updateEvent(event->parent);
-    event->stopTs = gettime() - startTime;
+    updateEvent(parent);
   } else if (type == ncclProfileKernelLaunch) {
     struct kernelLaunch* event = (struct kernelLaunch*) handle;
     event->stopTs = gettime() - startTime;
+    __atomic_fetch_add(&event->ctx->kernelLaunchPoolBase, 1, __ATOMIC_RELAXED);
     updateEvent(event->parent);
   } else if (type == ncclProfileGroup) {
     struct group* event = (struct group *)handle;
@@ -992,23 +986,20 @@ __hidden ncclResult_t exampleProfilerStopEvent(void* eHandle) {
   }
 
   uint64_t type = *(uint64_t *)eHandle;
-  // Stopping API events, Kernel Launch events, collective/p2p task events
-  // in NCCL core do not mean that they are complete. It means that the
-  // operation was enqueued so we need to keep the events open
+  // Stopping API events and collective/p2p task events in NCCL core does not
+  // mean that they are complete. It means that the operation was enqueued so
+  // we need to keep the events open. A kernel launch event is complete once
+  // the launch returns, so it releases its group in updateEvent, and the group
+  // API stop releases the group's own reference.
   if (type == ncclProfileGroupApi) {
     struct groupApi* event = (struct groupApi*) eHandle;
     event->stopTs = gettime() - startTime;
-    return ncclSuccess;
   } else if (type == ncclProfileCollApi) {
     struct collApi* event = (struct collApi*) eHandle;
     event->stopTs = gettime() - startTime;
     return ncclSuccess;
   } else if (type == ncclProfileP2pApi) {
     struct p2pApi* event = (struct p2pApi*) eHandle;
-    event->stopTs = gettime() - startTime;
-    return ncclSuccess;
-  } else if (type == ncclProfileKernelLaunch) {
-    struct kernelLaunch* event = (struct kernelLaunch*) eHandle;
     event->stopTs = gettime() - startTime;
     return ncclSuccess;
   } else if (type == ncclProfileGroup) {

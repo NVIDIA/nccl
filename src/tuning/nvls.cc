@@ -74,18 +74,12 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
     bw = bw * effChannels;
 
     if (comm->nNodes > 1 && algo == NCCL_ALGO_NVLS && (c == ncclFuncAllGather || c == ncclFuncReduceScatter)) {
-      int nHeads = 0;
+      int nHeads = comm->collNetHeadsNum;
       if (c == ncclFuncAllGather && (!comm->ncclCollNet || !comm->ncclCollNet->iallgather)) {
         bw = -1.0;
         enabled[c] = 0; // Hard disable
       }
       if (c == ncclFuncReduceScatter && (!comm->ncclCollNet || !comm->ncclCollNet->ireducescatter)) {
-        bw = -1.0;
-        enabled[c] = 0; // Hard disable
-      }
-      if (comm->config.collnetEnable) {
-        nHeads = comm->collNetHeadsNum;
-      } else {
         bw = -1.0;
         enabled[c] = 0; // Hard disable
       }

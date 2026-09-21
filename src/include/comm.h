@@ -305,6 +305,8 @@ struct ncclTaskP2p {
   int root;
   size_t bytes;
   bool allowUB;
+  int maxCTAs;
+  int collOpCount; // Zero for explicit P2P; otherwise identifies the originating collective.
   cudaEvent_t launchCompletionEvent;
 
   // Profiler plugin
@@ -498,6 +500,9 @@ struct ncclKernelPlanner {
   struct Peer* peers /*[nRanks]*/;
   int nTasksColl, nTasksP2p, nTasksBcast, nTasksRma;
   int nTasksP2pSend, nTasksP2pRecv;
+  int p2pCollOpCount;
+  bool p2pCollNeedsIsolation;
+  struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> p2pCollTaskQueue;
   int nCollConfigLaunchCompletionEvents; // Original event-bearing collective requests in this group.
 
   struct {

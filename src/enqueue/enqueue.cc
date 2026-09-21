@@ -28,6 +28,7 @@
 #include <cstring> // std::memcpy
 #include <cinttypes> // PRIx64
 #include <cfloat> // FLT_MAX
+#include <vector>
 
 NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 NCCL_PARAM(AllgathervEnable, "ALLGATHERV_ENABLE", 1);
@@ -1259,12 +1260,26 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
   }
 
   // Compute how much to split operations
-  // Try to use all channels
-  int nChannelsMax = comm->p2pnChannelsPerPeer;
-  int nChannelsMin = nChannelsMax;
   // Try to use all channels, but one channel per operation.
-  while (nChannelsMin * nRanks > comm->p2pnChannels && nChannelsMin > 1) nChannelsMin /= 2;
+  int minChannelsPerPeer = comm->p2pnChannelsPerPeer;
+  while (minChannelsPerPeer * nRanks > comm->p2pnChannels && minChannelsPerPeer > 1) minChannelsPerPeer /= 2;
+
+  int planMaxCTAs = MAXCHANNELS;
   while (comm->planner.nTasksP2p != 0) {
+    auto* collQueue = &comm->planner.p2pCollTaskQueue;
+    if (comm->planner.nTasksP2p == collQueue->nElems) {
+      // Drain explicit P2P first, then one originating collective per plan sequence.
+      // This keeps unrelated send/recv directions from weakening a collective's cap.
+      if (plan->workBytes != 0) return ncclSuccess;
+      int collOpCount = ncclIntruQueueHead(collQueue)->collOpCount;
+      while (!ncclIntruQueueEmpty(collQueue) && ncclIntruQueueHead(collQueue)->collOpCount == collOpCount) {
+        struct ncclTaskP2p* task = ncclIntruQueueDequeue(collQueue);
+        ncclIntruQueueEnqueue(task->func == ncclFuncSend ? &peers[task->root].sendQueue : &peers[task->root].recvQueue,
+                              task);
+      }
+      *p2pRound = 0;
+      (*p2pEpoch)++;
+    }
     for (; *p2pRound < nRanks; (*p2pRound)++) {
       int sendRank = comm->p2pSchedule[*p2pRound].sendRank;
       int recvRank = comm->p2pSchedule[*p2pRound].recvRank;
@@ -1297,14 +1312,28 @@ static ncclResult_t scheduleP2pTasksToPlan(struct ncclComm* comm, int* p2pEpoch,
         comm->planner.nTasksP2pSend -= 1;
         comm->planner.nTasksP2pRecv -= 1;
       } else {
+        // Isolated collective tasks have the same bounds in both directions.
+        int pairMaxCTAs = std::max(send ? send->maxCTAs : 0, recv ? recv->maxCTAs : 0);
+        int pairChannelsMax = std::min(comm->p2pnChannelsPerPeer, pairMaxCTAs);
+        int maxCTAs = std::min(planMaxCTAs, pairMaxCTAs);
+        if (maxCTAs < MAXCHANNELS) {
+          uint64_t channelMask = plan->channelMask;
+          int base = ncclP2pChannelBaseForRound(comm, *p2pRound);
+          for (int part = 0; part < pairChannelsMax; part++) {
+            channelMask |= uint64_t(1) << ncclP2pChannelForPart(comm->p2pnChannels, base, part);
+          }
+          // The cap covers the union across peers, not just each peer's stripe.
+          if (countOneBits(channelMask) > maxCTAs) return ncclSuccess;
+        }
         // Ensure room for worst case of one new batch per channel.
-        if (!ncclTestBudget(budget, plan->nWorkBatches + nChannelsMax,
+        if (!ncclTestBudget(budget, plan->nWorkBatches + pairChannelsMax,
                             plan->workBytes + sizeof(struct ncclDevWorkP2p))) {
           return ncclSuccess;
         }
+        planMaxCTAs = maxCTAs;
         struct ncclTaskP2p* p2pTasks[2] = {recv, send};
-        NCCLCHECK(addP2pToPlan(comm, plan, nChannelsMin, nChannelsMax, *p2pEpoch, *p2pRound, sendRank, sendBuff,
-                               sendBytes, recvRank, recvBuff, recvBytes, p2pTasks));
+        NCCLCHECK(addP2pToPlan(comm, plan, std::min(minChannelsPerPeer, pairChannelsMax), pairChannelsMax, *p2pEpoch,
+                               *p2pRound, sendRank, sendBuff, sendBytes, recvRank, recvBuff, recvBytes, p2pTasks));
         if (send != nullptr) {
           ncclIntruQueueDequeue(&peers[sendRank].sendQueue);
           // Profiler - We can overwrite groupAPI event handles here since all operations here belong to the same group
@@ -1698,6 +1727,31 @@ static ncclResult_t getImplicitOrder(enum ncclImplicitOrder* mode, struct ncclCo
   return ncclSuccess;
 }
 
+static void isolateP2pCollTasks(struct ncclComm* comm) {
+  auto* planner = &comm->planner;
+  if (!planner->p2pCollNeedsIsolation) return;
+  std::vector<ncclTaskP2p*> tasks;
+  for (int peer = 0; peer < comm->nRanks; peer++) {
+    for (auto* queue : {&planner->peers[peer].sendQueue, &planner->peers[peer].recvQueue}) {
+      for (auto* task = ncclIntruQueueHead(queue); task != nullptr; task = task->next) {
+        tasks.push_back(task);
+      }
+    }
+  }
+  std::stable_sort(tasks.begin(), tasks.end(),
+                   [](ncclTaskP2p* a, ncclTaskP2p* b) { return a->collOpCount < b->collOpCount; });
+  for (int peer = 0; peer < comm->nRanks; peer++) {
+    ncclIntruQueueConstruct(&planner->peers[peer].sendQueue);
+    ncclIntruQueueConstruct(&planner->peers[peer].recvQueue);
+  }
+  for (auto* task : tasks) {
+    auto* queue = task->collOpCount != 0 ? &planner->p2pCollTaskQueue :
+                                           (task->func == ncclFuncSend ? &planner->peers[task->root].sendQueue :
+                                                                         &planner->peers[task->root].recvQueue);
+    ncclIntruQueueEnqueue(queue, task);
+  }
+}
+
 ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
   ncclResult_t result = ncclSuccess;
   struct ncclKernelPlanner* planner = &comm->planner;
@@ -1709,6 +1763,7 @@ ncclResult_t ncclLaunchPrepare(struct ncclComm* comm) {
   // The p2pEpoch value is incremented in scheduleP2pTasksToPlan and its value is carried over from one plan to
   // another (even if not strictly required)
   int nPlans = 0, p2pEpoch = 0, p2pRound = 0;
+  if (planner->nTasksP2p != 0) isolateP2pCollTasks(comm);
 
   if (planner->nTasksColl + planner->nTasksP2p + planner->nTasksBcast != 0 ||
       !ncclIntruQueueEmpty(&planner->collSymTaskQueue) || !ncclIntruQueueEmpty(&planner->collCeTaskQueue) ||
@@ -2705,6 +2760,14 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
   p2p->root = peer;
   p2p->bytes = nBytes;
   p2p->allowUB = allowUB;
+  p2p->maxCTAs = MAXCHANNELS;
+  p2p->collOpCount = 0;
+  if (collAPI == ncclFuncAlltoAll || collAPI == ncclFuncGather || collAPI == ncclFuncScatter) {
+    p2p->collOpCount = planner->p2pCollOpCount;
+    NCCL_CONFIG_SET(p2p, maxCTAs, ncclParamMaxCTAs(), std::min(info->collConfig.maxCTAs, comm->config.maxCTAs),
+                    comm->config.maxCTAs, 1, MAXCHANNELS);
+    planner->p2pCollNeedsIsolation |= p2p->maxCTAs < MAXCHANNELS;
+  }
   p2p->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&info->collConfig);
   p2p->eActivationMask = ncclProfilerApiState.eActivationMask;
   p2p->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
@@ -3218,6 +3281,8 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     t->sendRecv.bytes = info->count * ncclTypeSize(info->datatype);
     t->sendRecv.stream = info->stream;
     t->sendRecv.launchCompletionEvent = nullptr;
+    t->sendRecv.maxCTAs = MAXCHANNELS;
+    t->sendRecv.collOpCount = 0;
     ncclIntruQueueEnqueue(&rtq->genericQueue, t);
   } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal) {
     if (info->ctx < 0 || info->ctx >= comm->config.numRmaCtx) {
@@ -3430,6 +3495,11 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
         if (useSymmetricAlltoAll && !ncclSymkAvailable(comm, info->coll, opDev.op, info->datatype, info->count)) {
           WARN("NCCL_SYM_KERNEL requests AlltoAll_LL, but the kernel is unavailable for this operation");
           return ncclInvalidUsage;
+        }
+        if (!useSymmetricAlltoAll &&
+            (collAPI == ncclFuncAlltoAll || collAPI == ncclFuncGather || collAPI == ncclFuncScatter)) {
+          ncclGroupCommJoin(comm, ncclGroupTaskTypeCollective);
+          comm->planner.p2pCollOpCount++;
         }
         if (useSymmetricAlltoAll) {
           NCCLCHECK(collTaskAppend(comm, info, opDev));

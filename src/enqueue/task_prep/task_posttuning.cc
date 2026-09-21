@@ -158,6 +158,9 @@ static ncclResult_t fillP2pTaskFromRaw(struct ncclComm* comm, struct ncclTaskTun
   task->root = raw->peer;
   task->bytes = raw->bytes;
   task->launchCompletionEvent = raw->launchCompletionEvent;
+  task->maxCTAs = raw->maxCTAs;
+  task->collOpCount = raw->collOpCount;
+  comm->planner.p2pCollNeedsIsolation |= task->maxCTAs < MAXCHANNELS;
   if (task->collAPI == ncclFuncAlltoAll || task->collAPI == ncclFuncScatter || task->collAPI == ncclFuncGather) {
     task->allowUB = false;
   } else {

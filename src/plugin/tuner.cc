@@ -20,6 +20,7 @@ extern ncclTuner_t* getNcclTuner_v3(void* lib);
 extern ncclTuner_t* getNcclTuner_v4(void* lib);
 extern ncclTuner_t* getNcclTuner_v5(void* lib);
 extern ncclTuner_t* getNcclTuner_v6(void* lib);
+extern ncclTuner_t* getNcclTuner_v7(void* lib);
 
 static std::mutex tunerPluginMutex;
 static int tunerPluginRefCount;
@@ -72,7 +73,10 @@ ncclResult_t ncclTunerPluginLoad(struct ncclComm* comm) {
     tunerName = ncclPluginLibPaths[ncclPluginTypeTuner];
   }
 
-  tunerSymbol = getNcclTuner_v6(tunerPluginLib);
+  tunerSymbol = getNcclTuner_v7(tunerPluginLib);
+  if (tunerSymbol == NULL) {
+    tunerSymbol = getNcclTuner_v6(tunerPluginLib);
+  }
   if (tunerSymbol == NULL) {
     tunerSymbol = getNcclTuner_v5(tunerPluginLib);
   }

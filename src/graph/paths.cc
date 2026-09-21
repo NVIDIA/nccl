@@ -898,6 +898,18 @@ ncclResult_t ncclTopoComputePaths(struct ncclTopoSystem* system, struct ncclComm
 }
 
 ncclResult_t ncclTopoTrimSystem(struct ncclTopoSystem* system, struct ncclComm* comm) {
+  // Count how many GPUs in this communicator share each NIC before trimming.
+  // Trimming removes GPUs from the graph, not from the communicator.
+  // Keep this count so ncclTopoGetLocalNetType still accounts for those GPUs.
+  const int netTypes[] = {NET, GIN, RMA};
+  for (int type : netTypes) {
+    for (int n = 0; n < system->nodes[type].count; n++) {
+      struct ncclTopoNode* net = system->nodes[type].nodes + n;
+      int localGpus[NCCL_TOPO_MAX_NODES];
+      NCCLCHECK(ncclTopoGetLocal(system, type, n, GPU, localGpus, &net->net.sharingGpuCount, NULL));
+    }
+  }
+
   ncclResult_t ret = ncclSuccess;
   int* domains;
   int64_t* ids = NULL;

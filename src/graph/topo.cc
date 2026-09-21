@@ -129,9 +129,11 @@ ncclResult_t ncclTopoCreateNode(struct ncclTopoSystem* system, struct ncclTopoNo
     n->net.latency = 0.0;
     n->net.railId = NCCL_TOPO_UNDEF;
     n->net.planeId = NCCL_TOPO_UNDEF;
+    n->net.sharingGpuCount = NCCL_TOPO_UNDEF;
   } else if (type == GIN || type == RMA) {
     n->net.railId = NCCL_TOPO_UNDEF;
     n->net.planeId = NCCL_TOPO_UNDEF;
+    n->net.sharingGpuCount = NCCL_TOPO_UNDEF;
   } else if (type == DEV) {
     n->dev.dev = NCCL_TOPO_UNDEF;
     n->dev.cudaCompCap = NCCL_TOPO_UNDEF;
@@ -2334,12 +2336,24 @@ ncclResult_t ncclTopoGetLocalNetType(struct ncclTopoSystem* system, int type, in
     return ncclInternalError;
   }
 
-  int localGpuCount = 0, netsPerGpu = 0, policyCount = 0, localRailCount = 0;
+  // GPUs removed by trimming still share the NIC. Recounting after trimming can
+  // miscompute per-GPU rail allocation, leading to unbalanced NIC usage.
+  // Use the count saved by ncclTopoTrimSystem. During initial path computation,
+  // when no count is saved yet, compute it from the current paths.
+  int localGpuCount = system->nodes[type].nodes[localNets[0]].net.sharingGpuCount;
+  int netsPerGpu = 0, policyCount = 0, localRailCount = 0;
   int localGpus[NCCL_TOPO_MAX_NODES];
   int railOffset[NCCL_TOPO_MAX_NODES + 1];
   enum netDevsPolicy policy;
   NCCLCHECK(ncclTopoGetNetDevsPolicy(&policy, &policyCount));
-  NCCLCHECK(ncclTopoGetLocal(system, type, localNets[0], GPU, localGpus, &localGpuCount, NULL));
+  if (localGpuCount == NCCL_TOPO_UNDEF) {
+    NCCLCHECK(ncclTopoGetLocal(system, type, localNets[0], GPU, localGpus, &localGpuCount, NULL));
+  }
+  if (localGpuCount <= 0) {
+    WARN("Could not find any GPU local to %s device %d", topoNodeTypeStr[type],
+         system->nodes[type].nodes[localNets[0]].net.dev);
+    return ncclInternalError;
+  }
 
   struct ncclTopoNode* gpuNode = system->nodes[GPU].nodes + gpu;
   int net = 0;

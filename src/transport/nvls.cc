@@ -107,7 +107,7 @@ static ncclResult_t ncclNvlsTreeSm100Tuning(struct ncclComm* comm, int* nChannel
   return ncclSuccess;
 }
 
-static ncclResult_t ncclNvlsChannels(struct ncclComm* comm, int* nChannels, int* chunkSize, int* treeMaxChunkSize) {
+ncclResult_t ncclNvlsChannels(struct ncclComm* comm, int* nChannels, int* chunkSize, int* treeMaxChunkSize) {
   int channels = 0;
 
   if (comm->minCompCap >= 100 && comm->nNodes > 1 && !RUBIN_AND_LATER(comm->minCompCap)) {

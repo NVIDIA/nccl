@@ -7,14 +7,7 @@
 
 #include "cost_model.h"
 #include "comm.h"
-
-// NVLS efficiency factor.
-static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
-  0.0f, // Volta
-  0.0f, // Ampere
-  0.85f, // Hopper
-  0.74f, // Blackwell
-};
+#include "model.h"
 
 ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
                                      struct ncclTuningModelState* /*internal*/) {

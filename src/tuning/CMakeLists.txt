@@ -14,6 +14,9 @@ set(TUNING_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tree.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/tuning_general.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/tuning.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/ring.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/tree.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/nvls.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/pipeline_model.cc
 )
 

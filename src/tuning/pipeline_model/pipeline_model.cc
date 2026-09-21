@@ -30,7 +30,7 @@ static float pipelineModel(size_t s, int count, struct ncclTuningPipelineStep in
 }
 
 ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
-                                        struct modelState* internal) {
+                                        struct ncclTuningModelState* internal) {
   ncclResult_t ret = ncclSuccess;
 
   if (internal == nullptr || internal->pipeline.isValid == nullptr) return ncclInternalError;
@@ -84,7 +84,7 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
   float maxAlgBw = maxBusBw * comm->nRanks / nSteps;
   // The factor 1000.0 is used to convert bytes/us to GB/s.
   float channelAlgBw = pipeline.channelSize / pipelineTime / 1000.0f;
-  algBw = softmin(channelAlgBw * nChannels, maxAlgBw, /*smoothness=*/.1 * maxAlgBw);
+  algBw = ncclSoftMin(channelAlgBw * nChannels, maxAlgBw, /*smoothness=*/.1 * maxAlgBw);
 
   // Keep launch latency outside the pipeline model
   lat = comm->tuningContext.tuningConstants.baseLatencies[tuning->algo][tuning->proto];

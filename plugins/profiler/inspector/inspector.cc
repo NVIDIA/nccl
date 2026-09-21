@@ -68,6 +68,7 @@ static bool ncclInspectorInit = false;
 bool enableNcclInspectorP2p = true;
 // Global flag: require kernel-based timing; discard events without it
 bool requireKernelTiming = true;
+bool useNcclSourcedTimings = false;
 bool inspectorIsDumpVerboseEnabled() {
   return enableNcclInspectorDumpVerbose;
 }
@@ -858,6 +859,7 @@ static void showInspectorEnvVars() {
   } envVars[] = {
     {"NCCL_INSPECTOR_ENABLE", getenv("NCCL_INSPECTOR_ENABLE"), "0", "Enable/disable inspector plugin"},
     {"NCCL_INSPECTOR_ENABLE_P2P", getenv("NCCL_INSPECTOR_ENABLE_P2P"), "1", "Enable/disable P2P tracking"},
+    {"NCCL_INSPECTOR_NCCL_SOURCED_TIMINGS", getenv("NCCL_INSPECTOR_NCCL_SOURCED_TIMINGS"), "0", "Use NCCL-stamped event timestamps (v8 profiler interface) instead of plugin host clocks"},
     {"NCCL_INSPECTOR_DUMP_THREAD_ENABLE", getenv("NCCL_INSPECTOR_DUMP_THREAD_ENABLE"), "1", "Enable/disable dump thread"},
     {"NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS", getenv("NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS"), "-1", "Dump interval in microseconds (-1 = disabled/dump only at teardown, 0 = continuous, >0 = periodic)"},
     {"NCCL_INSPECTOR_DUMP_DIR", getenv("NCCL_INSPECTOR_DUMP_DIR"), "(auto-generated)", "Output directory for inspector logs"},
@@ -983,6 +985,23 @@ static void initKernelTimingFromEnv() {
   const char* str = getenv("NCCL_INSPECTOR_REQUIRE_KERNEL_TIMING");
   int val = str ? atoi(str) : 1;
   requireKernelTiming = val != 0;
+}
+
+/*
+ * Description:
+ *
+ *   Initializes the NCCL-sourced timings opt-in from the environment.
+ *   When enabled, the plugin asks NCCL (through the v8 profiler config)
+ *   to stamp event timestamps, and uses them in place of its own host
+ *   clock reads. Off by default because it makes NCCL run a periodic
+ *   GPU clock calibration on the profiler thread.
+ *
+ * Return:
+ *   None.
+ */
+static void initNcclSourcedTimingsFromEnv() {
+  const char* str = getenv("NCCL_INSPECTOR_NCCL_SOURCED_TIMINGS");
+  useNcclSourcedTimings = str ? (atoi(str) != 0) : false;
 }
 
 /*
@@ -1117,6 +1136,7 @@ inspectorResult_t inspectorGlobalInit(int rank) {
   INS_CHK(inspectorGlobalStateInit());
   initP2pTrackingFromEnv();
   initKernelTimingFromEnv();
+  initNcclSourcedTimingsFromEnv();
   INS_CHK(inspectorEventPoolInitFromEnv());
   INS_CHK(initDumpThreadFromEnv());
   return inspectorSuccess;

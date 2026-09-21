@@ -190,6 +190,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
     {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
     {2 * 141.2, 2 * 45.0 /*avg of ring & tree*/, 2 * 35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
+    {-1.0, -1.0, -1.0} /* Rubin-N1/Rubin-N2/Rubin-N4 */
   },
     // perChMaxRingLL128Bws
   {
@@ -197,6 +198,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
     {40.0, 40.0, 40.0}, /* Blackwell (N1/N2/N4) */
+    {-1.0, -1.0, -1.0} /* Rubin (N1/N2/N4) */
   },
     // perChMaxTreeLL128Bws
   {
@@ -204,6 +206,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 29.0}, /* Hopper (N1/N2/N4) */
     {55.6, 36.7, 20.0}, /* Blackwell (N1/N2/N4) */
+    {-1.0, -1.0, -1.0} /* Rubin (N1/N2/N4) */
   },
     // perChMaxTreeBws
   {
@@ -211,13 +214,15 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
     {38.7, 41.4, 36.0}, /* Hopper (N1/N2/N4) */
     {70.0, 42.8, 24.0}, /* Blackwell (N1/N2/N4) */
+    {-1.0, -1.0, -1.0}, /* Rubin (N1/N2/N4) */
   },
     // perChMaxNVLSTreeBws
   {
     {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
     {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
-    {0.0, 57.7, 45.5}, /* Hopper (N1/N2/N4) */
-    {0.0, 96.0, 80.0} /* Blackwell (N1/N2/N4) */
+    {0.0, 57.7, 45.5},  /* Hopper (N1/N2/N4) */
+    {0.0, 96.0, 80.0},  /* Blackwell (N1/N2/N4) */
+    {-1.0, -1.0, -1.0}, /* Rubin (N1/N2/N4) */
   }
 };
 

@@ -673,9 +673,9 @@ ncclResult_t p2pRecvFree(struct ncclComm* comm, struct ncclConnector* recv) {
     } else {
       if (resources->sendMemIpc) CUDACHECK(cudaIpcCloseMemHandle(resources->sendMemIpc));
       if (resources->recvMemIpc) CUDACHECK(cudaIpcCloseMemHandle(resources->recvMemIpc));
-      if (useMemcpy) {
-        NCCLCHECK(ncclShmIpcClose(&resources->desc));
-      }
+    }
+    if (useMemcpy) {
+      NCCLCHECK(ncclShmIpcClose(&resources->desc));
     }
     free(resources);
   }

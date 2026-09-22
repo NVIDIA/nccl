@@ -97,6 +97,18 @@ ncclResult_t ncclTuningRingModelSim(struct ncclTuningInput_t* const inputs, stru
   }
   float lat = inputs->comm->tuningContext.generalLatencies[inputs->func][tuning->algo][tuning->proto];
   float bw = inputs->comm->tuningContext.generalBandwidths[inputs->func][tuning->algo][tuning->proto];
+
+  // Two-rank Blackwell Ring/LL128 AllReduce does not reach the generic
+  // per-channel LL128 bandwidth cap; adjust the modeled bandwidth accordingly.
+  if (inputs->comm->nNodes == 1 &&
+      inputs->comm->nRanks == 2 &&
+      inputs->comm->minCompCap >= 100 &&
+      inputs->comm->graphs[NCCL_ALGO_RING].typeIntra == PATH_NVL &&
+      inputs->func == ncclFuncAllReduce &&
+      tuning->algo == NCCL_ALGO_RING &&
+      tuning->proto == NCCL_PROTO_LL128) {
+    bw *= 0.60f;
+  }
   if (bw == -1.0f) {
     tuning->valid = 0;
     tuning->timeUs = -1.0;

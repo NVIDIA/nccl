@@ -1397,15 +1397,15 @@ __forceinline__ __device__ void dispatch_s2g_issue_token(
     const uint32_t sf_bytes = (uint32_t)sf_bytes_per_token;
 
     // Remote fan-out: each field has its own output array, indexed [rank]+slot*stride.
-    const void* token_dst = remote_expert_output_token[dst.remote_rank_id] + (dst.output_buffer_index * HIDDEN_DIM);
+    const void* token_dst = remote_expert_output_token[dst.remote_rank_id] + ((size_t)dst.output_buffer_index * HIDDEN_DIM);
     const void* prob_dst = nullptr;
     const void* sf_dst = nullptr;
     if constexpr (FORWARD_DISPATCH) {
         prob_dst = remote_expert_output_prob[dst.remote_rank_id] +
-                   (dst.output_buffer_index * (experts_per_rank * LSA_TEAM_SIZE));
+                   ((size_t)dst.output_buffer_index * (experts_per_rank * LSA_TEAM_SIZE));
     }
     if constexpr (HAS_SF) {
-        sf_dst = remote_expert_output_scaling_factor[dst.remote_rank_id] + dst.output_buffer_index * sf_bytes_per_token;
+        sf_dst = remote_expert_output_scaling_factor[dst.remote_rank_id] + (size_t)dst.output_buffer_index * sf_bytes_per_token;
     }
     copy_token_bundle<TOKEN_DATA_TYPE, SMEM_TYPE, FORWARD_DISPATCH, HAS_SF, copy_dir::to_gmem>(
         smem_buffer_ptr,
@@ -2123,10 +2123,10 @@ __forceinline__ __device__ void issue_local_g2s_row(
             slot = pending_s2d;
         }
         const uint16_t* token_src =
-            remote_expert_input_token[rank_id] + (slot * HIDDEN_DIM * nccl_ep::size_u16<kTokenDtype>());
+            remote_expert_input_token[rank_id] + ((size_t)slot * HIDDEN_DIM * nccl_ep::size_u16<kTokenDtype>());
         const float* prob_src = nullptr;
         if constexpr (BACKWARD_COMBINE) {
-            prob_src = remote_expert_input_prob[rank_id] + (slot * (experts_per_rank * num_of_ranks_per_node));
+            prob_src = remote_expert_input_prob[rank_id] + ((size_t)slot * (experts_per_rank * num_of_ranks_per_node));
         }
         issue_g2s_entry<INTER_NODE, BACKWARD_COMBINE, /*WRITE_LAST_FLAG=*/true>(
             smem_buffer_ptr,
@@ -3782,7 +3782,7 @@ __forceinline__ __device__ void PAD_warp_group_device_function(
         int32_t pad = rem ? (alignment - rem) : 0;
         for (int p = 0; p < pad; p++, row_idx++) {
             if ((row_idx % global_stride) == global_id) {
-                void* dst = reinterpret_cast<void*>(local_buf + (zone_offsets[e] + count + p) * hidden_dim);
+                void* dst = reinterpret_cast<void*>(local_buf + (size_t)(zone_offsets[e] + count + p) * hidden_dim);
                 cuda::ptx::cp_async_bulk(
                     cuda::ptx::space_global,
                     cuda::ptx::space_shared,

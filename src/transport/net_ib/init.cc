@@ -604,10 +604,6 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                  ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar,
                  ncclIbDevs[ncclNIbDevs].oooRqSize);
 
-            ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
-            ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
-            ncclIbAsyncThread.detach();
-
             ncclNIbDevs++;
             nPorts++;
           }
@@ -639,6 +635,12 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
     }
     // sort devices to ensure a consistent order across nodes
     if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
+    // Start the async-event threads only once ncclIbDevs[] has its final, stable device order.
+    for (int d = 0; d < ncclNIbDevs; d++) {
+      ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + d);
+      ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", d);
+      ncclIbAsyncThread.detach();
+    }
     // Once sorted, get the realPort ID, the plane index, and create the virtual devices.
     // Doing it after sorting ensures that devices will have consistent realPort IDs and plane indexes accross ranks.
     char line[2048] = "";

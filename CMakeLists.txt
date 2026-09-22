@@ -176,6 +176,12 @@ if(NCCL_COMPILER_GCC)
     # GCC/Clang-specific flags
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare -Wvla -g")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+    # --compress-mode=size shrinks the fatbin by about 40% without changing the generated code.
+    # It needs a driver that can load zstd-compressed images, which CUDA 13 already requires;
+    # CUDA 12 builds keep the default mode to stay compatible with older drivers.
+    if(CUDA_MAJOR GREATER_EQUAL 13)
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --compress-mode=size")
+    endif()
 elseif(NCCL_COMPILER_MSVC)
     # MSVC-specific flags
     # /Zc:preprocessor enables conformant preprocessor for proper variadic macro handling (needed for NVTX)

@@ -30,6 +30,11 @@ struct ncclGinFlowConn {
   uint64_t step;
   uint32_t llStep;
   uint64_t signalValue;
+  // Connection-owned FIFOs remain valid across kernels and are protected by
+  // persistent credits. Only sends sourced from an external window need to
+  // be drained before the kernel returns.
+  bool flushOnClose;
+
   NCCL_DEVICE_INLINE ncclGinFlowConn(ncclDevComm const& comm, int contextId, ncclTeam team, int peer,
                                      ncclSymPtr<char> recvFifo, ncclSymPtr<char> sendFifo,
                                      ncclSymPtr<ncclFlowConnState> state, ncclGinSignal_t signal0, size_t signalIndex,
@@ -38,6 +43,8 @@ struct ncclGinFlowConn {
   NCCL_DEVICE_INLINE void close();
   NCCL_DEVICE_INLINE void* waitSend();
   NCCL_DEVICE_INLINE void postSend(size_t bytes);
+  NCCL_DEVICE_INLINE void postSendFrom(size_t bytes, ncclSymPtr<char> source);
+  NCCL_DEVICE_INLINE void postSendDirect(size_t bytes, ncclSymPtr<char> peerOutput, ncclSymPtr<char> source);
   NCCL_DEVICE_INLINE void* waitRecv();
   NCCL_DEVICE_INLINE void postRecv();
 

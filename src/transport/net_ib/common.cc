@@ -28,7 +28,6 @@ NCCL_PARAM(IbEventBasedLbRemote, "IB_EVENT_BASED_LB_REMOTE", 1);
 
 extern int ncclParamIbReceiverSideMatchingScheme();
 extern int ncclParamIbOooRq();
-extern int ncclParamIbResiliencyPortFailover();
 
 ncclResult_t ncclIbStatsCheckFatalCount(struct ncclIbStats* stat, const char* funcName) {
   if (ncclParamIbAsyncEvents() && COMPILER_ATOMIC_LOAD(&stat->fatalErrorCount, std::memory_order_relaxed)) {
@@ -73,7 +72,10 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
   baseComm->recvMatchingScheme =
     ncclParamIbReceiverSideMatchingScheme() == -2 ? BY_INDEX : ncclParamIbReceiverSideMatchingScheme();
 
-  if (ncclParamIbOooRq() || (ncclParamIbResiliencyPortFailover() == 1)) {
+  // Everything that makes ncclIbRecvCommInit() pre-post receive work requests needs ID-based
+  // matching: pre-posted requests all carry the same dummy wr_id, so the receiver can only find
+  // the request from the ID carried in the immediate data.
+  if (ncclParamIbOooRq() || baseComm->resiliency || (ncclParamIbPrepostReceiveWorkRequests() == 1)) {
     baseComm->recvMatchingScheme = BY_ID;
     if (ncclParamIbReceiverSideMatchingScheme() == BY_INDEX) {
       INFO(NCCL_NET, "NET/IB: %s: Overriding matching scheme to ID-based (%d)", __func__, BY_ID);

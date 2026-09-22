@@ -945,6 +945,49 @@ ncclResult_t ncclTopoSearchParams(struct ncclTopoSystem* system, int pattern, in
   return ncclSuccess;
 }
 
+// Compute the highest NVLink load on any GPU for the graph->minChannels channels of this search, in units of the
+// channel speed. The intent of this function is to return the load of the most loaded GPU accurately; this
+// enables us to skip searches for speeds that cannot be satisfied by the topology. If it is too high, valid
+// speeds may be skipped. If it is too low, we do more work than necessary.
+static ncclResult_t ncclTopoGraphMaxGpuLoad(struct ncclTopoSystem* system, struct ncclTopoGraph* graph, float* load) {
+  int ndevs = system->nodes[DEV].count;
+  int minChannels = graph->minChannels;
+  if (ndevs <= 1) {
+    *load = minChannels;
+    return ncclSuccess;
+  }
+  switch (graph->pattern) {
+  case NCCL_TOPO_PATTERN_RING:
+  case NCCL_TOPO_PATTERN_TREE:
+  case NCCL_TOPO_PATTERN_BALANCED_TREE:
+  case NCCL_TOPO_PATTERN_SPLIT_TREE:
+    // Chains (ncclTopoSearchRecGpu): one per channel per GPU, except the last GPU of a channel when the chain does
+    // not loop back. Some GPU is last in at most minChannels / ndevs channels: minChannels - minChannels / ndevs.
+    {
+      int backToNet, backToFirstRank;
+      NCCLCHECK(ncclTopoSearchParams(system, graph->pattern, &backToNet, &backToFirstRank));
+      *load = backToFirstRank != -1 ? minChannels : minChannels - minChannels / ndevs;
+      break;
+    }
+  case NCCL_TOPO_PATTERN_NVLS:
+    // NVLS (ncclTopoSearchTryNvls): one per channel per GPU, two for the head: minChannels + 1.
+    *load = minChannels + 1;
+    break;
+  case NCCL_TOPO_PATTERN_COLLNET_DIRECT:
+    // COLLNET_DIRECT (ncclTopoSearchTryCollnetDirect): 1 for the head, 1 / (ndevs - 1) for each peer:
+    // 1 + (minChannels - 1) / (ndevs - 1).
+    *load = 1.0f + (minChannels - 1) * 1.0f / (ndevs - 1);
+    break;
+  default:
+    // With load 0, speed * load > totalBw is never true, so no speed is skipped. The result is still the same,
+    // but a slower, more exhaustive search is done.
+    INFO(NCCL_GRAPH, "No speed pre-filter bound for graph pattern %d; trying every speed", graph->pattern);
+    *load = 0;
+    break;
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoSearchRec(struct ncclTopoSystem* system, struct ncclTopoGraph* graph,
                                struct ncclTopoGraph* saveGraph, int* time) {
   int backToNet, backToFirstRank;
@@ -1209,12 +1252,12 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   int speedIndex = 0;
   float maxBw;
   float totalBw;
+  float maxGpuLoad;
   int64_t globalTimeout = NCCL_SEARCH_GLOBAL_TIMEOUT;
   int time;
   NCCLCHECK(ncclTopoGetCompCap(system, &ccMin, NULL));
 
   int ngpus = system->nodes[GPU].count;
-  int ndevs = system->nodes[DEV].count;
   int crossNic = (system->nodes[NET].count > 1) &&
                      (graph->pattern == NCCL_TOPO_PATTERN_RING || graph->pattern == NCCL_TOPO_PATTERN_BALANCED_TREE ||
                       graph->pattern == NCCL_TOPO_PATTERN_SPLIT_TREE) ?
@@ -1295,10 +1338,9 @@ ncclResult_t ncclTopoCompute(ncclTopoSystem* system, struct ncclTopoGraph* graph
   maxBw = system->maxBw;
   totalBw = system->totalBw;
 
-  // algo other than RING do not need to close to the starting NET, so increase the NVLink bw artificially
-  if (ndevs > 1 && graph->pattern != NCCL_TOPO_PATTERN_RING) totalBw *= ndevs * 1.0 / (ndevs - 1);
-
-  while ((speedArray[speedIndex] > maxBw || speedArray[speedIndex] * graph->minChannels > totalBw) &&
+  // Skip speeds at which the most loaded GPU exceeds its NVLink bandwidth (totalBw). See ncclTopoGraphMaxGpuLoad.
+  NCCLCHECKGOTO(ncclTopoGraphMaxGpuLoad(system, graph, &maxGpuLoad), ret, exit);
+  while ((speedArray[speedIndex] > maxBw || speedArray[speedIndex] * maxGpuLoad > totalBw) &&
          speedIndex < nspeeds - 1) {
     speedIndex++;
   }

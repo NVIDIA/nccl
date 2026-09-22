@@ -58,6 +58,7 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool i
   if (hasSysmemSegment) {
     INFO(NCCL_REG, "Skipping registration for buffer %p size %zi since it contains segments backed by CPU memory", data,
          size);
+    *handle = NULL;
     return ncclSuccess;
   } else {
     INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);

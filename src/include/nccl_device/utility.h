@@ -79,17 +79,6 @@ static NCCL_DEVICE_INLINE bool testAbort(uint32_t* abortFlag, uint32_t& steps) {
     return abortFlag != nullptr && cuda::atomic_ref<uint32_t>{*abortFlag}.load(cuda::memory_order_relaxed) != 0;
   }
 }
-#else
-static NCCL_DEVICE_INLINE bool testAbort(uint32_t* abortFlag, uint32_t& steps) {
-  const uint32_t maxSteps = 10000;
-  if (++steps < maxSteps) {
-    return false;
-  } else {
-    volatile uint32_t* ptr = (volatile uint32_t*)abortFlag;
-    steps = 0;
-    return ptr != nullptr && *ptr != 0;
-  }
-}
 #endif
 
 template <typename T>

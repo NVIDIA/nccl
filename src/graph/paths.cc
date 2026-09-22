@@ -1009,7 +1009,6 @@ ncclResult_t ncclTopoComputeP2pChannelsPerPeer(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
-  /* here we already honor comm->max/minCTAs for p2pnChannels. */
   if (comm->sharedRes->owner != comm) {
     comm->p2pnChannels = std::min(comm->nChannels, (int)ncclParamMaxP2pNChannels());
     comm->p2pnChannels =
@@ -1023,6 +1022,8 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   comm->p2pnChannelsPerPeer = pow2Up(comm->p2pnChannelsPerPeer);
   comm->p2pnChannels = pow2Up(comm->p2pnChannels);
   comm->p2pnChannels = std::min(comm->p2pnChannels, pow2Down(ncclDevMaxChannelsForArgsBytes(ncclParamWorkArgsBytes())));
+  // Rounding up may exceed maxCTAs, which bounds the grid of every kernel; round down to honor it.
+  comm->p2pnChannels = std::min(comm->p2pnChannels, pow2Down(comm->config.maxCTAs));
 
   if (comm->nNodes > 1 && comm->config.nChannelsPerNetPeer == NCCL_CONFIG_UNDEF_INT) {
     // In the case of >1 NVLD (and the user didn't set nChannelsPerNetPeer), the network is the botteneck.

@@ -20,7 +20,7 @@ NCCL_DEVICE_INLINE ncclGinFlowConn<GinBackendMask, Protocol>::ncclGinFlowConn(
   ncclSymPtr<char> sendFifo, ncclSymPtr<ncclFlowConnState> state_, ncclGinSignal_t signal0, size_t signalIndex,
   int nSlots_, size_t slotSize_, int type_, bool waitRole, bool recvPost)
   : nSlots(nSlots_), slotSize(slotSize_), type(type_), gin(comm, contextId), team(team_), peer(peer_),
-    state(state_.localPtr()), fifo(), peerFifo(), step(0), llStep(0), signalValue(0) {
+    state(state_.localPtr()), fifo(), peerFifo(), step(0), llStep(0), signalValue(0), flushOnClose(false) {
   if (type != ncclFlowTypeNone) {
     if (waitRole) {
       assert(state->ginContextId_plus_1[type] == 0 || state->ginContextId_plus_1[type] == gin.contextId + 1);
@@ -45,6 +45,7 @@ NCCL_DEVICE_INLINE ncclGinFlowConn<GinBackendMask, Protocol>::ncclGinFlowConn(
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::close() {
+  if (flushOnClose) gin.flush(ncclCoopThread{});
   state->step[type] = step;
   state->llStep[type] = llStep;
   state->signalValue[type] = signalValue;
@@ -68,6 +69,25 @@ NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postSend(size
   } else if (bytes != 0) {
     gin.put(team, peer, peerFifo + offset, fifo + offset, bytes);
   }
+}
+
+template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
+NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postSendFrom(size_t bytes, ncclSymPtr<char> source) {
+  size_t const offset = ((step - 1) % nSlots) * slotSize;
+  if (bytes != 0) flushOnClose = true;
+  postSendSimple(bytes, source, peerFifo + offset);
+}
+
+template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
+NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postSendDirect(
+  size_t bytes, ncclSymPtr<char> peerOutput, ncclSymPtr<char> source) {
+  bool const externalSource = source.window != nullptr;
+  if (!externalSource) {
+    size_t const offset = ((step - 1) % nSlots) * slotSize;
+    source = fifo + offset;
+  }
+  if (bytes != 0 && externalSource) flushOnClose = true;
+  postSendSimple(bytes, source, peerOutput);
 }
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>

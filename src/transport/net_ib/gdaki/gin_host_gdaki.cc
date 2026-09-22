@@ -59,6 +59,7 @@ NCCL_PARAM(GinGdakiQpDepth, "GIN_GDAKI_QP_DEPTH", 128);
 NCCL_PARAM(GinGdakiMaxDestRdAtomic, "GIN_GDAKI_MAX_DEST_RD_ATOMIC", -2);
 NCCL_PARAM(GinGdakiMaxQpRdAtomic, "GIN_GDAKI_MAX_QP_RD_ATOMIC", -2);
 NCCL_PARAM(GinGdakiLAGAwareDisable, "GIN_GDAKI_LAG_AWARE_DISABLE", 0);
+NCCL_PARAM(GinGdakiCqType, "GIN_GDAKI_CQ_TYPE", 0);
 NCCL_PARAM(GinErrorQuerySec, "GIN_ERROR_QUERY_SEC", 10);
 NCCL_PARAM(GinIbOooAll, "GIN_IB_OOO_OPT", 0);
 USE_NCCL_PARAM(ncclParamIbTimeout, uint8_t);
@@ -72,6 +73,10 @@ extern int64_t ncclParamDmaBufEnable();
 
 static const int NCCL_IB_SL_DEFAULT = 0;
 static const int NCCL_IB_TC_DEFAULT = 0;
+
+static bool gdakiQpNeedsProxyProgress(const struct doca_gpu_verbs_qp* qp) {
+  return qp->cpu_proxy || qp->cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST;
+}
 
 static enum doca_verbs_qp_ordering_semantic gdakiOrderingSematic() {
   if (ncclParamGinIbOooAll() == 1) return DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL;
@@ -795,6 +800,31 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW;
   else qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
   qp_init_attr.comp_channel = gdaki_ctx->docaEvent;
+  switch (ncclParamGinGdakiCqType()) {
+  case 0:
+    qp_init_attr.cq_collapsed = false;
+    qp_init_attr.cq_type = DOCA_GPUNETIO_VERBS_CQ_64B;
+    INFO(NCCL_NET, "GDAKI CQ type configured as device (0)");
+    break;
+  case 1:
+    qp_init_attr.cq_collapsed = true;
+    qp_init_attr.cq_type = DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED;
+    INFO(NCCL_NET, "GDAKI CQ type configured as device-collapsed (1)");
+    break;
+  case 2:
+    qp_init_attr.cq_collapsed = true;
+    qp_init_attr.cq_type = DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST;
+    if ((ncclParamIbDataDirect() > 0) && true == dataDirectNic) {
+      qp_init_attr.flags |= DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_SUPPORT_DATA_DIRECT;
+    }
+    INFO(NCCL_NET, "GDAKI CQ type configured as host-collapsed (2)");
+    break;
+  default:
+    WARN("Invalid NCCL_GIN_GDAKI_CQ_TYPE=%ld; expected 0 (device), 1 (device-collapsed), or 2 (host-collapsed)",
+         (long)ncclParamGinGdakiCqType());
+    status = ncclInvalidArgument;
+    goto out;
+  }
 
   if (nqps_for_comm_this_rank > 0) {
   // SPC-X Ordering Semantic. 0 by default.
@@ -994,7 +1024,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
       gverbs_qps[qp_idx] = gdaki_ctx->gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
       contiguous_gverbs_qps[contiguous_qp_idx] = gverbs_qps[qp_idx];
       ++contiguous_qp_idx;
-      need_cpu_proxy |= (gverbs_qps[qp_idx]->cpu_proxy);
+      need_cpu_proxy |= gdakiQpNeedsProxyProgress(gverbs_qps[qp_idx]);
     }
     DOCACHECKGOTO(doca_gpu_verbs_export_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks, &gin_gdaki_gpu_ctx->gdqp),
                   status, out);
@@ -1006,7 +1036,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
         gverbs_qps[qp_idx] = gdaki_ctx->companion_gqps[(ctx_idx * nranks) + qp_idx]->qp_gverbs;
         contiguous_gverbs_qps[contiguous_qp_idx] = gverbs_qps[qp_idx];
         ++contiguous_qp_idx;
-        need_cpu_proxy |= (gverbs_qps[qp_idx]->cpu_proxy);
+        need_cpu_proxy |= gdakiQpNeedsProxyProgress(gverbs_qps[qp_idx]);
       }
       DOCACHECKGOTO(doca_gpu_verbs_export_multi_qps_dev(gdaki_ctx->gdev, gverbs_qps, nranks,
                                                         &gin_gdaki_gpu_ctx->companion_gdqp),
@@ -1343,14 +1373,14 @@ ncclResult_t ncclGinGdakiProgress(void* ctx) {
     has_progressed = false;
     for (int qpIdx = rankOff; qpIdx < nqpsForComm; qpIdx += rankStride) {
       struct doca_gpu_verbs_qp* qp = gdakiCtx->gqps[qpIdx]->qp_gverbs;
-      if (qp->cpu_proxy) {
+      if (gdakiQpNeedsProxyProgress(qp)) {
         DOCACHECK(doca_gpu_verbs_cpu_proxy_progress(qp, &progressed));
         has_progressed |= progressed;
       }
 
       if (gdakiCtx->companion_gqps) {
         qp = gdakiCtx->companion_gqps[qpIdx]->qp_gverbs;
-        if (qp->cpu_proxy) {
+        if (gdakiQpNeedsProxyProgress(qp)) {
           DOCACHECK(doca_gpu_verbs_cpu_proxy_progress(qp, &progressed));
           has_progressed |= progressed;
         }

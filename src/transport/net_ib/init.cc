@@ -478,8 +478,9 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
           // Record devices not excluded by NCCL_IB_HCA
           if (matchIfList(devices[d]->name, -1, userIfs, nUserIfs, searchExact) ^ searchNot) {
             size_t len = strlen(ncclIbOpenFailedDevs);
-            snprintf(ncclIbOpenFailedDevs + len, sizeof(ncclIbOpenFailedDevs) - len, "%s%s (%s, errno %d)",
-                     len ? ", " : "", devices[d]->name, err ? strerror(err) : "unknown error", err);
+            snprintf(ncclIbOpenFailedDevs + len, sizeof(ncclIbOpenFailedDevs) - len,
+                     "%s%s (ibv_open_device: %s, errno %d)", len ? ", " : "", devices[d]->name,
+                     err ? strerror(err) : "unknown error", err);
           }
           continue;
         }

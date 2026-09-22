@@ -1630,16 +1630,20 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
       rr = rr->next;
     }
     bufSizeTotal = alignUp(bufSizeTotal, 128);
-    ginSignalShadowsOffset = bufSizeTotal;
-    bufSizeTotal += nGinContexts * ginSignalTotal * sizeof(uint64_t); // include signal shadows
-    bufSizeTotal = alignUp(bufSizeTotal, devr->granularity);
   }
 
   if (requestedConnectionType != NCCL_GIN_CONNECTION_NONE) {
     reqs->ginSignalCount = ginSignalTotal;
     reqs->ginCounterCount = ginCounterTotal;
     NCCLCHECKGOTO(ncclGinDevCommSetup(comm, reqs, outDevComm, deviceCodeVersion), ret, fail);
+    // GIN rounds the context count up to a multiple of its connection count, and the device
+    // indexes the signal shadows by that rounded count.
+    nGinContexts = outDevComm->ginContextCount;
   }
+
+  ginSignalShadowsOffset = bufSizeTotal;
+  bufSizeTotal += nGinContexts * ginSignalTotal * sizeof(uint64_t); // include signal shadows
+  bufSizeTotal = alignUp(bufSizeTotal, devr->granularity);
 
   CUDACHECKGOTO(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), ret, fail);
 

@@ -27,4 +27,8 @@ inline double ncclSoftPlus(double x, double softness) {
   return 100.0 <= z ? x : softness * std::log1p(std::exp(z));
 }
 
+inline float ncclTuningProtoBWFactor(int proto) {
+  return (proto == NCCL_PROTO_LL) ? 0.5f : (proto == NCCL_PROTO_LL128) ? 120.0f / 128.0f : 1.0f;
+}
+
 #endif // NCCL_TUNING_MODEL_H_

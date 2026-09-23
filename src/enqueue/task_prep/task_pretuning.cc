@@ -41,6 +41,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   in->datatype = raw->datatype;
   in->count = raw->count;
   in->countMax = raw->count;
+  in->chunkSteps = ncclDefaultChunkStep(raw->func);
+  in->sliceSteps = ncclDefaultSliceStep(raw->func);
   in->nWorks = 1;
   in->numPipeOps = 1;
   elementSize = ncclTypeSize(in->datatype);

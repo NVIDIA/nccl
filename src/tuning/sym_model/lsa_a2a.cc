@@ -29,7 +29,7 @@ struct ncclSymkLsaA2ACtaScalingCurve {
 struct ncclSymkLsaA2AKernelTuningParameters {
   double baseLatencyUs;
   double rankLatencyUs;
-  double computeCtaBandwidthGbps;
+  double llCtaBw; // GB/s per CTA for rank-independent LL compute work.
   double transferCtaBandwidthGbps;
   double peakBandwidthGbps;
   struct ncclSymkLsaA2ACtaScalingCurve ctaScalingCurve;
@@ -204,8 +204,8 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   double ctaTransferTimeUs =
     ctaCopies * logicalBytes / (scaledCtas * tuning->transferCtaBandwidthGbps * bytesPerUsPerGbps);
   double ctaComputeTimeUs = 0.0;
-  if (tuning->computeCtaBandwidthGbps > 0.0) {
-    ctaComputeTimeUs = logicalBytes / (scaledCtas * tuning->computeCtaBandwidthGbps * bytesPerUsPerGbps);
+  if (tuning->llCtaBw > 0.0) {
+    ctaComputeTimeUs = logicalBytes / (scaledCtas * tuning->llCtaBw * bytesPerUsPerGbps);
   }
   double peakTransferTimeUs = (nRanks - 1) * logicalBytes / (peakBandwidthGbps * rankEfficiency * bytesPerUsPerGbps);
   double bandwidthBoundTimeUs = exposeCtaComputeTime ?

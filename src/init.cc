@@ -1016,7 +1016,7 @@ NCCL_PARAM(P2pNetChunkSize, "P2P_NET_CHUNKSIZE", (1 << 17)); /* 128 kB */
 NCCL_PARAM(P2pPciChunkSize, "P2P_PCI_CHUNKSIZE", (1 << 17)); /* 128 kB */
 NCCL_PARAM(P2pNvlChunkSize, "P2P_NVL_CHUNKSIZE", (1 << 19)); /* 512 kB */
 
-static ncclResult_t computeBuffSizes(struct ncclComm* comm) {
+ncclResult_t ncclComputeBuffSizes(struct ncclComm* comm) {
   int64_t envs[NCCL_NUM_PROTOCOLS] = {ncclParamLlBuffSize(), ncclParamLl128BuffSize(), ncclParamBuffSize()};
   int defaults[NCCL_NUM_PROTOCOLS] = {DEFAULT_LL_BUFFSIZE, DEFAULT_LL128_BUFFSIZE, DEFAULT_BUFFSIZE};
 
@@ -1759,7 +1759,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   line[1023] = '\0';
   INFO(NCCL_INIT, "Trees%s", line);
 
-  NCCLCHECKGOTO(computeBuffSizes(comm), ret, fail);
+  NCCLCHECKGOTO(ncclComputeBuffSizes(comm), ret, fail);
   NCCLCHECKGOTO(ncclTopoComputeP2pChannels(comm), ret, fail);
 
   /* until now, all info of comm should be known. We can initialize shared resources and
@@ -2619,7 +2619,7 @@ static ncclResult_t copyCommConfig(ncclComm_t childComm, ncclComm_t parnet) {
   return ncclSuccess;
 }
 
-static ncclResult_t parseCommConfig(ncclComm_t comm, ncclConfig_t* config) {
+ncclResult_t ncclParseCommConfig(ncclComm_t comm, ncclConfig_t* config) {
   ncclResult_t ret = ncclSuccess;
   /* config must not be NULL in this function */
   ncclConfig_t defaultConfig = NCCL_CONFIG_INITIALIZER;
@@ -2952,7 +2952,7 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId
   for (int i = 0; i < ncclGroupTaskTypeNum; i++) {
     comm->groupNext[i] = reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID);
   }
-  NCCLCHECKGOTO(parseCommConfig(comm, config), res, fail);
+  NCCLCHECKGOTO(ncclParseCommConfig(comm, config), res, fail);
   /* start with ncclInProgress and will be changed to ncclSuccess if init succeeds. */
   comm->initState = ncclInProgress;
   *newcomm = comm;
@@ -3664,7 +3664,7 @@ static ncclResult_t ncclCommInitChildComm(ncclComm_t comm, ncclComm_t* newcomm, 
     if (config == NULL) {
       NCCLCHECKGOTO(copyCommConfig(childComm, comm), res, fail);
     } else {
-      NCCLCHECKGOTO(parseCommConfig(childComm, config), res, fail);
+      NCCLCHECKGOTO(ncclParseCommConfig(childComm, config), res, fail);
     }
 
     /* start with ncclInProgress and will be changed to ncclSuccess if init succeeds. */
@@ -3874,7 +3874,7 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
   if (isExistingRank && config == NULL) {
     NCCLCHECKGOTO(copyCommConfig(newComm, comm), res, fail);
   } else {
-    NCCLCHECKGOTO(parseCommConfig(newComm, config), res, fail);
+    NCCLCHECKGOTO(ncclParseCommConfig(newComm, config), res, fail);
   }
 
   newComm->initState = ncclInProgress;

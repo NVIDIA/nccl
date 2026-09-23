@@ -100,12 +100,16 @@ inline int ncclDefaultSliceStep(ncclFunc_t func) {
   }
 }
 
-inline int ncclRingChunkSteps(int protocol, int algorithm, int chunkSteps) {
+inline int ncclGetChunkSteps(int protocol, int algorithm, int chunkSteps) {
   return protocol == NCCL_PROTO_SIMPLE && algorithm == NCCL_ALGO_RING ? chunkSteps : 1;
 }
 
-inline int ncclRingSliceSteps(int protocol, int algorithm, int sliceSteps) {
+inline int ncclGetSliceSteps(int protocol, int algorithm, int sliceSteps) {
   return protocol == NCCL_PROTO_SIMPLE && algorithm == NCCL_ALGO_RING ? sliceSteps : 1;
+}
+
+inline size_t ncclSizePerChannel(size_t nBytes, int nChannels) {
+  return nChannels > 0 ? DIVUP(nBytes, nChannels) : 0;
 }
 
 inline size_t ncclGetChunkSize(int protocol, size_t stepSize, int chunkSteps) {

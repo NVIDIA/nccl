@@ -103,7 +103,8 @@ static float ncclCeAgLatencyUs(struct ncclComm* comm, bool multicast, int nRanks
   return total;
 }
 
-ncclResult_t ncclTuningCeModelSim(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
+ncclResult_t ncclTuningCeModelSim(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result,
+                                  struct ncclTuningModelState* /*internal*/) {
   int method = result->id - NCCL_TUNING_CE_METHOD_ID_OFFSET;
   bool multicast = (method == ncclCeMethodId_AllGather_MC);
   int nRanks = input->comm->devrState.lsaSize;

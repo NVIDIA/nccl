@@ -633,8 +633,10 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
   int nPlanColls = 0;
   size_t trafficBytes[2 * 2] = {0, 0, 0, 0}; // [collnet][nvls]
   int nChannels[2 * 2] = {0, 0, 0, 0}; // [collnet][nvls]
-  int const nMaxChannels[2 * 2] = {comm->nChannels, comm->nvlsChannels, // [collnet][nvls]
-                                   comm->nChannels, std::min(comm->nChannels, comm->nvlsChannels)};
+  int const nMaxChannels[2 * 2] = // [collnet][nvls]
+    {ncclCommNMaxChannels(comm, 0, 0), ncclCommNMaxChannels(comm, 0, 1), ncclCommNMaxChannels(comm, 1, 0),
+     ncclCommNMaxChannels(comm, 1, 1)};
+
   do {
     size_t workBytes = 0;
     struct ncclTaskColl* task = ncclIntruQueueHead(&planner->collTaskQueue);
@@ -2242,8 +2244,8 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
   int nstepsPerLoop, nchunksPerLoop;
   size_t loopOffset = 0;
   int stepSize = comm->buffSizes[info->protocol] / NCCL_STEPS;
-  int chunkSteps = ncclRingChunkSteps(info->protocol, info->algorithm, info->chunkSteps);
-  int sliceSteps = ncclRingSliceSteps(info->protocol, info->algorithm, info->sliceSteps);
+  int chunkSteps = ncclGetChunkSteps(info->protocol, info->algorithm, info->chunkSteps);
+  int sliceSteps = ncclGetSliceSteps(info->protocol, info->algorithm, info->sliceSteps);
   int chunkSize = ncclGetChunkSize(info->protocol, stepSize, chunkSteps);
   // Buffer-based ceiling; plugins may increase chunk size up to this limit.
   int bufferMaxChunkSize = chunkSize;

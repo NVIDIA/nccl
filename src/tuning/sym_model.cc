@@ -37,7 +37,8 @@ static ncclResult_t queryModel(struct ncclTuningInput_t* input, enum ncclSymkKer
   return ncclSuccess;
 }
 
-ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning) {
+ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                    struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   tuning->selectionTimeUs = NCCL_TUNING_IGNORE;
 

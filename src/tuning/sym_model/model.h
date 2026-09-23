@@ -8,6 +8,7 @@
 #ifndef NCCL_INT_SYM_MODEL_MODEL_H_
 #define NCCL_INT_SYM_MODEL_MODEL_H_
 
+#include "../model.h"
 #include "sym_kernels.h"
 #include "tuning.h"
 

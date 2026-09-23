@@ -18,7 +18,8 @@ static float getNetOverhead(struct ncclComm* comm) {
   return 1.0;
 }
 
-ncclResult_t ncclTuningRingModelInit(struct ncclComm* comm, int id, int* /*enabled[NCCL_NUM_FUNCTIONS]*/) {
+ncclResult_t ncclTuningRingModelInit(struct ncclComm* comm, int id, int* /*enabled[NCCL_NUM_FUNCTIONS]*/,
+                                     struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   int algo, proto;
   NCCLCHECK(ncclTuningExpandId(id, &algo, &proto, nullptr, nullptr));
@@ -89,7 +90,8 @@ ncclResult_t ncclTuningRingModelInit(struct ncclComm* comm, int id, int* /*enabl
   return ret;
 }
 
-ncclResult_t ncclTuningRingModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning) {
+ncclResult_t ncclTuningRingModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                    struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   if (inputs->comm->tuningContext.generalBandwidths[inputs->func][tuning->algo][tuning->proto] == -1.0f) {
     tuning->valid = 0;
@@ -135,6 +137,6 @@ ncclResult_t ncclTuningRingModelSim(struct ncclTuningInput_t* const inputs, stru
     }
     lat *= plateauFactor; // Plateau effect of ring
   }
-  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, &lat, &bw);
+  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, lat, bw);
   return ret;
 }

@@ -16,7 +16,8 @@ static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
   0.74f, // Blackwell
 };
 
-ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS]) {
+ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                     struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   if (!ncclNvlsTransportEnabled(comm)) {
     memset(enabled, 0, NCCL_NUM_FUNCTIONS * sizeof(int));
@@ -124,7 +125,8 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
   return ret;
 }
 
-ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning) {
+ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                    struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   float lat = inputs->comm->tuningContext.generalLatencies[inputs->func][tuning->algo][tuning->proto];
   float bw = inputs->comm->tuningContext.generalBandwidths[inputs->func][tuning->algo][tuning->proto];
@@ -166,6 +168,6 @@ ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, stru
         (inputs->nBytes < 64 * 1024 * 1024 || inputs->comm->nNodes > 2 ||
          (inputs->comm->graphs[tuning->algo].typeInter == PATH_PIX && inputs->nBytes < 512 * 1024 * 1024)))))
     bw *= treeCorrectionFactor[tuning->proto][logSize];
-  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, &lat, &bw);
+  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, lat, bw);
   return ret;
 }

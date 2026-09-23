@@ -8,6 +8,7 @@
 #include "cost_model.h"
 #include "nccl_tuner.h"
 #include "comm.h"
+#include "cudawrap.h"
 
 NCCL_PARAM(Nthreads, "NTHREADS", -2);
 NCCL_PARAM(Ll128Nthreads, "LL128_NTHREADS", -2);
@@ -24,7 +25,9 @@ int ncclTuningGetNsteps(int coll, int nRanks) {
 
 int ncclTuningGetCompCapIndex(struct ncclComm* comm) {
   int minCompCap = comm->minCompCap;
-  if (minCompCap >= 100) {
+  if (RUBIN_AND_LATER(minCompCap)) {
+    return NCCL_RUBIN_COMPCAP_IDX;
+  } else if (minCompCap >= 100) {
     return NCCL_BLACKWELL_COMPCAP_IDX;
   } else if (minCompCap >= 90) {
     return NCCL_HOPPER_COMPCAP_IDX;
@@ -36,11 +39,12 @@ int ncclTuningGetCompCapIndex(struct ncclComm* comm) {
 }
 
 void ncclTuningGetConstantsIndexes(struct ncclComm* comm, int* index1, int* index2) {
-  *index2 = comm->nNodes <= 2 ? comm->nNodes - 1 : 2;
+  if (index2 != nullptr) *index2 = comm->nNodes <= 2 ? comm->nNodes - 1 : 2;
   // LL: for single node, we look at GPU type; for multi-node, we look at CPU type
-  *index1 = comm->nNodes == 1 ? ncclTuningGetCompCapIndex(comm) :
-            (comm->cpuVendor == NCCL_TOPO_CPU_VENDOR_AMD || comm->cpuVendor == NCCL_TOPO_CPU_VENDOR_MIXED) ? 1 :
-                                                                                                             0;
+  if (index1 != nullptr)
+    *index1 = comm->nNodes == 1 ? ncclTuningGetCompCapIndex(comm) :
+              (comm->cpuVendor == NCCL_TOPO_CPU_VENDOR_AMD || comm->cpuVendor == NCCL_TOPO_CPU_VENDOR_MIXED) ? 1 :
+                                                                                                               0;
 }
 
 void ncclTuningGetHwIndexes(struct ncclComm* comm, int a, int* intraHw, int* interHw) {
@@ -49,7 +53,7 @@ void ncclTuningGetHwIndexes(struct ncclComm* comm, int a, int* intraHw, int* int
   if (interHw != nullptr) *interHw = comm->nNodes == 1 ? intra : NCCL_HW_NET;
 }
 
-float ncclTuningGetTime(struct ncclTuningInput_t* const inputs, int a, float* lat, float* bw) {
+float ncclTuningGetTime(struct ncclTuningInput_t* const inputs, int a, float lat /* usec */, float bw /* GB/s */) {
   int latCount = a == NCCL_ALGO_RING ? inputs->numPipeOps : DIVUP(inputs->numPipeOps, NCCL_MAX_DEV_WORK_BATCH_COLLS);
 
   // Relegate fp8 reduction trees of sufficient depth that they incur precision loss
@@ -61,7 +65,9 @@ float ncclTuningGetTime(struct ncclTuningInput_t* const inputs, int a, float* la
     }
   }
 
-  return (*lat * latCount + inputs->nBytes / (1000 * (*bw))) * precision_ratio;
+  float time = lat * latCount;
+  if (bw > 0) time += inputs->nBytes / (1000 * bw) * precision_ratio;
+  return time;
 }
 
 static int ncclTuningGetNthreads(const char* name, int env, int min, int max, int def) {

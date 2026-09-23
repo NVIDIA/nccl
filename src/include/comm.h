@@ -918,6 +918,13 @@ inline ncclResult_t ncclCommPollCallbacks(struct ncclComm* comm, bool waitSome) 
   return ncclSuccess;
 }
 
+inline int ncclCommNMaxChannels(struct ncclComm* comm, int isCollNet, int isNvls) {
+  if (isCollNet && isNvls) return std::min(comm->nChannels, comm->nvlsChannels);
+  if (isCollNet /* &&!isNvls */) return comm->nChannels;
+  if (/* !isCollNet&& */ isNvls) return comm->nvlsChannels;
+  /*if ( !isCollNet&& !isNvls)*/ return comm->nChannels;
+}
+
 inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm* comm, bool waitSome) {
   ncclResult_t result = ncclSuccess;
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
@@ -1000,6 +1007,8 @@ static inline ncclRedOp_t ncclUserRedOpMangle(ncclComm* comm, ncclRedOp_t op) {
 
 ncclResult_t ncclCommEnsureReady(ncclComm_t comm);
 ncclResult_t ncclCommSetAsyncError(ncclComm_t comm, ncclResult_t nextState);
+ncclResult_t ncclComputeBuffSizes(struct ncclComm* comm);
+ncclResult_t ncclParseCommConfig(ncclComm_t comm, ncclConfig_t* config);
 
 // Process-wide NCCL_CTA_POLICY env override, or NCCL_CONFIG_UNDEF_INT when unset/invalid.
 int ncclGetEnvCtaPolicy();

@@ -10,9 +10,12 @@
 #define NCCL_INT_COST_MODEL_H_
 
 #include "tuning_int.h"
+#include "pipeline_model/pipeline_model.h"
 
 // Tuning internal model state
-struct ncclTuningModelState {};
+struct ncclTuningModelState {
+  ncclTuningPipelineState pipeline;
+};
 
 // Init and finalize to support context memory allocation and deallocaiton on comm creation/finalize
 typedef ncclResult_t (*ncclTuningModelInitFn_t)(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
@@ -79,6 +82,10 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
 // CE (Copy Engine) collective model
 ncclResult_t ncclTuningCeModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
                                   struct ncclTuningModelState* internal);
+
+// Pipeline Model
+ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                        struct modelState* internal);
 
 // Tuning general
 int ncclTuningGetNsteps(int coll, int nRanks);

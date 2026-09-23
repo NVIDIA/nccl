@@ -77,6 +77,8 @@ struct ncclTuningInput_t {
   int minCTAs;  // resolved lower CTA bound (env > per-call > comm)
   int maxCTAs;  // resolved upper CTA bound (env > per-call > comm)
   int CTAPolicy;   // resolved effective CTAPolicy (per-call)
+  int chunkSteps;
+  int sliceSteps;
 };
 
 struct ncclTuningContext_t {

@@ -9,6 +9,7 @@
 #include "nccl_tuner.h"
 #include "comm.h"
 #include "cudawrap.h"
+#include "channel.h"
 
 NCCL_PARAM(Nthreads, "NTHREADS", -2);
 NCCL_PARAM(Ll128Nthreads, "LL128_NTHREADS", -2);
@@ -227,4 +228,29 @@ ncclResult_t ncclTuningExpandId(int tuningId, int* algo, int* proto, int* symKer
     *ceMethodId = tuningId - NCCL_TUNING_CE_METHOD_ID_OFFSET;
   }
   return ncclSuccess;
+}
+
+// Model one collective on an otherwise empty plan. Aggregation can move a
+// task's starting channel and changes the traffic budget shared by the plan.
+int ncclTuningGetActiveChannels(struct ncclTuningInput_t* const input, const struct ncclTuningResult_t* result) {
+  int maxChannels = result->maxChannels > 0 ? result->maxChannels : result->nChannels;
+  maxChannels = ncclClampChannels(maxChannels, input->minCTAs, input->maxCTAs);
+
+  int isCollnet = result->algo == NCCL_ALGO_COLLNET_CHAIN || result->algo == NCCL_ALGO_COLLNET_DIRECT ||
+                  (result->algo == NCCL_ALGO_NVLS && input->comm->nNodes > 1);
+  int isNvls = result->algo == NCCL_ALGO_NVLS || result->algo == NCCL_ALGO_NVLS_TREE ||
+               (result->algo == NCCL_ALGO_PAT && !input->comm->isOneRPN);
+  maxChannels = std::min(maxChannels, ncclCommNMaxChannels(input->comm, isCollnet, isNvls));
+
+  if (maxChannels <= 0 || input->count == 0) return 0;
+
+  int trafficPerByte = ncclFuncTrafficPerByte(input->func, input->comm->nRanks);
+  if (result->proto == NCCL_PROTO_LL) trafficPerByte *= 4;
+
+  size_t elementSize = ncclTypeSize(input->datatype);
+  size_t trafficBytes = std::max(ncclMinTrafficPerChannel, input->count * elementSize * trafficPerByte);
+  size_t trafficPerChannel = ncclCollTrafficPerChannel(trafficBytes, maxChannels);
+  return ncclComputeCollChannelLayout(input->count, elementSize, trafficPerByte, trafficPerChannel,
+                                      /*currentTraffic=*/0, /*channelId=*/0, maxChannels)
+    .nChannels;
 }

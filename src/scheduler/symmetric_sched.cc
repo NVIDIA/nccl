@@ -195,6 +195,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
                       ncclAllGatherIsInPlace(headTask->sendbuff, headTask->recvbuff, comm->rank,
                                              headTask->count * ncclTypeSize(headTask->datatype));
       NCCLCHECK(symBatchAlignment(headTask, &input.symAligned16B, &input.symInputAligned16B));
+      input.chunkSteps = headTask->chunkSteps;
+      input.sliceSteps = headTask->sliceSteps;
       input.minCTAs = headTask->minCTAs;
       input.maxCTAs = headTask->maxCTAs;
       input.CTAPolicy = headTask->CTAPolicy;

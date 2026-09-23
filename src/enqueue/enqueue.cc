@@ -2160,6 +2160,10 @@ ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, i
   input.collNetSupport = collNetSupport;
   input.nvlsSupport = nvlsSupport;
   input.count = info->count;
+  input.chunkSteps = info->chunkSteps;
+  input.sliceSteps = info->sliceSteps;
+  input.minCTAs = info->minCTAs;
+  input.maxCTAs = info->maxCTAs;
   NCCLCHECK(ncclGetRegBuff(comm, info, &input.regBuff));
   struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;
   bestTuning.maxChannels = 0;

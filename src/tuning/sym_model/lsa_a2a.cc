@@ -22,6 +22,14 @@ enum ncclSymkLsaA2AAllGatherKernel {
   ncclSymkLsaA2AAllGatherKernel_Count,
 };
 
+enum ncclSymkLsaA2AReduceScatterKernel {
+  ncclSymkLsaA2AReduceScatterKernel_LL,
+  ncclSymkLsaA2AReduceScatterKernel_TmaLD,
+  ncclSymkLsaA2AReduceScatterKernel_LD,
+  ncclSymkLsaA2AReduceScatterKernel_LDMC,
+  ncclSymkLsaA2AReduceScatterKernel_Count,
+};
+
 struct ncclSymkLsaA2ACtaScalingCurve {
   double ctaScale[2];
 };
@@ -38,20 +46,38 @@ struct ncclSymkLsaA2AKernelTuningParameters {
   double ctaTroughLatUs;
   double ctaTroughPeakBw;
   double rankLimitedPeakBw;
+  double reduceScalarCtaBw; // GB/s per CTA for the scalar tail; zero uses the bulk rate.
+  double smallChunkCtaBw; // GB/s per CTA for 2 KiB chunks; zero uses the bulk rate.
+};
+
+struct ncclSymkLsaA2AReduceScatterTuningParameters {
+  struct ncclSymkLsaA2AKernelTuningParameters defaultParameters;
+  // Complete Sum rows; an empty row uses defaultParameters.
+  struct ncclSymkLsaA2AKernelTuningParameters fp16Bf16SumParameters;
+  struct ncclSymkLsaA2AKernelTuningParameters fp8SumParameters;
 };
 
 struct ncclSymkLsaA2AArchTuningParameters {
   int computeCapability;
   int rankSharedMulticastCtaBudget;
   int allGatherMulticastCtaLimit;
+  struct ncclSymkLsaA2AReduceScatterTuningParameters reduceScatter[ncclSymkLsaA2AReduceScatterKernel_Count];
   struct ncclSymkLsaA2AKernelTuningParameters allGather[ncclSymkLsaA2AAllGatherKernel_Count];
 };
 
-// Each row owns CTA limits and fitted AllGather timing terms for one compute capability.
+static constexpr struct ncclSymkLsaA2AKernelTuningParameters reduceScatterParameters(
+  double baseLatUs, double rankLatUs, double ctaBw, double peakBw, double llCtaBw = 0.0, double reduceScalarCtaBw = 0.0,
+  double smallChunkCtaBw = 0.0, bool peakRankEfficiency = false) {
+  return {baseLatUs, rankLatUs, llCtaBw,           ctaBw,          peakBw, {{1.0, 1.0}}, 0.0, peakRankEfficiency, 0.0,
+          0.0,       0.0,       reduceScalarCtaBw, smallChunkCtaBw};
+}
+
+// Each row owns CTA limits and fitted timing terms for one compute capability.
 static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParameters[] = {
   {100,
    32,
    0,
+   {},
    {
      {7.1084, 0.1065, 2.32, 15.87, 250.0, {{0.99, 0.69}}, 0.0, false},
      {7.4229, 0.1030, 2.1932, 27.46, 316.0699, {{1.0, 1.0}}, 3.3805, true},
@@ -64,6 +90,32 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
    32,
    0,
    {
+     {
+       // LL
+       reduceScatterParameters(10.5737, 0.0129, 8.6531, 248.9148, 2.1255, 0, 0),
+       {},
+       {},
+     },
+     {
+       // TmaLD
+       reduceScatterParameters(5.9025, 0.2089, 46.7794, 640.7738, 0, 7.3964, 9.5412), // Default
+       reduceScatterParameters(5.9025, 0.2089, 41.1659, 640.7738, 0, 3.6620, 7.3839), // FP16/BF16 Sum
+       reduceScatterParameters(5.9025, 0.2089, 24.6948, 640.7738, 0, 0.4053, 6.5968), // FP8 Sum
+     },
+     {
+       // LD
+       reduceScatterParameters(9.6736, 0.2801, 26.0000, 660, 0, 7.3964, 12.3392), // Default
+       reduceScatterParameters(8.4739, 0.2096, 16.9749, 660.0000, 0, 4.0022, 9.5826), // FP16/BF16 Sum
+       reduceScatterParameters(8.4739, 0.2096, 15.8819, 660.0000, 0, 1.9578, 9.3889), // FP8 Sum
+     },
+     {
+       // LDMC
+       reduceScatterParameters(10.9124, 0.0736, 24.5386, 750.1525, 0, 0, 0, true),
+       {},
+       {},
+     },
+   },
+   {
      {7.1084, 0.1065, 2.32, 15.87, 250.0, {{0.99, 0.69}}, 0.0, false},
      {7.4229, 0.1030, 2.1932, 27.46, 316.0699, {{1.0, 1.0}}, 3.3805, true},
      {10.0618, 0.0679, 0.0, 64.1577, 671.6052, {{1.0, 1.0}}, 0.0, false, 12.1475, 639.6826, 585.7896},
@@ -74,6 +126,32 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
   {107,
    32,
    ncclSymkMaxBlocks,
+   {
+     {
+       // LL
+       reduceScatterParameters(10.1682, 0.1318, 8.6659, 378.2311, 1.5849, 0, 0),
+       {},
+       {},
+     },
+     {
+       // TmaLD
+       reduceScatterParameters(13.2601, 0.8953, 33.9867, 1004.8552, 0, 7.4807, 7.7706), // Default
+       reduceScatterParameters(13.2601, 0.8953, 37.2708, 1004.8552, 0, 3.0701, 5.9251), // FP16/BF16 Sum
+       reduceScatterParameters(13.2601, 0.8953, 23.4600, 1004.8552, 0, 0.3082, 5.6772), // FP8 Sum
+     },
+     {
+       // LD
+       reduceScatterParameters(13.2750, 1.0829, 17.9128, 692.0016, 0, 5.6894, 9.4630), // Default
+       reduceScatterParameters(13.2750, 1.0829, 10.6581, 692.0016, 0, 2.9289, 7.3404), // FP16/BF16 Sum
+       reduceScatterParameters(13.2750, 1.0829, 10.1315, 692.0016, 0, 1.3376, 7.1995), // FP8 Sum
+     },
+     {
+       // LDMC
+       reduceScatterParameters(11.7527, 0.2263, 15.1821, 1134.4294, 0, 0, 0, true),
+       {},
+       {},
+     },
+   },
    {
      {7.90, 0.29, 1.50, 18.05, 380.00, {{0.88, 0.60}}, 0.00, false},
      {8.02, 0.24, 1.55, 26.63, 497.24, {{1.00, 1.00}}, 1.52, true},
@@ -110,6 +188,21 @@ static int lsaA2AAllGatherKernelIndex(enum ncclSymkKernelId kernelId) {
   }
 }
 
+static int lsaA2AReduceScatterKernelIndex(enum ncclSymkKernelId kernelId) {
+  switch (kernelId) {
+  case ncclSymkKernelId_ReduceScatter_LL:
+    return ncclSymkLsaA2AReduceScatterKernel_LL;
+  case ncclSymkKernelId_ReduceScatter_TmaLD:
+    return ncclSymkLsaA2AReduceScatterKernel_TmaLD;
+  case ncclSymkKernelId_ReduceScatter_LD:
+    return ncclSymkLsaA2AReduceScatterKernel_LD;
+  case ncclSymkKernelId_ReduceScatter_LDMC:
+    return ncclSymkLsaA2AReduceScatterKernel_LDMC;
+  default:
+    return -1;
+  }
+}
+
 int ncclSymkLsaMaxCtas(const struct ncclComm* comm, enum ncclSymkKernelId kernelId) {
   const struct ncclSymkLsaA2AArchTuningParameters* archTuning = lsaA2AArchTuningForComm(comm);
   int rankSharedMulticastCtaBudget =
@@ -122,8 +215,11 @@ int ncclSymkLsaMaxCtas(const struct ncclComm* comm, enum ncclSymkKernelId kernel
     }
     // fall through
   case ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC:
-  case ncclSymkKernelId_ReduceScatter_LDMC:
     return divUp(rankSharedMulticastCtaBudget, comm->nRanks);
+  case ncclSymkKernelId_ReduceScatter_LDMC:
+    // Let the fitted RS model choose saturation instead of imposing a rank-scaled cap.
+    return comm->minCompCap == 103 || comm->minCompCap == 107 ? ncclSymkMaxBlocks :
+                                                                divUp(rankSharedMulticastCtaBudget, comm->nRanks);
   default:
     return ncclSymkMaxBlocks;
   }
@@ -164,8 +260,35 @@ static const struct ncclSymkLsaA2AKernelTuningParameters* lsaA2AParametersForKer
   const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId) {
   if (input == nullptr || input->comm == nullptr || input->comm->nRanks < 2 || input->nWorks != 1) return nullptr;
   const struct ncclSymkLsaA2AArchTuningParameters* archTuning = lsaA2AArchTuningForComm(input->comm);
+  if (archTuning == nullptr) return nullptr;
+  int rsIndex = lsaA2AReduceScatterKernelIndex(kernelId);
+  // The LD, TmaLD, and LDMC fits require 16-byte-aligned buffers and output size.
+  if (rsIndex >= 0) {
+    if (input->func != ncclFuncReduceScatter || input->count == 0) return nullptr;
+    size_t logicalBytes = input->count * ncclTypeSize(input->datatype);
+    if (kernelId != ncclSymkKernelId_ReduceScatter_LL &&
+        (!input->symAligned16B || !input->symInputAligned16B || logicalBytes % 16 != 0))
+      return nullptr;
+    const struct ncclSymkLsaA2AReduceScatterTuningParameters& parameters = archTuning->reduceScatter[rsIndex];
+    if (parameters.defaultParameters.transferCtaBandwidthGbps <= 0.0) return nullptr;
+    if (input->redOp == ncclSum && input->devRedOp == ncclDevSum) {
+      switch (input->datatype) {
+      case ncclFloat16:
+      case ncclBfloat16:
+        if (parameters.fp16Bf16SumParameters.transferCtaBandwidthGbps > 0.0) return &parameters.fp16Bf16SumParameters;
+        break;
+      case ncclFloat8e4m3:
+      case ncclFloat8e5m2:
+        if (parameters.fp8SumParameters.transferCtaBandwidthGbps > 0.0) return &parameters.fp8SumParameters;
+        break;
+      default:
+        break;
+      }
+    }
+    return &parameters.defaultParameters;
+  }
   int kernelIndex = lsaA2AAllGatherKernelIndex(kernelId);
-  return archTuning == nullptr || kernelIndex < 0 ? nullptr : &archTuning->allGather[kernelIndex];
+  return kernelIndex < 0 ? nullptr : &archTuning->allGather[kernelIndex];
 }
 
 ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId,
@@ -181,11 +304,16 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   if (logicalBytes == 0) return ncclSuccess;
   bool isLowLatencyMulticast = kernelId == ncclSymkKernelId_AllGather_LLMC;
   bool exposeCtaComputeTime = kernelId == ncclSymkKernelId_AllGather_LL && input->comm->minCompCap == 107;
-  bool isStoreMulticast = kernelId == ncclSymkKernelId_AllGather_TmaSTMC || kernelId == ncclSymkKernelId_AllGather_STMC;
+  bool isReduceScatter = lsaA2AReduceScatterKernelIndex(kernelId) >= 0;
+  bool isLoadStoreMulticast = kernelId == ncclSymkKernelId_AllGather_TmaSTMC ||
+                              kernelId == ncclSymkKernelId_AllGather_STMC ||
+                              kernelId == ncclSymkKernelId_ReduceScatter_LDMC;
   int nRanks = input->comm->nRanks;
   double rankLatencyUs = (nRanks - 1) * tuning->rankLatencyUs;
   double rankEfficiency = tuning->peakRankEfficiency ? (double)(nRanks - 1) / nRanks : 1.0;
-  double ctaCopies = isLowLatencyMulticast ? nRanks : isStoreMulticast ? 1.0 : nRanks - (input->inPlace != 0);
+  double ctaCopies = isLoadStoreMulticast                     ? 1.0 :
+                     isReduceScatter || isLowLatencyMulticast ? nRanks :
+                                                                nRanks - (input->inPlace != 0);
   int activeCtas = lsaA2AActiveCtas(logicalBytes, requestedCtas);
   double scaledCtas = activeCtas * lsaA2AAllGatherCtaScale(tuning, kernelId, nRanks, activeCtas);
   double peakBandwidthGbps = tuning->peakBandwidthGbps;
@@ -211,6 +339,35 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   double bandwidthBoundTimeUs = exposeCtaComputeTime ?
                                   ctaComputeTimeUs + std::max(ctaTransferTimeUs, peakTransferTimeUs) :
                                   std::max(ctaComputeTimeUs + ctaTransferTimeUs, peakTransferTimeUs);
+  if (kernelId == ncclSymkKernelId_ReduceScatter_LD || kernelId == ncclSymkKernelId_ReduceScatter_TmaLD) {
+    // Follow reduce_scatter.cuh: consume bulk chunks, then 2 KiB small chunks,
+    // then the scalar tail. Each chunk loop rounds down to complete rank/CTA
+    // groups; aligned input/output leaves no scalar prefix.
+    size_t fullChunk =
+      kernelId == ncclSymkKernelId_ReduceScatter_TmaLD ? ncclSymkDeepBytePerChunk : ncclSymkBytePerChunk;
+    constexpr size_t smallChunk = ncclSymkMinWarpsPerBlock * 4 * WARP_SIZE * 4;
+    size_t group = size_t(nRanks) * activeCtas;
+    size_t fullBytes = (logicalBytes / (group * fullChunk)) * (group * fullChunk);
+    size_t smallBytes = ((logicalBytes - fullBytes) / (group * smallChunk)) * (group * smallChunk);
+    size_t endsBytes = logicalBytes - fullBytes - smallBytes;
+
+    // Each remainder rate independently defaults to the normal CTA bandwidth.
+    double endsCtaBw = tuning->reduceScalarCtaBw > 0.0 ? tuning->reduceScalarCtaBw : tuning->transferCtaBandwidthGbps;
+    double smallChunkCtaBw = tuning->smallChunkCtaBw > 0.0 ? tuning->smallChunkCtaBw : tuning->transferCtaBandwidthGbps;
+    // Reuse the common compute and peak times in proportion to each portion's bytes.
+    double endsFraction = double(endsBytes) / logicalBytes;
+    double smallFraction = double(smallBytes) / logicalBytes;
+    double fullFraction = double(fullBytes) / logicalBytes;
+    // Compare CTA and peak limits separately for each portion before adding them.
+    double endsTimeUs =
+      std::max(ctaComputeTimeUs * endsFraction + ctaCopies * endsBytes / (scaledCtas * endsCtaBw * bytesPerUsPerGbps),
+               peakTransferTimeUs * endsFraction);
+    double smallTimeUs = std::max(ctaComputeTimeUs * smallFraction +
+                                    ctaCopies * smallBytes / (scaledCtas * smallChunkCtaBw * bytesPerUsPerGbps),
+                                  peakTransferTimeUs * smallFraction);
+    double fullTimeUs = bandwidthBoundTimeUs * fullFraction;
+    bandwidthBoundTimeUs = endsTimeUs + smallTimeUs + fullTimeUs;
+  }
   double estimateUs;
   if (isLowLatencyMulticast) {
     double overlapFraction = std::min(1.0, tuning->fullOverlapCtas / activeCtas);

@@ -11,6 +11,7 @@ MAKEFLAGS += -r
 .SECONDARY:
 
 NCCLDIR := ../..
+NVCC_GENCODE_ORIGIN := $(origin NVCC_GENCODE)
 include $(NCCLDIR)/makefiles/common.mk
 include $(NCCLDIR)/makefiles/version.mk
 
@@ -44,12 +45,17 @@ define COMPILE
  $(call COMPILE$(or $3,$(suffix $2)),$1,$2)
 endef
 
+# Keep architecture-specific kernels in default builds; explicit targets are exact.
+ifeq ($(NVCC_GENCODE_ORIGIN),undefined)
 ifeq ($(shell echo "$$((1000*$(CUDA_MAJOR) + 10*$(CUDA_MINOR) >= 12090))"),1)
 	NVCC_GENCODE_LDMC_FP8 = -gencode=arch=compute_100f,code=sm_100f
 else ifeq ($(shell echo "$$((1000*$(CUDA_MAJOR) + 10*$(CUDA_MINOR) >= 12070))"),1)
   NVCC_GENCODE_LDMC_FP8 = -gencode=arch=compute_100a,code=sm_100a
 else
 	NVCC_GENCODE_LDMC_FP8 =
+endif
+else
+  NVCC_GENCODE_LDMC_FP8 = $(NVCC_GENCODE)
 endif
 
 define COMPILE_SYM

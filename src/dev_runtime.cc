@@ -1260,6 +1260,7 @@ static ncclResult_t deepCopyDevCommRequirements(struct ncclDevCommRequirements c
   memcpy(*dst, src, src->size);
   (*dst)->resourceRequirementsList = nullptr;
   (*dst)->teamRequirementsList = nullptr;
+  (*dst)->ginCustomArray = nullptr;
 
   dstRes = &(*dst)->resourceRequirementsList;
   for (struct ncclDevResourceRequirements* rr = src->resourceRequirementsList; rr != nullptr; rr = rr->next) {
@@ -1275,6 +1276,11 @@ static ncclResult_t deepCopyDevCommRequirements(struct ncclDevCommRequirements c
     memcpy(*dstTeam, tr, sizeof(struct ncclTeamRequirements));
     (*dstTeam)->next = nullptr;
     dstTeam = &(*dstTeam)->next;
+  }
+
+  if ((*dst)->ginCustomArrayCount > 0 && src->ginCustomArray != nullptr) {
+    NCCLCHECKGOTO(ncclCalloc(&(*dst)->ginCustomArray, (*dst)->ginCustomArrayCount), ret, fail);
+    memcpy((*dst)->ginCustomArray, src->ginCustomArray, (*dst)->ginCustomArrayCount * sizeof(int));
   }
 
 exit:
@@ -1299,6 +1305,7 @@ void freeDevCommRequirements(struct ncclDevCommRequirements* reqs) {
       reqs->teamRequirementsList = tr_next;
     }
 
+    free(reqs->ginCustomArray);
     free(reqs);
   }
 }
@@ -1448,7 +1455,6 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
         return ncclInvalidArgument;
       }
     }
-
     ginActivated = !devr->ginEnabled;
     devr->ginEnabled = true;
   }
@@ -1462,6 +1468,19 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
     WARN("Cannot create DevComm with a GIN rank stride of 0. To disable GIN, set reqs->ginConnectionType to "
          "NCCL_GIN_CONNECTION_NONE.");
     return ncclInvalidUsage;
+  }
+
+  if (requestedConnectionType == NCCL_GIN_CONNECTION_CUSTOM_ARRAY) {
+    if (reqs->ginCustomArrayCount < 0 || (reqs->ginCustomArrayCount > 0 && reqs->ginCustomArray == nullptr)) {
+      WARN(
+        "Cannot create DevComm with NCCL_GIN_CONNECTION_CUSTOM_ARRAY and ginCustomArrayCount %d and ginCustomArray %p.",
+        reqs->ginCustomArrayCount, reqs->ginCustomArray);
+      return ncclInvalidUsage;
+    }
+    if (reqs->barrierCount > 0 || reqs->railGinBarrierCount > 0 || reqs->worldGinBarrierCount > 0) {
+      WARN("Cannot create GIN barriers with NCCL_GIN_CONNECTION_CUSTOM_ARRAY.");
+      return ncclInvalidArgument;
+    }
   }
 
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&captureMode));

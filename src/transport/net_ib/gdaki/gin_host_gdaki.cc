@@ -678,8 +678,8 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   int const* peerArray = config->peerArray;
   const int peerArrayCount = config->peerArrayCount;
 
-  if (peerArray == nullptr || peerArrayCount <= 0) {
-    WARN("GIN GDAKI create context: peerArray must list at least one peer to connect to");
+  if (peerArrayCount < 0 || (peerArrayCount > 0 && peerArray == nullptr)) {
+    WARN("GIN GDAKI create context: invalid peerArrayCount %d and peerArray %p", peerArrayCount, peerArray);
     return ncclInternalError;
   }
   const int connectedNRanks = peerArrayCount;
@@ -975,7 +975,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     }
   }
 
-  if (ncompanion_qps > nqps_for_comm) {
+  if (ncompanion_qps > nqps_for_comm && nqps_for_comm_this_rank > 0) {
     DOCACHECKGOTO(doca_gpu_verbs_create_qp_list_hl(&qp_init_attr, nqps_for_comm_this_rank,
                                                    &gdaki_ctx->self_companion_gqp_list),
                   status, out);
@@ -1078,7 +1078,9 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   gverbs_qps = (struct doca_gpu_verbs_qp**)calloc(nranks, sizeof(struct doca_gpu_verbs_qp*));
   EQCHECKGOTO(gverbs_qps, nullptr, status, out);
 
-  contiguous_gverbs_qps = (struct doca_gpu_verbs_qp**)calloc(connectedNRanks, sizeof(struct doca_gpu_verbs_qp*));
+  // calloc(0) may return NULL, which is not an error when no peers are connected.
+  contiguous_gverbs_qps =
+    (struct doca_gpu_verbs_qp**)calloc(connectedNRanks > 0 ? connectedNRanks : 1, sizeof(struct doca_gpu_verbs_qp*));
   EQCHECKGOTO(contiguous_gverbs_qps, nullptr, status, out);
 
   for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {

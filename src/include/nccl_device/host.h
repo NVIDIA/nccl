@@ -76,6 +76,12 @@ typedef struct ncclDevCommRequirements {
 
   int cftCaps; // Bitmask of ncclCftCap_t values
   int cftBarrierCount;
+
+  // List of ginCustomArrayCount world ranks to connect to. Only valid if ginConnectionType
+  // is NCCL_GIN_CONNECTION_CUSTOM_ARRAY. Both ranks of a pair must request the connection (peer j
+  // appearing in rank i's ginCustomArray requires peer i to appear in rank j's ginCustomArray).
+  int* ginCustomArray;
+  int ginCustomArrayCount;
 } ncclDevCommRequirements_t;
 
 // clang-format off: maintain hand-formatted code
@@ -107,6 +113,8 @@ typedef struct ncclDevCommRequirements {
     false,                                       /* useRuntimeVersion */        \
     NCCL_CFT_NONE,                               /* cftCaps */                 \
     0,                                           /* cftBarrierCount */         \
+    NULL,                                        /* ginCustomArray */         \
+    0,                                           /* ginCustomArrayCount */    \
 }
 // clang-format on
 

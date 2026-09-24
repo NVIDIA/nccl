@@ -310,52 +310,89 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
 
   int connectedStride =
     comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_FULL ? 1 : comm->contiguousRanksPerHost;
-  int requestedStride = 1;
-  if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_CUSTOM_STRIDE) {
-    requestedStride = reqs->ginCustomStride;
-  } else if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_RAIL) {
-    requestedStride = ncclTeamRail(comm).stride;
-  }
 
-  if (requestedStride == 0) {
-    WARN("Cannot create DevComm with a GIN rank stride of 0. To disable GIN, set reqs->ginConnectionType to "
-         "NCCL_GIN_CONNECTION_NONE.");
-    ret = ncclInvalidUsage;
-    goto end;
-  }
-  if (requestedStride > ncclTeamRail(comm).stride) {
-    // Hierarchical barriers assume GIN is at least RAIL connected.
-    WARN("Cannot create DevComm with a GIN rank stride %d greater than the rail team stride %d", requestedStride,
-         ncclTeamRail(comm).stride);
-    ret = ncclInvalidUsage;
-    goto end;
-  }
-  if (requestedStride % connectedStride != 0) {
-    WARN("Cannot create DevComm with the requested GIN rank stride %d, this comm only supports strides that are "
-         "multiples of %d",
-         requestedStride, connectedStride);
-    ret = ncclInvalidUsage;
-    goto end;
-  }
+  if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_CUSTOM_ARRAY) {
+    INFO(NCCL_INIT, "GIN: NCCL_GIN_CONNECTION_CUSTOM_ARRAY connecting to %d peer(s)", reqs->ginCustomArrayCount);
 
-  if (requestedStride <= 0 || comm->nRanks % requestedStride != 0) {
-    WARN("invalid rank stride %d for nranks %d", requestedStride, comm->nRanks);
-    ret = ncclInvalidUsage;
-    goto end;
-  }
+    if (connectedStride == 1) {
+      NCCLCHECKGOTO(ncclCalloc(&peerArray, reqs->ginCustomArrayCount), ret, end);
+      if (reqs->ginCustomArrayCount > 0) {
+        memcpy(peerArray, reqs->ginCustomArray, reqs->ginCustomArrayCount * sizeof(int));
+      }
+      peerArrayCount = reqs->ginCustomArrayCount;
+    } else {
+      // Cluster only supports RAIL connectivity. Validate and translate to connectedStride indexing.
+      NCCLCHECKGOTO(ncclCalloc(&peerArray, reqs->ginCustomArrayCount), ret, end);
+      for (int i = 0; i < reqs->ginCustomArrayCount; i++) {
+        int peer = reqs->ginCustomArray[i];
+        if ((peer % connectedStride) != (comm->rank % connectedStride)) {
+          WARN("Cannot create DevComm with requested connectivity: requested peer %d is not reachable (connections "
+               "must be within stride %d)",
+               peer, connectedStride);
+          ret = ncclInvalidUsage;
+          goto end;
+        }
+        peerArray[peerArrayCount++] = peer / connectedStride;
+      }
+    }
+    // -1 is valid; ginContextStride is only used for barriers, which are not supported by
+    // NCCL_GIN_CONNECTION_CUSTOM_ARRAY.
+    devComm->ginContextStride = -1;
+  } else {
+    int requestedStride = 1;
+    if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_CUSTOM_STRIDE) {
+      requestedStride = reqs->ginCustomStride;
+    } else if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_RAIL) {
+      requestedStride = ncclTeamRail(comm).stride;
+    }
 
-  devComm->ginConnectionStride = connectedStride;
-  devComm->ginConnectionStride_rcp32 = idivRcp32(connectedStride);
-  devComm->ginContextStride = requestedStride;
+    if (requestedStride == 0) {
+      WARN("Cannot create DevComm with a GIN rank stride of 0. To disable GIN, set reqs->ginConnectionType to "
+           "NCCL_GIN_CONNECTION_NONE.");
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+    if (requestedStride > ncclTeamRail(comm).stride) {
+      // Hierarchical barriers assume GIN is at least RAIL connected.
+      WARN("Cannot create DevComm with a GIN rank stride %d greater than the rail team stride %d", requestedStride,
+           ncclTeamRail(comm).stride);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+    if (requestedStride % connectedStride != 0) {
+      WARN("Cannot create DevComm with the requested GIN rank stride %d, this comm only supports strides that are "
+           "multiples of %d",
+           requestedStride, connectedStride);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
 
-  {
+    if (requestedStride <= 0 || comm->nRanks % requestedStride != 0) {
+      WARN("invalid rank stride %d for nranks %d", requestedStride, comm->nRanks);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+
+    devComm->ginContextStride = requestedStride;
+
     int nPeers = comm->nRanks / requestedStride;
     NCCLCHECKGOTO(ncclCalloc(&peerArray, nPeers), ret, end);
     for (int i = 0; i < nPeers; i++) {
       int peer = (comm->rank + i * requestedStride) % comm->nRanks;
       peerArray[peerArrayCount++] = peer / connectedStride;
     }
-    qsort(peerArray, peerArrayCount, sizeof(int), compareInts);
+  }
+  devComm->ginConnectionStride = connectedStride;
+  devComm->ginConnectionStride_rcp32 = idivRcp32(connectedStride);
+  qsort(peerArray, peerArrayCount, sizeof(int), compareInts);
+  for (int i = 0; i < peerArrayCount; i++) {
+    if (peerArray[i] < 0 || peerArray[i] >= DIVUP(comm->nRanks, connectedStride) ||
+        (i > 0 && peerArray[i] == peerArray[i - 1])) {
+      WARN("Cannot create DevComm with requested connectivity: ginCustomArray must list distinct ranks in [0, %d)",
+           comm->nRanks);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
   }
 
   ginConfig = {

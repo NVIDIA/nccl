@@ -20,10 +20,11 @@ typedef ncclGin_t* getNcclGin_t(void* ginPluginLib);
 
 extern getNcclGin_t getNcclGin_v13;
 extern getNcclGin_t getNcclGin_v14;
+extern getNcclGin_t getNcclGin_v15;
 NCCL_PARAM(GinPluginRefCount, "GIN_PLUGIN_REF_COUNT", 0);
-#define NCCL_GIN_VERSION_COUNT 2
-int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {14, 13};
-getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v14, getNcclGin_v13};
+#define NCCL_GIN_VERSION_COUNT 3
+int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {15, 14, 13};
+getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v15, getNcclGin_v14, getNcclGin_v13};
 
 #define NCCL_GIN_NUM_RESERVED_PLUGINS 3
 #define NCCL_GIN_NUM_INTERNAL_PLUGINS 2

@@ -169,13 +169,9 @@ NCCL_HOST_DEVICE_INLINE void* alignDown(void const* x, size_t a) {
 
 template <typename T>
 NCCL_HOST_DEVICE_INLINE T add4G(T base, int delta4G) {
-  union {
-    uint32_t u32[2];
-    T tmp;
-  };
-  tmp = base;
-  u32[1] += delta4G;
-  return tmp;
+  // Plain 64-bit arithmetic: the former union type-pun made ptxas 12.8-13.0
+  // drop the upper 32 bits of the result on sm_120 (LL epoch store in the symmetric kernels).
+  return (T)((uintptr_t)base + ((uint64_t)(uint32_t)delta4G << 32));
 }
 
 template <typename Int>

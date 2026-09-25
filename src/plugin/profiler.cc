@@ -30,6 +30,7 @@ static std::mutex profilerMutex;
 static int profilerPluginRefCount;
 static void* profilerPluginLib;
 static ncclProfiler_t* ncclProfiler;
+static bool profilerKernelStepSupported;
 
 extern thread_local int ncclGroupDepth;
 thread_local ncclProfilerApiState_t ncclProfilerApiState;
@@ -72,6 +73,7 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
   }
 
   ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
+  profilerKernelStepSupported = ncclProfiler != nullptr;
   if (ncclProfiler == nullptr) {
     ncclProfiler = getNcclProfiler_v5(profilerPluginLib);
   }
@@ -120,6 +122,7 @@ static ncclResult_t ncclProfilerPluginUnload(void) {
     NCCLCHECK(ncclClosePluginLib(profilerPluginLib, ncclPluginTypeProfiler));
     profilerPluginLib = nullptr;
     ncclProfiler = nullptr;
+    profilerKernelStepSupported = false;
     profilerPluginStatus = profilerPluginLoadReady;
   }
   return ncclSuccess;
@@ -241,6 +244,7 @@ static void printProfilerEventMask(int mask) {
   if (mask & ncclProfileCeSync) pos += sprintf(enabled + pos, "CeSync ");
   if (mask & ncclProfileCeBatch) pos += sprintf(enabled + pos, "CeBatch ");
   if (mask & ncclProfileKernelStep) pos += sprintf(enabled + pos, "KernelStep ");
+  if (mask & ncclProfileKernelStepRecv) pos += sprintf(enabled + pos, "KernelStepRecv ");
   INFO(NCCL_INIT, "Profiler event mask: 0x%x (%d) - Enabled: %s", mask, mask, enabled);
 }
 
@@ -736,24 +740,23 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, ui
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s, const struct ncclDevKernelStepEvent* ev,
-                                              void** eHandle) {
+ncclResult_t ncclProfilerStartKernelStepEvent(const struct ncclKernelStepParent* parent, int channelId,
+                                              const struct ncclDevKernelStepEvent* ev, void** eHandle) {
   if (eHandle) *eHandle = nullptr;
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && ev && eHandle) {
-    struct ncclProxySubArgs* sub = &args->subs[s];
-    if (sub->eActivationMask & ncclProfileKernelStep) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && parent && ev && eHandle) {
+    if (parent->eActivationMask & ncclProfileKernelStep) {
       ncclProfilerEventDescr_t eDescr = {};
       eDescr.type = ncclProfileKernelStep;
-      eDescr.parentObj = sub->taskEventHandle;
-      eDescr.rank = sub->rank;
-      eDescr.kernelStep.channelId = (uint8_t)sub->channelId;
+      eDescr.parentObj = parent->taskEventHandle;
+      eDescr.rank = parent->rank;
+      eDescr.kernelStep.channelId = (uint8_t)channelId;
       eDescr.kernelStep.isSend = (ev->flags & NCCL_KERNEL_STEP_FLAG_SEND) ? 1 : 0;
       eDescr.kernelStep.peer = ev->peer; // communicator-local dest rank; drain drops inter-host
       eDescr.kernelStep.step = ev->step;
       eDescr.kernelStep.size = ev->size;
       eDescr.kernelStep.startTs = ev->start_ts;
       eDescr.kernelStep.readyTs = ev->ready_ts;
-      ncclProfiler->startEvent(sub->profilerContext, eHandle, &eDescr);
+      ncclProfiler->startEvent(parent->profilerContext, eHandle, &eDescr);
     }
   }
   return ncclSuccess;
@@ -843,6 +846,10 @@ bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op) {
 
 bool ncclProfilerPluginLoaded(void) {
   return (COMPILER_EXPECT(ncclProfiler != NULL, 0));
+}
+
+bool ncclProfilerKernelStepSupported(void) {
+  return ncclProfilerPluginLoaded() && profilerKernelStepSupported;
 }
 
 ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData) {

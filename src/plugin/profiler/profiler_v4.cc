@@ -120,7 +120,8 @@ static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivat
                                       int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn) {
   NCCLCHECK(ncclProfiler_v4->init(ctx, eActivationMask, commName, commId, nNodes, nRanks, rank, logfn));
   if (eActivationMask) {
-    *eActivationMask &= ~(ncclProfileKernelStep | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch);
+    *eActivationMask &=
+      ~(ncclProfileKernelStep | ncclProfileKernelStepRecv | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch);
   }
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.recordEventState = ncclProfiler_recordEventState;

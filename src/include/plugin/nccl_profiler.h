@@ -27,6 +27,8 @@ enum {
   ncclProfileCeBatch = (1 << 14), // CE batch operation
   // Kernel step events (v6): per-slice start/end on Simple prims (intra-host)
   ncclProfileKernelStep = (1 << 15),
+  // Modifier for ncclProfileKernelStep: also stamp receive-side steps.
+  ncclProfileKernelStepRecv = (1 << 16),
 };
 
 typedef enum {

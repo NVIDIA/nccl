@@ -107,7 +107,7 @@ struct RunWorkBatch<ncclFuncSendRecv, T, RedOp, NCCL_ALGO_RING, NCCL_PROTO_SIMPL
         if ((profActive >> wi) & 1) {
           int localIx = __popc(profActive & ((1u << wi) - 1u));
           works[wi].profilerWorkTag =
-            (uint16_t)(ncclShmem.channel.workCounter + localIx + 1);
+            (uint32_t)(ncclShmem.channel.workCounter + localIx + 1);
         } else {
           works[wi].profilerWorkTag = 0;
         }

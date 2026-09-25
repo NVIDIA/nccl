@@ -15,6 +15,10 @@
 
 #define ASSIGN_SYM(container, symbol, name) container->name = &symbol;
 
+/* Optional rdma-core 1.16+ API. NeMo's verbs.h does not declare it; keep a
+ * weak fallback so RDMA_CORE=1 still links against the cluster libibverbs. */
+extern "C" int ibv_query_port_speed(struct ibv_context* context, uint8_t port_num, uint64_t* speed) __attribute__((weak));
+
 // Passthrough function for ibv_reg_mr macro in verbs.h
 struct ibv_mr* ibv_internal_reg_mr(struct ibv_pd* pd, void* addr, size_t length, int access) {
   return ibv_reg_mr(pd, addr, length, access);
@@ -53,7 +57,11 @@ ncclResult_t buildIbvSymbols(struct ncclIbvSymbols* ibvSymbols) {
 
   ASSIGN_SYM(ibvSymbols, ibv_query_ece, ibv_internal_query_ece);
   ASSIGN_SYM(ibvSymbols, ibv_set_ece, ibv_internal_set_ece);
-  ASSIGN_SYM(ibvSymbols, ibv_query_port_speed, ibv_internal_query_port_speed);
+  if (ibv_query_port_speed) {
+    ASSIGN_SYM(ibvSymbols, ibv_query_port_speed, ibv_internal_query_port_speed);
+  } else {
+    ibvSymbols->ibv_internal_query_port_speed = NULL;
+  }
 
   ibvSymbols->ibv_internal_reg_mr = &ibv_internal_reg_mr;
   ibvSymbols->ibv_internal_query_port = &ibv_internal_query_port;

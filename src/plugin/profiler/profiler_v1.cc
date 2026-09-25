@@ -149,7 +149,8 @@ static ncclResult_t ncclProfiler_init(void** context, uint64_t commId __attribut
                                       ncclDebugLogger_t logfn __attribute__((unused))) {
   NCCLCHECK(ncclProfiler_v1->init(context, eActivationMask));
   if (eActivationMask) {
-    *eActivationMask &= ~(ncclProfileKernelStep | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch);
+    *eActivationMask &=
+      ~(ncclProfileKernelStep | ncclProfileKernelStepRecv | ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch);
   }
   ncclProfiler.startEvent = ncclProfiler_startEvent;
   ncclProfiler.stopEvent = ncclProfiler_v1->stopEvent;

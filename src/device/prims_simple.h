@@ -43,8 +43,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
   void* netDeviceHandle;
   uint64_t accSize;
   bool stepProf = false; // KernelStep profiling for this work
+  bool recvStepProf = false; // receive-side KernelSteps requested by the plugin
   uint8_t kernelStepSampleRate = 1;
-  uint16_t kernelStepWorkTag = 0;
+  uint32_t kernelStepWorkTag = 0;
   uint64_t kernelStepLogicalIndex = 0; // Per-work slice index; independent of persistent connection credits
   uint64_t kernelStepStartTs = 0; // send credit wait start from last waitPeer (0 if none)
   bool connSameHost = false; // peer on same host (NCCL_CONN_SAME_HOST); gate KernelStep stamps
@@ -249,7 +250,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
           const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
           uint64_t seq = 0;
-          if (connSameHost && profilerKernelStepRankFits(connPeer) && workSize > 0) {
+          const bool directionEnabled = isSendNotRecv || recvStepProf;
+          if (directionEnabled && connSameHost && profilerKernelStepRankFits(connPeer) && workSize > 0) {
             uint64_t waitStart = isSendNotRecv ? kernelStepStartTs : 0;
             kernelStepStartTs = 0;
             if (profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex)) {
@@ -342,7 +344,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
       if (COMPILER_EXPECT(stepProf, 0) && workSize > 0 && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
         const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
         uint64_t seq = 0;
-        if (connSameHost && profilerKernelStepRankFits(connPeer)) {
+        const bool directionEnabled = isSendNotRecv || recvStepProf;
+        if (directionEnabled && connSameHost && profilerKernelStepRankFits(connPeer)) {
           uint64_t waitStart = isSendNotRecv ? kernelStepStartTs : 0;
           kernelStepStartTs = 0;
           if (profilerKernelStepSample(stepProf, kernelStepSampleRate, kernelStepLogicalIndex)) {
@@ -658,13 +661,16 @@ public:
     flags = 0;
     index = -1;
     stepProf = P2p ? (p2pWork && p2pWork->profilerStepEnabled) : (collWork && collWork->profilerStepEnabled);
+    recvStepProf = stepProf &&
+      (P2p ? (p2pWork && p2pWork->profilerStepRecvEnabled) :
+             (collWork && collWork->profilerStepRecvEnabled));
     kernelStepSampleRate = P2p ? (p2pWork ? p2pWork->profilerStepSampleRate : 1) :
                                  (collWork ? collWork->profilerStepSampleRate : 1);
     if (kernelStepSampleRate == 0) kernelStepSampleRate = 1;
     if (P2p && p2pWork) {
       kernelStepWorkTag = p2pWork->profilerWorkTag;
     } else if (collWork) {
-      kernelStepWorkTag = (uint16_t)(ncclShmem.channel.workCounter +
+      kernelStepWorkTag = (uint32_t)(ncclShmem.channel.workCounter +
         (collWork - (struct ncclDevWorkColl*)ncclShmem.workStorage) + 1);
     }
     if (mode == primsModeDefault) {

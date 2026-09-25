@@ -181,7 +181,8 @@ CXXFLAGS += -DPROFAPI
 endif
 
 ifneq ($(RDMA_CORE), 0)
-CXXFLAGS += -DNCCL_BUILD_RDMA_CORE=1 -libverbs
+CXXFLAGS += -DNCCL_BUILD_RDMA_CORE=1
+LDFLAGS += -libverbs
 endif
 
 ifneq ($(MLX5DV), 0)

@@ -273,6 +273,10 @@ bool ncclProfilerPluginLoaded(void) {
   return false;
 }
 
+bool ncclProfilerKernelStepSupported(void) {
+  return false;
+}
+
 ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
   (void)comm;
   return ncclSuccess;
@@ -412,10 +416,10 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, ui
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s, const struct ncclDevKernelStepEvent* ev,
-                                              void** eHandle) {
-  (void)args;
-  (void)s;
+ncclResult_t ncclProfilerStartKernelStepEvent(const struct ncclKernelStepParent* parent, int channelId,
+                                              const struct ncclDevKernelStepEvent* ev, void** eHandle) {
+  (void)parent;
+  (void)channelId;
   (void)ev;
   if (eHandle) *eHandle = nullptr;
   return ncclSuccess;

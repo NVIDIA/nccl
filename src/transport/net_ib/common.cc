@@ -152,6 +152,8 @@ void* ncclIbAsyncThreadMain(void* args) {
     case IBV_EVENT_GID_CHANGE:
       WARN("NET/IB : %s:%d GID table changed", dev->devName, dev->portNum);
       break;
+#ifndef NCCL_BUILD_RDMA_CORE
+    /* NeMo verbs.h (libibverbs 60) has no IBV_EVENT_DEVICE_SPEED_CHANGE. */
     case IBV_EVENT_DEVICE_SPEED_CHANGE:
       {
         uint64_t newSpeed = 0;
@@ -164,6 +166,7 @@ void* ncclIbAsyncThreadMain(void* args) {
              strlen(speedStr) ? speedStr : "N/A");
         break;
       }
+#endif
     case IBV_EVENT_PATH_MIG_ERR:
     case IBV_EVENT_PORT_ERR:
     case IBV_EVENT_PATH_MIG:

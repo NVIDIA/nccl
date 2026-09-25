@@ -46,6 +46,9 @@ struct ncclShmemGroup {
   // KernelStep: Wait role publishes seq here for Post role after barrier
   uint64_t kernelStepSeqSend[NCCL_MAX_ARITY];
   uint64_t kernelStepSeqRecv[NCCL_MAX_ARITY];
+  // LL/LL128 send-credit wait begins are recorded by the peer-owning lanes
+  // and consumed by thread 0 when it emits one KernelStep per fan-out peer.
+  uint64_t kernelStepWaitStartSend[NCCL_MAX_ARITY];
 };
 
 struct ncclShmemData {
@@ -355,6 +358,9 @@ __device__ __forceinline__ bool profilerIsP2pSelfCopy(int workItemIdx) {
 __device__ __forceinline__ bool profilerKernelStepSample(bool enabled, uint8_t rate, uint64_t logicalIndex) {
   if (!enabled) return false;
   if (rate <= 1) return true;
+  // The deployed rates are normally 2/4/8. Avoid a 64-bit integer remainder
+  // in the per-slice hot path for those power-of-two rates.
+  if ((rate & (rate - 1)) == 0) return (logicalIndex & (rate - 1)) == 0;
   return (logicalIndex % rate) == 0;
 }
 
@@ -364,7 +370,7 @@ __device__ __forceinline__ bool profilerKernelStepRankFits(int destRank) {
 }
 
 __device__ __forceinline__ void profilerKernelStepStart(bool enabled, int isSend, int peerIdx, uint32_t step,
-                                                         uint32_t size, uint16_t workTag, uint64_t startTs,
+                                                         uint32_t size, uint32_t workTag, uint64_t startTs,
                                                          uint64_t* seqOut) {
   if (!enabled || ncclShmem.comm.stepStarted == nullptr || ncclShmem.comm.stepSeq == nullptr) return;
   int ch = ncclShmem.channelId;

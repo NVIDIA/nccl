@@ -33,7 +33,7 @@ struct ncclKernelStepParent {
 
 // Each profiled work produces at least two step events, so this covers every
 // distinct work item that can still be resident in the KernelStep ring.
-#define MAX_KERNEL_STEP_PARENT_EVENTS 32768
+#define MAX_KERNEL_STEP_PARENT_EVENTS 65536
 
 struct ncclProfilerProxy {
   bool initialized;
@@ -44,10 +44,8 @@ struct ncclProfilerProxy {
   struct ncclDevKernelStepRing* stepStarted /*[MAXCHANNELS]*/;
   struct ncclDevKernelStepRing* stepCompleted /*[MAXCHANNELS]*/;
   uint64_t* stepSeq /*[MAXCHANNELS]*/;       // device-published high water (same buffer as device)
-  uint64_t stepCounter[MAXCHANNELS];         // host discovery cursor per channel
-  // Unresolved out-of-order sequences [MAXCHANNELS][MAX_KERNEL_STEP_EVENTS_PER_CHANNEL], flat.
-  uint64_t* kernelStepPending;
-  int kernelStepPendingCount[MAXCHANNELS];
+  uint64_t stepStartCounter[MAXCHANNELS];    // host cursor for start publication
+  uint64_t stepCounter[MAXCHANNELS];         // host cursor for completion publication
   // Plugin handles for start-visible KernelSteps.  A slot is opened when the
   // GPU start ring becomes visible and closed when its completion arrives.
   void** kernelStepHandles;
@@ -128,8 +126,8 @@ ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProxyArgs* args, int s, u
 ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProxyArgs* args, int s, uint64_t stop);
 
 // KernelStep Start/Stop Event Wrappers (per-slice Simple prims timing)
-ncclResult_t ncclProfilerStartKernelStepEvent(struct ncclProxyArgs* args, int s, const struct ncclDevKernelStepEvent* ev,
-                                              void** eHandle);
+ncclResult_t ncclProfilerStartKernelStepEvent(const struct ncclKernelStepParent* parent, int channelId,
+                                              const struct ncclDevKernelStepEvent* ev, void** eHandle);
 ncclResult_t ncclProfilerStopKernelStepEvent(void* eHandle, const struct ncclDevKernelStepEvent* ev);
 
 // Record Event Wrappers
@@ -142,6 +140,7 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
 ncclResult_t ncclProfilerAddPidToProxyOp(struct ncclProxyOp* op);
 bool ncclProfilerNeedsProxy(struct ncclComm* comm, struct ncclProxyOp* op);
 bool ncclProfilerPluginLoaded(void);
+bool ncclProfilerKernelStepSupported(void);
 
 // Profiler callback for network plugin
 ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64_t pluginId, void* extData);

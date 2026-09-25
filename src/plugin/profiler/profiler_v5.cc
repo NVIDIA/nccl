@@ -179,7 +179,8 @@ static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivat
   // Clear event bits unsupported by v5 plugins (v6 CE + KernelStep)
   if (eActivationMask) {
     *eActivationMask &=
-      ~(ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch | ncclProfileKernelStep);
+      ~(ncclProfileCeColl | ncclProfileCeSync | ncclProfileCeBatch | ncclProfileKernelStep |
+        ncclProfileKernelStepRecv);
   }
 
   ncclProfiler.startEvent = ncclProfiler_startEvent;

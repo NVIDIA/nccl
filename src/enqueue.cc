@@ -341,6 +341,8 @@ ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm) {
     devWork.netRegUsed = devWork.regUsed = 0;
     devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
     devWork.profilerStepEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelStep);
+    devWork.profilerStepRecvEnabled =
+      devWork.profilerStepEnabled && (task->eActivationMask & ncclProfileKernelStepRecv);
     devWork.profilerStepSampleRate = profilerKernelStepSampleRate();
     if (task->regBufType & NCCL_NET_REG_BUFFER) devWork.netRegUsed = 1;
     if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER)) devWork.regUsed = 1;
@@ -532,6 +534,8 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       devWork.netRegUsed = devWork.regUsed = 0;
       devWork.profilerEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelCh);
       devWork.profilerStepEnabled = ncclProfilerPluginLoaded() && (task->eActivationMask & ncclProfileKernelStep);
+      devWork.profilerStepRecvEnabled =
+        devWork.profilerStepEnabled && (task->eActivationMask & ncclProfileKernelStepRecv);
       devWork.profilerStepSampleRate = profilerKernelStepSampleRate();
       if (task->regBufType & NCCL_NET_REG_BUFFER) devWork.netRegUsed = 1;
       if (task->regBufType & (NCCL_IPC_REG_BUFFER | NCCL_NVLS_REG_BUFFER)) devWork.regUsed = 1;
@@ -1039,6 +1043,9 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     ncclProfilerPluginLoaded() && ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelCh);
   work->profilerStepEnabled =
     ncclProfilerPluginLoaded() && ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelStep);
+  work->profilerStepRecvEnabled =
+    work->profilerStepEnabled &&
+    ((p2pTasks[0] ? p2pTasks[0] : p2pTasks[1])->eActivationMask & ncclProfileKernelStepRecv);
   work->profilerStepSampleRate = profilerKernelStepSampleRate();
 
   for (int dir = 0; dir < nProxyOps; dir++) {

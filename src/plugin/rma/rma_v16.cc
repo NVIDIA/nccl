@@ -18,7 +18,7 @@ static ncclResult_t ncclRma_v16_createContext(void* collComm, ncclRmaConfig_v17_
   memset(&config_v16, 0, sizeof(config_v16));
   config_v16.nContexts = config->nContexts;
   config_v16.trafficClass = config->trafficClass;
-  config_v16.rankStride = config->rankStride;
+  config_v16.rankStride = 1;
   return ncclRma_v16->createContext(collComm, &config_v16, rmaCtx);
 }
 

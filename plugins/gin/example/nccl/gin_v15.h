@@ -22,7 +22,8 @@ typedef struct {
   int queueDepth;
   int trafficClass;
   int backendVersion;
-  int rankStride;
+  int* peerArray;
+  int peerArrayCount;
 } ncclGinConfig_v15_t;
 
 typedef struct {

@@ -305,6 +305,8 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
 
   ncclResult_t ret = ncclSuccess;
   bool needsProxyProgress = false;
+  int* peerArray = nullptr;
+  int peerArrayCount = 0;
 
   int connectedStride =
     comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_FULL ? 1 : comm->contiguousRanksPerHost;
@@ -336,9 +338,26 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
     goto end;
   }
 
+  if (requestedStride <= 0 || comm->nRanks % requestedStride != 0) {
+    WARN("invalid rank stride %d for nranks %d", requestedStride, comm->nRanks);
+    ret = ncclInvalidUsage;
+    goto end;
+  }
+
   devComm->ginConnectionStride = connectedStride;
   devComm->ginConnectionStride_rcp32 = idivRcp32(connectedStride);
   devComm->ginContextStride = requestedStride;
+
+  {
+    int nPeers = comm->nRanks / requestedStride;
+    NCCLCHECKGOTO(ncclCalloc(&peerArray, nPeers), ret, end);
+    for (int i = 0; i < nPeers; i++) {
+      int peer = (comm->rank + i * requestedStride) % comm->nRanks;
+      peerArray[peerArrayCount++] = peer / connectedStride;
+    }
+    qsort(peerArray, peerArrayCount, sizeof(int), compareInts);
+  }
+
   ginConfig = {
     reqs->ginSignalCount,
     reqs->ginCounterCount,
@@ -346,7 +365,8 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
     reqs->ginQueueDepth,
     reqs->ginTrafficClass != NCCL_CONFIG_UNDEF_INT ? reqs->ginTrafficClass : comm->config.trafficClass,
     backendVersion,
-    /*rankStride*/ requestedStride / connectedStride,
+    peerArray,
+    peerArrayCount,
   };
 
   for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
@@ -392,6 +412,7 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
   }
 
 end:
+  free(peerArray);
   if (ret != ncclSuccess) {
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
       if (ginStateDevComm->ginCtx[commIdx]) backend->ncclGin->destroyContext(ginStateDevComm->ginCtx[commIdx]);

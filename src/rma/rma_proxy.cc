@@ -243,11 +243,20 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, in
   ncclResult_t ret = ncclSuccess;
   // Get the RMA plugin interface
   ncclRma_t* rmaComm = (ncclRma_t*)comm->rmaState.rmaProxyState.ncclRma;
+  int* peerArray = nullptr;
+  int peerArrayCount = 0;
+  ncclRmaConfig_t config;
+  struct ncclRmaProxyCtx* rmaProxyCtx = nullptr;
 
-  ncclRmaConfig_t config = {1, comm->config.trafficClass, rankStride};
+  int nPeers = (int)idivFast32((uint32_t)comm->nRanks, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32);
+  int myPeer = (int)idivFast32((uint32_t)comm->rank, (uint32_t)comm->rmaBaseStride, comm->rmaBaseStride_rcp32);
+  NCCLCHECKGOTO(ncclCalloc(&peerArray, DIVUP(nPeers, rankStride)), ret, fail);
+  for (int peer = myPeer % rankStride; peer < nPeers; peer += rankStride) {
+    peerArray[peerArrayCount++] = peer;
+  }
+  config = {1, comm->config.trafficClass, peerArray, peerArrayCount};
 
   // Allocate the RMA proxy context
-  struct ncclRmaProxyCtx* rmaProxyCtx = nullptr;
   NCCLCHECKGOTO(ncclCalloc(&rmaProxyCtx, 1), ret, fail);
 
   rmaProxyCtx->comm = comm;
@@ -263,10 +272,11 @@ ncclResult_t ncclRmaProxyCreateContext(struct ncclComm* comm, void* collComm, in
   NCCLCHECKGOTO(ncclRmaProxyCtxAllocGraph(comm, rmaComm, rmaProxyCtx), ret, fail);
 
   *outRmaProxyCtx = rmaProxyCtx;
-
-  return ncclSuccess;
+  goto exit;
 fail:
   ncclRmaProxyDestroyContext(rmaComm, rmaProxyCtx);
+exit:
+  free(peerArray);
   return ret;
 }
 

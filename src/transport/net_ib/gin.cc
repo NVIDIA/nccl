@@ -9,6 +9,7 @@
 
 #include "gin/gin_host.h"
 #include "gin.h"
+#include "utils.h"
 
 const int NCCL_GIN_IB_ALLGATHER_TAG = 0xa0;
 const int NCCL_GIN_IB_ALLTOALL_TAG = 0xa1;
@@ -505,13 +506,6 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
   // Make sure all QP we create use the provided traffic class.
   ncclIbSetTrafficClass(cComm->ctx, config->trafficClass);
 
-  if (config->rankStride <= 0 || (cComm->nranks % config->rankStride) != 0) {
-    WARN(
-      "Rma Proxy create context: invalid rank stride %d, must be >= 0 and nranks (%d) must be a multiple of the stride",
-      config->rankStride, cComm->nranks);
-    return ncclInternalError;
-  }
-
   int nranks;
   struct ncclRmaIbProxyCtx* rmaProxyCtx = NULL;
   *rmaCtx = NULL;
@@ -546,21 +540,33 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
     gc->rank = cComm->rank;
     gc->wrBatchsize = (int)wrBatchsize;
 
-    for (int i = 0; i < nranks; i += config->rankStride) {
+    // iterate through all ranks and barrier on each round to handle non-uniform peer counts across ranks.
+    for (int i = 0; i < nranks; i++) {
       int connectPeer = (cComm->rank + i) % nranks;
       int acceptPeer = (cComm->rank - i + nranks) % nranks;
+
+      // Always connect to self. The self-QP in self-recvComm is used in iFlush.
+      bool wantConnect = (connectPeer == cComm->rank);
+      bool wantAccept = (acceptPeer == cComm->rank);
+
+      if (config->peerArrayCount > 0) {
+        wantConnect |= (bool)bsearch(&connectPeer, config->peerArray, config->peerArrayCount, sizeof(int), compareInts);
+        wantAccept |= (bool)bsearch(&acceptPeer, config->peerArray, config->peerArrayCount, sizeof(int), compareInts);
+      }
+
       do {
-        if (gc->fullSendComm[connectPeer] == NULL) {
+        if (wantConnect && gc->fullSendComm[connectPeer] == NULL) {
           NCCLCHECKGOTO(ncclIbConnectImpl(cComm->ctx, cComm->dev, handles + NCCL_NET_HANDLE_MAXSIZE * connectPeer,
                                           &gc->fullSendComm[connectPeer], NULL, /*nQpsPerDev*/ 1,
                                           ncclParamGinIbTc() != NCCL_PARAM_VAL_AUTO ? ncclParamGinIbTc() :
                                                                                       ncclParamIbTc()),
                         ret, end);
         }
-        if (gc->fullRecvComm[acceptPeer] == NULL) {
+        if (wantAccept && gc->fullRecvComm[acceptPeer] == NULL) {
           NCCLCHECKGOTO(ncclIbAcceptImpl(lComm, &gc->fullRecvComm[acceptPeer], NULL, /*nQpsPerDev*/ 1), ret, end);
         }
-      } while ((gc->fullSendComm[connectPeer] == NULL) || (gc->fullRecvComm[acceptPeer] == NULL));
+      } while ((wantConnect && gc->fullSendComm[connectPeer] == NULL) ||
+               (wantAccept && gc->fullRecvComm[acceptPeer] == NULL));
       NCCLCHECKGOTO(ncclGinIbP2PBarrier(cComm), ret, end);
     }
   }

@@ -35,7 +35,6 @@ struct ginCtx {
   int queueDepth;
   int trafficClass;
   int backendVersion;
-  int rankStride;
 };
 
 struct ginMemHandle {
@@ -349,7 +348,6 @@ __hidden ncclResult_t ginCreateContext_v14(void* collComm, ncclGinConfig_v14_t* 
   gc->queueDepth = config->queueDepth;
   gc->trafficClass = config->trafficClass;
   gc->backendVersion = config->backendVersion;
-  gc->rankStride = config->rankStride;
 
   ncclNetDeviceHandle_v11_t* dh = (ncclNetDeviceHandle_v11_t*)calloc(1, sizeof(*dh));
   if (dh == NULL) { free(gc); return ncclSystemError; }
@@ -381,7 +379,6 @@ __hidden ncclResult_t ginCreateContext_v15(void* collComm, ncclGinConfig_v15_t* 
   gc->queueDepth = config->queueDepth;
   gc->trafficClass = config->trafficClass;
   gc->backendVersion = config->backendVersion;
-  gc->rankStride = config->rankStride;
 
   ncclNetDeviceHandle_v11_t* dh = (ncclNetDeviceHandle_v11_t*)calloc(1, sizeof(*dh));
   if (dh == NULL) { free(gc); return ncclSystemError; }

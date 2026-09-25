@@ -176,10 +176,6 @@ ncclResult_t ncclRmaSocketProxyCreateContext(void* collComm, ncclRmaConfig_t* co
     WARN("RMA/Socket : invalid context count %d", config->nContexts);
     return ncclInvalidArgument;
   }
-  if (config->rankStride <= 0 || (comm->nranks % config->rankStride) != 0) {
-    WARN("RMA/Socket : invalid rank stride %d for nranks %d", config->rankStride, comm->nranks);
-    return ncclInvalidArgument;
-  }
   if (config->nContexts > INT_MAX - comm->nContexts) {
     WARN("RMA/Socket : context count overflow current=%d additional=%d", comm->nContexts, config->nContexts);
     return ncclInvalidArgument;

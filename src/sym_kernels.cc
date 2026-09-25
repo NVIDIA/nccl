@@ -291,11 +291,16 @@ static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncc
   case ncclFuncAllGather:
     return true;
   case ncclFuncAllReduce:
+    // generate.py emits no avg (ncclDevSumPostDiv) AllReduce kernels; let avg fall back to the regular kernels.
+    if (red == ncclDevSum) {
+      return isFloat && ty != ncclFloat64;
+    }
+    return false;
   case ncclFuncReduceScatter:
     if (red == ncclDevSum || red == ncclDevSumPostDiv) {
       return isFloat && ty != ncclFloat64;
     }
-    // fall through
+    return false;
   default:
     return false;
   }

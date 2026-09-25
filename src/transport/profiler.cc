@@ -18,8 +18,12 @@ static ncclResult_t profilerProxyConnect(struct ncclProxyConnection* connection,
 }
 
 // Started-but-uncompleted distance after which a KernelStep completion is
-// treated as lost (see profilerDrainKernelSteps).
-#define KERNEL_STEP_COMPLETION_LOST_LAG 1024
+// treated as lost (see profilerDrainKernelSteps). A channel's thread block
+// runs slices in order, so only about one slice per peer is ever in flight;
+// 64 later starts take a few ms. At 1024, every missing completion held all
+// later KernelStep stops on its channel back by about one training step
+// (DP2/TP2/PP2), too late for per-iteration copy-rate checks.
+#define KERNEL_STEP_COMPLETION_LOST_LAG 64
 
 // KernelStep is intra-host only (P2P/SHM/NVLS). Drop NET/inter-host leftovers
 // so CoMMA never sees a KernelStep whose peer lives on another host.

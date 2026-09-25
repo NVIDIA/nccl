@@ -262,8 +262,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
           } else {
             kernelStepStartTs = 0;
           }
-          if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[index] = seq;
-          else ncclShmem.groups[group].kernelStepSeqRecv[index] = seq;
+          if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[slice & 1][index] = seq;
+          else ncclShmem.groups[group].kernelStepSeqRecv[slice & 1][index] = seq;
         }
         if (flags & AnyNetDeviceUnpack) {
           ncclNetDeviceUnpack<Recv>(tid, tidInBlock, nworkers, group,
@@ -315,8 +315,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         // KernelStep stop: after postPeer (Post roles only); seq published by Wait role.
         if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RolePostRecv | Send * RolePostSend))) {
           const bool isSendNotRecv = (Send && Recv) ? (flags & RolePostSend) : Send;
-          uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[index] :
-                                          ncclShmem.groups[group].kernelStepSeqRecv[index];
+          uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[slice & 1][index] :
+                                          ncclShmem.groups[group].kernelStepSeqRecv[slice & 1][index];
           if (seq != 0) {
             profilerKernelStepStop(true, seq, isSendNotRecv, connPeer, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
           }
@@ -356,20 +356,20 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
         } else {
           kernelStepStartTs = 0;
         }
-        if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[index] = seq;
-        else ncclShmem.groups[group].kernelStepSeqRecv[index] = seq;
+        if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[slice & 1][index] = seq;
+        else ncclShmem.groups[group].kernelStepSeqRecv[slice & 1][index] = seq;
       } else if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RoleWaitRecv | Send * RoleWaitSend))) {
         kernelStepStartTs = 0;
         const bool isSendNotRecv = (Send && Recv) ? (flags & RoleWaitSend) : Send;
-        if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[index] = 0;
-        else ncclShmem.groups[group].kernelStepSeqRecv[index] = 0;
+        if (isSendNotRecv) ncclShmem.groups[group].kernelStepSeqSend[slice & 1][index] = 0;
+        else ncclShmem.groups[group].kernelStepSeqRecv[slice & 1][index] = 0;
       }
       barrier(); // Has couterpart in preceding worker-only loop.
       postPeer<Recv, Send>(0 < workSize);
       if (COMPILER_EXPECT(stepProf, 0) && (flags & (Recv * RolePostRecv | Send * RolePostSend))) {
         const bool isSendNotRecv = (Send && Recv) ? (flags & RolePostSend) : Send;
-        uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[index] :
-                                        ncclShmem.groups[group].kernelStepSeqRecv[index];
+        uint64_t seq = isSendNotRecv ? ncclShmem.groups[group].kernelStepSeqSend[slice & 1][index] :
+                                        ncclShmem.groups[group].kernelStepSeqRecv[slice & 1][index];
         if (seq != 0) {
           profilerKernelStepStop(true, seq, isSendNotRecv, connPeer, (uint32_t)step, (uint32_t)(workSize * sizeof(T)));
         }

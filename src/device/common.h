@@ -43,9 +43,12 @@ struct ncclShmemGroup {
   } devicePlugin;
   int32_t dstSizes[NCCL_MAX_ARITY + 1];
   uint64_t redOpArgs;
-  // KernelStep: Wait role publishes seq here for Post role after barrier
-  uint64_t kernelStepSeqSend[NCCL_MAX_ARITY];
-  uint64_t kernelStepSeqRecv[NCCL_MAX_ARITY];
+  // KernelStep: Wait role publishes seq here for Post role after barrier.
+  // Simple prims double-buffer by slice parity: the Wait role of slice k+1
+  // can publish before the Post role of slice k reads, which lost slice k's
+  // completion. LL/LL128 record start and stop in one thread and use [0].
+  uint64_t kernelStepSeqSend[2][NCCL_MAX_ARITY];
+  uint64_t kernelStepSeqRecv[2][NCCL_MAX_ARITY];
   // LL/LL128 send-credit wait begins are recorded by the peer-owning lanes
   // and consumed by thread 0 when it emits one KernelStep per fan-out peer.
   uint64_t kernelStepWaitStartSend[NCCL_MAX_ARITY];

@@ -32,7 +32,7 @@ static ncclResult_t ncclGin_v14_createContext(void* collComm, ncclGinConfig_v15_
   config_v14.queueDepth = config->queueDepth;
   config_v14.trafficClass = config->trafficClass;
   config_v14.backendVersion = config->backendVersion;
-  config_v14.rankStride = config->rankStride;
+  config_v14.rankStride = 1;
   return ncclGin_v14->createContext(collComm, &config_v14, ginCtx, devHandle);
 }
 

@@ -469,7 +469,7 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
   struct ginProxyCtx* proxyCtx = NULL;
   ncclNetDeviceHandle_t* devHandle = NULL;
   int nContexts = 0;
-  ncclRmaConfig_t rmaConfig = {config->nContexts, config->trafficClass, config->rankStride};
+  ncclRmaConfig_t rmaConfig = {config->nContexts, config->trafficClass, config->peerArray, config->peerArrayCount};
   uint64_t queueSize = 0;
   uint32_t maxRequests = 0;
   size_t gpuCtxArraySize = 0;

@@ -293,6 +293,11 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   plan->hasProxyOps = false;
   ncclSymkKernelId kernelId = (ncclSymkKernelId)headTask->devFuncId;
   int kernelIndex = ncclSymkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype);
+  if (kernelIndex < 0) {
+    WARN("No symmetric kernel %s for %s with red op %d datatype %d", kernelName, funcName, (int)headTask->opDev.op,
+         (int)headTask->datatype);
+    return ncclInternalError;
+  }
   // Profiling requested = plugin loaded and mask has ncclProfileKernelCh. Set
   // hasProfilerOps (like non-sym plans) so the host callback fires the group/coll events.
   bool profilingRequested = ncclProfilerPluginLoaded() && (headTask->eActivationMask & ncclProfileKernelCh);

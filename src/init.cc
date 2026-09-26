@@ -2850,10 +2850,6 @@ static void ncclCommInitJobFree(void* _job) {
 
 static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId, ncclUniqueId* commId, int myrank,
                                         int cudaDev, ncclConfig_t* config, const char funcName[]) {
-  if (nId <= 0 || nId > nranks) {
-    WARN("improper usage of ncclCommInitRank: nId = %d, nranks=%d", nId, nranks);
-    return ncclInvalidArgument;
-  }
   ncclResult_t res = ncclSuccess;
   const char* commIdEnv = NULL;
   ncclComm_t comm = NULL;
@@ -2873,8 +2869,15 @@ static ncclResult_t ncclCommInitRankDev(ncclComm_t* newcomm, int nranks, int nId
 
   NCCLCHECKGOTO(PtrCheck(newcomm, "CommInitRank", "newcomm"), res, fail);
   NCCLCHECKGOTO(PtrCheck(config, "CommInitRank", "config"), res, fail);
+  NCCLCHECKGOTO(PtrCheck(commId, "CommInitRank", "commId"), res, fail);
   if (nranks < 1 || myrank < 0 || myrank >= nranks) {
     WARN("Invalid rank requested : %d/%d", myrank, nranks);
+    res = ncclInvalidArgument;
+    goto fail;
+  }
+  // Checked here rather than on entry so that the fail path sets *newcomm to NULL for the callers.
+  if (nId <= 0 || nId > nranks) {
+    WARN("improper usage of ncclCommInitRank: nId = %d, nranks=%d", nId, nranks);
     res = ncclInvalidArgument;
     goto fail;
   }
@@ -2984,7 +2987,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
 
   CUDACHECK(cudaGetDevice(&oldDev));
   NCCLCHECKGOTO(PtrCheck(comms, "CommInitAll", "comms"), ret, fail);
-  if (ndev < 0) {
+  if (ndev <= 0) {
     WARN("Invalid device count requested : %d", ndev);
     ret = ncclInvalidArgument;
     goto fail;
@@ -3548,8 +3551,10 @@ static ncclResult_t ncclCommInitChildComm(ncclComm_t comm, ncclComm_t* newcomm, 
 
   int oldDev;
   CUDACHECK(cudaGetDevice(&oldDev));
-  NCCLCHECKGOTO(CommCheck(comm, caller, "comm"), res, exit);
   NCCLCHECKGOTO(PtrCheck(newcomm, caller, "newcomm"), res, exit);
+  /* *newcomm should be NCCL_COMM_NULL until comm split fully complete; the callers read it on every exit. */
+  *newcomm = NCCL_COMM_NULL;
+  NCCLCHECKGOTO(CommCheck(comm, caller, "comm"), res, exit);
   if (isShrink) {
     NCCLCHECKGOTO(PtrCheck(excludeRanksList, caller, "excludeRanksList"), res, exit);
     NCCLCHECKGOTO(excludeRanksCount > 0 ? ncclSuccess : ncclInvalidArgument, res, exit);
@@ -3564,8 +3569,6 @@ static ncclResult_t ncclCommInitChildComm(ncclComm_t comm, ncclComm_t* newcomm, 
   NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, exit);
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), res, exit);
 
-  /* *newcomm should be NCCL_COMM_NULL until comm split fully complete. */
-  *newcomm = NCCL_COMM_NULL;
   if (!isShrink && color == NCCL_SPLIT_NOCOLOR) {
     INFO(NCCL_INIT, "Rank %d has color with NCCL_SPLIT_NOCOLOR, not creating a new communicator", comm->rank);
   } else {

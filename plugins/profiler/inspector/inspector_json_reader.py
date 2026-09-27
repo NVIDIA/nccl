@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Restore per-record context for Inspector v4.3, accepting older JSON too."""
+"""Restore per-record context for Inspector v4.3/v4.4, accepting older JSON too.
+
+Nested Step arrays stay inside their Proxy record. Marker counts refer to
+top-level payload records, not to the number of nested Steps.
+"""
 
 
 class DumpContext:
@@ -20,7 +24,7 @@ class DumpContext:
             if any(self.remaining.values()):
                 raise ValueError("Incomplete or interleaved Inspector dump")
             self.reset()
-            if record.get("metadata", {}).get("inspector_output_format_version") == "v4.3":
+            if record.get("metadata", {}).get("inspector_output_format_version") in ("v4.3", "v4.4"):
                 self.header = record["header"]
                 self.metadata = record["metadata"]
                 stats = record["dump_stats"]
@@ -32,13 +36,13 @@ class DumpContext:
             return record
         if self.header is not None:
             if len(record) != 1:
-                raise ValueError("Unexpected fields in Inspector v4.3 payload")
+                raise ValueError("Unexpected fields in Inspector dump payload")
             kind = next(iter(record))
             if self.remaining.get(kind, 0) <= 0:
                 raise ValueError("Unexpected record beyond Inspector dump counts")
             self.remaining[kind] -= 1
             return {"header": self.header, "metadata": self.metadata, **record}
-        # v4.0-v4.2 records carry their own context. An orphan v4.3 payload
+        # v4.0-v4.2 records carry their own context. An orphan v4.3/v4.4 payload
         # must not silently acquire an unknown communicator or the previous PID.
         if "header" not in record or "metadata" not in record:
             raise ValueError("Missing Inspector record context")

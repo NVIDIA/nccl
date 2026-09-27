@@ -74,6 +74,8 @@ jsonResult_t jsonStr(jsonFileOutput *jfo, const char *str);
 
 // Write a bool as "true" or "false" strings.
 jsonResult_t jsonBool(jsonFileOutput *jfo, bool val);
+// Native JSON boolean; jsonBool above retains its legacy string encoding.
+jsonResult_t jsonBoolean(jsonFileOutput *jfo, bool val);
 
 // Write an integer value
 jsonResult_t jsonInt(jsonFileOutput *jfo, const int val);

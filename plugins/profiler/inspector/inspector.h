@@ -149,7 +149,18 @@ typedef enum {
 typedef enum {
   NCCL_INSP_PROXY_RECORD_OP = 0,
   NCCL_INSP_PROXY_RECORD_STEP,
+  NCCL_INSP_PROXY_RECORD_OP_START,
+  NCCL_INSP_PROXY_RECORD_OP_SEGMENT,
 } inspectorProxyRecordType_t;
+
+// Completed snapshots grow lazily per Op, with a fixed upper bound.
+enum { NCCL_INSP_PROXY_SEGMENT_STEPS = 8 };
+struct inspectorProxyStepSnapshot {
+  uint64_t proxyStepSn;
+  int step;
+  size_t transSizeBytes;
+  struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_STEP_NEVT];
+};
 
 struct inspectorEventTrkKernelInfo {
   struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_KERNEL_NEVT];
@@ -197,6 +208,7 @@ struct inspectorProxyOpMetadata {
 // retain pointers to active events because those objects return to their pools.
 struct inspectorCompletedProxyRecord {
   inspectorProxyRecordType_t recordType;
+  bool nested;
   uint64_t recordSn;
   struct inspectorProxyOpMetadata metadata;
   union {
@@ -209,14 +221,14 @@ struct inspectorCompletedProxyRecord {
       size_t transSizeBytes;
       struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_OP_NEVT];
     } proxyOp;
-    struct {
-      uint64_t proxyStepSn;
-      int step;
-      size_t transSizeBytes;
-      struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_STEP_NEVT];
-    } proxyStep;
+    struct inspectorProxyStepSnapshot proxyStep;
   };
 };
+
+static inline uint64_t inspectorProxyRecordStepCount(const void* entry) {
+  const auto* record = static_cast<const inspectorCompletedProxyRecord*>(entry);
+  return record->recordType == NCCL_INSP_PROXY_RECORD_STEP ? 1 : 0;
+}
 
 #include "inspector_ring.h"
 
@@ -249,6 +261,7 @@ struct inspectorCommInfo {
   uint64_t nextProxyRecordSn;
   uint64_t proxyOpsDropped;
   uint64_t proxyOpsDroppedReported;
+  uint64_t proxyStepsOverwrittenReported;
   // Last observed process-wide PXN skip count; not a per-comm loss counter.
   uint64_t proxyPxnSkippedReported;
   pthread_rwlock_t guard;
@@ -322,6 +335,9 @@ struct inspectorProxyOpInfo {
   uint64_t eventSeqNum;
   size_t transSizeBytes;
   struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_PROXY_OP_NEVT];
+  uint32_t nBufferedSteps;
+  uint32_t bufferedStepCapacity;
+  struct inspectorProxyStepSnapshot* bufferedSteps;
   pthread_rwlock_t guard;
 };
 
@@ -430,6 +446,10 @@ extern bool enableNcclInspectorP2p;
 extern bool enableNcclInspectorProxy;
 // Controls completed Step records only; callbacks still feed Op statistics.
 extern bool enableNcclInspectorProxyStepDump;
+// Controls JSON diagnostics only; callbacks always record event sequence numbers.
+extern bool enableNcclInspectorProxyEventTraceSnDump;
+// nested is the default; flat retains streaming, per-Step output.
+extern bool enableNcclInspectorProxyNested;
 extern pid_t ncclInspectorPid;
 // Foreign-PID descriptors may also carry a foreign profiler context, so these
 // skips cannot be safely attributed to a communicator. Access atomically.

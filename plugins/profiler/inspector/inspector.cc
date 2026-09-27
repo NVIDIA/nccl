@@ -71,6 +71,8 @@ bool enableNcclInspectorP2p = true;
 // Global flag to control ProxyOp/ProxyStep tracking
 bool enableNcclInspectorProxy = false;
 bool enableNcclInspectorProxyStepDump = true;
+bool enableNcclInspectorProxyEventTraceSnDump = false;
+bool enableNcclInspectorProxyNested = true;
 pid_t ncclInspectorPid = 0;
 uint64_t ncclInspectorProxyPxnSkipped = 0;
 static bool outputBackendInitialized = false;
@@ -873,7 +875,9 @@ static void showInspectorEnvVars() {
     {"NCCL_INSPECTOR_ENABLE", getenv("NCCL_INSPECTOR_ENABLE"), "0", "Enable/disable inspector plugin"},
     {"NCCL_INSPECTOR_ENABLE_P2P", getenv("NCCL_INSPECTOR_ENABLE_P2P"), "1", "Enable/disable P2P tracking"},
     {"NCCL_INSPECTOR_ENABLE_PROXY", getenv("NCCL_INSPECTOR_ENABLE_PROXY"), "0", "Enable/disable ProxyOp/ProxyStep tracking"},
+    {"NCCL_INSPECTOR_PROXY_OUTPUT_MODE", getenv("NCCL_INSPECTOR_PROXY_OUTPUT_MODE"), "nested", "Proxy JSON layout: nested segments or flat Step records"},
     {"NCCL_INSPECTOR_DUMP_PROXY_STEPS", getenv("NCCL_INSPECTOR_DUMP_PROXY_STEPS"), "1", "Emit completed ProxyStep records; callbacks always maintain ProxyOp statistics"},
+    {"NCCL_INSPECTOR_DUMP_PROXY_EVENT_TRACE_SN", getenv("NCCL_INSPECTOR_DUMP_PROXY_EVENT_TRACE_SN"), "0", "Emit Proxy event sequence numbers for debugging; internal tracking stays enabled"},
     {"NCCL_INSPECTOR_DUMP_THREAD_ENABLE", getenv("NCCL_INSPECTOR_DUMP_THREAD_ENABLE"), "1", "Enable/disable dump thread"},
     {"NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS", getenv("NCCL_INSPECTOR_DUMP_THREAD_INTERVAL_MICROSECONDS"), "-1", "Dump interval in microseconds (-1 = dump thread disabled/no output, 0 = continuous, >0 = periodic)"},
     {"NCCL_INSPECTOR_DUMP_DIR", getenv("NCCL_INSPECTOR_DUMP_DIR"), "(auto-generated)", "Output directory for inspector logs"},
@@ -1027,6 +1031,15 @@ static void initProxyTrackingFromEnv() {
   enableNcclInspectorProxy = requested;
   str = getenv("NCCL_INSPECTOR_DUMP_PROXY_STEPS");
   enableNcclInspectorProxyStepDump = str ? atoi(str) != 0 : true;
+  str = getenv("NCCL_INSPECTOR_DUMP_PROXY_EVENT_TRACE_SN");
+  enableNcclInspectorProxyEventTraceSnDump = str ? atoi(str) != 0 : false;
+  str = getenv("NCCL_INSPECTOR_PROXY_OUTPUT_MODE");
+  enableNcclInspectorProxyNested = true;
+  if (str && strcmp(str, "flat") == 0) {
+    enableNcclInspectorProxyNested = false;
+  } else if (str && strcmp(str, "nested") != 0) {
+    WARN_INSPECTOR("NCCL Inspector: unknown Proxy output mode '%s'; using nested", str);
+  }
 
   if (requested
       && (inspectorOtelIsEnabled() || enableNcclInspectorPromDump)) {
@@ -1370,6 +1383,7 @@ static inspectorResult_t inspectorFillCommInfo(struct inspectorCommInfo* commInf
   commInfo->nextProxyRecordSn = 0;
   commInfo->proxyOpsDropped = 0;
   commInfo->proxyOpsDroppedReported = 0;
+  commInfo->proxyStepsOverwrittenReported = 0;
   commInfo->proxyPxnSkippedReported = 0;
   INS_CHK(inspectorRingInit(&commInfo->completedCollRing, ncclInspectorDumpCollRingSize,
                             sizeof(struct inspectorCompletedOpInfo)));
@@ -1378,7 +1392,7 @@ static inspectorResult_t inspectorFillCommInfo(struct inspectorCommInfo* commInf
   INS_CHK(inspectorRingInit(&commInfo->completedProxyRing,
                             enableNcclInspectorProxy
                               ? ncclInspectorDumpProxyRingSize : 0,
-                            sizeof(struct inspectorCompletedProxyRecord)));
+                            sizeof(struct inspectorCompletedProxyRecord), inspectorProxyRecordStepCount));
 
   // Capture current CUDA device ID and convert to UUID string
   int cudaDeviceId = -1;

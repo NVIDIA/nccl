@@ -318,6 +318,17 @@ static bool inspectorPluginProxyOpGetParentInfo(ncclProfilerEventDescr_t* eDescr
   return false;
 }
 
+static void inspectorPluginWarnProxyOverflow(const struct inspectorCommInfo* commInfo,
+                                              bool overflowed) {
+  static bool warned = false;
+  if (overflowed && !__atomic_exchange_n(&warned, true, __ATOMIC_RELAXED)) {
+    WARN_INSPECTOR("NCCL Inspector: Proxy ring overflowed on comm %s (size %u); "
+                   "increase NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE or disable Step output with "
+                   "NCCL_INSPECTOR_DUMP_PROXY_STEPS=0. Drops are counted in dump_stats.",
+                   commInfo->commHashStr, commInfo->completedProxyRing.size);
+  }
+}
+
 static void inspectorPluginUpdateCommProxyRecord(struct inspectorCommInfo* commInfo,
                                                  struct inspectorCompletedProxyRecord* completedProxy) {
   if (commInfo == nullptr || completedProxy == nullptr) return;
@@ -325,25 +336,19 @@ static void inspectorPluginUpdateCommProxyRecord(struct inspectorCommInfo* commI
   inspectorLockWr(&commInfo->guard);
   struct inspectorCompletedRing* ring = &commInfo->completedProxyRing;
   completedProxy->recordSn = ++commInfo->nextProxyRecordSn;
-
   uint64_t droppedBefore = ring->dropped;
   inspectorRingEnqueue(ring, completedProxy);
   bool overflowed = ring->dropped != droppedBefore;
   commInfo->dump_proxy = inspectorRingNonEmpty(ring);
   inspectorUnlockRWLock(&commInfo->guard);
-  static bool warned = false;
-  if (overflowed && !__atomic_exchange_n(&warned, true, __ATOMIC_RELAXED)) {
-    WARN_INSPECTOR("NCCL Inspector: Proxy ring overflowed on comm %s (size %u); "
-                   "increase NCCL_INSPECTOR_DUMP_PROXY_RING_SIZE or disable Step output with "
-                   "NCCL_INSPECTOR_DUMP_PROXY_STEPS=0. Drops are counted in dump_stats.",
-                   commInfo->commHashStr, ring->size);
-  }
+  inspectorPluginWarnProxyOverflow(commInfo, overflowed);
 }
 
 static void inspectorPluginUpdateProxyOpRecord(struct inspectorCompletedProxyRecord* completedProxy,
                                                const struct inspectorProxyOpInfo* proxyOpInfo) {
   memset(completedProxy, 0, sizeof(*completedProxy));
   completedProxy->recordType = NCCL_INSP_PROXY_RECORD_OP;
+  completedProxy->nested = enableNcclInspectorProxyNested;
   completedProxy->metadata = proxyOpInfo->metadata;
   completedProxy->proxyOp.nSteps = proxyOpInfo->nSteps;
   completedProxy->proxyOp.chunkSize = proxyOpInfo->chunkSize;
@@ -355,24 +360,90 @@ static void inspectorPluginUpdateProxyOpRecord(struct inspectorCompletedProxyRec
          sizeof(completedProxy->proxyOp.evntTrace));
 }
 
+// Publish Steps BEFORE their parent metadata under one comm guard. FIFO can
+// only evict the parent after all its Steps; the dumper drains the whole ring
+// under the same guard. This also holds when a batch exceeds ring capacity.
+// The caller owns the Op exclusively or holds its guard (lock order Op -> comm).
+static void inspectorPluginPublishProxyBatch(struct inspectorProxyOpInfo* proxyOpInfo,
+                                              struct inspectorCompletedProxyRecord* parent) {
+  auto* commInfo = proxyOpInfo->commInfo;
+  auto* ring = &commInfo->completedProxyRing;
+  inspectorLockWr(&commInfo->guard);
+  uint64_t droppedBefore = ring->dropped;
+  for (uint32_t i = 0; i < proxyOpInfo->nBufferedSteps; i++) {
+    struct inspectorCompletedProxyRecord step = {};
+    step.recordType = NCCL_INSP_PROXY_RECORD_STEP;
+    step.nested = true;
+    step.metadata = proxyOpInfo->metadata;
+    step.proxyStep = proxyOpInfo->bufferedSteps[i];
+    step.recordSn = ++commInfo->nextProxyRecordSn;
+    inspectorRingEnqueue(ring, &step);
+  }
+  parent->recordSn = ++commInfo->nextProxyRecordSn;
+  inspectorRingEnqueue(ring, parent);
+  bool overflowed = ring->dropped != droppedBefore;
+  commInfo->dump_proxy = inspectorRingNonEmpty(ring);
+  inspectorUnlockRWLock(&commInfo->guard);
+  inspectorPluginWarnProxyOverflow(commInfo, overflowed);
+  proxyOpInfo->nBufferedSteps = 0;
+}
+
+static void inspectorPluginFlushProxySegment(struct inspectorProxyOpInfo* proxyOpInfo) {
+  struct inspectorCompletedProxyRecord segment = {};
+  segment.recordType = NCCL_INSP_PROXY_RECORD_OP_SEGMENT;
+  segment.nested = true;
+  segment.metadata = proxyOpInfo->metadata;
+  inspectorPluginPublishProxyBatch(proxyOpInfo, &segment);
+}
+
+static void inspectorPluginUpdateProxyStepSnapshot(struct inspectorProxyStepSnapshot* snapshot,
+                                                    const struct inspectorProxyStepInfo* step) {
+  snapshot->proxyStepSn = step->proxyStepSn;
+  snapshot->step = step->step;
+  snapshot->transSizeBytes = step->transSizeBytes;
+  memcpy(snapshot->evntTrace, step->evntTrace, sizeof(snapshot->evntTrace));
+}
+
 static void inspectorPluginUpdateProxyStepRecord(struct inspectorCompletedProxyRecord* completedProxy,
                                                  const struct inspectorProxyStepInfo* proxyStepInfo,
                                                  const struct inspectorProxyOpInfo* proxyOpInfo) {
   memset(completedProxy, 0, sizeof(*completedProxy));
   completedProxy->recordType = NCCL_INSP_PROXY_RECORD_STEP;
   completedProxy->metadata = proxyOpInfo->metadata;
-  completedProxy->proxyStep.proxyStepSn = proxyStepInfo->proxyStepSn;
-  completedProxy->proxyStep.step = proxyStepInfo->step;
-  completedProxy->proxyStep.transSizeBytes = proxyStepInfo->transSizeBytes;
-  memcpy(completedProxy->proxyStep.evntTrace, proxyStepInfo->evntTrace,
-         sizeof(completedProxy->proxyStep.evntTrace));
+  inspectorPluginUpdateProxyStepSnapshot(&completedProxy->proxyStep, proxyStepInfo);
+}
+
+// Grow 1 -> 2 -> 4 -> 8. On growth failure, publish the existing snapshots and
+// reuse the old allocation. An initial failure loses only the current detail,
+// not its byte/completion accounting or the Op's lifetime reference.
+static void inspectorPluginBufferProxyStep(struct inspectorProxyOpInfo* op,
+                                            const struct inspectorProxyStepInfo* step) {
+  if (op->nBufferedSteps == op->bufferedStepCapacity) {
+    uint32_t capacity = op->bufferedStepCapacity ? op->bufferedStepCapacity * 2 : 1;
+    auto* grown = static_cast<inspectorProxyStepSnapshot*>(
+      realloc(op->bufferedSteps, capacity * sizeof(inspectorProxyStepSnapshot)));
+    if (grown != nullptr) {
+      op->bufferedSteps = grown;
+      op->bufferedStepCapacity = capacity;
+    } else if (op->nBufferedSteps != 0) {
+      inspectorPluginFlushProxySegment(op);
+    } else {
+      op->nStepsDropped++;
+      return;
+    }
+  }
+  inspectorPluginUpdateProxyStepSnapshot(&op->bufferedSteps[op->nBufferedSteps++], step);
 }
 
 static void inspectorPluginProxyOpFinalize(struct inspectorProxyOpInfo* proxyOpInfo,
                                            struct inspectorCompletedProxyRecord* completedProxy) {
   // Only the caller that transitions refCount to zero may finalize. This
   // function consumes no reference of its own.
-  inspectorPluginUpdateCommProxyRecord(proxyOpInfo->commInfo, completedProxy);
+  if (enableNcclInspectorProxyNested) {
+    inspectorPluginPublishProxyBatch(proxyOpInfo, completedProxy);
+  } else {
+    inspectorPluginUpdateCommProxyRecord(proxyOpInfo->commInfo, completedProxy);
+  }
   inspectorPluginProxyOpInfoCleanup(proxyOpInfo);
 }
 
@@ -417,6 +488,18 @@ static void inspectorPluginProxyOpInfoInit(struct inspectorProxyOpInfo** proxyOp
     return;
   }
   inspectorPluginProxyOpFillInfo(info, &parent, eDescr, proxyOpSn);
+  if (enableNcclInspectorProxyNested) {
+    struct inspectorCompletedProxyRecord started = {};
+    started.recordType = NCCL_INSP_PROXY_RECORD_OP_START;
+    started.nested = true;
+    started.metadata = info->metadata;
+    started.proxyOp.nSteps = info->nSteps;
+    started.proxyOp.chunkSize = info->chunkSize;
+    started.proxyOp.evntTrace[NCCL_INSP_EVT_TRK_PROXY_OP_START]
+      = info->evntTrace[NCCL_INSP_EVT_TRK_PROXY_OP_START];
+    // Publish before returning the handle to NCCL: no Step can precede this.
+    inspectorPluginUpdateCommProxyRecord(info->commInfo, &started);
+  }
   *proxyOpInfo = info;
 }
 
@@ -835,7 +918,11 @@ static ncclResult_t inspectorPluginStopEventProxyStep(struct inspectorProxyStepI
     proxyOpInfo->transSizeBytes += proxyStepInfo->transSizeBytes;
   }
   if (enableNcclInspectorProxyStepDump) {
-    inspectorPluginUpdateProxyStepRecord(&completedStep, proxyStepInfo, proxyOpInfo);
+    if (enableNcclInspectorProxyNested) {
+      inspectorPluginBufferProxyStep(proxyOpInfo, proxyStepInfo);
+    } else {
+      inspectorPluginUpdateProxyStepRecord(&completedStep, proxyStepInfo, proxyOpInfo);
+    }
   }
   commInfo = proxyOpInfo->commInfo;
   if (inspectorPluginProxyOpInfoDeRef(proxyOpInfo) == inspectorReturn
@@ -843,11 +930,15 @@ static ncclResult_t inspectorPluginStopEventProxyStep(struct inspectorProxyStepI
     inspectorPluginUpdateProxyOpRecord(&completedOp, proxyOpInfo);
     shouldFinalizeOp = true;
   }
+  if (enableNcclInspectorProxyNested && !shouldFinalizeOp
+      && proxyOpInfo->nBufferedSteps == NCCL_INSP_PROXY_SEGMENT_STEPS) {
+    inspectorPluginFlushProxySegment(proxyOpInfo);
+  }
   inspectorUnlockRWLock(&proxyOpInfo->guard);
 
   // Suppressing Step output must not suppress its byte/count aggregation or
   // parent reference release above. It also must not consume a ring sequence.
-  if (enableNcclInspectorProxyStepDump) {
+  if (enableNcclInspectorProxyStepDump && !enableNcclInspectorProxyNested) {
     inspectorPluginUpdateCommProxyRecord(commInfo, &completedStep);
   }
   inspectorEventPoolReleaseProxyStep(proxyStepInfo);

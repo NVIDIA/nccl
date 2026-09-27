@@ -507,6 +507,12 @@ static void cleanupPartialPoolInit() {
   }
   if (g_eventPool.proxyOpChunkList != nullptr) {
     pthread_mutex_destroy(&g_eventPool.proxyOpPoolLock);
+    // Teardown is quiescent. Release buffers of unfinished Ops as well as
+    // normal recycled entries (whose pointers have already been cleared).
+    for (auto* chunk = g_eventPool.proxyOpChunkList; chunk; chunk = chunk->next) {
+      auto* entries = static_cast<inspectorProxyOpInfoPoolEntry*>(chunk->entries);
+      for (uint32_t i = 0; i < chunk->chunkSize; i++) free(entries[i].obj.bufferedSteps);
+    }
     freeChunkList(g_eventPool.proxyOpChunkList);
     g_eventPool.proxyOpChunkList = nullptr;
     g_eventPool.proxyOpFreeList = nullptr;
@@ -956,6 +962,9 @@ void inspectorEventPoolReleaseProxyOp(struct inspectorProxyOpInfo* proxyOpInfo) 
     return;
   }
 
+  free(proxyOpInfo->bufferedSteps);
+  proxyOpInfo->bufferedSteps = nullptr;
+  proxyOpInfo->nBufferedSteps = proxyOpInfo->bufferedStepCapacity = 0;
   entry->inUse = false;
   entry->next = g_eventPool.proxyOpFreeList;
   g_eventPool.proxyOpFreeList = entry;

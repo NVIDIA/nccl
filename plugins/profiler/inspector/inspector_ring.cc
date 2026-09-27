@@ -23,9 +23,13 @@
  */
 inspectorResult_t inspectorRingInit(struct inspectorCompletedRing* ring,
                                     uint32_t size,
-                                    size_t entrySize) {
+                                    size_t entrySize,
+                                    uint64_t (*countItems)(const void*)) {
   if (!ring) return inspectorMemoryError;
   ring->entrySize = entrySize;
+  ring->countItems = countItems;
+  ring->droppedItems = 0;
+  ring->enqueued = ring->dropped = ring->droppedReported = 0;
   if (size == 0) {
     ring->entries = nullptr;
     ring->size = ring->head = ring->tail = 0;
@@ -70,6 +74,8 @@ void inspectorRingFinalize(struct inspectorCompletedRing* ring) {
   ring->enqueued = 0;
   ring->dropped = 0;
   ring->droppedReported = 0;
+  ring->droppedItems = 0;
+  ring->countItems = nullptr;
 }
 
 /*
@@ -97,6 +103,7 @@ inspectorResult_t inspectorRingEnqueue(struct inspectorCompletedRing* ring,
 
   uint32_t bufSize = ring->size + 1;
   if ((ring->tail + 1) % bufSize == ring->head) {
+    if (ring->countItems) ring->droppedItems += ring->countItems(ringSlot(ring, ring->head));
     // Ring is full: advance head to overwrite the oldest entry
     ring->head = (ring->head + 1) % bufSize;
     ring->dropped++;

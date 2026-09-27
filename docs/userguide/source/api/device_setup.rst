@@ -149,6 +149,17 @@ ncclDevCommRequirements
       do not use GIN VA signals (such as :cpp:struct:`ncclGin_WeakVASignalInc` and :cpp:struct:`ncclGin_StrongVASignalAdd`).
       Default is true. Available since NCCL 2.30.5.
 
+   .. c:member:: ncclGinType_t ginType
+
+      Requests that the device communicator be connected using a specific GIN backend (see
+      :c:enum:`ncclGinType_t`).
+      :c:func:`ncclDevCommCreate` fails if set to a specific backend that is not supported.
+      The default value is :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`,
+      which automatically selects a backend that is supported by the communicator.
+
+      Multiple GIN backends can be used at once by creating two device communicators, each with a different ginType.
+      See :ref:`deviceapi_gin_multi_backend` for a worked example. Available since NCCL 2.31.
+
    .. c:member:: int cftCaps
 
       Bitmask of CFT capabilities requested for the device communicator (see :ref:`device_api_cft`).
@@ -205,8 +216,11 @@ ncclCommProperties_t
 
    .. c:member:: ncclGinType_t ginType
 
-      The GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
+      **Deprecated.** The GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
       :c:type:`ncclDevComm` cannot be created with GIN connection type :c:enumerator:`NCCL_GIN_CONNECTION_FULL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_FULL>`.
+      Available since NCCL 2.29, deprecated since NCCL 2.31.
+      This field only reports a single GIN type and predates multi-backend GIN support. New code should use
+      :c:member:`ginConnectionType` together with :c:member:`ginSupport` instead.
 
    .. c:member:: int nLsaTeams
 
@@ -214,9 +228,11 @@ ncclCommProperties_t
 
    .. c:member:: ncclGinType_t railedGinType
 
-      The railed GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
+      **Deprecated.** The railed GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
       :c:type:`ncclDevComm` cannot be created with GIN connection type :c:enumerator:`NCCL_GIN_CONNECTION_RAIL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_RAIL>`.
-      Available since NCCL 2.29.7.
+      Available since NCCL 2.29.7, deprecated since NCCL 2.31.
+      This field only reports a single GIN type and predates multi-backend GIN support. New code should use
+      :c:member:`ginConnectionType` together with :c:member:`ginSupport` instead.
 
    .. c:member:: uint64_t commHash
 
@@ -229,6 +245,24 @@ ncclCommProperties_t
       that strides spanning rail boundaries are not possible. ``ginMinStride`` is ``INT_MAX`` if GIN connectivity
       does not follow a uniform stride pattern, in which case :c:enumerator:`NCCL_GIN_CONNECTION_CUSTOM_STRIDE <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_CUSTOM_STRIDE>` cannot
       be used. Available since NCCL 2.31.
+
+   .. c:member:: ncclGinConnectionType_t ginConnectionType
+
+      The type of GIN connection established across the communicator (see :c:enum:`ncclGinConnectionType_t`).
+      This reflects the connectivity actually negotiated for the communicator (e.g.,
+      :c:enumerator:`NCCL_GIN_CONNECTION_NONE <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_NONE>` if GIN is unavailable,
+      :c:enumerator:`NCCL_GIN_CONNECTION_FULL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_FULL>`, or
+      :c:enumerator:`NCCL_GIN_CONNECTION_RAIL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_RAIL>`). Use this field together with
+      :c:member:`ginSupport` to determine which GIN backends are available before setting
+      :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>` on :c:type:`ncclDevCommRequirements_t`.
+      Available since NCCL 2.31.
+
+   .. c:member:: bool ginSupport[64]
+
+      Determines which GIN backends are supported.
+      If ``ginSupport[gin_type]`` is ``true``, then ``gin_type`` is supported by every rank of the communicator.
+      The value ``gin_type`` is one of the values from :c:type:`ncclGinType_t`.
+      See :ref:`deviceapi_gin_multi_backend`. Available since NCCL 2.31.
 
 
 ncclGinType_t

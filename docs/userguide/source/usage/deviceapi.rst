@@ -28,7 +28,7 @@ Requirements
 
 The device API relies on symmetric memory (see :ref:`window_reg`), which in turn depends on GPU virtual memory
 management (see :ref:`env_NCCL_CUMEM_ENABLE`) and optionally -- for multimem support -- on NVLink SHARP (see
-:ref:`env_NCCL_NVLS_ENABLE`). GIN supports muiltiple networking backends, each with their own set of requirements.
+:ref:`env_NCCL_NVLS_ENABLE`). GIN supports multiple networking backends, each with their own set of requirements.
 
 GIN has the following requirements:
 
@@ -418,6 +418,71 @@ commit outstanding outgoing :c:func:`put` operations. While :c:func:`flush` does
 side effect, it does ensure the local send buffer is safe to reuse from this kernel's perspective. After :c:func:`waitSignal`
 and :c:func:`flush`, :c:func:`bar.sync` runs again. The barrier is added so that all ranks complete the collective before any
 rank exits the kernel.
+
+.. _deviceapi_gin_multi_backend:
+
+Multiple GIN Backends
+^^^^^^^^^^^^^^^^^^^^^
+
+A single communicator can load more than one GIN backend at a time (for example, both
+:c:enumerator:`NCCL_GIN_TYPE_PROXY <ncclGinType_t.NCCL_GIN_TYPE_PROXY>` and
+:c:enumerator:`NCCL_GIN_TYPE_GDAKI <ncclGinType_t.NCCL_GIN_TYPE_GDAKI>`).
+Each :c:type:`ncclDevComm` only supports a single backend. To use several backends concurrently,
+create one device communicator per backend and drive each with its own :c:type:`ncclGin` object.
+
+Call :c:func:`ncclCommQueryProperties` and inspect :c:member:`ncclCommProperties_t.ginSupport` to discover which
+backends are available before requesting one:
+
+.. code-block:: C
+
+  ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+  NCCLCHECK(ncclCommQueryProperties(comm, &props));
+
+  bool hasProxy = props.ginSupport[NCCL_GIN_TYPE_PROXY];
+  bool hasGdaki = props.ginSupport[NCCL_GIN_TYPE_GDAKI];
+
+Request a specific backend for a device communicator by setting :c:member:`ncclDevCommRequirements.ginType`; leave
+it at the default :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>` to accept whichever backend
+the communicator picks. :c:func:`ncclDevCommCreate` fails if the requested backend is not supported.
+
+.. code-block:: C
+
+  ncclDevCommRequirements reqsProxy = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+  reqsProxy.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+  reqsProxy.ginSignalCount = 1;
+  reqsProxy.ginType = NCCL_GIN_TYPE_PROXY;
+  NCCLCHECK(ncclDevCommCreate(comm, &reqsProxy, &devCommProxy));
+
+  ncclDevCommRequirements reqsGdaki = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+  reqsGdaki.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+  reqsGdaki.ginSignalCount = 1;
+  reqsGdaki.ginType = NCCL_GIN_TYPE_GDAKI;
+  NCCLCHECK(ncclDevCommCreate(comm, &reqsGdaki, &devCommGdaki));
+
+On the device, construct one :c:type:`ncclGin` per device communicator. Signal and counter indices are local
+to each device communicator, so ``signal 0`` on ``devCommProxy`` is independent from ``signal 0`` on
+``devCommGdaki``:
+
+.. code-block:: C
+
+  __global__ void multiBackendPutKernel(ncclDevComm devCommProxy, ncclDevComm devCommGdaki,
+                                        ncclWindow_t window, size_t offsetProxy, size_t offsetGdaki) {
+    ncclTeam world = ncclTeamWorld(devCommProxy);
+    ncclGin ginProxy { devCommProxy, 0 };
+    ncclGin ginGdaki { devCommGdaki, 0 };
+    ncclGinSignal_t sig = 0; // signal 0 in each devComm's own signal table
+
+    if (world.rank == 0) {
+      ginProxy.put(world, 1, window, offsetProxy, window, offsetProxy, sizeof(uint64_t),
+                   ncclGin_WeakSignalInc{sig});
+      ginGdaki.put(world, 1, window, offsetGdaki, window, offsetGdaki, sizeof(uint64_t),
+                   ncclGin_WeakSignalInc{sig});
+    }
+    if (world.rank == 1) {
+      ginProxy.waitSignal(ncclCoopThread(), sig, 1);
+      ginGdaki.waitSignal(ncclCoopThread(), sig, 1);
+    }
+  }
 
 .. _deviceapi_gin_compat:
 

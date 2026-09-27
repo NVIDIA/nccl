@@ -92,7 +92,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
       }
       sendConnHead += 1;
     }
-    if (COMPILER_EXPECT(stepProf, 0) && tid < WARP_SIZE && wid < fan.nsend()) {
+    if (COMPILER_EXPECT(stepProf, 0) && tid < WARP_SIZE && wid < fan.nsend() &&
+        wid < NCCL_KERNEL_STEP_MAX_ARITY) {
       ncclShmem.groups[group].kernelStepWaitStartSend[wid] = waitStart;
     }
   }
@@ -336,7 +337,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
         const bool sampled = profilerKernelStepSample(stepProf, kernelStepSampleRate, sampleIndex);
         bool anyEligible = false;
         if (RECV && recvStepProf) {
-          for (int i = 0; i < fan.nrecv(); i++) {
+          for (int i = 0; i < fan.nrecv() && i < NCCL_KERNEL_STEP_MAX_ARITY; i++) {
             if (!recvSameHost[i] || !profilerKernelStepRankFits(recvPeerRank[i])) continue;
             anyEligible = true;
             ncclShmem.groups[group].kernelStepSeqRecv[0][i] = 0;
@@ -348,7 +349,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
           }
         }
         if (SEND) {
-          for (int i = 0; i < fan.nsend(); i++) {
+          for (int i = 0; i < fan.nsend() && i < NCCL_KERNEL_STEP_MAX_ARITY; i++) {
             uint64_t waitStart = ncclShmem.groups[group].kernelStepWaitStartSend[i];
             ncclShmem.groups[group].kernelStepWaitStartSend[i] = 0;
             if (!sendSameHost[i] || !profilerKernelStepRankFits(sendPeerRank[i])) continue;
@@ -371,14 +372,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
 
       if (COMPILER_EXPECT(stepProf, 0) && tid == 0) {
         if (RECV) {
-          for (int i = 0; i < fan.nrecv(); i++) {
+          for (int i = 0; i < fan.nrecv() && i < NCCL_KERNEL_STEP_MAX_ARITY; i++) {
             uint64_t seq = ncclShmem.groups[group].kernelStepSeqRecv[0][i];
             if (seq != 0)
               profilerKernelStepStop(true, seq, /*isSend=*/0, recvPeerRank[i], sliceStep, sliceBytes);
           }
         }
         if (SEND) {
-          for (int i = 0; i < fan.nsend(); i++) {
+          for (int i = 0; i < fan.nsend() && i < NCCL_KERNEL_STEP_MAX_ARITY; i++) {
             uint64_t seq = ncclShmem.groups[group].kernelStepSeqSend[0][i];
             if (seq != 0)
               profilerKernelStepStop(true, seq, /*isSend=*/1, sendPeerRank[i], sliceStep, sliceBytes);

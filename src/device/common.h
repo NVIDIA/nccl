@@ -31,6 +31,22 @@ extern __device__ ncclDevFuncPtr_t const* ncclDevFuncTable;
 extern __device__ ncclDevFuncPtr_t const ncclDevFuncTable[];
 #endif
 
+// KernelStep instruments same-host P2P/SHM copies, whose fan-out is at most
+// NCCL_MAX_DIRECT_ARITY (+1 for CollNet direct). Sizing its slots by
+// NCCL_MAX_ARITY (32 NVLS peers on sm_90+) adds 20 KiB of static shared memory
+// across NCCL_MAX_GROUPS and overflows the 48 KiB limit, so the slots stop at
+// this cap and fan-out peers beyond it are not stamped. sm_12x has ~99 KiB of
+// shared memory per block, and 8 slots leave ~2.3 KiB too little for NCCL's
+// dynamic scratch; those parts have no NVLS or CollNet, so ring/tree fan-out
+// (at most NCCL_MAX_TREE_ARITY) fits in 4.
+#if __CUDA_ARCH__ >= 1200
+#define NCCL_KERNEL_STEP_MAX_ARITY 4
+#elif NCCL_MAX_ARITY < NCCL_MAX_DIRECT_ARITY + 1
+#define NCCL_KERNEL_STEP_MAX_ARITY NCCL_MAX_ARITY
+#else
+#define NCCL_KERNEL_STEP_MAX_ARITY (NCCL_MAX_DIRECT_ARITY + 1)
+#endif
+
 struct ncclShmemGroup {
   ncclConnInfo* recvConns[NCCL_MAX_ARITY];
   ncclConnInfo* sendConns[NCCL_MAX_ARITY];
@@ -47,11 +63,11 @@ struct ncclShmemGroup {
   // Simple prims double-buffer by slice parity: the Wait role of slice k+1
   // can publish before the Post role of slice k reads, which lost slice k's
   // completion. LL/LL128 record start and stop in one thread and use [0].
-  uint64_t kernelStepSeqSend[2][NCCL_MAX_ARITY];
-  uint64_t kernelStepSeqRecv[2][NCCL_MAX_ARITY];
+  uint64_t kernelStepSeqSend[2][NCCL_KERNEL_STEP_MAX_ARITY];
+  uint64_t kernelStepSeqRecv[2][NCCL_KERNEL_STEP_MAX_ARITY];
   // LL/LL128 send-credit wait begins are recorded by the peer-owning lanes
   // and consumed by thread 0 when it emits one KernelStep per fan-out peer.
-  uint64_t kernelStepWaitStartSend[NCCL_MAX_ARITY];
+  uint64_t kernelStepWaitStartSend[NCCL_KERNEL_STEP_MAX_ARITY];
 };
 
 struct ncclShmemData {

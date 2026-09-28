@@ -38,9 +38,14 @@ collective,size_bytes,algorithm,protocol,channels,nodes,ranks,pipeOps,regBuff,co
 - `pipeOps`: Number of pipeline operations (or `-1` for any)
 - `regBuff`: Registered buffer flag (`0`, `1`, or `-1` for any)
 
-**Optional metrics (must have at least one present):**
+**Performance metrics:**
 - `bandwidth_gbps`: Bandwidth in GB/s (higher is better)
 - `latency_us`: Latency in microseconds (lower is better)
+
+The metric selected with `--metric` (default: `latency_us`) must be present and
+contain a finite, non-negative measurement. Rows with missing, non-numeric,
+negative, or infinite measurements are skipped, as are `NaN` measurements.
+The unselected metric may be omitted.
 
 ### Examples
 

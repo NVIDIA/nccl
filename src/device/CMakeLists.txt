@@ -15,12 +15,21 @@ execute_process(
 string(STRIP "${symmetric_files}" symmetric_files)
 list(TRANSFORM symmetric_files PREPEND ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric/)
 
+execute_process(
+    COMMAND ${CMAKE_COMMAND} -E env NCCL_USE_CMAKE=1 ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/general "${ONLY_FUNCS}"
+    OUTPUT_VARIABLE general_files
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+string(STRIP "${general_files}" general_files)
+list(TRANSFORM general_files PREPEND ${CMAKE_CURRENT_BINARY_DIR}/gensrc/general/)
+
 # On Windows, exclude GIN device sources (GIN backend implementation is Linux-only; would cause nvlink undefined refs).
 set(device_files ${files})
-set(device_symmetric_files ${symmetric_files})
+set(device_symk_files ${symmetric_files})
+set(device_genk_files ${general_files})
 if(NCCL_OS_WINDOWS)
   list(FILTER device_files EXCLUDE REGEX "gin")
-  list(FILTER device_symmetric_files EXCLUDE REGEX "gin")
+  list(FILTER device_symk_files EXCLUDE REGEX "gin")
 endif()
 
 # Create custom commands to generate source files with proper dependencies
@@ -40,14 +49,23 @@ add_custom_command(
     COMMENT "Generating symmetric device source files"
 )
 
+add_custom_command(
+    OUTPUT  ${general_files}
+    COMMAND ${CMAKE_COMMAND} -E env ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/general "${ONLY_FUNCS}"
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating general device source files"
+)
+
 # On Linux, ncclGin_BackendMask<...> is provided by implicit instantiation in common.cu (no -G).
-# On Windows, GIN device code is excluded (device_files / device_symmetric_files filtered above).
+# On Windows, GIN device code is excluded from the source lists above.
 
 # On Windows use STATIC so CUDA device linking runs (OBJECT libs don't support it); on Linux use OBJECT.
 if(NCCL_OS_WINDOWS)
     add_library(nccl_device STATIC
                 ${device_files}
-                ${device_symmetric_files}
+                ${device_symk_files}
+                ${device_genk_files}
                 ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
                 ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
     )
@@ -60,7 +78,8 @@ if(NCCL_OS_WINDOWS)
 else()
     add_library(nccl_device OBJECT
                 ${files}
-                ${symmetric_files}
+                ${device_symk_files}
+                ${device_genk_files}
                 ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
                 ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
     )
@@ -71,7 +90,7 @@ else()
 endif()
 
 
-# On Linux, define NCCL_OS_LINUX so nccl_device.h includes gin__funcs.h (required for ncclGin_BackendMask<...> in common.cu and symmetric GIN kernels)
+# On Linux, define NCCL_OS_LINUX so nccl_device.h includes gin__funcs.h for common.cu and device GIN kernels.
 if(NCCL_OS_LINUX)
     target_compile_definitions(nccl_device PRIVATE NCCL_OS_LINUX)
 endif()

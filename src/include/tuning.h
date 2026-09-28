@@ -23,6 +23,7 @@
   ((1ULL << NCCL_TUNING_CE_METHOD_ID_OFFSET) - 1ULL - NCCL_TUNING_MASK_GENERAL_KERNELS)
 #define NCCL_TUNING_MASK_CE ((1ULL << NCCL_TUNING_COUNT) - (1ULL << NCCL_TUNING_CE_METHOD_ID_OFFSET))
 #define NCCL_TUNING_MASK_ALL ((1ULL << NCCL_TUNING_COUNT) - 1ULL)
+static_assert(NCCL_TUNING_COUNT < 64, "Tuning masks cannot represent every tuning entry");
 
 #define NCCL_TUNING_ENTRY_INIT_VALUE -1
 #define NCCL_TUNING_RESULT_INIT \
@@ -37,6 +38,7 @@
    /*.nChannels =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
    /*.maxChannels =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
    /*.nWarps =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
+   /*.minChunkPayloadBytes =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
    /*.forced =*/0}
 
 struct ncclTuningResult_t {
@@ -51,6 +53,7 @@ struct ncclTuningResult_t {
   int nChannels;
   int maxChannels;
   int nWarps;
+  int minChunkPayloadBytes;
   int forced;
 };
 

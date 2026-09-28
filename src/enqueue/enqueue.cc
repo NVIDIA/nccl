@@ -62,22 +62,39 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
   int driverVersion;
   NCCLCHECK(ncclCudaDriverVersion(&driverVersion));
 
-  for (int sym = 0; sym <= 1; sym++) {
-    int kcount = sym == 0 ? ncclDevKernelCount : ncclSymkKernelCount;
-    void** kptrs = sym == 0 ? ncclDevKernelList : ncclSymkKernelList;
-    // Symmetric kernels have a parallel list of instrumented variants (indexed
-    // identically). They share requirements/smem, so configure both here.
-    void** kptrsProfile = sym == 0 ? nullptr : ncclSymkKernelListProfile;
-    int* krequires = sym == 0 ? ncclDevKernelRequirements : ncclSymkKernelRequirements;
+  enum {
+    kernelSetDev,
+    kernelSetSymk,
+    kernelSetGenk,
+    kernelSetCount
+  };
+  int const kcounts[kernelSetCount] = {ncclDevKernelCount, ncclSymkKernelCount, ncclGenkKernelCount};
+  void** const kptrsList[kernelSetCount] = {ncclDevKernelList, ncclSymkKernelList, ncclGenkKernelList};
+  // Symk and Genk each have a parallel list of instrumented variants. The
+  // default and instrumented variants share requirements/smem.
+  void** const kptrsProfileList[kernelSetCount] = {nullptr, ncclSymkKernelListProfile, ncclGenkKernelListProfile};
+  int* const krequiresList[kernelSetCount] = {ncclDevKernelRequirements, ncclSymkKernelRequirements,
+                                              ncclGenkKernelRequirements};
+  int* const kmaxDynamicSmemList[kernelSetCount] = {nullptr, ncclSymkKernelMaxDynamicSmem,
+                                                    ncclGenkKernelMaxDynamicSmem};
+  const char* const kernelSetNames[kernelSetCount] = {"", "symmetric ", "general "};
+
+  for (int set = 0; set < kernelSetCount; set++) {
+    int kcount = kcounts[set];
+    void** kptrs = kptrsList[set];
+    void** kptrsProfile = kptrsProfileList[set];
+    int* krequires = krequiresList[set];
+    int* kmaxDynamicSmem = kmaxDynamicSmemList[set];
+    const char* kernelSetName = kernelSetNames[set];
     for (int k = 0; k < kcount; k++) {
       if (kptrs[k] != nullptr && driverVersion < krequires[k]) {
-        INFO(NCCL_INIT, "Skipping %skernel %d which requires driver %d", sym ? "symmetric " : "", k, krequires[k]);
+        INFO(NCCL_INIT, "Skipping %skernel %d which requires driver %d", kernelSetName, k, krequires[k]);
         kptrs[k] = nullptr;
         if (kptrsProfile != nullptr) kptrsProfile[k] = nullptr;
       }
 
-      // Configure the default and, for sym kernels, the instrumented variant. Smem is
-      // recorded once from the default (v==0) and shared (identical footprints).
+      // Configure the default and, for Symk/Genk, the instrumented variant. Smem
+      // is recorded once from the default (v==0) and shared (identical footprints).
       void* variants[2] = {kptrs[k], kptrsProfile != nullptr ? kptrsProfile[k] : nullptr};
       int nVariants = kptrsProfile != nullptr ? 2 : 1;
       for (int v = 0; v < nVariants; v++) {
@@ -97,8 +114,8 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
         }
         {
           int dynSmem = maxSharedMem - attr.sharedSizeBytes;
-          if (sym) {
-            if (v == 0) ncclSymkKernelMaxDynamicSmem[k] = dynSmem;
+          if (set != kernelSetDev) {
+            if (v == 0) kmaxDynamicSmem[k] = dynSmem;
           } else {
             maxDynamicSmem = std::min(maxDynamicSmem, dynSmem);
           }

@@ -231,7 +231,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
     NCCLCHECKGOTO(ncclTuningSelectBestTuning(&tunings, &bestTuning), ret, exit);
   }
   if (bestTuning.algo != NCCL_ALGO_UNDEF && bestTuning.proto != NCCL_PROTO_UNDEF) {
-    NCCLCHECKGOTO(ncclTuningGetChannels(input, &bestTuning), ret, exit);
+    NCCLCHECKGOTO(ncclTuningGetChannels(input, &bestTuning, /*forceMaxTreeThreads=*/true), ret, exit);
   }
   // NCCL_CTA_POLICY_EFFICIENCY requires user (non-symmetric) buffer registration (currently unsupported with MNNVL).
   // Run after GetChannels so bestTuning.nChannels is valid. Skip when a tuner plugin owns selection
@@ -258,7 +258,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
   if ((bestTuning.symKernelId != ncclSymkKernelId_Count ||
        (input->tuningMask & NCCL_TUNING_MASK_SYM_KERNELS && bestTuning.symKernelId == ncclSymkKernelId_Count)) &&
       bestTuning.algo == NCCL_ALGO_UNDEF && bestTuning.proto == NCCL_PROTO_UNDEF) {
-    bool isLLKernel = (1 << bestTuning.symKernelId) & ncclSymkLLKernelMask();
+    bool isLLKernel = (1ull << bestTuning.symKernelId) & (ncclSymkLLKernelMask() & ~ncclGenkKernelMask());
     bool isOneThreadMultiGpus = input->comm->intraRanks > 1 && !ncclParamSingleProcMemRegEnable();
     bool needFallback = bestTuning.symKernelId != ncclSymkKernelId_Count ? false : true;
 

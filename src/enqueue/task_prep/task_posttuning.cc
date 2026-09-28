@@ -525,6 +525,7 @@ static ncclResult_t postTuneSymTasks(
     task->devFuncId = (uint32_t)tInfo->tuningOut.symKernelId;
     task->nMaxChannels = tInfo->tuningOut.nChannels;
     task->nWarps = tInfo->tuningOut.nWarps;
+    task->minChunkPayloadBytes = tInfo->tuningOut.minChunkPayloadBytes;
     task->isSymLast = 1;
     convertSymTaskDevOp(comm, task);
 

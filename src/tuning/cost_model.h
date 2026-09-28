@@ -79,6 +79,9 @@ ncclResult_t ncclTuningPatModelSim(struct ncclTuningInput_t* const inputs, struc
 ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
                                     struct ncclTuningModelState* internal);
 
+// General device-kernel model
+ncclResult_t ncclTuningGenkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning);
+
 // CE (Copy Engine) collective model
 ncclResult_t ncclTuningCeModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
                                   struct ncclTuningModelState* internal);

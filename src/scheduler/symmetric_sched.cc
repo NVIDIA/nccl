@@ -77,6 +77,17 @@ static ncclResult_t symBatchAlignment(struct ncclTaskColl* headTask, bool* relat
   return ncclSuccess;
 }
 
+static size_t symkMaxDevWorkArgsSize(int nChannels, int nWorks, bool profiler) {
+  return std::max(ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(nChannels, nWorks, profiler),
+                  ncclSymkDevWorkArgsSize<ncclGenkDevWorkArgs>(nChannels, nWorks, profiler));
+}
+
+static void setMinChunkPayloadBytes(struct ncclSymkDevWorkArgs* /*args*/, int /*minChunkPayloadBytes*/) {}
+
+static void setMinChunkPayloadBytes(struct ncclGenkDevWorkArgs* args, int minChunkPayloadBytes) {
+  args->minChunkPayloadBytes = minChunkPayloadBytes;
+}
+
 ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task,
                                        struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
                                        struct ncclTaskColl** remainTasksHead) {
@@ -127,12 +138,12 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     task = next;
   }
   if (remainTasksTail) remainTasksTail->next = nullptr;
-  if (!foundSymm) goto exit;
+  if (!foundSymm) return ret;
 
   // make sure kernel args space can hold at least a single work
-  if (comm->workArgsBytes < ncclSymkDevWorkArgs::calcArgsSize(MAXCHANNELS, 1, ncclProfilerPluginLoaded())) {
-    WARN("Symmetric kernel args size %u is smaller than minimum size %zu", comm->workArgsBytes,
-         ncclSymkDevWorkArgs::calcArgsSize(MAXCHANNELS, 1, ncclProfilerPluginLoaded()));
+  size_t const minArgsSize = symkMaxDevWorkArgsSize(MAXCHANNELS, 1, ncclProfilerPluginLoaded());
+  if (comm->workArgsBytes < minArgsSize) {
+    WARN("Symmetric kernel args size %u is smaller than minimum size %zu", comm->workArgsBytes, minArgsSize);
     return ncclInternalError;
   }
 
@@ -161,8 +172,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         // its own batch). This realizes the per-call caps exactly and never ignores a
         // non-head configured task.
         bool configBoundary = task->aggIsolate || (task->next != nullptr && task->next->aggIsolate);
-        if (ncclSymkDevWorkArgs::calcArgsSize(MAXCHANNELS, nWorks + 1, ncclProfilerPluginLoaded()) >
-              comm->workArgsBytes ||
+        if (symkMaxDevWorkArgsSize(MAXCHANNELS, nWorks + 1, ncclProfilerPluginLoaded()) > comm->workArgsBytes ||
             task->next == nullptr || configBoundary) {
           task->isSymLast = 1;
           break;
@@ -244,8 +254,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         continue;
       }
 
-      // initialize symmetric objects for LL kernels
-      if (((1 << kernelId) & ncclSymkLLKernelMask()) && headTask->winRegType == ncclSymSendNonregRecvNonreg) {
+      // Specialized LL kernels need their communicator even without a registered user window.
+      ncclSymkKernelMask const symkLLKernelMask = ncclSymkLLKernelMask() & ~ncclGenkKernelMask();
+      if (((1ull << kernelId) & symkLLKernelMask) && headTask->winRegType == ncclSymSendNonregRecvNonreg) {
         NCCLCHECK(ncclSymkInitOnce(comm));
       }
 
@@ -256,6 +267,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         task->devFuncId = (uint32_t)kernelId;
         task->nMaxChannels = nChannels;
         task->nWarps = nWarps;
+        task->minChunkPayloadBytes = bestTuning.minChunkPayloadBytes;
         convertSymTaskDevOp(comm, task);
         ncclIntruQueueEnqueue(&planner->collSymTaskQueue, task);
         task = next;
@@ -264,13 +276,13 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     }
   }
 
-exit:
   return ret;
 }
 
-ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
-                                        struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
-                                        struct ncclKernelPlan* plan) {
+template <bool Genk, typename Args, typename KernelComm>
+static ncclResult_t ncclSymmetricTaskSchedulerImpl(
+  struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
+  struct ncclKernelPlan* plan, KernelComm const& kcomm) {
   struct ncclTaskColl* headTask = ncclIntruQueueHead(symTaskQueue);
   int devFuncId = headTask->devFuncId;
   struct ncclTaskColl* task = NULL;
@@ -288,19 +300,23 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   struct ncclSymkChannelWorkRange* workRangePtr = NULL;
   const char* funcName = ncclFuncToString(headTask->func);
   const char* kernelName = ncclSymkKernelIdToString(headTask->devFuncId);
-  struct ncclSymkDevWorkArgs* argsBuf = NULL;
+  Args* argsBuf = NULL;
 
   plan->isSymColl = true;
   plan->threadPerBlock = headTask->nWarps * WARP_SIZE;
   plan->launchCompletionEvent = headTask->launchCompletionEvent;
   plan->hasProxyOps = false;
   ncclSymkKernelId kernelId = (ncclSymkKernelId)headTask->devFuncId;
-  int kernelIndex = ncclSymkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype);
+  int kernelIndex = Genk ? ncclGenkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype) :
+                           ncclSymkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype);
   if (kernelIndex < 0) {
-    WARN("No symmetric kernel %s for %s with red op %d datatype %d", kernelName, funcName, (int)headTask->opDev.op,
-         (int)headTask->datatype);
+    WARN("No %s kernel %s for %s with red op %d datatype %d", Genk ? "Genk" : "Symk", kernelName, funcName,
+         (int)headTask->opDev.op, (int)headTask->datatype);
     return ncclInternalError;
   }
+  void** kernelList = Genk ? ncclGenkKernelList : ncclSymkKernelList;
+  void** kernelListProfile = Genk ? ncclGenkKernelListProfile : ncclSymkKernelListProfile;
+  int* kernelMaxDynamicSmem = Genk ? ncclGenkKernelMaxDynamicSmem : ncclSymkKernelMaxDynamicSmem;
   // Profiling requested = plugin loaded and mask has ncclProfileKernelCh. Set
   // hasProfilerOps (like non-sym plans) so the host callback fires the group/coll events.
   bool profilingRequested = ncclProfilerPluginLoaded() && (headTask->eActivationMask & ncclProfileKernelCh);
@@ -309,10 +325,9 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   // cuLaunchKernel, so the mirrored counter can't advance across graph replays. Under
   // capture we launch the clean kernel and keep only host-side group/coll events.
   bool profilerEnabled = profilingRequested && !plan->persistent;
-  plan->kernelFn = (profilerEnabled && ncclSymkKernelListProfile[kernelIndex] != nullptr) ?
-                     ncclSymkKernelListProfile[kernelIndex] :
-                     ncclSymkKernelList[kernelIndex];
-  int maxDynamicSmem = ncclSymkKernelMaxDynamicSmem[kernelIndex];
+  plan->kernelFn = (profilerEnabled && kernelListProfile[kernelIndex] != nullptr) ? kernelListProfile[kernelIndex] :
+                                                                                    kernelList[kernelIndex];
+  int maxDynamicSmem = kernelMaxDynamicSmem[kernelIndex];
   plan->kernelDynSmem = (1 & ncclSymkDynamicSmemKernelMask() >> (int)kernelId) ? maxDynamicSmem : 0;
   task = headTask;
   while (task != nullptr && task->devFuncId == devFuncId) {
@@ -325,8 +340,8 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
     task = task->next;
   }
 
-  plan->kernelArgsSize = ncclSymkDevWorkArgs::calcArgsSize(nMaxChannels, workCount, profilerEnabled);
-  argsBuf = (struct ncclSymkDevWorkArgs*)calloc(1, plan->kernelArgsSize);
+  plan->kernelArgsSize = ncclSymkDevWorkArgsSize<Args>(nMaxChannels, workCount, profilerEnabled);
+  argsBuf = (Args*)calloc(1, plan->kernelArgsSize);
 
   argsBuf->nMaxChannels = nMaxChannels;
   argsBuf->maxDynamicSmem = maxDynamicSmem;
@@ -334,10 +349,11 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   // phase stamps and their fence at runtime.
   argsBuf->profilerMode =
     profilerEnabled ? ncclProfilerDeviceMode(headTask->eActivationMask) : (uint8_t)ncclDevProfilerModeNone;
+  setMinChunkPayloadBytes(argsBuf, headTask->minChunkPayloadBytes);
 
   remainCell = cellPerChannel = DIVUP(DIVUP(totalCount, nMaxChannels), cellCount);
-  workRangePtr = argsBuf->getWorkRange();
-  workBufPtr = argsBuf->getWorks(nMaxChannels);
+  workRangePtr = ncclSymkGetWorkRange(argsBuf);
+  workBufPtr = ncclSymkGetWorks(argsBuf, nMaxChannels);
 
   while (!ncclIntruQueueEmpty(symTaskQueue)) {
     struct ncclSymkDevWork devWork = {};
@@ -417,7 +433,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   if (remainCell < cellPerChannel) curChannel++;
   // At this point, curChannel indexes the first _empty_ channel.
 
-  memcpy(&argsBuf->kcomm, &comm->symkState.kcomm, sizeof(comm->symkState.kcomm));
+  memcpy(&argsBuf->kcomm, &kcomm, sizeof(kcomm));
   plan->workBytes = totalCount * ncclTypeSize(headTask->datatype);
   // curChannel == 0 is not expected here (the caller ensures symTaskQueue is
   // non-empty), but guard it anyway to avoid the undefined behavior of shifting
@@ -435,5 +451,18 @@ exit:
   return ret;
 fail:
   goto exit;
+}
+
+ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
+                                        struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
+                                        struct ncclKernelPlan* plan) {
+  struct ncclTaskColl* headTask = ncclIntruQueueHead(symTaskQueue);
+  ncclSymkKernelId const kernelId = (ncclSymkKernelId)headTask->devFuncId;
+  if ((1ull << kernelId) & ncclGenkKernelMask()) {
+    NCCLCHECK(ncclGenkInitOnce(comm));
+    return ncclSymmetricTaskSchedulerImpl<true, ncclGenkDevWorkArgs>(comm, symTaskQueue, plan,
+                                                                     comm->symkState.genkComm);
+  }
+  return ncclSymmetricTaskSchedulerImpl<false, ncclSymkDevWorkArgs>(comm, symTaskQueue, plan, comm->symkState.kcomm);
 }
 #endif // NCCL_SYMMETRIC_SCHED_H_

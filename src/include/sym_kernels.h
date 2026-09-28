@@ -86,29 +86,46 @@ enum ncclSymkKernelId {
   ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD,
   ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC,
 
+  // Append Genk IDs so the original Symk tuning bits remain unchanged.
+  ncclSymkKernelId_AllReduce_Ring_Simple,
+  ncclSymkKernelId_AllReduce_Tree_Simple,
+  ncclSymkKernelId_AllGather_Ring_Simple,
+  ncclSymkKernelId_ReduceScatter_Ring_Simple,
+
+  ncclSymkKernelId_Broadcast_Ring_Simple,
+  ncclSymkKernelId_Reduce_Ring_Simple,
+
+  ncclSymkKernelId_AllReduce_Ring_LL,
+  ncclSymkKernelId_AllReduce_Tree_LL,
+  ncclSymkKernelId_AllGather_Ring_LL,
+  ncclSymkKernelId_ReduceScatter_Ring_LL,
+  ncclSymkKernelId_Broadcast_Ring_LL,
+  ncclSymkKernelId_Reduce_Ring_LL,
+
+  ncclSymkKernelId_AllReduce_Ring_LL128,
+  ncclSymkKernelId_AllReduce_Tree_LL128,
+  ncclSymkKernelId_AllGather_Ring_LL128,
+  ncclSymkKernelId_ReduceScatter_Ring_LL128,
+  ncclSymkKernelId_Broadcast_Ring_LL128,
+  ncclSymkKernelId_Reduce_Ring_LL128,
+
   ncclSymkKernelId_Count
 };
 
+using ncclSymkKernelMask = uint64_t;
+static_assert(ncclSymkKernelId_Count <= 8 * sizeof(ncclSymkKernelMask), "Symmetric kernel mask is too small");
+
 constexpr char const* ncclSymKernelStr[] = {
   // Must align with enum ncclSymkKernelId definition in src/include/sym_kernels.h
-  "AllReduce_AGxLL_R",
-  "AllReduce_AGxLLMC_R",
-  "AllReduce_RSxTmaLD_AGxTmaST",
-  "AllReduce_RSxLD_AGxST",
-  "AllReduce_RSxLDMC_AGxSTMC",
-  "AllGather_LL",
-  "AllGather_LLMC",
-  "AllGather_TmaST",
-  "AllGather_ST",
-  "AllGather_TmaSTMC",
-  "AllGather_STMC",
-  "AllGather_RailRing_LsaSTMC",
-  "ReduceScatter_LL",
-  "ReduceScatter_TmaLD",
-  "ReduceScatter_LD",
-  "ReduceScatter_LDMC",
-  "ReduceScatter_RailA2A_LsaLD",
-  "ReduceScatter_RailA2A_LsaLDMC"
+  "AllReduce_AGxLL_R", "AllReduce_AGxLLMC_R", "AllReduce_RSxTmaLD_AGxTmaST", "AllReduce_RSxLD_AGxST",
+  "AllReduce_RSxLDMC_AGxSTMC", "AllGather_LL", "AllGather_LLMC", "AllGather_TmaST", "AllGather_ST", "AllGather_TmaSTMC",
+  "AllGather_STMC", "AllGather_RailRing_LsaSTMC", "ReduceScatter_LL", "ReduceScatter_TmaLD", "ReduceScatter_LD",
+  "ReduceScatter_LDMC", "ReduceScatter_RailA2A_LsaLD", "ReduceScatter_RailA2A_LsaLDMC",
+  // Genk kernels
+  "AllReduce_Ring_Simple", "AllReduce_Tree_Simple", "AllGather_Ring_Simple", "ReduceScatter_Ring_Simple",
+  "Broadcast_Ring_Simple", "Reduce_Ring_Simple", "AllReduce_Ring_LL", "AllReduce_Tree_LL", "AllGather_Ring_LL",
+  "ReduceScatter_Ring_LL", "Broadcast_Ring_LL", "Reduce_Ring_LL", "AllReduce_Ring_LL128", "AllReduce_Tree_LL128",
+  "AllGather_Ring_LL128", "ReduceScatter_Ring_LL128", "Broadcast_Ring_LL128", "Reduce_Ring_LL128"
 };
 
 // Per-channel view of the finalized topology ring for this rank. index is this rank's position in the ring when rank
@@ -221,28 +238,6 @@ struct alignas(16) ncclSymkDevWorkArgs {
   int nMaxChannels;
   int maxDynamicSmem;
   uint8_t profilerMode; // ncclDevProfilerMode bits; nonzero means profilerWorkCounters[nMaxChannels] follows
-  // Variable-length trailing data layout:
-  //   if profilerMode: uint64_t profilerWorkCounters[nMaxChannels] (aligned to 16)
-  //   ncclSymkChannelWorkRange[nChannels] (aligned to 16)
-  //   ncclSymkDevWork[nWorks]
-  // aux functions
-  __host__ static constexpr size_t calcArgsSize(int nChannels, int nWorks, bool profiler = false) {
-    return alignUp(sizeof(struct ncclSymkDevWorkArgs), 16) +
-           (profiler ? alignUp(nChannels * sizeof(uint64_t), 16) : size_t(0)) +
-           alignUp(nChannels * sizeof(struct ncclSymkChannelWorkRange), 16) + nWorks * sizeof(struct ncclSymkDevWork);
-  }
-  __host__ __device__ uint64_t* getProfilerCounters() const {
-    return (uint64_t*)((uint8_t*)this + alignUp(sizeof(struct ncclSymkDevWorkArgs), 16));
-  }
-  __host__ __device__ struct ncclSymkChannelWorkRange* getWorkRange() const {
-    size_t off = alignUp(sizeof(struct ncclSymkDevWorkArgs), 16);
-    if (profilerMode) off += alignUp(nMaxChannels * sizeof(uint64_t), 16);
-    return (struct ncclSymkChannelWorkRange*)((uint8_t*)this + off);
-  }
-  __host__ __device__ struct ncclSymkDevWork* getWorks(int nChannels) const {
-    return (struct ncclSymkDevWork*)((uint8_t*)this->getWorkRange() +
-                                     alignUp(nChannels * sizeof(struct ncclSymkChannelWorkRange), 16));
-  }
 };
 
 struct alignas(16) ncclGenkDevWorkArgs {
@@ -306,8 +301,8 @@ ncclResult_t ncclSymkFinalize(struct ncclComm* comm);
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                        size_t nElts);
-uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                      size_t nElts, bool symAligned16B = true);
+ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
+                                size_t nElts, bool symAligned16B = true);
 
 ncclResult_t ncclSymkMakeDevWork(struct ncclComm* comm, struct ncclTaskColl* task, struct ncclSymkDevWork* outDevWork);
 bool ncclSymkTmaAvailable(struct ncclComm* comm);
@@ -323,17 +318,26 @@ extern int ncclSymkKernelRequirements[/*ncclSymkKernelCount*/];
 extern int ncclSymkKernelMaxDynamicSmem[/*ncclSymkKernelCount*/]; // initialized by ncclInitKernelsForDevice()
 int ncclSymkGetKernelIndex(ncclSymkKernelId kernelId, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty);
 
+// Generated by src/device/general/generate.py
+extern int const ncclGenkKernelCount;
+extern void* ncclGenkKernelList[/*ncclGenkKernelCount*/];
+extern void* ncclGenkKernelListProfile[/*ncclGenkKernelCount*/];
+extern int ncclGenkKernelRequirements[/*ncclGenkKernelCount*/];
+extern int ncclGenkKernelMaxDynamicSmem[/*ncclGenkKernelCount*/];
+int ncclGenkGetKernelIndex(ncclSymkKernelId kernelId, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty);
+
 const char* ncclSymkKernelIdToString(int kernelId);
 ncclResult_t ncclGetSymRegType(struct ncclDevrWindow* sendWin, struct ncclDevrWindow* recvWin,
                                ncclSymRegType_t* winRegType);
 
-int ncclSymkLLKernelMask();
-int ncclSymkDynamicSmemKernelMask();
-int ncclSymkTmaKernelMask();
-int ncclSymkGinKernelMask();
-int ncclSymkAGKernelMask();
-int ncclSymkARKernelMask();
-int ncclSymkRSKernelMask();
+ncclSymkKernelMask ncclSymkLLKernelMask();
+ncclSymkKernelMask ncclSymkDynamicSmemKernelMask();
+ncclSymkKernelMask ncclSymkTmaKernelMask();
+ncclSymkKernelMask ncclSymkGinKernelMask();
+ncclSymkKernelMask ncclGenkKernelMask();
+ncclSymkKernelMask ncclSymkAGKernelMask();
+ncclSymkKernelMask ncclSymkARKernelMask();
+ncclSymkKernelMask ncclSymkRSKernelMask();
 size_t ncclSymkRsGinChunkBytes();
 
 constexpr int ncclSymkAllGather_RailRing_ChunkSize = 1 << 20;

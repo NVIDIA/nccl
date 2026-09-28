@@ -32,7 +32,8 @@ ncclResult_t ncclTuningComputeTuning(int id, struct ncclTuningInput_t* const inp
 ncclResult_t ncclTuningExpandId(int tuningId, int* algo, int* proto, int* symKernelId, int* ceMethodId);
 
 ncclResult_t ncclTuningSetThreadThresholds(struct ncclComm* comm);
-ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* result);
+ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* result,
+                                   bool forceMaxTreeThreads);
 
 int ncclTuningGetActiveChannels(struct ncclTuningInput_t* const input, const struct ncclTuningResult_t* result);
 

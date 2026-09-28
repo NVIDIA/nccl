@@ -12,14 +12,14 @@
 #include <stdint.h>
 
 // One row per selectable algorithm. name is the selection key, matched as a case-insensitive
-// substring. mask == 1ull << (cost-model tuning id): general in [0,21), symmetric in [21,39).
+// prefix. mask == 1ull << (cost-model tuning id): general ids precede Symk/Genk ids.
 struct ncclAlgRegEntry {
   const char* name;
   uint64_t mask;
   uint32_t collMask;   // OR of (1u << ncclFunc_t)
   int16_t algo;        // NCCL_ALGO_* for general rows, else -1
   int16_t proto;       // NCCL_PROTO_* for general rows, else -1
-  int16_t symkKernelId; // ncclSymkKernelId for symmetric rows, else -1
+  int16_t symkKernelId; // ncclSymkKernelId for Symk/Genk rows, else -1
 };
 
 uint64_t ncclAlgAllBits();                           // OR of all selectable rows (parser '^' base)

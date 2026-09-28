@@ -54,29 +54,35 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
     return ncclSuccess;
   }
 
-  uint32_t tuning_kmask = (1 << tuning->symKernelId);
-  uint32_t valid_kmask = ncclSymkMask(inputs->comm, inputs->func, inputs->devRedOp, inputs->datatype, inputs->countMax,
-                                      inputs->symAligned16B);
+  ncclSymkKernelMask tuning_kmask = 1ull << tuning->symKernelId;
+  ncclSymkKernelMask valid_kmask = ncclSymkMask(inputs->comm, inputs->func, inputs->devRedOp, inputs->datatype,
+                                                inputs->countMax, inputs->symAligned16B);
+  ncclSymkKernelMask window_optional_kmask = ncclSymkLLKernelMask() | ncclGenkKernelMask();
+  ncclSymkKernelMask ungrouped_ll_kmask = ncclSymkLLKernelMask() & ~ncclGenkKernelMask();
   if ((tuning_kmask & valid_kmask) == 0) {
     tuning->valid = 0;
     tuning->timeUs = -1.0;
     return ncclSuccess;
   }
 
-  if ((inputs->nWorks > 1 &&
-       ((tuning_kmask & ncclSymkLLKernelMask()) != 0)) // We currently don't support grouping for LL kernels.
-      || (inputs->func == ncclFuncAllReduce && inputs->winRegType != ncclSymSendRegRecvReg &&
-          (tuning_kmask & ncclSymkLLKernelMask()) == 0) ||
-      (inputs->func == ncclFuncAllGather && inputs->winRegType != ncclSymSendRegRecvReg &&
-       inputs->winRegType != ncclSymSendNonregRecvReg && (tuning_kmask & ncclSymkLLKernelMask()) == 0) ||
-      (inputs->func == ncclFuncReduceScatter && inputs->winRegType != ncclSymSendRegRecvReg &&
-       inputs->winRegType != ncclSymSendRegRecvNonreg && (tuning_kmask & ncclSymkLLKernelMask()) == 0) ||
+  // The specialized LL kernels do not support grouping; Flow protocols do.
+  if ((inputs->nWorks > 1 && ((tuning_kmask & ungrouped_ll_kmask) != 0)) ||
+      (inputs->func == ncclFuncAllReduce && inputs->winRegType != ncclSymSendRegRecvReg &&
+       (tuning_kmask & window_optional_kmask) == 0) ||
+      ((inputs->func == ncclFuncBroadcast || inputs->func == ncclFuncAllGather) &&
+       inputs->winRegType != ncclSymSendRegRecvReg && inputs->winRegType != ncclSymSendNonregRecvReg &&
+       (tuning_kmask & window_optional_kmask) == 0) ||
+      ((inputs->func == ncclFuncReduce || inputs->func == ncclFuncReduceScatter) &&
+       inputs->winRegType != ncclSymSendRegRecvReg && inputs->winRegType != ncclSymSendRegRecvNonreg &&
+       (tuning_kmask & window_optional_kmask) == 0) ||
       (inputs->func == ncclFuncAllGather && inputs->winRegType != ncclSymSendRegRecvReg && inputs->comm->nNodes > 1 &&
        (tuning_kmask & ncclSymkGinKernelMask()) != 0)) {
     tuning->valid = 0;
     tuning->timeUs = -1.0;
     return ncclSuccess;
   }
+
+  if ((tuning_kmask & ncclGenkKernelMask()) != 0) return ncclTuningGenkModelSim(inputs, tuning);
 
   float kTime = FLT_MAX;
   float kSelectionTime = FLT_MAX;
@@ -93,6 +99,6 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
   tuning->timeUs = kTime;
   tuning->selectionTimeUs = kSelectionTime;
   tuning->nChannels = kBlocks;
-  tuning->nWarps = 16;
+  tuning->nWarps = ncclSymkMaxThreads / WARP_SIZE;
   return ret;
 }

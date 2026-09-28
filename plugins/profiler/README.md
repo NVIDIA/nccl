@@ -328,6 +328,14 @@ is a 64-bit integer that has two parts: the 16 LSB are assigned to the plugin ev
 16 bits are assigned to the plugin type (NCCL\_PROFILER\_NET\_TYPE\_IB, ...). The rest of the bits are
 unused and available for future extensions.
 
+For profiler API v6 and newer, this implementation allows NetPlugin events to be enabled independently
+of ProxyOp and ProxyStep events. When a NetPlugin event is started, its `parentObj` is the active
+ProxyStep handle when one exists, or `NULL` when the ProxyStep event is disabled or its handle is
+unavailable. A non-NULL parent always represents a ProxyStep; it is never replaced with a ProxyOp
+handle. Profiler plugins must check for a NULL parent before dereferencing it and may discard events
+they cannot retain without a parent. For pre-v6 plugins that support NetPlugin events, NCCL preserves
+implicit proxy ancestor activation.
+
 A network IB plugin can use this infrastructure to define a QP event as:
 
 ```C
@@ -440,7 +448,7 @@ Group API event
    |     |  |
    |     |  +- ProxyStep event
    |     |     |
-   |     |     +- NetPlugin event
+   |     |     +- NetPlugin event (when ProxyStep is available)
    |     |
    |     +- KernelCh event
    |
@@ -452,13 +460,15 @@ Group API event
    |     |  |
    |     |  +- ProxyStep event
    |     |     |
-   |     |     +- NetPlugin event
+   |     |     +- NetPlugin event (when ProxyStep is available)
    |     |
    |     +- KernelCh event
    |
    +- Kernel Launch event
 
 ProxyCtrl event
+
+NetPlugin event (with a NULL parent when ProxyStep is unavailable)
 ```
 
 # Profiler instrumentation and logging

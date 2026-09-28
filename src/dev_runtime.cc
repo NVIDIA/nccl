@@ -176,13 +176,16 @@ ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
   // LSA needs to be the same size for all ranks, and it needs to represent
   // a consecutive set of ranks.
   int lsaSize = computeLsaSize(comm);
+  int cftSize = 0, cftMcSize = 0;
+  NCCLCHECK(computeCftSizes(comm, &cftSize, &cftMcSize));
+
   devr->lsaSize = lsaSize;
   devr->lsaSelf = comm->rank % lsaSize;
 
-  devr->cftSize = computeCftSize(comm);
+  devr->cftSize = cftSize;
   devr->cftSelf = comm->rank % devr->cftSize;
 
-  devr->cftMcSize = computeCftMcSize(comm);
+  devr->cftMcSize = cftMcSize;
   devr->cftMcSelf = comm->rank % devr->cftMcSize;
 
   devr->le[0].baseId = devr->le[1].baseId = NCCL_LE_ID_INVALID;
@@ -823,7 +826,7 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
       }
       ret = ncclSuccess;
 
-      if (comm->nvlsSupport) {
+      if (comm->nvlsSupport && comm->gpuCftMulticastSupport) {
         NOWARN(ret = symTeamObtain(comm, mcTeam, /*multimem=*/false, /*counted=*/false, /*uc=*/false, /*mc=*/true,
                                    /*outTeam=*/nullptr, /*needBarrier=*/nullptr),
                NCCL_INIT);

@@ -902,6 +902,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   info->fabricHandleSupport = 0;
   CUdevice currentDev;
   CUCHECK(cuDeviceGet(&currentDev, comm->cudaDev));
+  NCCLCHECK(ncclGpuGetCliqueIds(currentDev, &info->cftUnicastCliqueId, &info->cftMulticastCliqueId));
   // Ignore the error when CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED is unavailable.
   (void)CUPFN(cuDeviceGetAttribute(&info->fabricHandleSupport, CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED,
                                    currentDev));

@@ -186,6 +186,11 @@ DECLARE_CUDA_PFN_EXTERN_V13030(cuLogicalEndpointBindAddr,  uint32_t id, CUdevice
 DECLARE_CUDA_PFN_EXTERN_V13030(cuLogicalEndpointUnbind,    uint32_t id, CUdevice dev, size_t offset, size_t size);
 // clang-format on
 
+#if CUDA_VERSION >= 13040
+DECLARE_CUDA_PFN_EXTERN(cuDeviceGetCliqueCount, 13040);
+DECLARE_CUDA_PFN_EXTERN(cuDeviceGetCliqueInfo, 13040);
+#endif
+
 #if CUDA_VERSION >= 12010
 /* NVSwitch Multicast support */
 DECLARE_CUDA_PFN_EXTERN(cuMulticastAddDevice, 12010);

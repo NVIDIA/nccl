@@ -206,6 +206,11 @@ DECLARE_CUDA_PFN(cuLogicalEndpointImport, 13030);
 DECLARE_CUDA_PFN(cuLogicalEndpointBindAddr, 13030);
 DECLARE_CUDA_PFN(cuLogicalEndpointUnbind, 13030);
 #endif
+#if CUDA_VERSION >= 13040
+/* Typed clique discovery */
+DECLARE_CUDA_PFN(cuDeviceGetCliqueCount, 13040);
+DECLARE_CUDA_PFN(cuDeviceGetCliqueInfo, 13040);
+#endif
 #if CUDA_VERSION >= 12010
 /* NVSwitch Multicast support */
 DECLARE_CUDA_PFN(cuMulticastAddDevice, 12010);
@@ -325,6 +330,11 @@ static ncclResult_t cudaPfnFuncLoader(void) {
   LOAD_SYM(cuLogicalEndpointImport, 13030, 1);
   LOAD_SYM(cuLogicalEndpointBindAddr, 13030, 1);
   LOAD_SYM(cuLogicalEndpointUnbind, 13030, 1);
+#endif
+#if CUDA_VERSION >= 13040
+/* Typed clique discovery */
+  LOAD_SYM(cuDeviceGetCliqueCount, 13040, 1);
+  LOAD_SYM(cuDeviceGetCliqueInfo, 13040, 1);
 #endif
 #if CUDA_VERSION >= 12010
 /* NVSwitch Multicast support */

@@ -195,4 +195,6 @@ struct mlx5dv_qp_init_attr {
     uint64_t send_ops_flags; /* Use enum mlx5dv_qp_create_send_ops_flags */
 };
 
+struct mlx5dv_devx_obj;
+
 #endif  // NCCL_MLX5DV_CORE_H_

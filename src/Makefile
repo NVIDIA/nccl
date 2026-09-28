@@ -110,7 +110,7 @@ endif
 GIT_VERSION_FILE := $(OBJDIR)/include/nccl_git_version.h
 $(GIT_VERSION_FILE): ALWAYS_REBUILD
 	@mkdir -p $(dir $@)
-	@./misc/generate_git_version.py $@
+	@python3 ./misc/generate_git_version.py $@
 
 # DOCA GPUNetIO definitions
 DOCA_HOME        ?= transport/net_ib/gdaki/doca-gpunetio

@@ -16,6 +16,8 @@
 #include "param.h"
 
 NCCL_PARAM(CftEnable, "CFT_ENABLE", 1);
+NCCL_PARAM(CftUcTeamSize, "CFT_UC_TEAM_SIZE", 0);
+NCCL_PARAM(CftMcTeamSize, "CFT_MC_TEAM_SIZE", 0);
 
 ncclResult_t ncclGpuGetCliqueIds(CUdevice dev, uint32_t* unicastId, uint32_t* multicastId) {
   *unicastId = UINT32_MAX;
@@ -104,8 +106,8 @@ ncclResult_t computeCftSizes(struct ncclComm* comm, int* cftSize, int* cftMcSize
   *cftSize = lsaSize;
   *cftMcSize = lsaSize;
   if (comm->gpuCftSupport >= 13040) {
-    int ucCliqueSize = computeCftCliqueSize(comm, false);
-    int mcCliqueSize = comm->gpuCftMulticastSupport ? computeCftCliqueSize(comm, true) : 1;
+    int ucCliqueSize = computeCftCliqueSize(comm, /*multicast=*/false);
+    int mcCliqueSize = comm->gpuCftMulticastSupport ? computeCftCliqueSize(comm, /*multicast=*/true) : 1;
     if (ucCliqueSize == 0 || mcCliqueSize == 0) {
       WARN("CUDA did not report the logical-endpoint clique information required by CFT");
       return ncclInternalError;
@@ -121,6 +123,8 @@ ncclResult_t computeCftSizes(struct ncclComm* comm, int* cftSize, int* cftMcSize
     *cftMcSize = mcCliqueSize;
   }
 
+  if (ncclParamCftUcTeamSize() > 0) *cftSize = ncclParamCftUcTeamSize();
+  if (ncclParamCftMcTeamSize() > 0) *cftMcSize = ncclParamCftMcTeamSize();
   return ncclSuccess;
 }
 

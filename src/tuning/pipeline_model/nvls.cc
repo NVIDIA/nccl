@@ -16,19 +16,23 @@ static float computeNVLSMaxBusBw(struct ncclComm* comm, ncclFunc_t func, int alg
   const struct ncclTopoGraph* graph = &comm->graphs[algo];
   int compCapIndex = ncclTuningGetCompCapIndex(comm);
 
-  float intraBw = graph->bwIntra * nvlsEfficiency[compCapIndex] * (graph->nChannels - 1) / graph->nChannels;
+  int ctasPerChannel = comm->nvlsChannels / graph->nChannels;
+  float intraBw =
+    graph->bwIntra * nvlsEfficiency[compCapIndex] * (graph->nChannels - 1) / (graph->nChannels * ctasPerChannel);
   if (func == ncclFuncAllReduce) {
     intraBw *= 2.0f;
   } else {
     float ppn = comm->minLocalRanks;
     intraBw *= (ppn - 1) / ppn;
   }
-  float interBw = graph->bwInter * ((comm->nNodes <= 2 && algo == NCCL_ALGO_NVLS_TREE) ? 2 : 1);
+  float interBw = graph->bwInter * ((comm->nNodes <= 2 && algo == NCCL_ALGO_NVLS_TREE) ? 2 : 1) / ctasPerChannel;
+  intraBw = ncclTuningProtoBW(comm, algo, proto, intraBw);
+  interBw = ncclTuningProtoBW(comm, algo, proto, interBw);
   float bw = std::min({
     intraBw,
     interBw,
   });
-  return bw * graph->nChannels;
+  return bw * graph->nChannels * ctasPerChannel;
 }
 
 static float nvlsMaxBusBw(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* tuning) {

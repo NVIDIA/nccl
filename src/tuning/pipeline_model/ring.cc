@@ -15,8 +15,11 @@
 static float ringMaxBusBw(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* tuning) {
   struct ncclComm* comm = inputs->comm;
   const struct ncclTopoGraph* graph = &comm->graphs[tuning->algo];
-  return (comm->nNodes > 1 ? graph->bwInter : graph->bwIntra) * graph->nChannels *
-         ncclTuningProtoBWFactor(tuning->proto);
+  float bwFactor = 1.0f / graph->nCtasPerChannel;
+  float intraBw = bwFactor * graph->bwIntra, interBw = bwFactor * graph->bwInter;
+  intraBw = ncclTuningProtoBW(comm, tuning->algo, tuning->proto, intraBw);
+  interBw = ncclTuningProtoBW(comm, tuning->algo, tuning->proto, interBw);
+  return (comm->nNodes > 1 ? interBw : intraBw) * graph->nChannels * graph->nCtasPerChannel;
 }
 
 static ncclResult_t ncclTuningPipelineRingGetAlgoStep(struct ncclComm* comm, int proto, int algo, ncclFunc_t func,

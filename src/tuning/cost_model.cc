@@ -190,7 +190,8 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
     {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
     {2 * 141.2, 2 * 45.0 /*avg of ring & tree*/, 2 * 35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
-    {-1.0, -1.0, -1.0} /* Rubin-N1/Rubin-N2/Rubin-N4 */
+    // For rubin this value is now per CTA and not an overall limit.
+    {2.0, 0.6 /*avg of ring & tree*/, 0.46}, /* Rubin-N1/AMD-N2/AMD-N4) */
   },
     // perChMaxRingLL128Bws
   {
@@ -198,7 +199,8 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
     {40.0, 40.0, 40.0}, /* Blackwell (N1/N2/N4) */
-    {-1.0, -1.0, -1.0} /* Rubin (N1/N2/N4) */
+    // For rubin this value is per CTA and not per topology channel.
+    {21.6, 17.0, 14.0}, /* Rubin (N1/N2/N4) */
   },
     // perChMaxTreeLL128Bws
   {
@@ -206,7 +208,8 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 29.0}, /* Hopper (N1/N2/N4) */
     {55.6, 36.7, 20.0}, /* Blackwell (N1/N2/N4) */
-    {-1.0, -1.0, -1.0} /* Rubin (N1/N2/N4) */
+    // For rubin this value is per CTA and not per topology channel.
+    {11.20, 11.91, 11.91}, /* Rubin (N1/N2/N4) */
   },
     // perChMaxTreeBws
   {

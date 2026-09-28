@@ -22,11 +22,12 @@ static ncclResult_t getTreeNsteps(struct ncclComm* comm, ncclFunc_t func, int* n
 static float treeMaxBusBw(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* tuning) {
   struct ncclComm* comm = inputs->comm;
   const struct ncclTopoGraph* graph = &comm->graphs[tuning->algo];
-  float algofactor = 1.;
-  if (inputs->func == ncclFuncAllReduce || inputs->func == ncclFuncReduceScatter || inputs->func == ncclFuncAllGather)
-    algofactor = ((float)(comm->nRanks - 1)) / comm->nRanks;
-  return (comm->nNodes > 1 ? graph->bwInter : graph->bwIntra) * graph->nChannels *
-         ncclTuningProtoBWFactor(tuning->proto) * algofactor;
+  float algofactor = ((float)(comm->nRanks - 1)) / comm->nRanks;
+  float bwFactor = algofactor / graph->nCtasPerChannel;
+  float intraBw = bwFactor * graph->bwIntra, interBw = bwFactor * graph->bwInter;
+  intraBw = ncclTuningProtoBW(comm, tuning->algo, tuning->proto, intraBw);
+  interBw = ncclTuningProtoBW(comm, tuning->algo, tuning->proto, interBw);
+  return (comm->nNodes > 1 ? interBw : intraBw) * graph->nChannels * graph->nCtasPerChannel;
 }
 
 static ncclResult_t ncclTuningPipelineTreeGetAlgoStep(struct ncclComm* comm, int proto, int algo, ncclFunc_t func,

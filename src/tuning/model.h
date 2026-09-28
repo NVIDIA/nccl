@@ -40,4 +40,46 @@ inline float ncclTuningProtoBWFactor(int proto) {
   return (proto == NCCL_PROTO_LL) ? 0.5f : (proto == NCCL_PROTO_LL128) ? 120.0f / 128.0f : 1.0f;
 }
 
+// bwPerCTA is the expected per CTA bandwidth of the algo/proto for the model.
+// This value is clamped to the tuning constant if one if defined and is positive and non-zero.
+inline float ncclTuningProtoBW(struct ncclComm* comm, int algo, int proto, float bwPerCTA) {
+  int index, compCapIndex;
+  ncclTuningGetConstantsIndexes(comm, nullptr, &index);
+  compCapIndex = ncclTuningGetCompCapIndex(comm);
+  double (*constants)[NCCL_NUM_TUNING_SCALES] = nullptr;
+  if (proto == NCCL_PROTO_LL && (algo == NCCL_ALGO_RING || algo == NCCL_ALGO_TREE)) {
+    constants = comm->tuningContext.tuningConstants.llMaxBws;
+  } else if (proto == NCCL_PROTO_LL128) {
+    switch (algo) {
+    case NCCL_ALGO_RING:
+      constants = comm->tuningContext.tuningConstants.perChMaxRingLL128Bws;
+      break;
+    case NCCL_ALGO_TREE:
+      constants = comm->tuningContext.tuningConstants.perChMaxTreeLL128Bws;
+      break;
+    default:
+      constants = nullptr;
+      break;
+    }
+  } else if (proto == NCCL_PROTO_SIMPLE) {
+    switch (algo) {
+    case NCCL_ALGO_TREE:
+      constants = comm->tuningContext.tuningConstants.perChMaxTreeBws;
+      break;
+    case NCCL_ALGO_NVLS_TREE:
+      constants = comm->tuningContext.tuningConstants.perChMaxNVLSTreeBws;
+      break;
+    default:
+      constants = nullptr;
+      break;
+    }
+  }
+  float clamp = FLT_MAX;
+  if (constants != nullptr && constants[compCapIndex][index] > 0) clamp = constants[compCapIndex][index];
+  bwPerCTA = bwPerCTA * ncclTuningProtoBWFactor(proto);
+  TRACE(NCCL_TUNING, "a/p: %s/%s, bwPerCTA: %f, clamp: %f", ncclAlgoToString(algo), ncclProtoToString(proto), bwPerCTA,
+        clamp);
+  return std::min(bwPerCTA, clamp);
+}
+
 #endif // NCCL_TUNING_MODEL_H_

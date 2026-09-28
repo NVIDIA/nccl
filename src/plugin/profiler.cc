@@ -1270,14 +1270,22 @@ static ncclResult_t profilerPostWorkInternal(struct ncclComm* comm, int channelI
 // matching KernelCh ops are enqueued later by ncclProfilerPostPlanWork() from the host
 // callback. No-op for the clean kernel (graph capture / profiling off). Uses the
 // dedicated sym counters, which never share the regular/p2p sequence (ncclProfilerCommState).
+static uint64_t* profilerGetSymCounters(struct ncclKernelPlan* plan, struct ncclTaskColl* task) {
+  if ((1ull << task->devFuncId) & ncclGenkKernelMask()) {
+    struct ncclGenkDevWorkArgs* args = (struct ncclGenkDevWorkArgs*)plan->kernelSymArgs;
+    return args->profilerMode ? ncclSymkGetProfilerCounters(args) : nullptr;
+  }
+  struct ncclSymkDevWorkArgs* args = (struct ncclSymkDevWorkArgs*)plan->kernelSymArgs;
+  return args->profilerMode ? ncclSymkGetProfilerCounters(args) : nullptr;
+}
+
 void ncclProfilerReserveSymCounters(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   if (!ncclProfilerPluginLoaded() || comm->profiler.profilerThread == nullptr) return;
   if (!plan->isSymColl) return;
   struct ncclTaskColl* sct = ncclIntruQueueHead(&plan->collTaskQueue);
   if (sct == nullptr || !(sct->eActivationMask & ncclProfileKernelCh)) return;
-  struct ncclSymkDevWorkArgs* argsBuf = (struct ncclSymkDevWorkArgs*)plan->kernelSymArgs;
-  if (!argsBuf->profilerMode) return;
-  uint64_t* counters = argsBuf->getProfilerCounters();
+  uint64_t* counters = profilerGetSymCounters(plan, sct);
+  if (counters == nullptr) return;
   int nChannels = countOneBits(plan->channelMask);
   for (int c = 0; c < nChannels; c++) counters[c] = ++comm->profiler.symWorkCounter[c];
 }
@@ -1290,9 +1298,8 @@ static void profilerPostPlanWorkSym(struct ncclComm* comm, struct ncclKernelPlan
   if (sct == nullptr || !(sct->eActivationMask & ncclProfileKernelCh)) return;
   struct ncclProfilerThread* pt = comm->profiler.profilerThread;
   if (pt == nullptr) return;
-  struct ncclSymkDevWorkArgs* argsBuf = (struct ncclSymkDevWorkArgs*)plan->kernelSymArgs;
-  if (!argsBuf->profilerMode) return;
-  uint64_t* counters = argsBuf->getProfilerCounters();
+  uint64_t* counters = profilerGetSymCounters(plan, sct);
+  if (counters == nullptr) return;
   int nChannels = countOneBits(plan->channelMask);
   for (int c = 0; c < nChannels; c++) {
     profilerEnqueueOp(pt, comm, c, counters[c], sct->eActivationMask, sct->eventHandle, /*sym=*/true);

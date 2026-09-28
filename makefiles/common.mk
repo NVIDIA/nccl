@@ -139,6 +139,7 @@ endif
 NVLDFLAGS  := -L${CUDA_LIB} -lcudart -lrt
 
 NVCUFLAGS_SYM :=
+NVCUFLAGS_GENK :=
 
 ########## GCOV ##########
 GCOV ?= 0 # disable by default.
@@ -156,6 +157,7 @@ CXXFLAGS  += -O3 -g
 else
 NVCUFLAGS += $(DEBUG_DEVICE_FLAGS)
 NVCUFLAGS_SYM += $(DEBUG_DEVICE_FLAGS)
+NVCUFLAGS_GENK += $(DEBUG_DEVICE_FLAGS)
 CXXFLAGS  += $(DEBUG_HOST_FLAGS)
 endif
 

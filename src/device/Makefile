@@ -24,14 +24,20 @@ INCFLAGS  = -I. -I.. -I$(BUILDDIR)/include -I../include -I../include/plugin
 NVCUFLAGS += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
 CXXFLAGS  += $(INCFLAGS)
 
-NVCUFLAGS_SYM += -ccbin $(CXX) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=128 $(NVCC_COMPRESS)
+# Genk may launch up to 640 threads, while Symk remains capped at 512 threads.
+NVCUFLAGS_SYM_GENK := -ccbin $(CXX) $(CXXSTD) --expt-extended-lambda
+NVCUFLAGS_SYM += $(NVCUFLAGS_SYM_GENK) -Xptxas -maxrregcount=128 $(NVCC_COMPRESS)
+NVCUFLAGS_GENK += $(NVCUFLAGS_SYM_GENK) -Xptxas -maxrregcount=96 $(NVCC_COMPRESS)
 NVCUFLAGS_SYM += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
-# So that nccl_device.h includes gin__funcs.h and common.cu / symmetric GIN kernels get ncclGin_BackendMask<12> definition
+NVCUFLAGS_GENK += $(INCFLAGS) --compiler-options "-fPIC -fvisibility=hidden"
+# So that nccl_device.h includes gin__funcs.h and device GIN kernels get ncclGin_BackendMask<12> definition
 ifeq ($(NCCL_OS_LINUX), 1)
 NVCUFLAGS += -DNCCL_OS_LINUX
 NVCUFLAGS_SYM += -DNCCL_OS_LINUX -DDOCA_GPUNETIO_USE_CUDA_WRAPPER -DDOCA_VERBS_USE_NET_WRAPPER
+NVCUFLAGS_GENK += -DNCCL_OS_LINUX -DDOCA_GPUNETIO_USE_CUDA_WRAPPER -DDOCA_VERBS_USE_NET_WRAPPER
 endif
 #NVCUFLAGS_SYM += --ptx
+#NVCUFLAGS_GENK += --ptx
 
 SAY = @bash -c 'path="$$2"; [[ "$$(realpath "$$2")" =~ ^$(subst .,\.,$(abspath $(NCCLDIR)))/(.*)$$ ]] && path="$${BASH_REMATCH[1]}"; printf "%-15s %s\n" "$$1" "$$path"' SAY
 
@@ -62,6 +68,16 @@ define COMPILE_SYM
  fi
 endef
 
+define COMPILE_GENK
+@$(SAY) "Compiling" $2;\
+ mkdir -p $(dir $1);\
+ if [[ -n "$3" ]]; then\
+ $(NVCC) $(NVCUFLAGS_GENK) $3 -dw $2 -o $1;\
+ else\
+ touch $2.empty.cu; $(NVCC) $(NVCUFLAGS_GENK) -dw $2.empty.cu -o $1; rm $2.empty.cu;\
+ fi
+endef
+
 DEPENDS.cu = $(NVCC) $(NVCUFLAGS) -MM -dc $1
 DEPENDS.cc = $(CXX) $(CXXFLAGS) -MM -c $1
 define DEPENDS
@@ -89,17 +105,26 @@ $(OBJDIR)/gensrc/symmetric: $(OBJDIR)/gensrc symmetric/generate.py
 	@mkdir -p $@
 	python3 ./symmetric/generate.py $@
 
+$(OBJDIR)/gensrc/general: $(OBJDIR)/gensrc general/generate.py
+	@mkdir -p $@
+	python3 ./general/generate.py $@
+
 # The trailing ";" is necessary to make this an "empty recipe":
 # https://www.gnu.org/software/make/manual/html_node/Empty-Recipes.html
 $(OBJDIR)/gensrc/rules.mk: $(OBJDIR)/gensrc ;
 
 $(OBJDIR)/gensrc/symmetric/rules.mk: $(OBJDIR)/gensrc/symmetric ;
 
+$(OBJDIR)/gensrc/general/rules.mk: $(OBJDIR)/gensrc/general ;
+
 -include $(OBJDIR)/gensrc/rules.mk
 # "gensrc/rules.mk" populates $(LIB_OBJS_GEN)
 
 -include $(OBJDIR)/gensrc/symmetric/rules.mk
 # "gensrc/symmetric/rules.mk" populates $(LIB_OBJS_SYM_GEN)
+
+-include $(OBJDIR)/gensrc/general/rules.mk
+# "gensrc/general/rules.mk" populates $(LIB_OBJS_GENK_GEN)
 
 SRCS = common.cu onerank.cu
 
@@ -109,7 +134,7 @@ SRCS = common.cu onerank.cu
 #   - common.cu.o is in LIB_OBJS -> device link (dlink) -> DEVGLUE_OBJ -> MANIFEST.
 #   - src/Makefile links libnccl.so with $$(cat $(DEVMANIFEST)), so device objs (incl. common.cu.o) are in the .so.
 #   - test/perf links with -lnccl; the test's device code references the symbol; it is resolved from the .so.
-LIB_OBJS = $(patsubst %, $(OBJDIR)/%.o, $(SRCS)) $(LIB_OBJS_GEN) $(LIB_OBJS_SYM_GEN)
+LIB_OBJS = $(patsubst %, $(OBJDIR)/%.o, $(SRCS)) $(LIB_OBJS_GEN) $(LIB_OBJS_SYM_GEN) $(LIB_OBJS_GENK_GEN)
 
 $(OBJDIR)/%.o: % $(OBJDIR)/%.d
 	$(call COMPILE,$@,$<)
@@ -120,6 +145,9 @@ $(OBJDIR)/genobj/%.o: $(OBJDIR)/gensrc $(OBJDIR)/genobj/%.d
 $(OBJDIR)/genobj/symmetric/%.o: $(OBJDIR)/gensrc/symmetric $(OBJDIR)/genobj/symmetric/%.d
 	$(call COMPILE,$@,$(OBJDIR)/gensrc/symmetric/$*)
 
+$(OBJDIR)/genobj/general/%.o: $(OBJDIR)/gensrc/general $(OBJDIR)/genobj/general/%.d
+	$(call COMPILE,$@,$(OBJDIR)/gensrc/general/$*)
+
 $(OBJDIR)/%.d: %
 	$(call DEPENDS,$@,$<)
 
@@ -127,6 +155,9 @@ $(OBJDIR)/genobj/%.d: $(OBJDIR)/gensrc/%
 	$(call DEPENDS,$@,$<)
 
 $(OBJDIR)/genobj/symmetric/%.d: $(OBJDIR)/gensrc/symmetric/%
+	$(call DEPENDS,$@,$<)
+
+$(OBJDIR)/genobj/general/%.d: $(OBJDIR)/gensrc/general/%
 	$(call DEPENDS,$@,$<)
 
 # Device link: combine all device .o (incl. common.cu.o with GIN symbol) into device_glue.o
@@ -140,6 +171,7 @@ $(MANIFEST): $(LIB_OBJS) $(DEVGLUE_OBJ)
 -include $(wildcard $(OBJDIR)/*.d)
 -include $(wildcard $(OBJDIR)/genobj/*.d)
 -include $(wildcard $(OBJDIR)/genobj/symmetric/*.d)
+-include $(wildcard $(OBJDIR)/genobj/general/*.d)
 
 .PHONY: clean
 clean:

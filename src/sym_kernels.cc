@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "sym_kernels.h"
+#include "alloc.h"
 #include "comm.h"
 #include "device.h"
 #include "nccl_device/core.h"
@@ -14,77 +15,128 @@
 #include <cmath>
 #include <cfloat>
 
-constexpr uint32_t kernelMask_STMC =
-  1 << ncclSymkKernelId_AllGather_LLMC | 1 << ncclSymkKernelId_AllGather_STMC |
-  1 << ncclSymkKernelId_AllGather_TmaSTMC | 1 << ncclSymkKernelId_AllReduce_AGxLLMC_R |
-  1 << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC | 1 << ncclSymkKernelId_ReduceScatter_LDMC |
-  1 << ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
+constexpr ncclSymkKernelMask kernelMask_STMC =
+  1ull << ncclSymkKernelId_AllGather_LLMC | 1ull << ncclSymkKernelId_AllGather_STMC |
+  1ull << ncclSymkKernelId_AllGather_TmaSTMC | 1ull << ncclSymkKernelId_AllReduce_AGxLLMC_R |
+  1ull << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC | 1ull << ncclSymkKernelId_ReduceScatter_LDMC |
+  1ull << ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
-constexpr uint32_t kernelMask_LDMC = 1 << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-                                     1 << ncclSymkKernelId_ReduceScatter_LDMC |
-                                     1 << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
+constexpr ncclSymkKernelMask kernelMask_LDMC = 1ull << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
+                                               1ull << ncclSymkKernelId_ReduceScatter_LDMC |
+                                               1ull << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
 
-constexpr uint32_t kernelMask_LL = 1 << ncclSymkKernelId_AllReduce_AGxLL_R | 1 << ncclSymkKernelId_AllReduce_AGxLLMC_R |
-                                   1 << ncclSymkKernelId_AllGather_LL | 1 << ncclSymkKernelId_AllGather_LLMC |
-                                   1 << ncclSymkKernelId_ReduceScatter_LL;
+constexpr ncclSymkKernelMask kernelMask_GenkLL128 =
+  1ull << ncclSymkKernelId_AllReduce_Ring_LL128 | 1ull << ncclSymkKernelId_AllReduce_Tree_LL128 |
+  1ull << ncclSymkKernelId_AllGather_Ring_LL128 | 1ull << ncclSymkKernelId_ReduceScatter_Ring_LL128 |
+  1ull << ncclSymkKernelId_Broadcast_Ring_LL128 | 1ull << ncclSymkKernelId_Reduce_Ring_LL128;
+constexpr ncclSymkKernelMask kernelMask_GenkLL128Reduce =
+  1ull << ncclSymkKernelId_AllReduce_Ring_LL128 | 1ull << ncclSymkKernelId_AllReduce_Tree_LL128 |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_LL128 | 1ull << ncclSymkKernelId_Reduce_Ring_LL128;
 
-constexpr uint32_t kernelMask_AG = 1 << ncclSymkKernelId_AllGather_LL | 1 << ncclSymkKernelId_AllGather_LLMC |
-                                   1 << ncclSymkKernelId_AllGather_ST | 1 << ncclSymkKernelId_AllGather_STMC |
-                                   1 << ncclSymkKernelId_AllGather_TmaST | 1 << ncclSymkKernelId_AllGather_TmaSTMC |
-                                   1 << ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
+constexpr ncclSymkKernelMask kernelMask_LL =
+  1ull << ncclSymkKernelId_AllReduce_AGxLL_R | 1ull << ncclSymkKernelId_AllReduce_AGxLLMC_R |
+  1ull << ncclSymkKernelId_AllGather_LL | 1ull << ncclSymkKernelId_AllGather_LLMC |
+  1ull << ncclSymkKernelId_ReduceScatter_LL | 1ull << ncclSymkKernelId_AllReduce_Ring_LL |
+  1ull << ncclSymkKernelId_AllReduce_Tree_LL | 1ull << ncclSymkKernelId_AllGather_Ring_LL |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_LL | 1ull << ncclSymkKernelId_Broadcast_Ring_LL |
+  1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128;
 
-constexpr uint32_t kernelMask_AR = 1 << ncclSymkKernelId_AllReduce_AGxLLMC_R | 1 << ncclSymkKernelId_AllReduce_AGxLL_R |
-                                   1 << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-                                   1 << ncclSymkKernelId_AllReduce_RSxLD_AGxST |
-                                   1 << ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST;
+constexpr ncclSymkKernelMask kernelMask_Bcast = 1ull << ncclSymkKernelId_Broadcast_Ring_Simple |
+                                                1ull << ncclSymkKernelId_Broadcast_Ring_LL |
+                                                1ull << ncclSymkKernelId_Broadcast_Ring_LL128;
+constexpr ncclSymkKernelMask kernelMask_Reduce = 1ull << ncclSymkKernelId_Reduce_Ring_Simple |
+                                                 1ull << ncclSymkKernelId_Reduce_Ring_LL |
+                                                 1ull << ncclSymkKernelId_Reduce_Ring_LL128;
 
-constexpr uint32_t kernelMask_RS = 1 << ncclSymkKernelId_ReduceScatter_LD | 1 << ncclSymkKernelId_ReduceScatter_LDMC |
-                                   1 << ncclSymkKernelId_ReduceScatter_TmaLD | 1 << ncclSymkKernelId_ReduceScatter_LL |
-                                   1 << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
-                                   1 << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
+constexpr ncclSymkKernelMask kernelMask_AG =
+  1ull << ncclSymkKernelId_AllGather_LL | 1ull << ncclSymkKernelId_AllGather_LLMC |
+  1ull << ncclSymkKernelId_AllGather_ST | 1ull << ncclSymkKernelId_AllGather_STMC |
+  1ull << ncclSymkKernelId_AllGather_TmaST | 1ull << ncclSymkKernelId_AllGather_TmaSTMC |
+  1ull << ncclSymkKernelId_AllGather_RailRing_LsaSTMC | 1ull << ncclSymkKernelId_AllGather_Ring_Simple |
+  1ull << ncclSymkKernelId_AllGather_Ring_LL | 1ull << ncclSymkKernelId_AllGather_Ring_LL128;
 
-constexpr uint32_t kernelMask_LSA =
-  1 << ncclSymkKernelId_AllReduce_AGxLL_R | 1 << ncclSymkKernelId_AllReduce_AGxLLMC_R |
-  1 << ncclSymkKernelId_AllReduce_RSxLD_AGxST | 1 << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
-  1 << ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST | 1 << ncclSymkKernelId_AllGather_LL |
-  1 << ncclSymkKernelId_AllGather_LLMC | 1 << ncclSymkKernelId_AllGather_ST | 1 << ncclSymkKernelId_AllGather_STMC |
-  1 << ncclSymkKernelId_AllGather_TmaST | 1 << ncclSymkKernelId_AllGather_TmaSTMC |
-  1 << ncclSymkKernelId_ReduceScatter_LL | 1 << ncclSymkKernelId_ReduceScatter_LD |
-  1 << ncclSymkKernelId_ReduceScatter_LDMC | 1 << ncclSymkKernelId_ReduceScatter_TmaLD;
+constexpr ncclSymkKernelMask kernelMask_AR =
+  1ull << ncclSymkKernelId_AllReduce_AGxLLMC_R | 1ull << ncclSymkKernelId_AllReduce_AGxLL_R |
+  1ull << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC | 1ull << ncclSymkKernelId_AllReduce_RSxLD_AGxST |
+  1ull << ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST | 1ull << ncclSymkKernelId_AllReduce_Ring_Simple |
+  1ull << ncclSymkKernelId_AllReduce_Tree_Simple | 1ull << ncclSymkKernelId_AllReduce_Ring_LL |
+  1ull << ncclSymkKernelId_AllReduce_Tree_LL | 1ull << ncclSymkKernelId_AllReduce_Ring_LL128 |
+  1ull << ncclSymkKernelId_AllReduce_Tree_LL128;
 
-constexpr uint32_t kernelMask_Gin = 1 << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
-                                    1 << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
-                                    1 << ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
+constexpr ncclSymkKernelMask kernelMask_RS =
+  1ull << ncclSymkKernelId_ReduceScatter_LD | 1ull << ncclSymkKernelId_ReduceScatter_LDMC |
+  1ull << ncclSymkKernelId_ReduceScatter_TmaLD | 1ull << ncclSymkKernelId_ReduceScatter_LL |
+  1ull << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD | 1ull << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_Simple | 1ull << ncclSymkKernelId_ReduceScatter_Ring_LL |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_LL128;
 
-constexpr uint32_t kernelMask_Tma = 1 << ncclSymkKernelId_AllGather_TmaST | 1 << ncclSymkKernelId_AllGather_TmaSTMC |
-                                    1 << ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST |
-                                    1 << ncclSymkKernelId_ReduceScatter_TmaLD;
+constexpr ncclSymkKernelMask kernelMask_LSA =
+  1ull << ncclSymkKernelId_AllReduce_AGxLL_R | 1ull << ncclSymkKernelId_AllReduce_AGxLLMC_R |
+  1ull << ncclSymkKernelId_AllReduce_RSxLD_AGxST | 1ull << ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC |
+  1ull << ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST | 1ull << ncclSymkKernelId_AllReduce_Ring_Simple |
+  1ull << ncclSymkKernelId_AllReduce_Tree_Simple | 1ull << ncclSymkKernelId_AllGather_LL |
+  1ull << ncclSymkKernelId_AllGather_LLMC | 1ull << ncclSymkKernelId_AllGather_ST |
+  1ull << ncclSymkKernelId_AllGather_STMC | 1ull << ncclSymkKernelId_AllGather_TmaST |
+  1ull << ncclSymkKernelId_AllGather_TmaSTMC | 1ull << ncclSymkKernelId_AllGather_Ring_Simple |
+  1ull << ncclSymkKernelId_ReduceScatter_LL | 1ull << ncclSymkKernelId_ReduceScatter_LD |
+  1ull << ncclSymkKernelId_ReduceScatter_LDMC | 1ull << ncclSymkKernelId_ReduceScatter_TmaLD |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_Simple | 1ull << ncclSymkKernelId_Broadcast_Ring_Simple |
+  1ull << ncclSymkKernelId_Reduce_Ring_Simple | 1ull << ncclSymkKernelId_AllReduce_Ring_LL |
+  1ull << ncclSymkKernelId_AllReduce_Tree_LL | 1ull << ncclSymkKernelId_AllGather_Ring_LL |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_LL | 1ull << ncclSymkKernelId_Broadcast_Ring_LL |
+  1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128;
 
-constexpr uint32_t kernelMask_DynamicSmem = kernelMask_Tma;
+constexpr ncclSymkKernelMask kernelMask_GinOnly = 1ull << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
+                                                  1ull << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
+                                                  1ull << ncclSymkKernelId_AllGather_RailRing_LsaSTMC;
 
-int ncclSymkLLKernelMask() {
+constexpr ncclSymkKernelMask kernelMask_Genk =
+  1ull << ncclSymkKernelId_AllReduce_Ring_Simple | 1ull << ncclSymkKernelId_AllReduce_Tree_Simple |
+  1ull << ncclSymkKernelId_AllGather_Ring_Simple | 1ull << ncclSymkKernelId_ReduceScatter_Ring_Simple |
+  1ull << ncclSymkKernelId_Broadcast_Ring_Simple | 1ull << ncclSymkKernelId_Reduce_Ring_Simple |
+  1ull << ncclSymkKernelId_AllReduce_Ring_LL | 1ull << ncclSymkKernelId_AllReduce_Tree_LL |
+  1ull << ncclSymkKernelId_AllGather_Ring_LL | 1ull << ncclSymkKernelId_ReduceScatter_Ring_LL |
+  1ull << ncclSymkKernelId_Broadcast_Ring_LL | 1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128;
+constexpr ncclSymkKernelMask kernelMask_GenkReduce =
+  1ull << ncclSymkKernelId_AllReduce_Ring_Simple | 1ull << ncclSymkKernelId_AllReduce_Tree_Simple |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_Simple | 1ull << ncclSymkKernelId_Reduce_Ring_Simple |
+  1ull << ncclSymkKernelId_AllReduce_Ring_LL | 1ull << ncclSymkKernelId_AllReduce_Tree_LL |
+  1ull << ncclSymkKernelId_ReduceScatter_Ring_LL | 1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128Reduce;
+constexpr ncclSymkKernelMask kernelMask_GinCapable = kernelMask_GinOnly | kernelMask_Genk;
+
+constexpr ncclSymkKernelMask kernelMask_Tma =
+  1ull << ncclSymkKernelId_AllGather_TmaST | 1ull << ncclSymkKernelId_AllGather_TmaSTMC |
+  1ull << ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST | 1ull << ncclSymkKernelId_ReduceScatter_TmaLD;
+
+constexpr ncclSymkKernelMask kernelMask_DynamicSmem = kernelMask_Tma;
+
+ncclSymkKernelMask ncclSymkLLKernelMask() {
   return kernelMask_LL;
 }
-int ncclSymkDynamicSmemKernelMask() {
+ncclSymkKernelMask ncclSymkDynamicSmemKernelMask() {
   return kernelMask_DynamicSmem;
 }
-int ncclSymkTmaKernelMask() {
+ncclSymkKernelMask ncclSymkTmaKernelMask() {
   return kernelMask_Tma;
 }
 
-int ncclSymkGinKernelMask() {
-  return kernelMask_Gin;
+ncclSymkKernelMask ncclSymkGinKernelMask() {
+  return kernelMask_GinOnly;
 }
 
-int ncclSymkAGKernelMask() {
+ncclSymkKernelMask ncclGenkKernelMask() {
+  return kernelMask_Genk;
+}
+
+ncclSymkKernelMask ncclSymkAGKernelMask() {
   return kernelMask_AG;
 }
 
-int ncclSymkARKernelMask() {
+ncclSymkKernelMask ncclSymkARKernelMask() {
   return kernelMask_AR;
 }
 
-int ncclSymkRSKernelMask() {
+ncclSymkKernelMask ncclSymkRSKernelMask() {
   return kernelMask_RS;
 }
 
@@ -115,8 +167,12 @@ bool ncclSymkTmaDeepEligible(struct ncclComm* comm, ncclSymkKernelId k, size_t n
   return nBytes >= (size_t)bytePerChunk * (size_t)chunkMod;
 }
 
-static uint32_t kernelMask_coll(ncclFunc_t coll) {
+static ncclSymkKernelMask kernelMask_coll(ncclFunc_t coll) {
   switch (coll) {
+  case ncclFuncBroadcast:
+    return kernelMask_Bcast;
+  case ncclFuncReduce:
+    return kernelMask_Reduce;
   case ncclFuncAllGather:
     return kernelMask_AG;
   case ncclFuncAllReduce:
@@ -131,6 +187,20 @@ static uint32_t kernelMask_coll(ncclFunc_t coll) {
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 1)
+
+static bool ncclGenkGinAvailable(struct ncclComm* comm) {
+#if !defined(NCCL_OS_WINDOWS)
+  if (comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL) return false;
+
+  struct ncclGinState const& ginState = comm->sharedRes->ginState;
+  for (int i = 0; i < ginState.numActiveBackends; i++) {
+    if (ginState.backends[i].ginType == NCCL_GIN_TYPE_PROXY) return true;
+  }
+#else
+  (void)comm;
+#endif
+  return false;
+}
 
 bool ncclSymkTmaAvailable(struct ncclComm* comm) {
   // TMA requires up to (8KB data + 8B mbarrier + alignment) x 16 warps SMEM.
@@ -253,7 +323,6 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
 
     NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &symk->kcomm.devComm, /*isInternal=*/true,
                                          /*deviceCodeVersion=*/NCCL_VERSION_CODE));
-
     // Dedicated sym profiler buffers, kept separate from the regular kernels' so the
     // sym workCounter never interleaves with device channels[].workCounter.
     symk->kcomm.workStarted = comm->profiler.symWorkStarted;
@@ -265,13 +334,21 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
 
 ncclResult_t ncclSymkFinalize(struct ncclComm* comm) {
   struct ncclSymkState* symk = &comm->symkState;
+  if (symk->genkInitialized) {
+    NCCLCHECK(ncclDevCommDestroy(comm, &symk->genkComm.devComm));
+    symk->genkInitialized = false;
+  }
   if (symk->initialized) {
     NCCLCHECK(ncclDevCommDestroy(comm, &symk->kcomm.devComm));
   }
   return ncclSuccess;
 }
 
-static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
+static bool ncclGenkReduceImplemented(int /*ncclDevRedOp_t*/ red) {
+  return red == ncclDevSum || red == ncclDevProd || red == ncclDevMinMax;
+}
+
+static bool ncclSymkOtherReduceImplemented(int /*ncclDevRedOp_t*/ red, ncclDataType_t ty, ncclFunc_t coll) {
   bool isFloat;
   switch (ty) {
   case ncclFloat64:
@@ -286,25 +363,35 @@ static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncc
     isFloat = false;
     break;
   }
+  if (coll == ncclFuncReduceScatter) {
+    return (red == ncclDevSum || red == ncclDevSumPostDiv) && isFloat && ty != ncclFloat64;
+  }
+  return (red == ncclDevSum) && isFloat && ty != ncclFloat64;
+}
 
+static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
   switch (coll) {
+  case ncclFuncBroadcast:
   case ncclFuncAllGather:
     return true;
+  case ncclFuncReduce:
   case ncclFuncAllReduce:
-    return red == ncclDevSum && isFloat && ty != ncclFloat64;
   case ncclFuncReduceScatter:
-    if (red == ncclDevSum || red == ncclDevSumPostDiv) {
-      return isFloat && ty != ncclFloat64;
-    }
-    return false;
+    return ncclGenkReduceImplemented(red) || ncclSymkOtherReduceImplemented(red, ty, coll);
   default:
     return false;
   }
 }
 
-uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
-                      size_t nElts, bool symAligned16B) {
-  uint32_t kmask = kernelMask_coll(coll);
+ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
+                                size_t nElts, bool symAligned16B) {
+  ncclSymkKernelMask kmask = kernelMask_coll(coll);
+
+  bool const isReduction = coll == ncclFuncReduce || coll == ncclFuncAllReduce || coll == ncclFuncReduceScatter;
+  if (isReduction) {
+    if (!ncclGenkReduceImplemented(red)) kmask &= ~kernelMask_GenkReduce;
+    if (!ncclSymkOtherReduceImplemented(red, ty, coll)) kmask &= kernelMask_GenkReduce;
+  }
 
   bool hasSTMC = comm->symkState.hasLsaMultimem;
   bool hasLDMC = false;
@@ -335,7 +422,7 @@ uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp
   if (!hasLDMC) kmask &= ~kernelMask_LDMC;
 
   size_t nBytes = alignUp(nElts * ncclTypeSize(ty), NCCL_SYM_KERNEL_CELL_SIZE);
-  size_t nBusBytes = (coll == ncclFuncAllReduce ? 1 : comm->nRanks) * nBytes;
+  size_t nBusBytes = (coll == ncclFuncAllGather || coll == ncclFuncReduceScatter ? comm->nRanks : 1) * nBytes;
   // LL kernels use 32-bit ints to track element counts and indices.
   if (nBusBytes >= (size_t(2) << 30)) kmask &= ~kernelMask_LL;
   // Any kernel might use 32-bit int to track unrolled loop chunks (which are going
@@ -344,18 +431,25 @@ uint32_t ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp
 
   if (!ncclSymkTmaAvailable(comm)) kmask &= ~kernelMask_Tma;
   if (!symAligned16B) kmask &= ~kernelMask_Tma;
+  // Specialized kernels still require direct NVLink; Genk can also use LSA over CUDA P2P or GIN.
+  if (!comm->isAllDirectNvlink) kmask &= kernelMask_Genk;
+  if (comm->minCompCap < 90) kmask &= ~kernelMask_Genk;
 
-  bool hasGin = ncclParamSymGinKernelsEnable() != 0;
-  if (!hasGin) kmask &= ~kernelMask_Gin;
-  bool needGin = ncclTeamLsa(comm).nRanks < comm->nRanks;
-  kmask &= needGin ? kernelMask_Gin : ~kernelMask_Gin;
+  bool const hasGin = ncclParamSymGinKernelsEnable() != 0;
+  bool const hasMultipleLsaTeams = ncclTeamLsa(comm).nRanks < comm->nRanks;
+  if (hasMultipleLsaTeams) {
+    kmask &= kernelMask_GinCapable;
+    if (!hasGin) kmask &= ~kernelMask_GinOnly;
+  } else {
+    kmask &= ~kernelMask_GinOnly;
+  }
+  if (comm->nNodes > 1 && (!hasGin || !ncclGenkGinAvailable(comm))) kmask &= ~kernelMask_Genk;
   return kmask;
 }
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                        size_t nElts) {
   if (!comm->symmetricSupport) return false;
-  if (!comm->isAllDirectNvlink) return false;
   if (!ncclSymkImplemented(coll, red, ty)) return false;
 
   return (ncclSymkMask(comm, coll, red, ty, nElts) != 0);
@@ -370,11 +464,14 @@ const char* ncclSymkKernelIdToString(int kernelId) {
 
 int ncclSymkMaxChunkElts(struct ncclComm* comm, ncclSymkKernelId kernelId, int /*ncclDevRedOp_t*/ red,
                          ncclDataType_t ty) {
-  bool isReduce = 1 & ((kernelMask_AR | kernelMask_RS) >> (int)kernelId);
+  bool isReduce = 1 & ((kernelMask_Reduce | kernelMask_AR | kernelMask_RS) >> (int)kernelId);
   int eltSize = ncclTypeSize(ty);
   int accMult = !isReduce ? 1 : eltSize < 4 ? 2 : 1;
-  int kernelIndex = ncclSymkGetKernelIndex(kernelId, red, ty);
-  return kernelIndex < 0 ? 0 : ncclSymkKernelMaxDynamicSmem[kernelIndex] / (eltSize * accMult);
+  bool isGenk = 1 & (kernelMask_Genk >> (int)kernelId);
+  int kernelIndex = isGenk ? ncclGenkGetKernelIndex(kernelId, red, ty) : ncclSymkGetKernelIndex(kernelId, red, ty);
+  if (kernelIndex < 0) return 0;
+  int maxDynamicSmem = isGenk ? ncclGenkKernelMaxDynamicSmem[kernelIndex] : ncclSymkKernelMaxDynamicSmem[kernelIndex];
+  return maxDynamicSmem / (eltSize * accMult);
 }
 
 /* this function fills in the devWork except nextWorkOffset */

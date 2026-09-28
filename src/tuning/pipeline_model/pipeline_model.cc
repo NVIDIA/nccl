@@ -48,7 +48,7 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
   struct ncclComm* comm = inputs->comm;
 
   // The number of active channels might not be the number of channels provisioned
-  NCCLCHECK(ncclTuningGetChannels(inputs, tuning));
+  NCCLCHECK(ncclTuningGetChannels(inputs, tuning, /*forceMaxTreeThreads=*/true));
   tuning->nChannels = ncclTuningGetActiveChannels(inputs, tuning);
   int nChannels = tuning->nChannels;
   if (nChannels == 0) {

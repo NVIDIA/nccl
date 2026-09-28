@@ -145,7 +145,8 @@ ncclResult_t ncclTuningSetThreadThresholds(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
+ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result,
+                                   bool forceMaxTreeThreads) {
   int nc = input->comm->nChannels;
   int nt = input->comm->tuningContext.maxThreads[result->algo][result->proto];
   int threadThreshold = input->comm->tuningContext.threadThresholds[result->algo][result->proto];
@@ -192,7 +193,7 @@ ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct
     if (result->algo == NCCL_ALGO_TREE) nt += 4 * WARP_SIZE;
   }
   nt = nt / WARP_SIZE < 3 ? 3 * WARP_SIZE : nt;
-  if (result->algo == NCCL_ALGO_TREE) nt = NCCL_MAX_NTHREADS; // Tree now uses all threads always.
+  if (result->algo == NCCL_ALGO_TREE && forceMaxTreeThreads) nt = NCCL_MAX_NTHREADS;
   if (result->algo == NCCL_ALGO_PAT) nt = NCCL_MAX_NTHREADS;
   if (result->maxChannels > 0 && result->maxChannels < nc) {
     nc = result->maxChannels;

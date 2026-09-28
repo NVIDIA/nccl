@@ -220,6 +220,7 @@ struct ncclTaskColl {
   ncclRedOp_t opHost;
   struct ncclDevRedOpFull opDev;
   int chunkSteps, sliceSteps;
+  int minChunkPayloadBytes;
   // Computed later:
   size_t trafficBytes;
   int32_t nMaxChannels:8;

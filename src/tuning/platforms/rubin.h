@@ -57,6 +57,24 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   {nullptr, nullptr, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_LDMC
   {nullptr, nullptr, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_RailA2A_LsaLD
   {nullptr, nullptr, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_RailA2A_LsaLDMC
+  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Ring_Simple
+  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Tree_Simple
+  {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_Ring_Simple
+  {nullptr, nullptr, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_Simple
+  {nullptr, nullptr, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_Simple
+  {nullptr, nullptr, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_Simple
+  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Ring_LL
+  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Tree_LL
+  {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_Ring_LL
+  {nullptr, nullptr, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_LL
+  {nullptr, nullptr, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_LL
+  {nullptr, nullptr, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_LL
+  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Ring_LL128
+  {nullptr, nullptr, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Tree_LL128
+  {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_Ring_LL128
+  {nullptr, nullptr, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_LL128
+  {nullptr, nullptr, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_LL128
+  {nullptr, nullptr, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_LL128
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Unicast
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
 };

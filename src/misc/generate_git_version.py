@@ -29,7 +29,7 @@ def write_if_changed(path, new_content, encoding="utf-8"):
 
 def run_git(cmd, fallback="unknown"):
     try:
-        result = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        result = subprocess.check_output(cmd, cwd=Path(__file__).resolve().parent, stderr=subprocess.DEVNULL).decode().strip()
         return result if result else fallback
     except Exception:
         return fallback

@@ -28,6 +28,12 @@ Window Registration Flags
   Register buffer into NCCL window while ensuring strict ordering for window operations using the IB Verbs transport.
   This flag is mostly intended for buffers used for GIN VA Signals (see :ref:`devapi_signals`).
 
+.. c:macro:: NCCL_WIN_CFT_COUNTED
+
+  Register buffer into NCCL window with CFT counted support. Registered buffers must be aligned to 256 bytes and are used
+  in counted operations (see :ref:`CFT counted operations <cft_counted_operations>`). The user cannot exceed the 256GB limit
+  of registered memory for counted windows.
+
 .. _cta_policy_flags:
 
 NCCL Communicator CTA Policy Flags

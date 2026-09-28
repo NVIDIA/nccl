@@ -58,6 +58,8 @@ extern const char* ncclProtoStr[NCCL_NUM_PROTOCOLS];
 #endif
 
 #include "nccl_device/net_device.h"
+#include "nccl_device/impl/ll__types.h"
+#include "nccl_device/impl/ll128__types.h"
 
 enum ncclDevRedOp_t {
   ncclDevSum,
@@ -74,21 +76,6 @@ struct ncclDevRedOpFull {
   uint64_t scalarArg;
 };
 
-union ncclLLFifoLine {
-  /* Flags have to be *after* data, because otherwise, an incomplete receive
-     from the network may receive the flag but not the data.
-     Note this is assuming that either we receive contiguous chunks of data
-     (sockets) or data is written with an atomicity of 8 bytes (IB/RDMA). */
-  struct {
-    uint32_t data1;
-    uint32_t flag1;
-    uint32_t data2;
-    uint32_t flag2;
-  };
-  uint64_t v[2];
-  int4 i4;
-};
-
 #define WARP_SIZE 32
 #define MAXCHANNELS 64
 #define NCCL_MAX_CGA_CLUSTER_SIZE 8
@@ -98,27 +85,8 @@ union ncclLLFifoLine {
 #define NCCL_SIMPLE_MAX_NTHREADS 512
 #define NCCL_SIMPLE_EXTRA_GROUP_IF_NTHREADS_GE (3 * WARP_SIZE)
 #define NCCL_LL_MAX_NTHREADS 512
-#define NCCL_LL_LINES_PER_THREAD 8
-#ifdef TEST_LL_CLEANUP
-#define NCCL_LL_CLEAN_MASK 0x078 // Set to 0x100 to disable cleanup
-#define NCCL_LL_FLAG_MAX 0x100
-#define NCCL_LL_FLAG(a) ((uint32_t)((a) % NCCL_LL_FLAG_MAX))
-#else
-#define NCCL_LL_CLEAN_MASK 0x7ffffff8
-#define NCCL_LL_FLAG(a) ((uint32_t)(a))
-#endif
 // Make sure the clean mask will last for at least NCCL_NSTEPS
 static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK value");
-
-#define NCCL_LL128_LINESIZE 128
-#define NCCL_LL128_LINEELEMS (NCCL_LL128_LINESIZE / sizeof(uint64_t))
-#define NCCL_LL128_DATAELEMS (NCCL_LL128_LINEELEMS - 1)
-
-#define NCCL_LL128_MAX_NTHREADS 640
-#define NCCL_LL128_ELEMS_PER_THREAD 120
-
-#define NCCL_LL128_SHMEM_ELEMS_PER_THREAD 8
-#define NCCL_LL128_SHMEM_SIZE (NCCL_LL128_SHMEM_ELEMS_PER_THREAD * NCCL_LL128_MAX_NTHREADS)
 
 #define NCCL_P2P_WRITE 0x01
 #define NCCL_P2P_READ 0x02
@@ -193,10 +161,18 @@ struct ncclRing {
 #define NCCL_MAX_TREE_ARITY_TOP 2
 // Nodes inside the binary tree can have to two nodes down (+1 intra-node).
 #define NCCL_MAX_TREE_ARITY 3
+// Slot zero is used by the symmetric ring. Tree edges use stable reciprocal slots so compact peer ordering may
+// differ at the two endpoints without aliasing persistent flow state.
+constexpr int ncclFlowTreeSlotChild0 = 1;
+constexpr int ncclFlowTreeSlotChild1 = 2;
+constexpr int ncclFlowTreeSlotIntra = 3;
+constexpr int ncclFlowTreeSlotCount = 4;
 struct ncclTree {
   int depth;
   int up;
   int down[NCCL_MAX_TREE_ARITY];
+  int upSlot;
+  int downSlots[NCCL_MAX_TREE_ARITY];
 };
 
 #define NCCL_MAX_DIRECT_ARITY 7

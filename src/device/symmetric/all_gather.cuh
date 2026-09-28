@@ -7,7 +7,7 @@
 
 #include "sym_kernels.h"
 #include "kernel.cuh"
-#include "primitives.cuh"
+#include "symk.cuh"
 
 template <int BytePerPack, int UnrollPacks, int UnrollPeers, bool EnableTma>
 static __device__ void bcastDeep(ncclSymkArgsHandler const& handler, int tn, int t, bool waitNeeded,

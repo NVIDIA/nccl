@@ -7,7 +7,7 @@
 
 #include "sym_kernels.h"
 #include "kernel.cuh"
-#include "primitives.cuh"
+#include "symk.cuh"
 
 template <int BytePerPack, int UnrollPacks, int UnrollPeers, typename T, bool EnableTma, typename Red>
 static __device__ void reduceDeep(ncclSymkArgsHandler const& handler, int tn, int t, bool waitNeeded,

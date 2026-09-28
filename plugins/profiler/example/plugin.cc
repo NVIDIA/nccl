@@ -148,9 +148,7 @@ static struct context* contextFromEventHandle(void* eHandle) {
   }
   case ncclProfileNetPlugin: {
     struct netPlugin* ev = (struct netPlugin*)eHandle;
-    return (ev->parent && ev->parent->parent && ev->parent->parent->parent)
-             ? getTaskEventCtx(ev->parent->parent->parent)
-             : nullptr;
+    return ev->ctx;
   }
   case ncclProfileKernelCh: {
     struct kernelCh* ev = (struct kernelCh*)eHandle;
@@ -222,8 +220,56 @@ static ncclResult_t allocateGlobalPools(void) {
   return ncclSuccess;
 }
 
+// Reserve a unique record without letting the counter exceed chunk capacity.
+static struct netPlugin* reserveNetPluginEvent(struct netPluginChunk* chunk) {
+  if (!chunk) return nullptr;
+
+  int index = __atomic_load_n(&chunk->numUsed, __ATOMIC_RELAXED);
+  while (index < NET_PLUGIN_EVENTS_PER_CHUNK) {
+    if (__atomic_compare_exchange_n(&chunk->numUsed, &index, index + 1, false,
+                                    __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+      return &chunk->events[index];
+    }
+  }
+  return nullptr;
+}
+
+// Called with netPluginMutex held. Reserve the first record before publishing
+// the new chunk, so other threads cannot take the caller's record.
+static struct netPluginChunk* createNetPluginChunk(struct context* ctx) {
+  struct netPluginChunk* chunk = (struct netPluginChunk*)calloc(1, sizeof(*chunk));
+  if (!chunk) return nullptr;
+  chunk->numUsed = 1;
+
+  struct netPluginChunk* previous = __atomic_load_n(&ctx->netPluginTail, __ATOMIC_RELAXED);
+  if (previous) previous->next = chunk;
+  else ctx->netPluginHead = chunk;
+  __atomic_store_n(&ctx->netPluginTail, chunk, __ATOMIC_RELEASE);
+  return chunk;
+}
+
+static struct netPlugin* allocateNetPluginEvent(struct context* ctx) {
+  // Common path: reserve from the current chunk without taking the mutex.
+  struct netPluginChunk* chunk = __atomic_load_n(&ctx->netPluginTail, __ATOMIC_ACQUIRE);
+  struct netPlugin* event = reserveNetPluginEvent(chunk);
+  if (event) return event;
+
+  // Slow path: another thread may have expanded the pool while we waited.
+  pthread_mutex_lock(&ctx->netPluginMutex);
+  chunk = __atomic_load_n(&ctx->netPluginTail, __ATOMIC_ACQUIRE);
+  event = reserveNetPluginEvent(chunk);
+  if (!event) {
+    chunk = createNetPluginChunk(ctx);
+    if (chunk) event = &chunk->events[0];
+  }
+  pthread_mutex_unlock(&ctx->netPluginMutex);
+  return event;
+}
+
 // Allocate event pools for a context
 static ncclResult_t allocateContextPools(struct context* ctx) {
+  if (pthread_mutex_init(&ctx->netPluginMutex, nullptr) != 0) return ncclSystemError;
+
   ctx->groupApiPool = (struct groupApi *)calloc(groupApiPoolSize, sizeof(*ctx->groupApiPool));
   if (!ctx->groupApiPool) goto fail;
 
@@ -270,6 +316,7 @@ static ncclResult_t allocateContextPools(struct context* ctx) {
   return ncclSuccess;
 
 fail:
+  pthread_mutex_destroy(&ctx->netPluginMutex);
   if (ctx->ceBatchPool) free(ctx->ceBatchPool);
   if (ctx->ceSyncPool) free(ctx->ceSyncPool);
   if (ctx->ceCollPool) free(ctx->ceCollPool);
@@ -417,6 +464,14 @@ static void printAllEvents(FILE* fh, struct context* ctx) {
     printEvent(fh, &ctx->proxyCtrlPool[i % proxyCtrlPoolSize]);
   }
 
+  // Callback producers have stopped before finalization. Print every reserved
+  // record, preserving the existing handling of events without a stop callback.
+  for (struct netPluginChunk* chunk = ctx->netPluginHead; chunk; chunk = chunk->next) {
+    for (int i = 0; i < chunk->numUsed; i++) {
+      printEvent(fh, &chunk->events[i]);
+    }
+  }
+
   // Print orphan CeColl events (those without CollApi parent)
   start = (ctx->ceCollPoolIndex - ctx->ceCollPoolSize >= 0) ? ctx->ceCollPoolIndex - ctx->ceCollPoolSize : 0;
   end = ctx->ceCollPoolIndex;
@@ -441,6 +496,13 @@ static void freeContextPools(struct context* ctx) {
   free(ctx->collPool);
   free(ctx->p2pPool);
   free(ctx->proxyCtrlPool);
+  struct netPluginChunk* chunk = ctx->netPluginHead;
+  while (chunk) {
+    struct netPluginChunk* next = chunk->next;
+    free(chunk);
+    chunk = next;
+  }
+  pthread_mutex_destroy(&ctx->netPluginMutex);
   free(ctx->ceCollPool);
   free(ctx->ceSyncPool);
   free(ctx->ceBatchPool);
@@ -490,7 +552,6 @@ __hidden ncclResult_t exampleProfilerFinalize(void* context) {
 
   // Print events first (while pools are still valid)
   printAllEvents(fh, ctx);
-
   // Then cleanup and free resources
   ceProfilerCleanupPendingEvents(ctx);
   ceProfilerDeregisterContext(ctx);
@@ -831,7 +892,6 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     event->parent = parent;
     event->isSend = parent->isSend;
     event->startTs = eventTime();
-    event->nNetEvents = 0;
     *eHandle = event;
     debugEvent(event, "ProxyStepStart");
   } else if (eDescr->type == ncclProfileKernelCh) {
@@ -864,49 +924,52 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       debugEvent(event, "KernelChStart");
     }
   } else if (eDescr->type == ncclProfileNetPlugin) {
-    struct proxyStep* parent = (struct proxyStep *)eDescr->parentObj;
-    if (parent == NULL) return ncclSuccess;
-
     int64_t pluginId = eDescr->netPlugin.id;
     int64_t type = pluginId & NCCL_PROFILER_NET_TYPE_MASK;
     int64_t ver = pluginId & NCCL_PROFILER_NET_VER_MASK;
+    if (eDescr->netPlugin.data == NULL ||
+        !((type == NCCL_PROFILER_NET_TYPE_IB || type == NCCL_PROFILER_NET_TYPE_SOCK) && ver == 1)) {
+      return ncclSuccess;
+    }
+
+    void* parent = eDescr->parentObj;
+    uint64_t parentType = parent ? *(uint64_t*)parent : 0;
+    if (parentType != 0 && parentType != ncclProfileProxyStep) {
+      return ncclSuccess;
+    }
+
+    struct netPlugin* event = allocateNetPluginEvent(ctx);
+    if (!event) return ncclSuccess;
+
+    event->type = ncclProfileNetPlugin;
+    event->ctx = ctx;
+    event->parent = parent;
+    event->parentType = parentType;
+    event->pluginType = type;
+    event->pluginVer = ver;
+    event->startTs = eventTime();
+    event->stopTs = 0;
     if (type == NCCL_PROFILER_NET_TYPE_IB) {
-      if (ver == 1) {
-        ncclProfilerNetIbDescr_v1_t* descr = (ncclProfilerNetIbDescr_v1_t *)eDescr->netPlugin.data;
-        struct netPlugin* event = parent->net + __atomic_fetch_add(&parent->nNetEvents, 1, __ATOMIC_RELAXED);
-        event->type = ncclProfileNetPlugin;
-        event->pluginType = type;
-        event->pluginVer = ver;
-        if (descr->type == ncclProfileQp) {
-          event->pluginEvent = ncclProfileQp;
-          event->qp.device = descr->qp.device;
-          event->qp.wr_id = descr->qp.wr_id;
-          event->qp.opcode = descr->qp.opcode;
-          event->qp.qpNum = descr->qp.qpNum;
-          event->qp.length = descr->qp.length;
-        }
-        event->startTs = eventTime();
-        *eHandle = event;
-        debugEvent(event, "NetPluginStart");
+      ncclProfilerNetIbDescr_v1_t* descr = (ncclProfilerNetIbDescr_v1_t *)eDescr->netPlugin.data;
+      if (descr->type == ncclProfileQp) {
+        event->pluginEvent = ncclProfileQp;
+        event->qp.device = descr->qp.device;
+        event->qp.wr_id = descr->qp.wr_id;
+        event->qp.opcode = descr->qp.opcode;
+        event->qp.qpNum = descr->qp.qpNum;
+        event->qp.length = descr->qp.length;
       }
     } else if (type == NCCL_PROFILER_NET_TYPE_SOCK) {
-      if (ver == 1) {
-        ncclProfilerNetSockDescr_v1_t* descr = (ncclProfilerNetSockDescr_v1_t *)eDescr->netPlugin.data;
-        struct netPlugin* event = parent->net + __atomic_fetch_add(&parent->nNetEvents, 1, __ATOMIC_RELAXED);
-        event->type = ncclProfileNetPlugin;
-        event->pluginType = type;
-        event->pluginVer = ver;
-        if (descr->type == ncclProfileSocket) {
-          event->pluginEvent = ncclProfileSocket;
-          event->sock.fd = descr->sock.fd;
-          event->sock.op = descr->sock.op;
-          event->sock.length = descr->sock.length;
-        }
-        event->startTs = eventTime();
-        *eHandle = event;
-        debugEvent(event, "NetPluginStart");
+      ncclProfilerNetSockDescr_v1_t* descr = (ncclProfilerNetSockDescr_v1_t *)eDescr->netPlugin.data;
+      if (descr->type == ncclProfileSocket) {
+        event->pluginEvent = ncclProfileSocket;
+        event->sock.fd = descr->sock.fd;
+        event->sock.op = descr->sock.op;
+        event->sock.length = descr->sock.length;
       }
     }
+    *eHandle = event;
+    debugEvent(event, "NetPluginStart");
   }
   return ncclSuccess;
 }

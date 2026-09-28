@@ -123,6 +123,7 @@ bool ncclDevrIsOneLsaTeam(struct ncclComm* comm);
 // Returns the CUDA version supported by CFT on this GPU, or 0 when CFT is unsupported.
 ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport, bool* gpuCftMulticastSupport,
                                bool* gpuCftCountedSupport);
+ncclResult_t ncclGpuGetCliqueIds(CUdevice dev, uint32_t* unicastId, uint32_t* multicastId);
 
 // We assume ncclComm has a `ncclDevrState symState` member.
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm);

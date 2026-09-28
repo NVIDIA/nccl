@@ -40,8 +40,7 @@ ncclResult_t findCommAndHostWindowFromDeviceWindow(ncclWindow_t devWindow, ncclC
                                                    struct ncclDevrWindow** hostWindow);
 
 // Functions in cft_dev_runtime.cc called from dev_runtime.cc:
-int computeCftSize(struct ncclComm* comm);
-int computeCftMcSize(struct ncclComm* comm);
+ncclResult_t computeCftSizes(struct ncclComm* comm, int* cftSize, int* cftMcSize);
 ncclResult_t symBindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le);
 ncclResult_t symUnbindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le);
 ncclResult_t symTeamObtainUcLe(struct ncclComm* comm, struct ncclDevrTeam* t, struct ncclDevrState* devr,

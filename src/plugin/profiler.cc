@@ -107,6 +107,8 @@ static std::mutex profilerMutex;
 static int profilerPluginRefCount;
 static void* profilerPluginLib;
 static ncclProfiler_t* ncclProfiler;
+// Pre-v6 plugins retain implicit proxy ancestors for NetPlugin events, including RAS masks.
+static bool profilerLegacyNetPlugin;
 
 // The v8 timestamp opt-in, as negotiated by whichever plugin is loaded: the
 // CPU clock to stamp into tsCpu (an ncclProfilerCpuClock_t) and whether
@@ -382,6 +384,7 @@ static pid_t pid;
 static ncclResult_t ncclProfilerPluginLoad(void) {
   const char* profilerName = nullptr;
   bool profilerPluginRequested = false;
+  bool legacyNetPlugin = false;
   if (profilerPluginLoadFailed == profilerPluginStatus) {
     return ncclSuccess;
   }
@@ -416,6 +419,8 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
     ncclProfiler = getNcclProfiler_v6(profilerPluginLib);
   }
   if (ncclProfiler == nullptr) {
+    // Falling back below v6 preserves legacy event activation semantics.
+    legacyNetPlugin = true;
     ncclProfiler = getNcclProfiler_v5(profilerPluginLib);
   }
   if (ncclProfiler == nullptr) {
@@ -437,6 +442,7 @@ static ncclResult_t ncclProfilerPluginLoad(void) {
     }
     goto fail;
   }
+  COMPILER_ATOMIC_STORE(&profilerLegacyNetPlugin, legacyNetPlugin, std::memory_order_relaxed);
   if (profilerName) INFO(NCCL_INIT, "Successfully loaded external profiler plugin %s", profilerName);
 
   ++profilerPluginRefCount;
@@ -466,6 +472,7 @@ static ncclResult_t ncclProfilerPluginUnload(void) {
     NCCLCHECK(ncclClosePluginLib(profilerPluginLib, ncclPluginTypeProfiler));
     profilerPluginLib = nullptr;
     ncclProfiler = nullptr;
+    COMPILER_ATOMIC_STORE(&profilerLegacyNetPlugin, false, std::memory_order_relaxed);
     COMPILER_ATOMIC_STORE(&profilerTsMode, 0u, std::memory_order_relaxed);
     profilerPluginStatus = profilerPluginLoadReady;
   }
@@ -598,7 +605,15 @@ static void printProfilerEventMask(int mask) {
 
 // KernelPhase sub-events are gated on ncclProfileKernelCh, so KernelCh must be set
 // whenever KernelPhase is. Enforce that on any incoming mask and log if it changes.
+// Also preserve implicit proxy ancestors for legacy NetPlugin events.
 static int ncclProfilerEnforceMaskDeps(int mask, const char* source) {
+  if (COMPILER_ATOMIC_LOAD(&profilerLegacyNetPlugin, std::memory_order_relaxed) && (mask & ncclProfileNetPlugin)) {
+    int required = ncclProfileProxyOp | ncclProfileProxyStep;
+    if ((mask & required) != required) {
+      mask |= required;
+      INFO(NCCL_INIT, "Profiler: enabling ProxyOp and ProxyStep ancestors for legacy NetPlugin events (%s)", source);
+    }
+  }
   if ((mask & ncclProfileKernelPhase) && !(mask & ncclProfileKernelCh)) {
     mask |= ncclProfileKernelCh;
     INFO(NCCL_INIT,
@@ -610,6 +625,7 @@ static int ncclProfilerEnforceMaskDeps(int mask, const char* source) {
 
 void ncclProfilerSetRasOverride(int mask) {
   // A RAS-set mask must satisfy the same KernelPhase->KernelCh dependency as any other.
+  // It must also preserve proxy ancestors when a legacy plugin requests NetPlugin.
   mask = ncclProfilerEnforceMaskDeps(mask, "RAS override");
   // Store the 'active' flag (release) LAST, pairing with the acquire-load in ncclProfilerPluginInit so both
   // mask writes are visible there.
@@ -657,6 +673,7 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
     }
 
     // KernelPhase requires KernelCh; enable it implicitly (logs if it changes the mask).
+    // Preserve implicit proxy ancestors for legacy NetPlugin events as well.
     ncclProfilerEventMask = ncclProfilerEnforceMaskDeps(ncclProfilerEventMask, "plugin");
 
     printProfilerEventMask(ncclProfilerEventMask);
@@ -665,6 +682,8 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
   // otherwise clobber a value set job-wide via the RAS client.
   if (COMPILER_ATOMIC_LOAD(&ncclProfilerRasOverrideActive, std::memory_order_acquire)) {
     int mask = COMPILER_ATOMIC_LOAD(&ncclProfilerRasOverrideMask, std::memory_order_relaxed);
+    // RAS may set this mask before the plugin is loaded. Recheck dependencies using the loaded API version.
+    mask = ncclProfilerEnforceMaskDeps(mask, "RAS override");
     COMPILER_ATOMIC_STORE(&ncclProfilerEventMask, mask, std::memory_order_relaxed);
     INFO(NCCL_INIT, "Profiler event mask: re-applied RAS override 0x%x", mask);
   }
@@ -1018,7 +1037,7 @@ ncclResult_t ncclProfilerStartProxyOpEvent(int s, struct ncclProxyArgs* args) {
   TIME_START_EVENT(proxyOpStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    if (sub->eActivationMask & (ncclProfileProxyOp | ncclProfileProxyStep | ncclProfileNetPlugin)) {
+    if (sub->eActivationMask & (ncclProfileProxyOp | ncclProfileProxyStep)) {
       ncclProfilerEventDescr_t eDescr = {0};
       eDescr.type = ncclProfileProxyOp;
       eDescr.parentObj = sub->taskEventHandle;
@@ -1051,8 +1070,9 @@ ncclResult_t ncclProfilerStartSendProxyStepEvent(int s, struct ncclProxyArgs* ar
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   int step_ = DIVUP(stepId, args->sliceSteps);
+  sub->pHandles[step_ % NCCL_STEPS].stepEventHandle = NULL;
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin)) {
+    if (sub->eActivationMask & ncclProfileProxyStep) {
       ncclProfilerEventDescr_t eDescr = {0};
       eDescr.type = ncclProfileProxyStep;
       eDescr.parentObj = sub->opEventHandle;
@@ -1070,8 +1090,9 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* ar
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   int step_ = DIVUP(stepId, args->sliceSteps);
+  sub->pHandles[step_ % NCCL_STEPS].stepEventHandle = NULL;
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    if (sub->eActivationMask & (ncclProfileProxyStep | ncclProfileNetPlugin)) {
+    if (sub->eActivationMask & ncclProfileProxyStep) {
       ncclProfilerEventDescr_t eDescr = {0};
       eDescr.type = ncclProfileProxyStep;
       eDescr.parentObj = sub->opEventHandle;
@@ -1732,6 +1753,7 @@ ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64
       if (sub->eActivationMask & ncclProfileNetPlugin) {
         ncclProfilerEventDescr_t eDescr = {0};
         eDescr.type = ncclProfileNetPlugin;
+        // NetPlugin parents remain ProxyStep handles; an unavailable parent is NULL.
         eDescr.parentObj = p->stepEventHandle;
         eDescr.rank = sub->rank;
         eDescr.netPlugin.id = pluginId;

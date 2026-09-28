@@ -375,4 +375,3 @@ if os.environ.get("NCCL_USE_CMAKE", "0") != "1":
           "\n"
           .format(src=src, fbase=fbase, gencode=gencode)
         )
-

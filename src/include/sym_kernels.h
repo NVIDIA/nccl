@@ -18,13 +18,47 @@
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
-// ncclSymk[Foo]: Kernels built on the device API
+// ncclSymk[Foo]: Specialized symmetric kernels and shared dispatch machinery
+// ncclGenk[Foo]: General Ring/Tree kernels built on the device API
 
 #define NCCL_SYM_KERNEL_CELL_SIZE 1024 // no less than 16 bytes minimal cell size
 
 constexpr int ncclSymkMaxBlocks = 64;
 constexpr int ncclSymkMaxThreads = 512;
 constexpr int ncclSymkLLMaxEltSize = 8;
+constexpr int ncclGenkRingMaxWorkerWarps = ncclSymkMaxThreads / WARP_SIZE;
+constexpr int ncclGenkRingSlotsPerProcess = 2;
+// Simple Ring uses four 1 MiB published slices in its 4 MiB FIFO and processes two slices per 2 MiB chunk.
+constexpr size_t ncclGenkRingSimpleChannelSize = 1 << 22;
+constexpr int ncclGenkRingSimpleFifoSlots = 2 * ncclGenkRingSlotsPerProcess;
+constexpr int ncclGenkRingLLFifoSlots = NCCL_STEPS;
+constexpr int ncclGenkRingLL128FifoSlots = NCCL_STEPS;
+constexpr int ncclGenkTreeMaxWorkerWarps = ncclSymkMaxThreads / WARP_SIZE;
+constexpr int ncclGenkTreeParts = 2;
+constexpr int ncclGenkTreeFifoSlots = 8;
+constexpr int ncclGenkTreeSlots = 3;
+constexpr int ncclGenkRingConnections = 1;
+constexpr int ncclGenkTreeConnections = ncclGenkTreeParts * ncclGenkTreeSlots;
+constexpr size_t ncclGenkTreeSimpleSliceBytes = 1 << 19;
+constexpr size_t ncclGenkTreeSimpleChannelSize =
+  ncclGenkTreeSimpleSliceBytes * ncclGenkTreeFifoSlots * ncclGenkTreeConnections;
+constexpr size_t ncclGenkRingLLChunkPayloadBytes = NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads * sizeof(uint64_t);
+constexpr size_t ncclGenkTreeLLChunkPayloadBytes = ncclGenkRingLLChunkPayloadBytes;
+constexpr size_t ncclGenkRingLLChannelWireBytes =
+  NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads * ncclGenkRingLLFifoSlots * sizeof(ncclLLFifoLine);
+constexpr size_t ncclGenkTreeLLChannelWireBytes = NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads *
+                                                  ncclGenkTreeFifoSlots * ncclGenkTreeConnections *
+                                                  sizeof(ncclLLFifoLine);
+// Ring and Tree use the same LL128 wire slot size.
+constexpr size_t ncclGenkLL128SlotSize = 256 << 10;
+constexpr size_t ncclGenkRingLL128ChunkPayloadBytes =
+  ncclGenkLL128SlotSize * NCCL_LL128_DATAELEMS / NCCL_LL128_LINEELEMS;
+constexpr size_t ncclGenkTreeLL128ChunkPayloadBytes = ncclGenkRingLL128ChunkPayloadBytes;
+constexpr size_t ncclGenkRingLL128ChannelWireBytes = ncclGenkLL128SlotSize * ncclGenkRingLL128FifoSlots;
+constexpr size_t ncclGenkTreeLL128ChannelWireBytes =
+  ncclGenkLL128SlotSize * ncclGenkTreeFifoSlots * ncclGenkTreeConnections;
+// General kernels use a dedicated device communicator whose selected GIN backend matches this mask.
+constexpr unsigned ncclGenkGinBackendMask = 1u << (unsigned)NCCL_NET_DEVICE_GIN_PROXY;
 
 constexpr __host__ __device__ int ncclSymkLLMaxSlots(int eltSize = ncclSymkLLMaxEltSize) {
   return ncclSymkMaxThreads * ncclSymkLLMaxEltSize / eltSize;
@@ -77,6 +111,64 @@ constexpr char const* ncclSymKernelStr[] = {
   "ReduceScatter_RailA2A_LsaLDMC"
 };
 
+// Per-channel view of the finalized topology ring for this rank. index is this rank's position in the ring when rank
+// zero is assigned index zero; prev, next, and userRanks entries are world ranks. userRanks is ordered from this rank,
+// so userRanks[0] is self, userRanks[1] is next, and userRanks[nRanks-1] is prev.
+struct ncclGenkRing {
+  int prev;
+  int next;
+  int index;
+  int const* userRanks;
+};
+
+// Per-channel view of the finalized topology tree for this rank: at most one LSA child and two GIN children. All
+// peers are world ranks. Slots identify the fixed ncclFlowProcessor FIFO region used at both ends of an edge. A -1
+// entry is unused.
+struct ncclGenkTree {
+  int upLsa;
+  int upGin;
+  int upSlot;
+  int downLsa;
+  int downLsaSlot;
+  int downGin[2];
+  int downGinSlots[2];
+};
+
+// Device state for the general Ring/Tree kernels built on ncclFlowProcessor.
+struct ncclGenkDevComm {
+  struct ncclDevComm devComm;
+#if !defined(NCCL_OS_WINDOWS)
+  ncclGinSignal_t ginSignal0;
+  // GIN send staging is packed by active logical CTA channel: Ring buffers first, then Tree buffers.
+  // Each mask marks channels with a staging buffer.
+  ncclDevResourceHandle ginFlowBuffer;
+  uint64_t ringGinChannelMask;
+  uint64_t treeGinChannelMask;
+  static_assert(ncclSymkMaxBlocks <= sizeof(ringGinChannelMask) * 8);
+  static_assert(ncclSymkMaxBlocks <= sizeof(treeGinChannelMask) * 8);
+#endif
+  // Resources in devComm's window.
+  ncclDevResourceHandle ringBuffer;
+  ncclDevResourceHandle treeBuffer;
+  ncclDevResourceHandle ringLLBuffer;
+  ncclDevResourceHandle treeLLBuffer;
+  ncclDevResourceHandle ringLL128Buffer;
+  ncclDevResourceHandle treeLL128Buffer;
+  ncclDevResourceHandle connState; // Ring states followed by Tree states.
+  // Profiler counters (host-pinned), indexed by channel id and per-channel slot.
+  // workPhases holds per-phase timestamps published behind a fence.
+  struct ncclDevProfiler* workStarted;
+  struct ncclDevProfiler* workCompleted;
+  struct ncclDevProfilerPhases* workPhases;
+  int nResourceChannels; // Per-channel FIFOs, connection states, and signals allocated at initialization.
+  int nRingChannels; // Distinct ring topologies before copyChannels expansion.
+  int nTreeChannels; // Distinct tree topologies before copyChannels expansion.
+  int nTreeSearchChannels; // Tree channels before double-tree expansion.
+  struct ncclGenkRing* rings;
+  struct ncclGenkTree* trees;
+};
+
+// Device state for the specialized symmetric kernels.
 struct ncclSymkDevComm {
   struct ncclDevComm devComm;
   struct ncclLLA2AHandle lsaLLA2A;
@@ -94,9 +186,11 @@ struct ncclSymkDevComm {
 
 struct ncclSymkState {
   bool initialized;
+  bool genkInitialized;
   bool hasLsaMultimem;
   int maxGinInboxBlocks;
   struct ncclSymkDevComm kcomm;
+  struct ncclGenkDevComm genkComm;
 };
 
 struct ncclSymkChannelWorkRange {
@@ -151,8 +245,49 @@ struct alignas(16) ncclSymkDevWorkArgs {
   }
 };
 
+struct alignas(16) ncclGenkDevWorkArgs {
+  struct ncclGenkDevComm kcomm;
+  int nMaxChannels;
+  int maxDynamicSmem;
+  uint8_t profilerMode; // ncclDevProfilerMode bits; nonzero means profilerWorkCounters[nMaxChannels] follows
+  int minChunkPayloadBytes;
+};
+
+// Both kernel families use the same variable-length trailing data layout:
+//   if profilerMode: uint64_t profilerWorkCounters[nMaxChannels] (aligned to 16)
+//   ncclSymkChannelWorkRange[nChannels] (aligned to 16)
+//   ncclSymkDevWork[nWorks]
+template <typename Args>
+__host__ constexpr size_t ncclSymkDevWorkArgsSize(int nChannels, int nWorks, bool profiler = false) {
+  return alignUp(sizeof(Args), 16) + (profiler ? alignUp(nChannels * sizeof(uint64_t), 16) : size_t(0)) +
+         alignUp(nChannels * sizeof(struct ncclSymkChannelWorkRange), 16) + nWorks * sizeof(struct ncclSymkDevWork);
+}
+
+template <typename Args>
+__host__ __device__ uint64_t* ncclSymkGetProfilerCounters(Args const* args) {
+  return (uint64_t*)((uint8_t*)args + alignUp(sizeof(Args), 16));
+}
+
+template <typename Args>
+__host__ __device__ struct ncclSymkChannelWorkRange* ncclSymkGetWorkRange(Args const* args) {
+  size_t off = alignUp(sizeof(Args), 16);
+  if (args->profilerMode) off += alignUp(args->nMaxChannels * sizeof(uint64_t), 16);
+  return (struct ncclSymkChannelWorkRange*)((uint8_t*)args + off);
+}
+
+template <typename Args>
+__host__ __device__ struct ncclSymkDevWork* ncclSymkGetWorks(Args const* args, int nChannels) {
+  return (struct ncclSymkDevWork*)((uint8_t*)ncclSymkGetWorkRange(args) +
+                                   alignUp(nChannels * sizeof(struct ncclSymkChannelWorkRange), 16));
+}
+
 union ncclSymkDevWorkArgs4K {
   struct ncclSymkDevWorkArgs args;
+  char buf4K[4096];
+};
+
+union ncclGenkDevWorkArgs4K {
+  struct ncclGenkDevWorkArgs args;
   char buf4K[4096];
 };
 
@@ -166,6 +301,7 @@ typedef enum {
 
 // We assume ncclComm contains a field: `ncclSymkState symkState`
 ncclResult_t ncclSymkInitOnce(struct ncclComm* comm);
+ncclResult_t ncclGenkInitOnce(struct ncclComm* comm);
 ncclResult_t ncclSymkFinalize(struct ncclComm* comm);
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
@@ -186,6 +322,7 @@ extern void* ncclSymkKernelListProfile[/*ncclSymkKernelCount*/];
 extern int ncclSymkKernelRequirements[/*ncclSymkKernelCount*/];
 extern int ncclSymkKernelMaxDynamicSmem[/*ncclSymkKernelCount*/]; // initialized by ncclInitKernelsForDevice()
 int ncclSymkGetKernelIndex(ncclSymkKernelId kernelId, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty);
+
 const char* ncclSymkKernelIdToString(int kernelId);
 ncclResult_t ncclGetSymRegType(struct ncclDevrWindow* sendWin, struct ncclDevrWindow* recvWin,
                                ncclSymRegType_t* winRegType);

@@ -8,7 +8,7 @@
 #include "sym_kernels.h"
 #include "nccl_device.h"
 #include "kernel.cuh"
-#include "primitives.cuh"
+#include "symk.cuh"
 #include <stdio.h>
 
 template <int BytePerPack, int UnrollPacks, int UnrollPeers, typename T, bool EnableTma, typename Red>

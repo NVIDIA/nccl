@@ -1,6 +1,6 @@
 #include "sym_kernels.h"
 #include "kernel.cuh"
-#include "primitives.cuh"
+#include "symk.cuh"
 #include "data_ops.cuh"
 
 template <bool EnableProfiler, template <typename> typename Red, typename T, bool multimem>

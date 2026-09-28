@@ -17,6 +17,7 @@ set(LIBSRCFILES
     mnnvl.cc
     allocator.cc
     sym_kernels.cc
+    genk_runtime.cc
     dev_runtime.cc
     cft_dev_runtime.cc
     dev_runtime_segments.cc

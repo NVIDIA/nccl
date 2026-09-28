@@ -20,7 +20,7 @@ endif
 
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc group.cc \
-	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc cft_dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
+	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc cft_dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc genk_runtime.cc ce_coll.cc mem_manager.cc \
 	$(wildcard config/*.cc) \
 	$(wildcard graph/*.cc) \
 	$(wildcard enqueue/*.cc) \

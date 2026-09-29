@@ -48,6 +48,11 @@ ncclResult_t ncclShmemAllgather(struct ncclComm* comm, struct ncclShmemCollBuff*
                         std::memory_order_release);
 
   do {
+    // A peer that stopped calling collectives never arrives; ncclCommAbort must be able to end the wait.
+    if (COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire)) {
+      ret = ncclInternalError;
+      goto exit;
+    }
     done = true;
     for (int i = index; i < comm->localRanks; ++i) {
       if (i != comm->localRank && COMPILER_ATOMIC_LOAD((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * i),

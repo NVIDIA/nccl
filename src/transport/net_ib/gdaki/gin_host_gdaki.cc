@@ -18,6 +18,7 @@
 
 #include "ibvwrap.h"
 #include "mlx5/mlx5dvwrap.h"
+#include "mlx5/mlx5prm.h"
 #include "gin/gin_host.h"
 #include "gin_host_gdaki.h"
 #include "plugin/nccl_net.h"
@@ -395,70 +396,66 @@ struct gdaki_context {
   doca_verbs_comp_channel_t* docaEvent;
 };
 
-// Q counter commands are issued through DevX. Mailboxes are big-endian 32-bit words laid out per the PRM
-// ALLOC_Q_COUNTER / QUERY_Q_COUNTER commands; the indices below are word offsets into those layouts.
-#define GDAKI_CMD_OP_ALLOC_Q_COUNTER 0x771
-#define GDAKI_CMD_OP_QUERY_Q_COUNTER 0x773
-#define GDAKI_ALLOC_Q_COUNTER_IN_DW 4
-#define GDAKI_ALLOC_Q_COUNTER_OUT_DW 4
-#define GDAKI_QUERY_Q_COUNTER_IN_DW 8
-#define GDAKI_QUERY_Q_COUNTER_OUT_DW 64
-
 static const struct {
   const char* name;
   int dw;
 } gdakiQCounterFields[] = {
-  {"rx_write_requests", 4},
-  {"rx_read_requests", 6},
-  {"rx_atomic_requests", 8},
-  {"out_of_buffer", 12},
-  {"out_of_sequence", 14},
-  {"duplicate_request", 16},
-  {"rnr_nak_retry_err", 18},
-  {"packet_seq_err", 20},
-  {"implied_nak_seq_err", 22},
-  {"local_ack_timeout_err", 24},
-  {"resp_cqe_error", 36},
-  {"req_cqe_error", 37},
-  {"req_transport_retries_exceeded", 45},
-  {"resp_cqe_flush_error", 47},
-  {"req_cqe_flush_error", 48},
+  {"rx_write_requests", NCCL_MLX5_Q_COUNTER_RX_WRITE_REQUESTS_DW},
+  {"rx_read_requests", NCCL_MLX5_Q_COUNTER_RX_READ_REQUESTS_DW},
+  {"rx_atomic_requests", NCCL_MLX5_Q_COUNTER_RX_ATOMIC_REQUESTS_DW},
+  {"out_of_buffer", NCCL_MLX5_Q_COUNTER_OUT_OF_BUFFER_DW},
+  {"out_of_sequence", NCCL_MLX5_Q_COUNTER_OUT_OF_SEQUENCE_DW},
+  {"duplicate_request", NCCL_MLX5_Q_COUNTER_DUPLICATE_REQUEST_DW},
+  {"rnr_nak_retry_err", NCCL_MLX5_Q_COUNTER_RNR_NAK_RETRY_ERR_DW},
+  {"packet_seq_err", NCCL_MLX5_Q_COUNTER_PACKET_SEQ_ERR_DW},
+  {"implied_nak_seq_err", NCCL_MLX5_Q_COUNTER_IMPLIED_NAK_SEQ_ERR_DW},
+  {"local_ack_timeout_err", NCCL_MLX5_Q_COUNTER_LOCAL_ACK_TIMEOUT_ERR_DW},
+  {"resp_cqe_error", NCCL_MLX5_Q_COUNTER_RESP_CQE_ERROR_DW},
+  {"req_cqe_error", NCCL_MLX5_Q_COUNTER_REQ_CQE_ERROR_DW},
+  {"req_transport_retries_exceeded", NCCL_MLX5_Q_COUNTER_REQ_TRANSPORT_RETRIES_EXCEEDED_DW},
+  {"resp_cqe_flush_error", NCCL_MLX5_Q_COUNTER_RESP_CQE_FLUSH_ERROR_DW},
+  {"req_cqe_flush_error", NCCL_MLX5_Q_COUNTER_REQ_CQE_FLUSH_ERROR_DW},
 };
 
 // Best-effort: on failure GIN QPs stay on the device default counter set.
 static void gdakiQCounterCreate(struct gdaki_context* ctx, struct ibv_context* context) {
-  uint32_t in[GDAKI_ALLOC_Q_COUNTER_IN_DW] = {};
-  uint32_t out[GDAKI_ALLOC_Q_COUNTER_OUT_DW] = {};
-  in[0] = htobe32(GDAKI_CMD_OP_ALLOC_Q_COUNTER << 16);
+  uint32_t in[NCCL_MLX5_ALLOC_Q_COUNTER_IN_SIZE_DW] = {};
+  uint32_t out[NCCL_MLX5_ALLOC_Q_COUNTER_OUT_SIZE_DW] = {};
+  in[NCCL_MLX5_CMD_IN_OPCODE_DW] = htobe32(NCCL_MLX5_CMD_OP_ALLOC_Q_COUNTER << 16);
   if (wrap_mlx5dv_devx_obj_create(&ctx->ginQCounter, context, in, sizeof(in), out, sizeof(out)) != ncclSuccess) {
     INFO(NCCL_NET,
          "[%d] GIN GDAKI Q counter not available (status=%#x syndrome=%#x); GIN QPs will use the default counter set",
-         ctx->rank, be32toh(out[0]) >> 24, be32toh(out[1]));
+         ctx->rank, be32toh(out[NCCL_MLX5_CMD_OUT_STATUS_DW]) >> 24, be32toh(out[NCCL_MLX5_CMD_OUT_SYNDROME_DW]));
     return;
   }
-  ctx->ginCounterSetId = be32toh(out[2]) & 0xff;
+  ctx->ginCounterSetId = be32toh(out[NCCL_MLX5_ALLOC_Q_COUNTER_OUT_COUNTER_SET_ID_DW]) & 0xff;
   INFO(NCCL_NET, "GIN GDAKI counter set: rank=%d dev=%s port=%u counterSetId=%u", ctx->rank, ctx->ib_dev_name,
        ctx->port_num, ctx->ginCounterSetId);
 }
 
-static void gdakiQCounterReport(struct gdaki_context* ctx) {
-  uint32_t in[GDAKI_QUERY_Q_COUNTER_IN_DW] = {};
-  uint32_t out[GDAKI_QUERY_Q_COUNTER_OUT_DW] = {};
-  in[0] = htobe32(GDAKI_CMD_OP_QUERY_Q_COUNTER << 16);
-  in[7] = htobe32(ctx->ginCounterSetId & 0xff);
+// Returns the totals of the GIN Q counter set as " counterSetTotals: name=value ...", or an empty string when GIN QPs
+// are not attached to it or it cannot be queried.
+static const char* gdakiQCounterString(struct gdaki_context* ctx, char* buf, size_t size) {
+  buf[0] = '\0';
+  if (ctx->ginCounterSetId == 0) return buf;
+
+  uint32_t in[NCCL_MLX5_QUERY_Q_COUNTER_IN_SIZE_DW] = {};
+  uint32_t out[NCCL_MLX5_QUERY_Q_COUNTER_OUT_SIZE_DW] = {};
+  in[NCCL_MLX5_CMD_IN_OPCODE_DW] = htobe32(NCCL_MLX5_CMD_OP_QUERY_Q_COUNTER << 16);
+  in[NCCL_MLX5_QUERY_Q_COUNTER_IN_COUNTER_SET_ID_DW] = htobe32(ctx->ginCounterSetId & 0xff);
   if (wrap_mlx5dv_devx_obj_query(ctx->ginQCounter, in, sizeof(in), out, sizeof(out)) != ncclSuccess) {
     INFO(NCCL_NET, "[%d] GIN GDAKI could not query counterSetId=%u (status=%#x syndrome=%#x)", ctx->rank,
-         ctx->ginCounterSetId, be32toh(out[0]) >> 24, be32toh(out[1]));
-    return;
+         ctx->ginCounterSetId, be32toh(out[NCCL_MLX5_CMD_OUT_STATUS_DW]) >> 24,
+         be32toh(out[NCCL_MLX5_CMD_OUT_SYNDROME_DW]));
+    return buf;
   }
 
-  char counters[1024] = "";
-  size_t len = 0;
+  size_t len = snprintf(buf, size, " counterSetTotals:");
   for (const auto& field : gdakiQCounterFields) {
-    if (len >= sizeof(counters)) break;
-    len += snprintf(counters + len, sizeof(counters) - len, " %s=%u", field.name, be32toh(out[field.dw]));
+    if (len >= size) break;
+    len += snprintf(buf + len, size - len, " %s=%u", field.name, be32toh(out[field.dw]));
   }
-  WARN("GDAKI GIN counter set aggregate: rank=%d counterSetId=%u%s", ctx->rank, ctx->ginCounterSetId, counters);
+  return buf;
 }
 
 static void gdakiFillExchInfo(struct gdaki_exch_info* exch_info, struct gdaki_context* gdaki_ctx,
@@ -597,7 +594,6 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
   DOCACHECK(doca_verbs_ah_attr_set_gid(ctx->ah, exch_info->vgid));
   DOCACHECK(doca_verbs_ah_attr_set_dlid(ctx->ah, dlid));
   DOCACHECK(doca_verbs_qp_attr_create(&verbs_qp_attr));
-  // counter_set_id is programmed into the QP context by the RST->INIT transition (first doca_verbs_qp_modify below).
   if (ctx->ginCounterSetId != 0) {
     doca_error_t qcErr = doca_verbs_qp_attr_set_counter_set_id(verbs_qp_attr, ctx->ginCounterSetId);
     if (qcErr != DOCA_SUCCESS) {
@@ -942,7 +938,6 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   }
   NCCLCHECKGOTO(gdakiCreateVerbsAh(gdaki_ctx, ib_sl, ib_tc, ib_gid_index), status, out);
 
-  // Must precede every gdakiConnectQp(). The DOCA SDK backend does not support doca_verbs_qp_attr_set_counter_set_id.
   if (ncclParamGinGdakiQCounter() && gdaki_ctx->gdev->type == DOCA_GPU_LIB_TYPE_OPEN) {
     gdakiQCounterCreate(gdaki_ctx, cComm->ib.context);
   }
@@ -1318,7 +1313,6 @@ out:
       if (gdaki_ctx->gqps) free(gdaki_ctx->gqps);
       if (gdaki_ctx->companion_gqps) free(gdaki_ctx->companion_gqps);
 
-      // Only after all GIN QPs are destroyed: a Q counter set cannot be deallocated while a QP references it.
       if (gdaki_ctx->ginQCounter) wrap_mlx5dv_devx_obj_destroy(gdaki_ctx->ginQCounter);
 
       if (gdaki_ctx->ndev) {
@@ -1425,7 +1419,6 @@ ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx) {
   if (gdaki_ctx->gqps) free(gdaki_ctx->gqps);
   if (gdaki_ctx->companion_gqps) free(gdaki_ctx->companion_gqps);
 
-  // Only after all GIN QPs are destroyed: a Q counter set cannot be deallocated while a QP references it.
   if (gdaki_ctx->ginQCounter) wrap_mlx5dv_devx_obj_destroy(gdaki_ctx->ginQCounter);
 
   if (gdaki_ctx->counters_table) {
@@ -1568,8 +1561,8 @@ ncclResult_t ncclGinGdakiProgress(void* ctx) {
   return ncclSuccess;
 }
 
-// Logs a GIN QP error and, when GIN QPs are attached to the GIN Q counter set, the cumulative hardware counters of all
-// of them, so triage can tell whether GIN traffic as a whole saw retries, drops, sequence errors, etc.
+// Logs a GIN QP error. When GIN QPs are attached to the GIN Q counter set, the same line carries the cumulative hardware
+// counters of all of them, so triage can tell whether GIN traffic as a whole saw retries, drops, sequence errors, etc.
 static void gdakiReportQpError(struct gdaki_context* ctx, struct doca_gpu_verbs_qp* qp,
                                const struct doca_gpu_verbs_qp_error_info* errorInfo) {
   const int nranks = ctx->collComm->nranks;
@@ -1591,14 +1584,14 @@ static void gdakiReportQpError(struct gdaki_context* ctx, struct doca_gpu_verbs_
   uint32_t qpn = 0;
   doca_verbs_qp_get_qpn(qp->qp, &qpn);
 
+  char counters[1024];
   // Communication QPs are indexed qpIdx = remoteRank + contextId * nranks.
   WARN("GDAKI QP error on qpIdx %d/%d (%s): rank=%d remoteRank=%d contextId=%d nranks=%d ncontexts=%d qpn=%#x "
-       "counterSetId=%u syndrome=%#x vendor_err=%#x hw_err=%#x hw_type=%#x wqe_counter=%d",
+       "counterSetId=%u syndrome=%#x vendor_err=%#x hw_err=%#x hw_type=%#x wqe_counter=%d%s",
        qpIdx, nqpsForComm, type, ctx->rank, qpIdx < 0 ? -1 : qpIdx % nranks, qpIdx < 0 ? -1 : qpIdx / nranks, nranks,
        ctx->nContexts, qpn, ctx->ginCounterSetId, (unsigned)errorInfo->syndrome, (unsigned)errorInfo->vendor_err_synd,
-       (unsigned)errorInfo->hw_err_synd, (unsigned)errorInfo->hw_synd_type, errorInfo->wqe_counter);
-
-  if (ctx->ginCounterSetId != 0) gdakiQCounterReport(ctx);
+       (unsigned)errorInfo->hw_err_synd, (unsigned)errorInfo->hw_synd_type, errorInfo->wqe_counter,
+       gdakiQCounterString(ctx, counters, sizeof(counters)));
 }
 
 static ncclResult_t ncclGinGdakiQueryLastErrorPolling(struct gdaki_context* gdakiCtx, bool* hasError) {

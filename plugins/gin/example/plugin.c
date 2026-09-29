@@ -364,6 +364,38 @@ __hidden ncclResult_t ginCreateContext_v14(void* collComm, ncclGinConfig_v14_t* 
   return ncclSuccess;
 }
 
+/* v15-specific functions */
+
+__hidden ncclResult_t ginGetGinProperties_v15(ncclGinProperties_v15_t* ginProps) {
+  ginProps->supportsStrongSignals = true;
+  ginProps->supportsVASignals = true;
+  return ncclSuccess;
+}
+
+__hidden ncclResult_t ginCreateContext_v15(void* collComm, ncclGinConfig_v15_t* config, void** ginCtxOut, ncclNetDeviceHandle_v11_t** devHandle) {
+  struct ginCtx* gc = (struct ginCtx*)calloc(1, sizeof(*gc));
+  if (gc == NULL) return ncclSystemError;
+  gc->nSignals = config->nSignals;
+  gc->nCounters = config->nCounters;
+  gc->nContexts = config->nContexts;
+  gc->queueDepth = config->queueDepth;
+  gc->trafficClass = config->trafficClass;
+  gc->backendVersion = config->backendVersion;
+  gc->rankStride = config->rankStride;
+
+  ncclNetDeviceHandle_v11_t* dh = (ncclNetDeviceHandle_v11_t*)calloc(1, sizeof(*dh));
+  if (dh == NULL) { free(gc); return ncclSystemError; }
+  dh->netDeviceType = NCCL_NET_DEVICE_GIN_PROXY;
+  dh->netDeviceVersion = NCCL_NET_DEVICE_INVALID_VERSION;
+  dh->handle = NULL;
+  dh->size = 0;
+  dh->needsProxyProgress = 0;
+
+  *ginCtxOut = gc;
+  *devHandle = dh;
+  return ncclSuccess;
+}
+
 /* Exported plugin structs */
 
 const ncclGin_v11_t ncclGinPlugin_v11 = {
@@ -445,6 +477,26 @@ const ncclGin_v14_t ncclGinPlugin_v14 = {
   .listen = ginListen,
   .connect = ginConnect,
   .createContext = ginCreateContext_v14,
+  .regMrSym = ginRegMrSym,
+  .regMrSymDmaBuf = ginRegMrSymDmaBuf,
+  .deregMrSym = ginDeregMrSym,
+  .destroyContext = ginDestroyContext,
+  .closeColl = ginCloseColl,
+  .closeListen = ginCloseListen,
+  .ginProgress = ginProgress_v13,
+  .queryLastError = ginQueryLastError,
+  .finalize = ginFinalize,
+};
+
+const ncclGin_v15_t ncclGinPlugin_v15 = {
+  .name = "Example",
+  .init = ginInit,
+  .devices = ginDevices,
+  .getProperties = ginGetProperties_v13,
+  .getGinProperties = ginGetGinProperties_v15,
+  .listen = ginListen,
+  .connect = ginConnect,
+  .createContext = ginCreateContext_v15,
   .regMrSym = ginRegMrSym,
   .regMrSymDmaBuf = ginRegMrSymDmaBuf,
   .deregMrSym = ginDeregMrSym,

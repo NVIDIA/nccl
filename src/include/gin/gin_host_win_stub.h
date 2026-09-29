@@ -26,7 +26,7 @@
 
 typedef void* ncclGinWindow_t;
 
-/* Config type (same layout as ncclGinConfig_v14_t in gin_v14.h) */
+/* Config type (same layout as ncclGinConfig_v15_t in gin_v15.h) */
 typedef struct {
   int nSignals;
   int nCounters;
@@ -36,7 +36,7 @@ typedef struct {
   int backendVersion;
 } ncclGinConfig_t;
 
-/* Plugin struct (same layout as ncclGin_v14_t) so gin->name, gin->regMrSym, etc. compile. Not used at runtime on
+/* Plugin struct (same layout as ncclGin_v15_t) so gin->name, gin->regMrSym, etc. compile. Not used at runtime on
  * Windows. When __CUDACC__ is defined we are in a .cu file: use a different struct tag (ncclGinHostPlugin) so the
  * name "ncclGin" is left for the device stub's type alias (ncclGin_BackendMask<...>), avoiding redefinition. */
 #if defined(__CUDACC__)

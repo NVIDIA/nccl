@@ -339,7 +339,7 @@ allocate/initialize the structs according to the format that existed at the time
 
 ## Example
 
-`plugins/gin/example` contains a minimal GIN plugin example. It exports the current v14
+`plugins/gin/example` contains a minimal GIN plugin example. It exports the current v15
 interface while preserving older example exports for compatibility. Build it with:
 
 ```shell

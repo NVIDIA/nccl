@@ -63,20 +63,20 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
 
 static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL] = 3.49;
-  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL128] = 4.88;
-  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 10.99;
-  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL] = 4.03;
-  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 5.46;
-  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 14.26;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL128] = 5.06;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 11.41;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL] = 2.6;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 3.32;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 9.5;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] = 41.35;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] = 40.48;
 
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_LL] = 19.56;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_LL128] = 27.64;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 36.32;
-  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL] = 8.19;
-  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 11.29;
-  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 15.59;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL] = 26;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 45;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 150;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] = 34.37;
 }
 

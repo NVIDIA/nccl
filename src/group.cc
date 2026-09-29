@@ -203,7 +203,7 @@ struct ncclPrepareTasksAndCollPreconnectJob {
   ncclSimInfo_t* simInfo;
 };
 
-struct ncclTaskPrepareJob {
+struct ncclTaskPrepareSchedJob {
   struct ncclAsyncJob base;
   struct ncclComm* comm;
   ncclSimInfo_t* simInfo;
@@ -292,8 +292,8 @@ ncclResult_t ncclPrepareTasksAndCollPreconnectFunc(struct ncclAsyncJob* job_) {
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTaskPrepareAndSchedJobFunc(struct ncclAsyncJob* job_) {
-  struct ncclTaskPrepareJob* job = (struct ncclTaskPrepareJob*)job_;
+static ncclResult_t ncclTaskPrepareSchedJobFunc(struct ncclAsyncJob* job_) {
+  struct ncclTaskPrepareSchedJob* job = (struct ncclTaskPrepareSchedJob*)job_;
   struct ncclComm* comm = job->comm;
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (!job_->isThreadMain && ncclOsCpuCount(comm->cpuAffinity)) ncclOsSetAffinity(comm->cpuAffinity);
@@ -690,8 +690,8 @@ static void ncclPrepareTasksAndCollPreconnectJobFree(void* _job) {
   delete job;
 }
 
-static void ncclTaskPrepareJobFree(void* _job) {
-  delete (struct ncclTaskPrepareJob*)_job;
+static void ncclTaskPrepareSchedJobFree(void* _job) {
+  delete (struct ncclTaskPrepareSchedJob*)_job;
 }
 
 static void ncclMgmtTaskJobFree(void* _job) {
@@ -902,7 +902,7 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
     if (job->destructor) job->destructor((void*)job);
   }
 
-  for (int type = 0; type < ncclGroupTaskTypeNum; ++type) {
+  for (int type = ncclGroupTaskTypeCollective; type <= ncclGroupTaskTypeSymRegister; ++type) {
     while (groupCommHeadMain[type] != nullptr) {
       struct ncclComm* comm = groupCommHeadMain[type];
       struct ncclComm* next = comm->groupNext[type];
@@ -1001,10 +1001,10 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
   while (cliqueHead) {
     comm = cliqueHead;
     do {
-      struct ncclTaskPrepareJob* job;
-      NEW_NOTHROW_GOTO(job, ncclTaskPrepareJob, ret, fail);
-      job->base.func = ncclTaskPrepareAndSchedJobFunc;
-      job->base.destructor = ncclTaskPrepareJobFree;
+      struct ncclTaskPrepareSchedJob* job;
+      NEW_NOTHROW_GOTO(job, ncclTaskPrepareSchedJob, ret, fail);
+      job->base.func = ncclTaskPrepareSchedJobFunc;
+      job->base.destructor = ncclTaskPrepareSchedJobFree;
       job->base.state = ncclGroupJobRunning;
       job->base.abortFlag = comm->abortFlag;
       job->base.abortFlagDev = comm->abortFlagDev;
@@ -1059,7 +1059,14 @@ fail:
 }
 
 static ncclResult_t groupLaunch(struct ncclAsyncJob* job_, ncclSimInfo_t* simInfo = NULL) {
-  return ncclParamEnqueueRearchEnable() ? groupLaunchEnqueueRearch(job_, simInfo) : groupLaunchLegacy(job_, simInfo);
+  struct ncclGroupJob* gjob = (struct ncclGroupJob*)job_;
+  if (ncclParamEnqueueRearchEnable()) {
+    if (gjob->hasLegacyColl) NCCLCHECK(groupLaunchLegacy(job_, simInfo));
+    NCCLCHECK(groupLaunchEnqueueRearch(job_, simInfo));
+    return ncclSuccess;
+  } else {
+    return groupLaunchLegacy(job_, simInfo);
+  }
 }
 
 static ncclResult_t groupLaunchNonBlocking(struct ncclAsyncJob* job_) {
@@ -1118,6 +1125,7 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
   memcpy(groupJob->groupCommHead, ncclGroupCommHead, sizeof(ncclGroupCommHead));
   groupJob->groupCommPreconnectHead = ncclGroupCommPreconnectHead;
   groupJob->groupError = ncclSuccess;
+  groupJob->hasLegacyColl = ncclGroupCommHead[ncclGroupTaskTypeCollective] != nullptr;
   groupJob->abortFlag = false;
   groupJob->joined = false;
   ncclIntruQueueTransfer(&groupJob->asyncJobs, &ncclAsyncJobs);

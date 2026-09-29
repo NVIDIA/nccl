@@ -806,6 +806,10 @@ struct ncclComm {
   // Queue of things for the main thread to do
   int reclaimSteps;
   struct ncclIntruQueueMpsc<struct ncclCommCallback, &ncclCommCallback::next> callbackQueue;
+  // Captured descriptors reclaimed when the matching scheduler is entered.
+  // The CUDA graph destructor only enqueues the token.
+  struct ncclIntruQueueMpsc<struct ncclRmaProxyReclaimToken, &ncclRmaProxyReclaimToken::next> rmaSchedCallbackQueue;
+  struct ncclIntruQueueMpsc<struct ncclRmaProxyReclaimToken, &ncclRmaProxyReclaimToken::next> ceSchedCallbackQueue;
 
   ncclConfig_t config;
   // initState is to more conveniently reclaim resources when errors happen.

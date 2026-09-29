@@ -268,13 +268,15 @@ static ncclResult_t ncclRmaProxyDestroyDescPersistent(struct ncclComm* comm, str
   return ncclSuccess;
 }
 
-// Destroy a descriptor.
+// Destroy a descriptor. Captured descriptors own their sequence allocations
+// even when they are not attached to a kernel plan.
 ncclResult_t ncclRmaProxyDestroyDesc(struct ncclComm* comm, struct ncclRmaProxyDesc** desc) {
   ncclResult_t ret;
-  if ((*desc)->persistPlan == nullptr) {
-    ret = ncclRmaProxyDestroyDescNonPersistent(*desc);
-  } else {
+  bool ownsSeq = (*desc)->persistPlan != nullptr || (*desc)->reclaimToken != nullptr || (*desc)->captured;
+  if (ownsSeq) {
     ret = ncclRmaProxyDestroyDescPersistent(comm, *desc);
+  } else {
+    ret = ncclRmaProxyDestroyDescNonPersistent(*desc);
   }
   *desc = nullptr;
   return ret;
@@ -821,4 +823,53 @@ ncclResult_t ncclRmaProxyReclaimPlan(struct ncclComm* comm, struct ncclKernelPla
   }
 
   return ncclSuccess;
+}
+
+// Free captured descriptors tagged with token. The proxy thread is paused so
+// the persistent queues are not being traversed. The proxy is resumed even
+// when a descriptor fails to free.
+ncclResult_t ncclRmaProxyReclaimDesc(struct ncclComm* comm, struct ncclRmaProxyReclaimToken* token) {
+  struct ncclRmaProxyState* proxyState = &comm->rmaState.rmaProxyState;
+  ncclResult_t ret = ncclSuccess;
+  if (token == nullptr || !proxyState->connected) return ncclSuccess;
+
+  {
+    std::unique_lock<std::mutex> lock(proxyState->mutex);
+    proxyState->rmaProgress = 2;
+    proxyState->cond.notify_one();
+    proxyState->cond.wait(lock, [&] { return proxyState->rmaProgress == 0; });
+  }
+
+  for (int c = 0; c < proxyState->rmaProxyCtxCount && ret == ncclSuccess; c++) {
+    struct ncclRmaProxyCtx* proxyCtx = (struct ncclRmaProxyCtx*)proxyState->rmaProxyCtxs[c];
+    if (proxyCtx == nullptr) continue;
+
+    for (int peer = 0; peer < proxyCtx->comm->nRanks && ret == ncclSuccess; peer++) {
+      struct ncclRmaProxyDesc* prev = nullptr;
+      struct ncclRmaProxyDesc* desc = ncclIntruQueueHead(&proxyCtx->persistentQueues[peer]);
+      while (desc != nullptr && ret == ncclSuccess) {
+        struct ncclRmaProxyDesc* next = desc->next;
+        if (desc->reclaimToken == token) {
+          if (prev == nullptr) {
+            proxyCtx->persistentQueues[peer].head = next;
+            if (next == nullptr) proxyCtx->persistentQueues[peer].tail = nullptr;
+          } else {
+            prev->next = next;
+            if (next == nullptr) proxyCtx->persistentQueues[peer].tail = prev;
+          }
+          ret = ncclRmaProxyDestroyDesc(comm, &desc);
+        } else {
+          prev = desc;
+        }
+        desc = next;
+      }
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(proxyState->mutex);
+    proxyState->rmaProgress = 1;
+    proxyState->cond.notify_one();
+  }
+  return ret;
 }

@@ -583,12 +583,6 @@ static void CUDART_CB symSchedKernelPlanDestructor(void* arg_) {
   free(arg);
 }
 
-static void CUDART_CB symSchedStreamPlanDestructor(void* graph_) {
-  struct ncclCudaGraph* graph = (struct ncclCudaGraph*)graph_;
-  (void)graph;
-  free(graph);
-}
-
 static ncclResult_t launchSymStreamPlan(
     struct ncclComm* comm,
     struct ncclSymSchedStreamPlan* streamPlans,

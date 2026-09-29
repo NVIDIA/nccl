@@ -100,9 +100,20 @@ struct ncclRmaProxyDesc {
 
   // Graph capture fields
   struct ncclKernelPlan* persistPlan; // Back reference to persistent plan during clean up
+  // Identity for captured descriptors that have no kernel plan. Graph teardown
+  // matches this pointer and frees the descriptor.
+  struct ncclRmaProxyReclaimToken* reclaimToken;
   bool captured;
   struct ncclCudaGraph graph;
   bool persistDescValid; // Persistent descriptor is valid
+};
+
+// Pointer identity groups the descriptors created by one captured launch.
+// next links the token on a scheduler callback queue. The CUDA graph
+// destructor only enqueues; the scheduler reclaims on its own thread.
+struct ncclRmaProxyReclaimToken {
+  struct ncclRmaProxyReclaimToken* next;
+  struct ncclComm* comm;
 };
 
 struct ncclRmaProxyCtx {
@@ -209,6 +220,9 @@ struct ncclRmaProxyState {
 ncclResult_t ncclRmaProxyPutLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
 ncclResult_t ncclRmaProxyWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* plan, cudaStream_t stream);
 ncclResult_t ncclRmaProxyReclaimPlan(struct ncclComm* comm, struct ncclKernelPlan* plan);
+// Same cleanup as ncclRmaProxyReclaimPlan for descriptors tagged with token
+// instead of an ncclKernelPlan.
+ncclResult_t ncclRmaProxyReclaimDesc(struct ncclComm* comm, struct ncclRmaProxyReclaimToken* token);
 
 // RMA Proxy lifecycle functions
 ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm);

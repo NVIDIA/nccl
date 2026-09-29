@@ -37,6 +37,7 @@ struct ncclGroupJob {
   int groupRefCount;
   bool nonBlockingInit;
   bool joined;
+  bool hasLegacyColl;
   struct ncclComm* groupCommHead[ncclGroupTaskTypeNum];
   struct ncclComm* groupCommPreconnectHead;
   ncclResult_t groupError;
@@ -80,6 +81,9 @@ inline ncclResult_t ncclGroupErrCheck(ncclResult_t ret) {
 // Add comm to this thread's group
 inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
   if (comm->groupNext[type] == reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID)) {
+    bool taskCommFirstJoin =
+      comm->groupNext[ncclGroupTaskTypeCollective] == reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID) &&
+      comm->groupNext[ncclGroupTaskTypeRawTask] == reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID);
     // Insert comm into ncclGroupCommHead adjacent to sibling comms. This preserves
     // the users program order yet insures siblings occur consecutively. This
     // is required by doLaunches() in "group.cc".
@@ -95,7 +99,7 @@ inline void ncclGroupCommJoin(struct ncclComm* comm, int type) {
     *pp = comm;
     // Comms gets a new memory stack scope upon joining. Each task batched for
     // this comm is allocated there.
-    if (type == ncclGroupTaskTypeCollective || type == ncclGroupTaskTypeRawTask) {
+    if ((type == ncclGroupTaskTypeCollective || type == ncclGroupTaskTypeRawTask) && taskCommFirstJoin) {
       // Initialize planner
       ncclMemoryStackPush(&comm->memScoped);
       ncclKernelPlanner::Peer* tmp = comm->planner.peers;

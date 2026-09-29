@@ -22,6 +22,7 @@
 #include "rma.h"
 #include "diagnostics.h"
 #include "enqueue.h"
+#include "enqueue/task_sched.h"
 #include "graph.h"
 #include "graph/topo.h"
 #include "argcheck.h"
@@ -641,6 +642,8 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   }
 
   ncclIntruQueueMpscConstruct(&comm->callbackQueue);
+  ncclIntruQueueMpscConstruct(&comm->rmaSchedCallbackQueue);
+  ncclIntruQueueMpscConstruct(&comm->ceSchedCallbackQueue);
   ncclIntruQueueConstruct(&comm->legacyRegCleanupQueue);
   ncclIntruQueueConstruct(&comm->ceInitTaskQueue);
   ncclIntruQueueConstruct(&comm->suspendTaskQueue);
@@ -3249,6 +3252,8 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
 
     NCCLCHECKGOTO(ncclCommPollEventCallbacks(comm, true), ret, fail);
     NCCLCHECKGOTO(ncclCommPollCallbacks(comm, false), ret, fail);
+    NCCLCHECKGOTO(ncclRmaSchedPollCallbacks(comm), ret, fail);
+    NCCLCHECKGOTO(ncclCeSchedPollCallbacks(comm), ret, fail);
     // And keep polling until all graphs referencing us die.
     while (comm->localPersistentRefs != 0) {
       NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/true), ret, fail);
@@ -3508,6 +3513,8 @@ static ncclResult_t commRevokeAsync(struct ncclAsyncJob* job_) {
   NCCLCHECKGOTO(ncclStrongStreamSynchronize(&comm->sharedRes->deviceStream), res, exit);
   NCCLCHECKGOTO(ncclCommPollEventCallbacks(comm, /*waitSome=*/true), res, exit);
   NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/false), res, exit);
+  NCCLCHECKGOTO(ncclRmaSchedPollCallbacks(comm), res, exit);
+  NCCLCHECKGOTO(ncclCeSchedPollCallbacks(comm), res, exit);
   {
     ncclResult_t _tmpret = ncclSuccess;
     if ((_tmpret = ncclProxyStop(comm)) != ncclSuccess) {

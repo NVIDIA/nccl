@@ -3452,7 +3452,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
   ncclFunc_t collAPI = info->coll;
   bool hasLaunchCompletionEvent = ncclInfoHasLaunchCompletionEvent(info);
 
-  if (ncclParamEnqueueRearchEnable()) {
+  if (ncclParamEnqueueRearchEnable() && info->stream != cudaStreamPerThread) {
     NCCLCHECK(rawTaskAppend(comm, info));
   } else if (info->coll == ncclFuncSend || info->coll == ncclFuncRecv) {
     NCCLCHECK(p2pTaskAppend(comm, info, info->coll, collAPI, (void*)info->recvbuff, info->count, info->datatype,

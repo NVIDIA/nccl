@@ -79,11 +79,11 @@ Check the output first for the ``Domain State`` line. If it is not ``UP`` then y
 
 A healthy IMEX domain should have all nodes in the domain in the ``READY`` state and connectivity matrix showing ``C``.
 
-In some cases NCCL may report this warning:
+In some cases NCCL may report this error:
 
 .. code:: shell
 
-  transport/p2p.cc:XXX NCCL WARN Cuda failure 800 'operation not permitted'
+  transport/p2p.cc:XXX NCCL ERROR [ncclUnhandledCudaError] Cuda failure 800 'operation not permitted'
 
 This may indicate that the current user has no write access to IMEX security files located at ``/dev/nvidia-caps-imex-channels/channel*``.
 Changing their permissions to allow write access should fix the issue.

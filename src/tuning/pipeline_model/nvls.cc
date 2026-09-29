@@ -97,7 +97,6 @@ static int ncclTuningPipelineNVLSTreeIsValid(struct ncclTuningInput_t* const inp
 
   if (!inputs->nvlsSupport) return 0;
   if (inputs->func != ncclFuncAllReduce) return 0;
-  if (inputs->comm->localRanks > NCCL_MAX_NVLS_ARITY) return 0;
 
   return 1;
 }

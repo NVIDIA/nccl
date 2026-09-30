@@ -561,6 +561,14 @@ void ncclDiagRunIbWriteBw(ncclComm* comm) {
   }
   // Gathered data is identical everywhere, so all ranks take this exit together.
   for (int rank = 0; rank < comm->nRanks; rank++) {
+    char* host = rankInfo[rank].hostname;
+    host[IB_BW_HOSTNAME_SIZE - 1] = rankInfo[rank].device[IB_BW_NAME_SIZE - 1] = '\0';
+    // Peer-supplied and later pasted into a shell command: accept plain hostnames only.
+    if (host[0] == '\0' || host[0] == '-' ||
+        host[strspn(host, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")] != '\0')
+      rankInfo[rank].setupFailed = true;
+  }
+  for (int rank = 0; rank < comm->nRanks; rank++) {
     if (!rankInfo[rank].setupFailed) continue;
     if (comm->rank == 0)
       DIAG_PRINT("NCCL DIAG [INFO] net bw: setup failed on rank %d in comm 0x%lx", rank, (unsigned long)comm->commHash);

@@ -2075,6 +2075,40 @@ Values accepted
 ^^^^^^^^^^^^^^^
 Default is 1. A positive floating-point number. Values less than or equal to 0 are ignored and replaced with 1.
 
+.. _env_NCCL_RUN_RAS_DIAGNOSTICS:
+
+NCCL_RUN_RAS_DIAGNOSTICS
+------------------------
+(since 2.31)
+
+Run the passive RAS diagnostics automatically at each communicator initialization. The diagnostics collect and compare
+system information across ranks without exercising NCCL data paths, and print a report whose lines are prefixed with
+``NCCL DIAG`` (see :ref:`ras_diagnostics`). This variable only controls the automatic init-time trigger; RAS diagnostics
+can still be requested on demand through the ``ncclras`` client regardless of its value. Requires the RAS subsystem to
+be enabled (see :ref:`env_NCCL_RAS_ENABLE`). This variable is independent of :ref:`env_NCCL_RUN_DIAGNOSTICS`; set both
+to 1 to run both levels.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Default is 0 (disabled). Set to 1 to run RAS diagnostics at every communicator initialization.
+
+.. _env_NCCL_RUN_DIAGNOSTICS:
+
+NCCL_RUN_DIAGNOSTICS
+--------------------
+(since 2.31)
+
+Run the active diagnostics synchronously during communicator initialization, before the application can issue operations
+on the communicator. Active diagnostics exercise the actual communication paths between GPUs (e.g., the P2P check and,
+across hosts, the network bandwidth check) and report the results in ``NCCL DIAG`` lines on the standard output of the
+process hosting rank 0 of the communicator (see :doc:`troubleshooting/diagnostics`). Diagnostics are informational only
+and never abort initialization. They add to initialization time. This variable is independent of
+:ref:`env_NCCL_RUN_RAS_DIAGNOSTICS`; set both to 1 to run both levels.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Default is 0 (disabled). Set to 1 to run active diagnostics at every communicator initialization.
+
 .. _NCCL_LAUNCH_ORDER_IMPLICIT:
 
 NCCL_LAUNCH_ORDER_IMPLICIT

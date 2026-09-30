@@ -27,7 +27,7 @@ static ncclResult_t ncclRma_init(void** ctx, uint64_t commId, ncclDebugLogger_t 
   return ncclSuccess;
 }
 
-static ncclResult_t ncclRma_createContext(void* collComm, ncclRmaConfig_v15_t* config, void** rmaCtx) {
+static ncclResult_t ncclRma_createContext(void* collComm, ncclRmaConfig_v17_t* config, void** rmaCtx) {
   ncclNetDeviceHandle_v11_t* devHandle;
   ncclGinConfig_v13_t config_v13;
   memset(&config_v13, 0, sizeof(config_v13));

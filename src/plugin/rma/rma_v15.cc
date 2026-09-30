@@ -8,6 +8,7 @@
 #include "nccl_rma.h"
 #include "proxy.h"
 #include <dlfcn.h>
+#include <string.h>
 
 static ncclRma_v15_t* ncclRma_v15;
 static ncclRma_t ncclRma;
@@ -16,6 +17,15 @@ static ncclResult_t ncclRma_v15_getRmaProperties(void* collComm, ncclRmaProperti
   (void)collComm;
   rmaProps->flushesAllPutsOnAnySignal = false;
   return ncclSuccess;
+}
+
+static ncclResult_t ncclRma_v15_createContext(void* collComm, ncclRmaConfig_v17_t* config, void** rmaCtx) {
+  ncclRmaConfig_v15_t config_v15;
+  memset(&config_v15, 0, sizeof(config_v15));
+  config_v15.nContexts = config->nContexts;
+  config_v15.trafficClass = config->trafficClass;
+  config_v15.rankStride = config->rankStride;
+  return ncclRma_v15->createContext(collComm, &config_v15, rmaCtx);
 }
 
 ncclRma_t* getNcclRma_v15(void* lib) {
@@ -29,7 +39,7 @@ ncclRma_t* getNcclRma_v15(void* lib) {
     ncclRma.getProperties = ncclRma_v15->getProperties;
     ncclRma.listen = ncclRma_v15->listen;
     ncclRma.connect = ncclRma_v15->connect;
-    ncclRma.createContext = ncclRma_v15->createContext;
+    ncclRma.createContext = ncclRma_v15_createContext;
     ncclRma.regMrSym = ncclRma_v15->regMrSym;
     ncclRma.regMrSymDmaBuf = ncclRma_v15->regMrSymDmaBuf;
     ncclRma.deregMrSym = ncclRma_v15->deregMrSym;

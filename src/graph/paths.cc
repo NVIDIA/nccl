@@ -578,26 +578,6 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t n
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoIsGdrAvail(struct ncclTopoSystem* system, int rank, bool* avail) {
-  int netNum = system->nodes[NET].count;
-  enum ncclTopoGdrMode useGdr = ncclTopoGdrModeDisable;
-  *avail = false;
-  for (int n = 0; n < netNum; n++) {
-    int64_t netId = system->nodes[NET].nodes[n].id;
-    NCCLCHECK(ncclTopoCheckGdr(system, rank, netId, 1, &useGdr));
-    if (useGdr) {
-      *avail = true;
-      break;
-    }
-    NCCLCHECK(ncclTopoCheckGdr(system, rank, netId, 0, &useGdr));
-    if (useGdr) {
-      *avail = true;
-      break;
-    }
-  }
-  return ncclSuccess;
-}
-
 // Set to 0 to disable the flush on Hopper when using GDR
 NCCL_PARAM(NetForceFlush, "NET_FORCE_FLUSH", 0);
 

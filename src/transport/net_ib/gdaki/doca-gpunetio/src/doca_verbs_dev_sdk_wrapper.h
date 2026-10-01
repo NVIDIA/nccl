@@ -60,6 +60,8 @@ extern "C" {
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_open_from_pd(struct ibv_pd *pd,
                                                                  doca_dev_t *net_dev);
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_close(doca_dev_t *dev);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_get_ibv_ctx(doca_dev_t *net_dev,
+                                                                struct ibv_context **ctx);
 
 #ifdef __cplusplus
 }

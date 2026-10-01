@@ -45,5 +45,6 @@
 #include "host/doca_verbs.h"
 #include "host/doca_gpunetio.h"
 #include "host/doca_gpunetio_high_level.h"
+#include "host/doca_gpunetio_signal.h"
 
 #endif /* DOCA_GPUNETIO_HOST_H */

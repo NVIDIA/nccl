@@ -43,20 +43,20 @@
 #include <mutex>
 
 #include "common/doca_gpunetio_verbs_def.h"
-#include "compiler.h"
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
 
 #include "doca_verbs_net_wrapper.h"
+#include "doca_verbs_qp.hpp"
 #include "doca_internal.hpp"
 #include "host/doca_gpunetio.h"
 #include "doca_gpunetio_gdrcopy.h"
 #include "common/doca_gpunetio_verbs_dev.h"
 #include "host/doca_verbs.h"
-#include "doca_verbs_qp.hpp"
 #include "doca_gpunetio_cuda_wrapper.h"
 #include "doca_gpunetio_sdk_wrapper.h"
 #include "doca_gpunetio.hpp"
+#include "doca_verbs_dev.hpp"
 
 #define GPU_PAGE_SHIFT 16
 #define GPU_PAGE_SIZE (1UL << GPU_PAGE_SHIFT)
@@ -743,11 +743,10 @@ doca_error_t doca_gpu_verbs_unexport_uar(uint64_t *uar_addr_gpu) {
         DOCA_LOG(LOG_ERR, "UAR address %p not found in registered_uar_refcount", uar_addr_gpu);
         return DOCA_ERROR_INVALID_VALUE;
     }
-    auto uar_it = registered_uar_refcount.find(uar_key);
-    assert(uar_it->second > 0);
-    uar_it->second--;
-    if (uar_it->second == 0) {
-        registered_uar_refcount.erase(uar_it);
+    assert(registered_uar_refcount[uar_key] > 0);
+    registered_uar_refcount[uar_key]--;
+    if (registered_uar_refcount[uar_key] == 0) {
+        registered_uar_refcount.erase(uar_key);
         cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostUnregister(uar_addr_gpu));
         if (cuda_status != cudaSuccess) {
             DOCA_LOG(LOG_ERR, "Failed to unregister UAR address %p", uar_addr_gpu);
@@ -758,18 +757,140 @@ doca_error_t doca_gpu_verbs_unexport_uar(uint64_t *uar_addr_gpu) {
     return DOCA_SUCCESS;
 }
 
+static void mlx5_init_cqes(struct doca_gpunetio_ib_mlx5_cqe64 *cqes, uint32_t nb_cqes) {
+    for (uint32_t cqe_idx = 0; cqe_idx < nb_cqes; cqe_idx++)
+        cqes[cqe_idx].op_own =
+            (DOCA_GPUNETIO_IB_MLX5_CQE_INVALID << DOCA_GPUNETIO_VERBS_MLX5_CQE_OPCODE_SHIFT) |
+            DOCA_GPUNETIO_IB_MLX5_CQE_OWNER_MASK;
+}
+
+static doca_error_t get_rq_cq_resources(doca_verbs_cq_t *cq_rq, uint32_t rq_wqe_num,
+                                        void **cqe_haddr_out, uint32_t **ci_dbr_out) {
+    doca_error_t status = DOCA_SUCCESS;
+    void *cqe_haddr = nullptr;
+    uint32_t cqe_num = 0;
+    uint8_t cqe_size = 0;
+    uint64_t *uar_db_reg = nullptr;
+    uint32_t *ci_dbr = nullptr;
+    uint32_t *arm_dbr = nullptr;
+
+    if (cq_rq == nullptr || rq_wqe_num == 0) return DOCA_ERROR_INVALID_VALUE;
+
+    status = doca_verbs_cq_get_wq(cq_rq, &cqe_haddr, &cqe_num, &cqe_size);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to get RQ CQ work queue");
+        return status;
+    }
+
+    status = doca_verbs_cq_get_dbr_db_addr(cq_rq, &uar_db_reg, &ci_dbr, &arm_dbr);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to get RQ CQ dbr addr");
+        return status;
+    }
+
+    if (cqe_haddr == nullptr || cqe_num == 0 || (cqe_num & (cqe_num - 1)) != 0 ||
+        cqe_num != rq_wqe_num || cqe_size != sizeof(struct doca_gpunetio_ib_mlx5_cqe64) ||
+        ci_dbr == nullptr) {
+        DOCA_LOG(LOG_ERR,
+                 "RQ and RQ CQ must have matching non-zero power-of-two depths, 64-byte CQEs, "
+                 "and a consumer-index doorbell record");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (cqe_haddr_out != nullptr) *cqe_haddr_out = cqe_haddr;
+    if (ci_dbr_out != nullptr) *ci_dbr_out = ci_dbr;
+
+    return DOCA_SUCCESS;
+}
+
+/* Initialize the RQ before the QP can receive traffic. Runtime reset is handled by
+ * doca_gpu_verbs_reset_tracking_and_memory() after the caller moves the QP to RST. */
+static doca_error_t initialize_rq(struct doca_gpu_verbs_qp *qp_gverbs, void *rq_wqe_daddr,
+                                  uint32_t rq_wqe_num, uint32_t rcv_wqe_size) {
+    doca_error_t status = DOCA_SUCCESS;
+    cudaError_t status_cuda = cudaSuccess;
+    struct doca_gpunetio_ib_mlx5_cqe64 *cqe_init = nullptr;
+    void *cq_rq_cqe_haddr = nullptr;
+    uint32_t *cq_ci_dbr = nullptr;
+
+    if (qp_gverbs == nullptr || qp_gverbs->cq_rq == nullptr || rq_wqe_daddr == nullptr ||
+        rq_wqe_num == 0 || rcv_wqe_size == 0)
+        return DOCA_ERROR_INVALID_VALUE;
+
+    status = get_rq_cq_resources(qp_gverbs->cq_rq, rq_wqe_num, &cq_rq_cqe_haddr, &cq_ci_dbr);
+    if (status != DOCA_SUCCESS) return status;
+
+    if (qp_gverbs->rq_dbrec_cpu == nullptr) return DOCA_ERROR_BAD_STATE;
+
+    status_cuda = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMemset(rq_wqe_daddr, 0, (size_t)rq_wqe_num * rcv_wqe_size));
+    if (status_cuda != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to zero the RQ work queue, ret %d", status_cuda);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    status_cuda = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaStreamSynchronize(0));
+    if (status_cuda != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to complete zeroing the RQ work queue, ret %d", status_cuda);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    /* The CQ lives in host memory, so mark every CQE invalid directly. Matching the owner bit
+     * that create_cq() wrote is what keeps a consumer index of 0 from reading a stale CQE as
+     * valid. */
+    cqe_init = (struct doca_gpunetio_ib_mlx5_cqe64 *)cq_rq_cqe_haddr;
+    mlx5_init_cqes(cqe_init, rq_wqe_num);
+
+    qp_gverbs->cq_rq_cqe_ci = 0;
+    qp_gverbs->rq_dbr_pi = rq_wqe_num;
+    qp_gverbs->rq_fatal_status = DOCA_SUCCESS;
+
+    *(volatile __be32 *)cq_ci_dbr = htobe32(0);
+    *(volatile __be32 *)qp_gverbs->rq_dbrec_cpu = htobe32(qp_gverbs->rq_dbr_pi & UINT16_MAX);
+    doca_internal_wc_store_fence();
+
+    return DOCA_SUCCESS;
+}
+
+/*
+ * Collect the receive-side handles needed for CPU progress and perform the one-time
+ * initialization of the RQ. The CPU pointer is either the host-resident DBR used by CPU proxy or
+ * the GDRCopy alias of the GPU-resident DBR used by a GPU NIC handler.
+ */
+static doca_error_t setup_rq(struct doca_gpu_verbs_qp *qp_gverbs, doca_verbs_cq_t *cq_rq,
+                             void *dbr_cpu_ptr, void *rq_wqe_daddr, uint32_t rq_wqe_num,
+                             uint32_t rcv_wqe_size) {
+    if (qp_gverbs == nullptr || cq_rq == nullptr) return DOCA_ERROR_INVALID_VALUE;
+
+    if (dbr_cpu_ptr == nullptr) {
+        DOCA_LOG(LOG_ERR, "RQ requires a CPU-accessible doorbell record");
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    if (rq_wqe_num == 0 || rq_wqe_daddr == nullptr) {
+        DOCA_LOG(LOG_ERR, "QP was created without an RQ");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_gverbs->cq_rq = cq_rq;
+    qp_gverbs->rq_dbrec_cpu = (__be32 *)((uint32_t *)dbr_cpu_ptr + DOCA_GPUNETIO_IB_MLX5_RCV_DBR);
+
+    return initialize_rq(qp_gverbs, rq_wqe_daddr, rq_wqe_num, rcv_wqe_size);
+}
+
 doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
                                       enum doca_gpu_dev_verbs_nic_handler nic_handler,
                                       void *gpu_qp_umem_dev_ptr, doca_verbs_cq_t *cq_sq,
+                                      doca_verbs_cq_t *cq_rq, void *dbr_cpu_ptr,
                                       enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext,
                                       enum doca_gpu_dev_verbs_cq_type cq_type,
                                       bool enable_data_direct, struct doca_gpu_verbs_qp **qp_out) {
     doca_error_t status = DOCA_SUCCESS;
     struct doca_gpu_dev_verbs_qp *qp_cpu_ = nullptr;
     struct doca_gpu_verbs_qp *qp_gverbs = nullptr;
-    void *rq_wqe_daddr;
-    uint32_t rq_wqe_num;
-    uint32_t rcv_wqe_size;
+    void *rq_wqe_daddr = nullptr;
+    uint32_t rq_wqe_num = 0;
+    uint32_t rcv_wqe_size = 0;
     uint64_t *sq_db;
     uint32_t sq_wqe_num;
     uint64_t *uar_db_reg = NULL;
@@ -782,8 +903,22 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
     bool nic_handler_must_be_cpu_proxy = false;
 
     // Will introduce SDK wrapper once done with DOCA Verbs
-    if (gpu_dev->open == nullptr || qp == nullptr || qp == nullptr || cq_sq == nullptr)
+    if (gpu_dev == nullptr || gpu_dev->open == nullptr || qp == nullptr || cq_sq == nullptr ||
+        qp_out == nullptr)
         return DOCA_ERROR_INVALID_VALUE;
+
+    if (qp->type != DOCA_VERBS_SDK_LIB_TYPE_OPEN || qp->open == nullptr)
+        return DOCA_ERROR_NOT_SUPPORTED;
+
+    if (qp->open->get_cq_sq() != cq_sq) {
+        DOCA_LOG(LOG_ERR, "SQ CQ mismatch");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (qp->open->get_cq_rq() != cq_rq) {
+        DOCA_LOG(LOG_ERR, "RQ CQ mismatch");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
 
     status = normalize_export_cq_type(&cq_type);
     if (status != DOCA_SUCCESS) return status;
@@ -843,11 +978,15 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
 
     // Check QP and CQ same size!!!!
 
-    doca_verbs_qp_get_wq(qp,
-                         (void **)&(qp_cpu_->sq_wqe_daddr),  // broken for external umem
-                         &sq_wqe_num,
-                         (void **)&(rq_wqe_daddr),  // broken for external umem
-                         &rq_wqe_num, &rcv_wqe_size);
+    status = doca_verbs_qp_get_wq(qp,
+                                  (void **)&(qp_cpu_->sq_wqe_daddr),  // broken for external umem
+                                  &sq_wqe_num,
+                                  (void **)&(rq_wqe_daddr),  // broken for external umem
+                                  &rq_wqe_num, &rcv_wqe_size);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Can't get QP work queues.");
+        goto out;
+    }
 
     status = doca_verbs_qp_get_dbr_addr(qp, (void **)&dbrec);
     if (status != DOCA_SUCCESS) {
@@ -995,6 +1134,14 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
     qp_gverbs->free_flow_ring_db_threshold = DOCA_GPUNETIO_FREE_FLOW_RING_DB_THRESHOLD_DEFAULT;
     qp_gverbs->enable_data_direct = enable_data_direct;
     qp_gverbs->cq_type = cq_type;
+
+    if (cq_rq != nullptr) {
+        status = setup_rq(qp_gverbs, cq_rq, dbr_cpu_ptr, rq_wqe_daddr, rq_wqe_num, rcv_wqe_size);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to set up the RQ");
+            goto out;
+        }
+    }
 
     *qp_out = qp_gverbs;
 
@@ -1185,7 +1332,7 @@ out:
     if (status != DOCA_SUCCESS) {
         if (qp_gpus_d) doca_gpu_mem_free(gpu_dev, qp_gpus_d);
     }
-    free(qp_gpus_h);
+    if (qp_gpus_h) free(qp_gpus_h);
     return status;
 }
 
@@ -1290,7 +1437,7 @@ static inline void priv_cpu_proxy_progress_cq(struct doca_gpu_verbs_qp *qp, bool
     struct doca_gpunetio_ib_mlx5_cqe64 *cqe64 =
         reinterpret_cast<struct doca_gpunetio_ib_mlx5_cqe64 *>(cq->cqe_daddr);
 
-    if (COMPILER_EXPECT(qp->qp_gpu_h == nullptr, 0))
+    if (qp->qp_gpu_h == nullptr)
         goto out;
 
     old_cqe_ci = cq->cqe_ci;
@@ -1306,7 +1453,7 @@ static inline void priv_cpu_proxy_progress_cq(struct doca_gpu_verbs_qp *qp, bool
         ((opown & DOCA_GPUNETIO_IB_MLX5_CQE_OWNER_MASK) ^ !!(wqe_counter & cq->cqe_num)))
         goto out;
 
-    if (COMPILER_EXPECT(opcode == DOCA_GPUNETIO_IB_MLX5_CQE_REQ_ERR, 0)) {
+    if (opcode == DOCA_GPUNETIO_IB_MLX5_CQE_REQ_ERR) {
         DOCA_LOG(LOG_WARNING, "CQE indicates request error");
         goto out;
     }
@@ -1418,7 +1565,7 @@ doca_error_t doca_gpu_verbs_create_service(doca_gpu_verbs_service_t *out_service
 out:
     if (status) {
         if (service->qps) delete service->qps;
-        free(service);
+        if (service) free(service);
     }
     return doca_status;
 }
@@ -1516,6 +1663,12 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
     cudaError_t cuda_status = cudaSuccess;
 
     struct doca_gpu_dev_verbs_qp qp_gpu_h;
+    void *sq_wqe_daddr = nullptr;
+    void *rq_wqe_daddr = nullptr;
+    void *cq_rq_cqe_haddr = nullptr;
+    uint32_t sq_wqe_num = 0;
+    uint32_t rq_wqe_num = 0;
+    uint32_t rcv_wqe_size = 0;
 
     if (qp_gverbs == nullptr) {
         status = DOCA_ERROR_INVALID_VALUE;
@@ -1533,6 +1686,30 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
     }
 
     assert(qp_gverbs->qp_cpu);
+
+    if (qp_gverbs->cq_rq != nullptr) {
+        if (qp_gverbs->monitored_by != nullptr) {
+            DOCA_LOG(LOG_ERR, "Cannot reset QP tracking while its RQ is monitored by a service");
+            status = DOCA_ERROR_IN_USE;
+            goto out;
+        }
+        if (qp_gverbs->rq_dbrec_cpu == nullptr) {
+            DOCA_LOG(LOG_ERR, "RQ has not been set up and cannot be reset");
+            status = DOCA_ERROR_BAD_STATE;
+            goto out;
+        }
+
+        doca_verbs_qp_get_wq(qp_gverbs->qp, &sq_wqe_daddr, &sq_wqe_num, &rq_wqe_daddr, &rq_wqe_num,
+                             &rcv_wqe_size);
+        if (rq_wqe_num == 0 || rq_wqe_daddr == nullptr) {
+            DOCA_LOG(LOG_ERR, "QP no longer has a valid RQ work queue");
+            status = DOCA_ERROR_UNEXPECTED;
+            goto out;
+        }
+
+        status = get_rq_cq_resources(qp_gverbs->cq_rq, rq_wqe_num, &cq_rq_cqe_haddr, nullptr);
+        if (status != DOCA_SUCCESS) goto out;
+    }
 
     qp_gverbs->qp_cpu->sq_wqe_pi = 0;
     qp_gverbs->qp_cpu->sq_rsvd_index = 0;
@@ -1583,6 +1760,16 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
         DOCA_LOG(LOG_ERR, "Failed to reset sq_wqe_daddr");
         status = DOCA_ERROR_DRIVER;
         goto out;
+    }
+
+    if (qp_gverbs->cq_rq != nullptr) {
+        memset(cq_rq_cqe_haddr, 0xff, rq_wqe_num * sizeof(struct doca_gpunetio_ib_mlx5_cqe64));
+        qp_gverbs->rq_dbr_pi = rq_wqe_num;
+        qp_gverbs->rq_fatal_status = DOCA_SUCCESS;
+
+        *(volatile __be32 *)qp_gverbs->rq_dbrec_cpu =
+            htobe32((uint32_t)(qp_gverbs->rq_dbr_pi & UINT16_MAX));
+        doca_internal_wc_store_fence();
     }
 
     cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaMemcpy(qp_gverbs->qp_gpu, qp_gverbs->qp_cpu,
@@ -1713,6 +1900,330 @@ doca_error_t doca_gpu_verbs_req_notify_cq(doca_gpu_t *gpu_dev, doca_verbs_cq_t *
 
 out:
     cudaStreamDestroy(stream);
+
+    return status;
+}
+
+doca_error_t doca_gpu_nic_cap_is_gpu_mem_umem_supported(doca_gpu_t *gpu_dev, doca_dev_t *net_dev) {
+    const size_t size = priv_get_page_size();
+    doca_error_t status = DOCA_SUCCESS;
+    doca_error_t cleanup_status;
+    void *gpu_ptr = nullptr;
+    doca_verbs_umem_t *umem = nullptr;
+    int dmabuf_fd = DOCA_VERBS_DMABUF_INVALID_FD;
+    CUcontext current_ctx;
+    CUcontext input_ctx;
+    CUresult res;
+
+    if (gpu_dev == nullptr || net_dev == nullptr) return DOCA_ERROR_INVALID_VALUE;
+
+    if ((gpu_dev->type == DOCA_GPU_LIB_TYPE_SDK && net_dev->type != DOCA_VERBS_SDK_LIB_TYPE_SDK) ||
+        (gpu_dev->type != DOCA_GPU_LIB_TYPE_SDK && net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK)) {
+        DOCA_LOG(LOG_ERR, "gpu_dev and nic_dev aren't both SDK or both open", __func__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (gpu_dev->type == DOCA_GPU_LIB_TYPE_SDK && net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_gpu_sdk_wrapper_cap_is_gpu_mem_umem_supported(gpu_dev->sdk, net_dev->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        } else if (err == DOCA_SDK_WRAPPER_NOT_SUPPORTED) {
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    }
+
+    if (gpu_dev->open == nullptr || net_dev->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA GPU or NIC open instance provided at %s line %d.", __func__,
+                 __LINE__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuCtxGetCurrent(&current_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxGetCurrent failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRetain(&input_ctx, gpu_dev->open->cuda_dev);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuDevicePrimaryCtxRetain input failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuCtxSetCurrent(input_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxSetCurrent input failed with %d", res);
+        status = DOCA_ERROR_DRIVER;
+        goto cleanup;
+    }
+
+    status = doca_gpu_mem_alloc(gpu_dev, size, size, DOCA_GPU_MEM_TYPE_GPU, &gpu_ptr, nullptr);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_WARNING, "Failed to allocate GPU memory while probing GPU UMEM support");
+        goto cleanup;
+    }
+
+    status = doca_gpu_get_dmabuf_fd(gpu_dev, gpu_ptr, size, &dmabuf_fd);
+    if (status == DOCA_SUCCESS) {
+        status = doca_verbs_umem_create(net_dev, gpu_dev, gpu_ptr, size, IBV_ACCESS_LOCAL_WRITE,
+                                        dmabuf_fd, 0, &umem);
+        if (status == DOCA_SUCCESS) goto cleanup;
+
+        DOCA_LOG(LOG_WARNING,
+                 "Failed to create GPU UMEM with DMABUF while probing support; trying PEERMEM");
+    } else {
+        DOCA_LOG(LOG_WARNING,
+                 "Failed to obtain a GPU DMABUF while probing UMEM support; trying PEERMEM");
+    }
+
+    status = doca_verbs_umem_create(net_dev, gpu_dev, gpu_ptr, size, IBV_ACCESS_LOCAL_WRITE,
+                                    DOCA_VERBS_DMABUF_INVALID_FD, 0, &umem);
+    if (status != DOCA_SUCCESS)
+        DOCA_LOG(LOG_WARNING, "GPU UMEM creation is not supported with DMABUF or PEERMEM");
+
+cleanup:
+    if (umem != nullptr) {
+        cleanup_status = doca_verbs_umem_destroy(umem);
+        if (cleanup_status != DOCA_SUCCESS)
+            DOCA_LOG(LOG_WARNING, "Failed to destroy GPU UMEM after probing with %d",
+                     cleanup_status);
+    }
+
+    if (dmabuf_fd >= 0 && close(dmabuf_fd) != 0)
+        DOCA_LOG(LOG_WARNING, "Failed to close GPU DMABUF %d after probing UMEM", dmabuf_fd);
+
+    if (gpu_ptr != nullptr) {
+        cleanup_status = doca_gpu_mem_free(gpu_dev, gpu_ptr);
+        if (cleanup_status != DOCA_SUCCESS)
+            DOCA_LOG(LOG_WARNING, "Failed to free GPU memory after probing UMEM support with %d",
+                     cleanup_status);
+    }
+
+    /* Restore original ctx as current ctx */
+    res = doca_gpu_cuda_wrapper_cuCtxSetCurrent(current_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxSetCurrent current failed with %d", res);
+        status = DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRelease(gpu_dev->open->cuda_dev);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuDevicePrimaryCtxRelease current failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    return status;
+}
+
+doca_error_t doca_gpu_nic_cap_is_host_mem_umem_supported(doca_gpu_t *gpu_dev,
+                                                         struct doca_dev *net_dev) {
+    const size_t size = priv_get_page_size();
+    doca_error_t status = DOCA_SUCCESS;
+    doca_error_t cleanup_status;
+    void *gpu_ptr = nullptr;
+    void *cpu_ptr = nullptr;
+    doca_verbs_umem_t *umem = nullptr;
+    CUcontext current_ctx;
+    CUcontext input_ctx;
+    CUresult res;
+
+    if (gpu_dev == nullptr || net_dev == nullptr) return DOCA_ERROR_INVALID_VALUE;
+
+    if ((gpu_dev->type == DOCA_GPU_LIB_TYPE_SDK && net_dev->type != DOCA_VERBS_SDK_LIB_TYPE_SDK) ||
+        (gpu_dev->type != DOCA_GPU_LIB_TYPE_SDK && net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK)) {
+        DOCA_LOG(LOG_INFO, "gpu_dev and nic_dev aren't both SDK or both open", __func__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (gpu_dev->type == DOCA_GPU_LIB_TYPE_SDK && net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err = doca_gpu_sdk_wrapper_cap_is_host_mem_umem_supported(gpu_dev->sdk, net_dev->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_WARNING, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        } else if (err == DOCA_SDK_WRAPPER_NOT_SUPPORTED) {
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    }
+
+    if (gpu_dev->open == nullptr || net_dev->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA GPU or NIC open instance provided at %s line %d.", __func__,
+                 __LINE__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuCtxGetCurrent(&current_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxGetCurrent failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRetain(&input_ctx, gpu_dev->open->cuda_dev);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuDevicePrimaryCtxRetain input failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuCtxSetCurrent(input_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxSetCurrent input failed with %d", res);
+        status = DOCA_ERROR_DRIVER;
+        goto cleanup;
+    }
+
+    status = doca_gpu_mem_alloc(gpu_dev, size, size, DOCA_GPU_MEM_TYPE_CPU_GPU, &gpu_ptr, &cpu_ptr);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_WARNING, "Failed to allocate host memory while probing host UMEM support");
+        goto cleanup;
+    }
+
+    status = doca_verbs_umem_create(net_dev, gpu_dev, cpu_ptr, size, IBV_ACCESS_LOCAL_WRITE,
+                                    DOCA_VERBS_DMABUF_INVALID_FD, 0, &umem);
+    if (status != DOCA_SUCCESS) DOCA_LOG(LOG_WARNING, "Host UMEM creation is not supported");
+
+cleanup:
+    if (umem != nullptr) {
+        cleanup_status = doca_verbs_umem_destroy(umem);
+        if (cleanup_status != DOCA_SUCCESS)
+            DOCA_LOG(LOG_WARNING, "Failed to destroy host UMEM after probing support with %d",
+                     cleanup_status);
+    }
+
+    if (gpu_ptr != nullptr) {
+        cleanup_status = doca_gpu_mem_free(gpu_dev, gpu_ptr);
+        if (cleanup_status != DOCA_SUCCESS)
+            DOCA_LOG(LOG_WARNING, "Failed to free host memory after probing UMEM support with %d",
+                     cleanup_status);
+    }
+
+    /* Restore original ctx as current ctx */
+    res = doca_gpu_cuda_wrapper_cuCtxSetCurrent(current_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxSetCurrent current failed with %d", res);
+        status = DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRelease(gpu_dev->open->cuda_dev);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuDevicePrimaryCtxRelease current failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    return status;
+}
+
+doca_error_t doca_gpu_nic_cap_is_nic_handler_gpu_sm_db_supported(doca_gpu_t *gpu_dev,
+                                                                 struct doca_dev *net_dev) {
+    doca_error_t status = DOCA_SUCCESS;
+    doca_error_t cleanup_status;
+    doca_verbs_uar_t *uar = nullptr;
+    void *uar_addr = nullptr;
+    uint64_t *uar_addr_gpu = nullptr;
+    bool uar_registered = false;
+    CUcontext current_ctx;
+    CUcontext input_ctx;
+    CUresult res;
+
+    if (gpu_dev == nullptr || net_dev == nullptr) return DOCA_ERROR_INVALID_VALUE;
+
+    if ((gpu_dev->type == DOCA_GPU_LIB_TYPE_SDK && net_dev->type != DOCA_VERBS_SDK_LIB_TYPE_SDK) ||
+        (gpu_dev->type != DOCA_GPU_LIB_TYPE_SDK && net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK)) {
+        DOCA_LOG(LOG_INFO, "gpu_dev and nic_dev aren't both SDK or both open", __func__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (gpu_dev->type == DOCA_GPU_LIB_TYPE_SDK && net_dev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+        auto err =
+            doca_gpu_sdk_wrapper_cap_is_nic_handler_gpu_sm_db_supported(gpu_dev->sdk, net_dev->sdk);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        } else if (err == DOCA_SDK_WRAPPER_NOT_SUPPORTED) {
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+    }
+
+    if (gpu_dev->open == nullptr || net_dev->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA GPU or NIC open instance provided at %s line %d.", __func__,
+                 __LINE__);
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuCtxGetCurrent(&current_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxGetCurrent failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRetain(&input_ctx, gpu_dev->open->cuda_dev);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuDevicePrimaryCtxRetain input failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuCtxSetCurrent(input_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxSetCurrent input failed with %d", res);
+        status = DOCA_ERROR_DRIVER;
+        goto cleanup;
+    }
+
+    status = doca_verbs_uar_create(net_dev, DOCA_VERBS_UAR_ALLOCATION_TYPE_NONCACHE, &uar);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to create a non-cache UAR while probing GPU doorbell support");
+        goto cleanup;
+    }
+
+    status = doca_verbs_uar_reg_addr_get(uar, &uar_addr);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to get the UAR address while probing GPU doorbell support");
+        goto cleanup;
+    }
+
+    status = doca_gpu_verbs_export_uar((uint64_t *)uar_addr, &uar_addr_gpu);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to export the UAR address while probing GPU doorbell support");
+        goto cleanup;
+    }
+
+    uar_registered = true;
+
+cleanup:
+    if (uar_registered) {
+        cleanup_status = doca_gpu_verbs_unexport_uar(uar_addr_gpu);
+        if (cleanup_status != DOCA_SUCCESS)
+            DOCA_LOG(
+                LOG_WARNING,
+                "Failed to unexport the UAR address after probing GPU doorbell support with %d",
+                cleanup_status);
+    }
+
+    if (uar != nullptr) {
+        cleanup_status = doca_verbs_uar_destroy(uar);
+        if (cleanup_status != DOCA_SUCCESS)
+            DOCA_LOG(LOG_WARNING,
+                     "Failed to destroy the UAR after probing GPU doorbell support with %d",
+                     cleanup_status);
+    }
+
+    /* Restore original ctx as current ctx */
+    res = doca_gpu_cuda_wrapper_cuCtxSetCurrent(current_ctx);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuCtxSetCurrent current failed with %d", res);
+        status = DOCA_ERROR_DRIVER;
+    }
+
+    res = doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRelease(gpu_dev->open->cuda_dev);
+    if (res != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuDevicePrimaryCtxRelease current failed with %d", res);
+        return DOCA_ERROR_DRIVER;
+    }
 
     return status;
 }

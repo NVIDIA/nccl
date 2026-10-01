@@ -68,6 +68,35 @@ static inline cudaError_t doca_verbs_cuda_clear_error(cudaError_t cuda_result) {
     return cuda_result;
 }
 
+/*
+ * Drain the store buffer so a store already issued to a write-combining mapping reaches the
+ * device.
+ */
+static inline void doca_internal_wc_store_fence(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    asm volatile("sfence" ::: "memory");
+#elif defined(__aarch64__)
+    asm volatile("dmb st" ::: "memory");
+#elif defined(__PPC64__) || defined(__powerpc64__)
+    asm volatile("sync" ::: "memory");
+#else
+    __sync_synchronize();
+#endif
+}
+
+/* Match GDRCopy's stronger fence when coherent and write-combined mappings coexist. */
+static inline void doca_internal_memory_fence(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    asm volatile("mfence" ::: "memory");
+#elif defined(__aarch64__)
+    asm volatile("dmb sy" ::: "memory");
+#elif defined(__PPC64__) || defined(__powerpc64__)
+    asm volatile("sync" ::: "memory");
+#else
+    __sync_synchronize();
+#endif
+}
+
 #define DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cmd) doca_verbs_cuda_clear_error(cmd)
 
 /**

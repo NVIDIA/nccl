@@ -239,7 +239,7 @@ void print_missing_attrs(int required_attr_mask, int attr_mask) {
     print_if_missing_attr(required_attr_mask, attr_mask, DOCA_VERBS_QP_ATTR_AH_ATTR);
 }
 
-static doca_error_t validate_lag_tx_port_affinity_attr(
+static doca_error_t is_lag_tx_port_affinity_attr_valid(
     uint8_t lag_tx_port_affinity, struct doca_verbs_device_attr *verbs_device_attr,
     doca_verbs_qp_state_mod state_mod) {
     if (lag_tx_port_affinity > 0) {
@@ -870,7 +870,7 @@ doca_error_t doca_verbs_qp_open::rst2init(struct doca_verbs_qp_attr_open *verbs_
     }
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
-        doca_error_t status = validate_lag_tx_port_affinity_attr(
+        doca_error_t status = is_lag_tx_port_affinity_attr_valid(
             verbs_qp_attr->lag_tx_port_affinity, m_verbs_device_attr, DOCA_VERBS_QP_RST2INIT);
         if (status != DOCA_SUCCESS) {
             return status;
@@ -925,7 +925,7 @@ doca_error_t doca_verbs_qp_open::init2init(struct doca_verbs_qp_attr_open *verbs
     }
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
-        doca_error_t status = validate_lag_tx_port_affinity_attr(
+        doca_error_t status = is_lag_tx_port_affinity_attr_valid(
             verbs_qp_attr->lag_tx_port_affinity, m_verbs_device_attr, DOCA_VERBS_QP_INIT2INIT);
         if (status != DOCA_SUCCESS) {
             return status;
@@ -973,6 +973,37 @@ doca_error_t doca_verbs_qp_open::init2rtr(struct doca_verbs_qp_attr_open *verbs_
     DEVX_SET(qpc, qpc, next_rcv_psn, verbs_qp_attr->rq_psn);
     DEVX_SET(qpc, qpc, remote_qpn, verbs_qp_attr->dest_qp_num);
     DEVX_SET(qpc, qpc, log_msg_max, sc_verbs_log_msg_max);
+
+    if (m_init_attr.is_ordering_semantic_set) {
+        if (!m_verbs_device_attr->m_dp_ordering_force) {
+            DOCA_LOG(LOG_ERR, "DP ordering force capability is not supported by the device");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+
+        if (m_init_attr.ordering_semantic > m_verbs_device_attr->m_dp_ordering_rc) {
+            DOCA_LOG(LOG_ERR, "Requested DP ordering semantic is not supported by the device");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+
+        DEVX_SET(qpc, qpc, dp_ordering_force, 1);
+        switch (m_init_attr.ordering_semantic) {
+            case DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA:
+                DEVX_SET(qpc, qpc, dp_ordering_0, PRIV_DOCA_MLX5_DP_ORDERING_IBTA & 0x1);
+                DEVX_SET(qpc, qpc, dp_ordering_1, (PRIV_DOCA_MLX5_DP_ORDERING_IBTA & 0x2) >> 1);
+                break;
+            case DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_RW:
+                DEVX_SET(qpc, qpc, dp_ordering_0, PRIV_DOCA_MLX5_DP_ORDERING_OOO_RW & 0x1);
+                DEVX_SET(qpc, qpc, dp_ordering_1, (PRIV_DOCA_MLX5_DP_ORDERING_OOO_RW & 0x2) >> 1);
+                break;
+            case DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL:
+                DEVX_SET(qpc, qpc, dp_ordering_0, PRIV_DOCA_MLX5_DP_ORDERING_OOO_ALL & 0x1);
+                DEVX_SET(qpc, qpc, dp_ordering_1, (PRIV_DOCA_MLX5_DP_ORDERING_OOO_ALL & 0x2) >> 1);
+                break;
+            default:
+                // Shouldn't reach this
+                return DOCA_ERROR_UNKNOWN;
+        }
+    }
 
     uint32_t prm_mtu{};
     auto status = convert_doca_mtu_size_to_prm_mtu_size(verbs_qp_attr->path_mtu, prm_mtu);
@@ -1067,7 +1098,7 @@ doca_error_t doca_verbs_qp_open::init2rtr(struct doca_verbs_qp_attr_open *verbs_
                  doca_internal_utils_log2(verbs_qp_attr->max_dest_rd_atomic));
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
-        status = validate_lag_tx_port_affinity_attr(verbs_qp_attr->lag_tx_port_affinity,
+        status = is_lag_tx_port_affinity_attr_valid(verbs_qp_attr->lag_tx_port_affinity,
                                                     m_verbs_device_attr, DOCA_VERBS_QP_INIT2RTR);
         if (status != DOCA_SUCCESS) {
             return status;
@@ -1209,7 +1240,7 @@ doca_error_t doca_verbs_qp_open::rts2rts(struct doca_verbs_qp_attr_open *verbs_q
     }
 
     if ((attr_mask & DOCA_VERBS_QP_ATTR_LAG_TX_PORT_AFFINITY)) {
-        doca_error_t status = validate_lag_tx_port_affinity_attr(
+        doca_error_t status = is_lag_tx_port_affinity_attr_valid(
             verbs_qp_attr->lag_tx_port_affinity, m_verbs_device_attr, DOCA_VERBS_QP_RTS2RTS);
         if (status != DOCA_SUCCESS) {
             return status;
@@ -1342,6 +1373,7 @@ doca_error_t doca_verbs_qp_open::query_qp(
     // verbs_qp_attr->atomic_mode = DEVX_GET(qpc, qpc, rae);
     verbs_qp_attr->max_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_sra_max);
     verbs_qp_attr->max_dest_rd_atomic = 1 << DEVX_GET(qpc, qpc, log_rra_max);
+    verbs_qp_attr->lag_tx_port_affinity = DEVX_GET(qpc, qpc, lag_tx_port_affinity);
 
     if (verbs_qp_attr->ah_attr_enabled != false) {
         verbs_qp_attr->ah_attr.addr_type = m_addr_type;
@@ -1375,6 +1407,16 @@ doca_error_t doca_verbs_qp_open::query_qp(
     verbs_qp_init_attr->external_uar = m_init_attr.external_uar;
     verbs_qp_init_attr->core_direct_master = m_init_attr.core_direct_master;
     verbs_qp_init_attr->send_dbr_mode = m_init_attr.send_dbr_mode;
+
+    if (DEVX_GET(qpc, qpc, dp_ordering_0) == (PRIV_DOCA_MLX5_DP_ORDERING_IBTA & 0x1) &&
+        (DEVX_GET(qpc, qpc, dp_ordering_1) << 1) == (PRIV_DOCA_MLX5_DP_ORDERING_IBTA & 0x2))
+        verbs_qp_init_attr->ordering_semantic = DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA;
+    if (DEVX_GET(qpc, qpc, dp_ordering_0) == (PRIV_DOCA_MLX5_DP_ORDERING_OOO_RW & 0x1) &&
+        (DEVX_GET(qpc, qpc, dp_ordering_1) << 1) == (PRIV_DOCA_MLX5_DP_ORDERING_OOO_RW & 0x2))
+        verbs_qp_init_attr->ordering_semantic = DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_RW;
+    if (DEVX_GET(qpc, qpc, dp_ordering_0) == (PRIV_DOCA_MLX5_DP_ORDERING_OOO_ALL & 0x1) &&
+        (DEVX_GET(qpc, qpc, dp_ordering_1) << 1) == (PRIV_DOCA_MLX5_DP_ORDERING_OOO_ALL & 0x2))
+        verbs_qp_init_attr->ordering_semantic = DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL;
 
     return DOCA_SUCCESS;
 }
@@ -1725,6 +1767,8 @@ doca_verbs_qp_open::doca_verbs_qp_open(struct ibv_context *ibv_ctx,
     m_init_attr.core_direct_master = verbs_qp_init_attr->core_direct_master;
     m_init_attr.send_dbr_mode = verbs_qp_init_attr->send_dbr_mode;
     m_init_attr.emulate_no_dbr_ext = verbs_qp_init_attr->emulate_no_dbr_ext;
+    m_init_attr.ordering_semantic = verbs_qp_init_attr->ordering_semantic;
+    m_init_attr.is_ordering_semantic_set = verbs_qp_init_attr->is_ordering_semantic_set;
 
     try {
         create();
@@ -1756,6 +1800,10 @@ uint32_t doca_verbs_qp_open::get_sq_size_wqebb() const noexcept { return m_sq_si
 uint32_t doca_verbs_qp_open::get_rq_size() const noexcept { return m_rq_size; }
 
 uint32_t doca_verbs_qp_open::get_rcv_wqe_size() const noexcept { return m_rcv_wqe_size; }
+
+doca_verbs_cq_t *doca_verbs_qp_open::get_cq_sq() const noexcept { return m_init_attr.send_cq; }
+
+doca_verbs_cq_t *doca_verbs_qp_open::get_cq_rq() const noexcept { return m_init_attr.receive_cq; }
 
 enum doca_verbs_qp_send_dbr_mode doca_verbs_qp_open::get_send_dbr_mode() const noexcept {
     return static_cast<enum doca_verbs_qp_send_dbr_mode>(m_init_attr.send_dbr_mode);
@@ -1868,7 +1916,7 @@ doca_error_t doca_verbs_qp_init_attr_set_pd(doca_verbs_qp_init_attr_t *qp_init_a
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -1910,7 +1958,7 @@ doca_error_t doca_verbs_qp_init_attr_set_send_cq(doca_verbs_qp_init_attr_t *qp_i
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -1943,7 +1991,7 @@ doca_error_t doca_verbs_qp_init_attr_set_receive_cq(doca_verbs_qp_init_attr_t *q
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -1971,7 +2019,7 @@ doca_error_t doca_verbs_qp_init_attr_set_sq_sig_all(doca_verbs_qp_init_attr_t *q
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -1998,7 +2046,7 @@ doca_error_t doca_verbs_qp_init_attr_set_sq_wr(doca_verbs_qp_init_attr_t *qp_ini
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2025,7 +2073,7 @@ doca_error_t doca_verbs_qp_init_attr_set_rq_wr(doca_verbs_qp_init_attr_t *qp_ini
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2053,7 +2101,7 @@ doca_error_t doca_verbs_qp_init_attr_set_send_max_sges(doca_verbs_qp_init_attr_t
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2081,7 +2129,7 @@ doca_error_t doca_verbs_qp_init_attr_set_receive_max_sges(doca_verbs_qp_init_att
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2109,7 +2157,7 @@ doca_error_t doca_verbs_qp_init_attr_set_max_inline_data(doca_verbs_qp_init_attr
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2137,7 +2185,7 @@ doca_error_t doca_verbs_qp_init_attr_set_user_index(doca_verbs_qp_init_attr_t *q
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2164,7 +2212,7 @@ doca_error_t doca_verbs_qp_init_attr_set_qp_type(doca_verbs_qp_init_attr_t *qp_i
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2198,7 +2246,7 @@ doca_error_t doca_verbs_qp_init_attr_set_external_umem(doca_verbs_qp_init_attr_t
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2233,7 +2281,7 @@ doca_error_t doca_verbs_qp_init_attr_set_external_umem_dbr(doca_verbs_qp_init_at
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2267,7 +2315,7 @@ doca_error_t doca_verbs_qp_init_attr_set_external_uar(doca_verbs_qp_init_attr_t 
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2295,7 +2343,7 @@ doca_error_t doca_verbs_qp_init_attr_set_qp_context(doca_verbs_qp_init_attr_t *q
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2329,7 +2377,7 @@ doca_error_t doca_verbs_qp_init_attr_set_core_direct_master(doca_verbs_qp_init_a
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2357,7 +2405,7 @@ doca_error_t doca_verbs_qp_init_attr_set_send_dbr_mode(
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2386,7 +2434,7 @@ doca_error_t doca_verbs_qp_init_attr_get_send_dbr_mode(
     }
 
     if (qp_init_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP init attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2453,12 +2501,22 @@ doca_error_t doca_verbs_qp_init_attr_set_ordering_semantic(
                      __func__);
             return DOCA_ERROR_NOT_SUPPORTED;
         }
-    } else {
-        DOCA_LOG(LOG_INFO,
-                 "QP init attribute setter set_ordering_semantic not supported in open mode.",
-                 __func__);
-        return DOCA_ERROR_NOT_SUPPORTED;
     }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    if (ordering_semantic != DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA &&
+        ordering_semantic != DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_RW &&
+        ordering_semantic != DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL) {
+        DOCA_LOG(LOG_ERR, "Invalid ordering_semantic value provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    qp_init_attr->open->is_ordering_semantic_set = true;
+    qp_init_attr->open->ordering_semantic = ordering_semantic;
 
     return DOCA_SUCCESS;
 }
@@ -2491,12 +2549,14 @@ doca_error_t doca_verbs_qp_init_attr_get_ordering_semantic(
                      __func__);
             return DOCA_ERROR_NOT_SUPPORTED;
         }
-    } else {
-        DOCA_LOG(LOG_INFO,
-                 "QP init attribute getter get_ordering_semantic not supported in open mode.",
-                 __func__);
-        return DOCA_ERROR_NOT_SUPPORTED;
     }
+
+    if (qp_init_attr->open == nullptr) {
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP init attr open instance provided.");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
+
+    *ordering_semantic = qp_init_attr->open->ordering_semantic;
 
     return DOCA_SUCCESS;
 }
@@ -2600,7 +2660,7 @@ doca_error_t doca_verbs_qp_attr_set_next_state(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2627,7 +2687,7 @@ doca_error_t doca_verbs_qp_attr_set_current_state(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2654,7 +2714,7 @@ doca_error_t doca_verbs_qp_attr_get_current_state(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2681,7 +2741,7 @@ doca_error_t doca_verbs_qp_attr_set_path_mtu(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2707,7 +2767,7 @@ doca_error_t doca_verbs_qp_attr_set_rq_psn(doca_verbs_qp_attr_t *qp_attr, uint32
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2733,7 +2793,7 @@ doca_error_t doca_verbs_qp_attr_set_sq_psn(doca_verbs_qp_attr_t *qp_attr, uint32
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2760,7 +2820,7 @@ doca_error_t doca_verbs_qp_attr_set_dest_qp_num(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2788,7 +2848,7 @@ doca_error_t doca_verbs_qp_attr_set_allow_remote_write(doca_verbs_qp_attr_t *qp_
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2816,7 +2876,7 @@ doca_error_t doca_verbs_qp_attr_set_allow_remote_read(doca_verbs_qp_attr_t *qp_a
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2843,7 +2903,7 @@ doca_error_t doca_verbs_qp_attr_set_atomic_mode(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2869,7 +2929,7 @@ doca_error_t doca_verbs_qp_attr_set_pkey_index(doca_verbs_qp_attr_t *qp_attr, ui
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2895,7 +2955,7 @@ doca_error_t doca_verbs_qp_attr_set_port_num(doca_verbs_qp_attr_t *qp_attr, uint
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2922,7 +2982,7 @@ doca_error_t doca_verbs_qp_attr_set_ack_timeout(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2948,7 +3008,7 @@ doca_error_t doca_verbs_qp_attr_set_retry_cnt(doca_verbs_qp_attr_t *qp_attr, uin
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -2974,7 +3034,7 @@ doca_error_t doca_verbs_qp_attr_set_rnr_retry(doca_verbs_qp_attr_t *qp_attr, uin
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3001,7 +3061,7 @@ doca_error_t doca_verbs_qp_attr_set_min_rnr_timer(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3035,7 +3095,7 @@ doca_error_t doca_verbs_qp_attr_set_max_rd_atomic(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3070,7 +3130,7 @@ doca_error_t doca_verbs_qp_attr_set_max_dest_rd_atomic(doca_verbs_qp_attr_t *qp_
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3087,12 +3147,18 @@ doca_error_t doca_verbs_qp_attr_set_lag_tx_port_affinity(doca_verbs_qp_attr_t *q
     }
 
     if (qp_attr->type == DOCA_VERBS_SDK_LIB_TYPE_SDK) {
-        DOCA_LOG(LOG_ERR, "Failed to set lag_tx_port_affinity: Not supported by DOCA SDK");
-        return DOCA_ERROR_NOT_SUPPORTED;
+        auto err = doca_verbs_sdk_wrapper_qp_attr_set_lag_tx_port_affinity(qp_attr->sdk,
+                                                                           lag_tx_port_affinity);
+        if (err == DOCA_SDK_WRAPPER_SUCCESS) {
+            return DOCA_SUCCESS;
+        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
+            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
+            return DOCA_ERROR_UNEXPECTED;
+        }
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3169,7 +3235,7 @@ doca_error_t doca_verbs_qp_attr_set_ah_attr(doca_verbs_qp_attr_t *qp_attr,
     }
 
     if (qp_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3291,7 +3357,7 @@ doca_error_t doca_verbs_ah_attr_set_gid(doca_verbs_ah_attr_t *ah_attr, struct do
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3318,7 +3384,7 @@ doca_error_t doca_verbs_ah_attr_set_addr_type(doca_verbs_ah_attr_t *ah_attr,
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs AH attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3344,7 +3410,7 @@ doca_error_t doca_verbs_ah_attr_set_dlid(doca_verbs_ah_attr_t *ah_attr, uint32_t
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3370,7 +3436,7 @@ doca_error_t doca_verbs_ah_attr_set_sl(doca_verbs_ah_attr_t *ah_attr, uint8_t sl
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3396,7 +3462,7 @@ doca_error_t doca_verbs_ah_attr_set_sgid_index(doca_verbs_ah_attr_t *ah_attr, ui
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3423,7 +3489,7 @@ doca_error_t doca_verbs_ah_attr_set_static_rate(doca_verbs_ah_attr_t *ah_attr,
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3449,7 +3515,7 @@ doca_error_t doca_verbs_ah_attr_set_hop_limit(doca_verbs_ah_attr_t *ah_attr, uin
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 
@@ -3476,7 +3542,7 @@ doca_error_t doca_verbs_ah_attr_set_traffic_class(doca_verbs_ah_attr_t *ah_attr,
     }
 
     if (ah_attr->open == nullptr) {
-        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs CQ attr open instance provided.");
+        DOCA_LOG(LOG_ERR, "Invalid DOCA Verbs QP attr open instance provided.");
         return DOCA_ERROR_INVALID_VALUE;
     }
 

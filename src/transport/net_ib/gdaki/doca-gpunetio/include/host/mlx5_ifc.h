@@ -102,6 +102,7 @@ enum {
     MLX5_CMD_OP_QUERY_ROCE_ADDRESS = 0x760,
     MLX5_CMD_OP_ALLOC_Q_COUNTER = 0x771,
     MLX5_CMD_OP_DEALLOC_Q_COUNTER = 0x772,
+    MLX5_CMD_OP_QUERY_Q_COUNTER = 0x773,
     MLX5_CMD_OP_CREATE_SCHEDULING_ELEMENT = 0x782,
     MLX5_CMD_OP_DESTROY_SCHEDULING_ELEMENT = 0x783,
     MLX5_CMD_OP_ALLOC_PD = 0x800,
@@ -1103,7 +1104,12 @@ struct mlx5_ifc_cmd_hca_cap_bits {
     u8 log_max_transport_domain[0x5];
     u8 reserved_at_328[0x3];
     u8 log_max_pd[0x5];
-    u8 reserved_at_330[0xb];
+    u8 dp_ordering_ooo_all_ud[0x1];
+    u8 dp_ordering_ooo_all_uc[0x1];
+    u8 reserved_at_339[0x1];
+    u8 dp_ordering_ooo_all_dc[0x1];
+    u8 dp_ordering_ooo_all_rc[0x1];
+    u8 reserved_at_341[0x6];
     u8 log_max_xrcd[0x5];
 
     u8 nic_receive_steering_discard[0x1];
@@ -1459,8 +1465,11 @@ struct mlx5_ifc_qos_cap_bits {
 
 struct mlx5_ifc_cmd_hca_cap_2_bits {
     u8 reserved_at_0[0x80];
+    u8 reserved_at_80[0x8];
 
-    u8 reserved_at_80[0x13];
+    u8 dp_ordering_force[0x1];
+    u8 reserved_at_89[0xa];
+
     u8 log_reserved_qpn_granularity[0x5];
     u8 reserved_at_98[0x8];
 
@@ -3464,7 +3473,8 @@ struct mlx5_ifc_qpc_bits {
     u8 latency_sensitive[0x1];
     u8 reserved_at_24[0x1];
     u8 drain_sigerr[0x1];
-    u8 reserved_at_26[0x2];
+    u8 dp_ordering_0[0x1];
+    u8 dp_ordering_force[0x1];
     u8 pd[0x18];
 
     u8 mtu[0x3];
@@ -3535,7 +3545,8 @@ struct mlx5_ifc_qpc_bits {
     u8 rae[0x1];
     u8 reserved_at_493[0x1];
     u8 page_offset[0x6];
-    u8 reserved_at_49a[0x3];
+    u8 reserved_at_49a[0x2];
+    u8 dp_ordering_1[0x1];
     u8 cd_slave_receive[0x1];
     u8 cd_slave_send[0x1];
     u8 cd_master[0x1];
@@ -5345,6 +5356,16 @@ struct mlx5_ifc_destroy_tis_in_bits {
     u8 reserved_at_60[0x20];
 };
 
+struct mlx5_ifc_alloc_q_counter_in_bits {
+    u8 opcode[0x10];
+    u8 uid[0x10];
+
+    u8 reserved_at_20[0x10];
+    u8 op_mod[0x10];
+
+    u8 reserved_at_40[0x40];
+};
+
 struct mlx5_ifc_alloc_q_counter_out_bits {
     u8 reserved_at_0[0x40];
 
@@ -5364,6 +5385,127 @@ struct mlx5_ifc_dealloc_q_counter_in_bits {
     u8 counter_set_id[0x8];
 
     u8 reserved_at_60[0x20];
+};
+
+struct mlx5_ifc_query_q_counter_in_bits {
+    u8 opcode[0x10];
+    u8 reserved_at_10[0x10];
+
+    u8 reserved_at_20[0x10];
+    u8 op_mod[0x10];
+
+    u8 reserved_at_40[0x80];
+
+    u8 clear[0x1];
+    u8 reserved_at_c1[0x1f];
+
+    u8 reserved_at_e0[0x18];
+    u8 counter_set_id[0x8];
+};
+
+struct mlx5_ifc_query_q_counter_out_bits {
+    u8 status[0x8];
+    u8 reserved_at_8[0x18];
+
+    u8 syndrome[0x20];
+
+    u8 reserved_at_40[0x40];
+
+    u8 rx_write_requests[0x20];
+
+    u8 reserved_at_a0[0x20];
+
+    u8 rx_read_requests[0x20];
+
+    u8 reserved_at_e0[0x20];
+
+    u8 rx_atomic_requests[0x20];
+
+    u8 reserved_at_120[0x20];
+
+    u8 rx_dct_connect[0x20];
+
+    u8 reserved_at_160[0x20];
+
+    u8 out_of_buffer[0x20];
+
+    u8 reserved_at_1a0[0x20];
+
+    u8 out_of_sequence[0x20];
+
+    u8 reserved_at_1e0[0x20];
+
+    u8 duplicate_request[0x20];
+
+    u8 reserved_at_220[0x20];
+
+    u8 rnr_nak_retry_err[0x20];
+
+    u8 reserved_at_260[0x20];
+
+    u8 packet_seq_err[0x20];
+
+    u8 reserved_at_2a0[0x20];
+
+    u8 implied_nak_seq_err[0x20];
+
+    u8 reserved_at_2e0[0x20];
+
+    u8 local_ack_timeout_err[0x20];
+
+    u8 reserved_at_320[0xa0];
+
+    u8 resp_local_length_error[0x20];
+
+    u8 req_local_length_error[0x20];
+
+    u8 resp_local_qp_error[0x20];
+
+    u8 local_operation_error[0x20];
+
+    u8 resp_local_protection[0x20];
+
+    u8 req_local_protection[0x20];
+
+    u8 resp_cqe_error[0x20];
+
+    u8 req_cqe_error[0x20];
+
+    u8 req_mw_binding[0x20];
+
+    u8 req_bad_response[0x20];
+
+    u8 req_remote_invalid_request[0x20];
+
+    u8 resp_remote_invalid_request[0x20];
+
+    u8 req_remote_access_errors[0x20];
+
+    u8 resp_remote_access_errors[0x20];
+
+    u8 req_remote_operation_errors[0x20];
+
+    u8 req_transport_retries_exceeded[0x20];
+
+    u8 cq_overflow[0x20];
+
+    u8 resp_cqe_flush_error[0x20];
+
+    u8 req_cqe_flush_error[0x20];
+
+    u8 reserved_at_620[0x20];
+
+    u8 roce_adp_retrans[0x20];
+
+    u8 roce_adp_retrans_to[0x20];
+
+    u8 roce_slow_restart[0x20];
+
+    u8 roce_slow_restart_cnps[0x20];
+
+    u8 roce_slow_restart_trans[0x20];
+
+    u8 reserved_at_6e0[0x120];
 };
 
 struct mlx5_ifc_alloc_modify_header_context_out_bits {

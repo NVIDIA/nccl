@@ -64,7 +64,12 @@
 #endif
 
 #ifndef DOCA_GPUNETIO_VERBS_USE_LDG
+#if defined(__NVCC__) && \
+    (__CUDACC_VER_MAJOR__ < 13 || (__CUDACC_VER_MAJOR__ == 13 && __CUDACC_VER_MINOR__ < 4))
 #define DOCA_GPUNETIO_VERBS_USE_LDG 0
+#else
+#define DOCA_GPUNETIO_VERBS_USE_LDG 1
+#endif
 #endif
 
 #if CUDA_VERSION >= 13030

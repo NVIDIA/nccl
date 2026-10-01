@@ -136,6 +136,8 @@ typedef doca_error_t (*doca_verbs_qp_attr_set_max_rd_atomic_t)(void *verbs_qp_at
                                                                uint8_t max_rd_atomic);
 typedef doca_error_t (*doca_verbs_qp_attr_set_max_dest_rd_atomic_t)(void *verbs_qp_attr,
                                                                     uint8_t max_dest_rd_atomic);
+typedef doca_error_t (*doca_verbs_qp_attr_set_lag_tx_port_affinity_t)(void *verbs_qp_attr,
+                                                                      uint8_t lag_tx_port_affinity);
 typedef doca_error_t (*doca_verbs_qp_attr_set_cc_group_t)(void *verbs_qp_attr, void *cc_group);
 typedef void *(*doca_verbs_qp_attr_get_cc_group_t)(const void *verbs_qp_attr);
 
@@ -261,6 +263,8 @@ static doca_verbs_qp_attr_set_min_rnr_timer_t p_doca_verbs_qp_attr_set_min_rnr_t
 static doca_verbs_qp_attr_set_max_rd_atomic_t p_doca_verbs_qp_attr_set_max_rd_atomic = nullptr;
 static doca_verbs_qp_attr_set_max_dest_rd_atomic_t p_doca_verbs_qp_attr_set_max_dest_rd_atomic =
     nullptr;
+static doca_verbs_qp_attr_set_lag_tx_port_affinity_t p_doca_verbs_qp_attr_set_lag_tx_port_affinity =
+    nullptr;
 
 static doca_verbs_ah_attr_create_t p_doca_verbs_ah_attr_create = nullptr;
 static doca_verbs_ah_attr_destroy_t p_doca_verbs_ah_attr_destroy = nullptr;
@@ -326,37 +330,64 @@ static void *get_common_sdk_symbol(const char *symbol_name) {
 }
 
 static void doca_verbs_sdk_wrapper_init(int *ret) {
+    const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
+    char libcommon_versioned_path[doca_sdk_path_length];
     char libcommon_path[doca_sdk_path_length];
+    char libverbs_versioned_path[doca_sdk_path_length];
     char libverbs_path[doca_sdk_path_length];
 
+#if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
+    void *sdk_log;
+    doca_error_t doca_err = DOCA_SUCCESS;
+    ;
+#endif
+
+    memset(libcommon_versioned_path, '\0', doca_sdk_path_length);
     memset(libcommon_path, '\0', doca_sdk_path_length);
+    memset(libverbs_versioned_path, '\0', doca_sdk_path_length);
     memset(libverbs_path, '\0', doca_sdk_path_length);
 
-    if (getenv(DOCA_SDK_LIB_PATH_ENV_VAR) == NULL)
+    if (doca_sdk_lib_path == NULL) {
+        snprintf(libcommon_versioned_path, doca_sdk_path_length, "%s", "libdoca_common.so.2");
         snprintf(libcommon_path, doca_sdk_path_length, "%s", "libdoca_common.so");
-    else
-        snprintf(libcommon_path, doca_sdk_path_length, "%s/%s", getenv(DOCA_SDK_LIB_PATH_ENV_VAR),
+    } else {
+        snprintf(libcommon_versioned_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
+                 "libdoca_common.so.2");
+        snprintf(libcommon_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
                  "libdoca_common.so");
+    }
 
-    if (getenv(DOCA_SDK_LIB_PATH_ENV_VAR) == NULL)
+    if (doca_sdk_lib_path == NULL) {
+        snprintf(libverbs_versioned_path, doca_sdk_path_length, "%s", "libdoca_verbs.so.2");
         snprintf(libverbs_path, doca_sdk_path_length, "%s", "libdoca_verbs.so");
-    else
-        snprintf(libverbs_path, doca_sdk_path_length, "%s/%s", getenv(DOCA_SDK_LIB_PATH_ENV_VAR),
+    } else {
+        snprintf(libverbs_versioned_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
+                 "libdoca_verbs.so.2");
+        snprintf(libverbs_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
                  "libdoca_verbs.so");
+    }
 
-    common_handle = dlopen(libcommon_path, RTLD_NOW | RTLD_GLOBAL);
+    common_handle = dlopen(libcommon_versioned_path, RTLD_NOW | RTLD_GLOBAL);
+    if (!common_handle) common_handle = dlopen(libcommon_path, RTLD_NOW | RTLD_GLOBAL);
     if (!common_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to find libdoca_common.so library %s (DOCA_SDK_LIB_PATH=%s)",
-                 libcommon_path, getenv(DOCA_SDK_LIB_PATH_ENV_VAR));
+        DOCA_LOG(LOG_ERR,
+                 "Failed to load DOCA SDK library; tried %s then %s "
+                 "(DOCA_SDK_LIB_PATH=%s)",
+                 libcommon_versioned_path, libcommon_path,
+                 doca_sdk_lib_path == NULL ? "(unset)" : doca_sdk_lib_path);
 
         *ret = -1;
         goto exit_error;
     }
 
-    verbs_handle = dlopen(libverbs_path, RTLD_NOW | RTLD_LOCAL);
+    verbs_handle = dlopen(libverbs_versioned_path, RTLD_NOW | RTLD_LOCAL);
+    if (!verbs_handle) verbs_handle = dlopen(libverbs_path, RTLD_NOW | RTLD_LOCAL);
     if (!verbs_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to find libdoca_verbs.so library %s (DOCA_SDK_LIB_PATH=%s)",
-                 libverbs_path, getenv(DOCA_SDK_LIB_PATH_ENV_VAR));
+        DOCA_LOG(LOG_ERR,
+                 "Failed to load DOCA SDK library; tried %s then %s "
+                 "(DOCA_SDK_LIB_PATH=%s)",
+                 libverbs_versioned_path, libverbs_path,
+                 doca_sdk_lib_path == NULL ? "(unset)" : doca_sdk_lib_path);
 
         *ret = -1;
         goto exit_error;
@@ -490,6 +521,9 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
     p_doca_verbs_qp_attr_set_max_dest_rd_atomic =
         (doca_verbs_qp_attr_set_max_dest_rd_atomic_t)get_verbs_sdk_symbol(
             "doca_verbs_qp_attr_set_max_dest_rd_atomic");
+    p_doca_verbs_qp_attr_set_lag_tx_port_affinity =
+        (doca_verbs_qp_attr_set_lag_tx_port_affinity_t)get_verbs_sdk_symbol(
+            "doca_verbs_qp_attr_set_lag_tx_port_affinity");
 
     p_doca_verbs_qp_attr_set_cc_group =
         (doca_verbs_qp_attr_set_cc_group_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_set_cc_group");
@@ -569,9 +603,10 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
 
     /* Check if all symbols were found */
     /*
-     * Symbols p_doca_verbs_qp_init_attr_set_send_dbr_mode and
-     * p_doca_verbs_qp_init_attr_get_send_dbr_mode are optional as not present in DOCA 3.2 LTS
-     * version.
+     * Optional symbols:
+     * p_doca_verbs_qp_init_attr_set_send_dbr_mode
+     * p_doca_verbs_qp_init_attr_get_send_dbr_mode
+     * p_doca_verbs_qp_attr_set_lag_tx_port_affinity
      */
     if (!p_doca_verbs_qp_init_attr_create || !p_doca_verbs_qp_init_attr_destroy ||
         !p_doca_verbs_qp_init_attr_set_pd || !p_doca_verbs_qp_init_attr_set_send_cq ||
@@ -646,6 +681,15 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         *ret = -1;
         goto exit_error;
     }
+
+    doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
+    if (doca_err != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+        dlclose(verbs_handle);
+        verbs_handle = nullptr;
+        *ret = -1;
+        goto exit_error;
+    }
 #endif
 
     *ret = 0;
@@ -680,9 +724,6 @@ static int get_sdk_wrapper_env_var(void) {
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_create(void **qp_init_attr) {
     doca_error_t doca_err = DOCA_SUCCESS;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
-#if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
-    void *sdk_log;
-#endif
 
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_verbs_sdk_wrapper() != 0) {
@@ -692,14 +733,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_create(void **qp_in
                      val);
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
-
-#if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
-        doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-#endif
 
         doca_err = p_doca_verbs_qp_init_attr_create(qp_init_attr);
         if (doca_err == DOCA_SUCCESS) {
@@ -1524,6 +1557,26 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_set_max_dest_rd_atomic(
         if (init_verbs_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
 
         doca_err = p_doca_verbs_qp_attr_set_max_dest_rd_atomic(qp_attr, max_dest_rd_atomic);
+        if (doca_err == DOCA_SUCCESS)
+            return DOCA_SDK_WRAPPER_SUCCESS;
+        else {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_set_lag_tx_port_affinity(
+    void *qp_attr, uint8_t lag_tx_port_affinity) {
+    doca_error_t doca_err;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_verbs_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (!p_doca_verbs_qp_attr_set_lag_tx_port_affinity) return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+
+        doca_err = p_doca_verbs_qp_attr_set_lag_tx_port_affinity(qp_attr, lag_tx_port_affinity);
         if (doca_err == DOCA_SUCCESS)
             return DOCA_SDK_WRAPPER_SUCCESS;
         else {

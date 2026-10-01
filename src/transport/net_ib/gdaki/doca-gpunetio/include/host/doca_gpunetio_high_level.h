@@ -64,6 +64,7 @@ enum doca_gpu_verbs_mem_reg_type {
 enum doca_gpu_verbs_qp_init_attr_flags_hl {
     DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_NONE = 0,
     DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_SUPPORT_DATA_DIRECT = (1u << 0),
+    DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_PREFER_UAR_SHARING = (1u << 1),
 };
 
 struct doca_gpu_verbs_qp_init_attr_hl {
@@ -90,7 +91,8 @@ struct doca_gpu_verbs_qp_init_attr_hl {
     enum doca_verbs_qp_ordering_semantic ordering_semantic;
     uint32_t flags;
     doca_verbs_comp_channel_t *comp_channel;
-    uint8_t reserved3[4];
+    uint16_t rq_nwqe;
+    uint8_t reserved3[2];
 } __attribute__((__aligned__(8))) __attribute__((__packed__));
 
 struct doca_gpu_verbs_qp_hl {
@@ -114,6 +116,11 @@ struct doca_gpu_verbs_qp_hl {
 
     // QP GPUNetIO Object
     struct doca_gpu_verbs_qp *qp_gverbs;
+
+    // Receive CQ ownership
+    doca_verbs_cq_t *cq_rq;
+    void *cq_rq_umem_cpu_ptr;
+    doca_verbs_umem_t *cq_rq_umem;
 };
 
 struct doca_gpu_verbs_qp_group_hl {
@@ -129,6 +136,7 @@ struct doca_gpu_verbs_umem_hl {
     uint32_t refcount;
     doca_verbs_umem_t *umem;
     enum doca_gpu_verbs_mem_reg_type mreg_type;
+    bool is_system_malloc;
 };
 
 struct doca_gpu_verbs_qp_list_hl {

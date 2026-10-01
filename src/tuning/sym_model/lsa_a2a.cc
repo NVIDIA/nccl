@@ -37,8 +37,10 @@ struct ncclSymkLsaA2ACtaScalingCurve {
 struct ncclSymkLsaA2AKernelTuningParameters {
   double baseLatencyUs;
   double rankLatencyUs;
-  double llCtaBw; // GB/s per CTA for rank-independent LL compute work.
   double transferCtaBandwidthGbps;
+  double smallChunkCtaBw; // GB/s per CTA for 2 KiB chunks; zero uses the bulk rate.
+  double reduceScalarCtaBw; // GB/s per CTA for the scalar tail; zero uses the bulk rate.
+  double llCtaBw; // GB/s per CTA for rank-independent LL compute work.
   double peakBandwidthGbps;
   struct ncclSymkLsaA2ACtaScalingCurve ctaScalingCurve;
   double fullOverlapCtas;
@@ -46,8 +48,6 @@ struct ncclSymkLsaA2AKernelTuningParameters {
   double ctaTroughLatUs;
   double ctaTroughPeakBw;
   double rankLimitedPeakBw;
-  double reduceScalarCtaBw; // GB/s per CTA for the scalar tail; zero uses the bulk rate.
-  double smallChunkCtaBw; // GB/s per CTA for 2 KiB chunks; zero uses the bulk rate.
 };
 
 struct ncclSymkLsaA2AReduceScatterTuningParameters {
@@ -66,10 +66,21 @@ struct ncclSymkLsaA2AArchTuningParameters {
 };
 
 static constexpr struct ncclSymkLsaA2AKernelTuningParameters reduceScatterParameters(
-  double baseLatUs, double rankLatUs, double ctaBw, double peakBw, double llCtaBw = 0.0, double reduceScalarCtaBw = 0.0,
-  double smallChunkCtaBw = 0.0, bool peakRankEfficiency = false) {
-  return {baseLatUs, rankLatUs, llCtaBw,           ctaBw,          peakBw, {{1.0, 1.0}}, 0.0, peakRankEfficiency, 0.0,
-          0.0,       0.0,       reduceScalarCtaBw, smallChunkCtaBw};
+  double baseLatUs, double rankLatUs, double ctaBw, double smallChunkCtaBw, double reduceScalarCtaBw, double llCtaBw,
+  double peakBw, bool peakRankEfficiency = false) {
+  return {baseLatUs,
+          rankLatUs,
+          ctaBw,
+          smallChunkCtaBw,
+          reduceScalarCtaBw,
+          llCtaBw,
+          peakBw,
+          {{1.0, 1.0}},
+          0.0,
+          peakRankEfficiency,
+          0.0,
+          0.0,
+          0.0};
 }
 
 // Each row owns CTA limits and fitted timing terms for one compute capability.
@@ -79,12 +90,12 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
    0,
    {},
    {
-     {7.1084, 0.1065, 2.32, 15.87, 250.0, {{0.99, 0.69}}, 0.0, false},
-     {7.4229, 0.1030, 2.1932, 27.46, 316.0699, {{1.0, 1.0}}, 3.3805, true},
-     {10.0618, 0.0679, 0.0, 64.1577, 671.6052, {{1.0, 1.0}}, 0.0, false},
-     {10.5902, 0.0563, 0.0, 64.4810, 650.4378, {{1.0, 1.0}}, 0.0, false},
-     {8.2723, 0.0623, 0.0, 51.55, 715.1451, {{1.0, 1.0}}, 0.0, true},
-     {8.3313, 0.0561, 0.0, 50.83, 715.1451, {{1.0, 1.0}}, 0.0, true},
+     {7.1084, 0.1065, 15.87, 0.0, 0.0, 2.32, 250.0, {{0.99, 0.69}}, 0.0, false},
+     {7.4229, 0.1030, 27.46, 0.0, 0.0, 2.1932, 316.0699, {{1.0, 1.0}}, 3.3805, true},
+     {10.0618, 0.0679, 64.1577, 0.0, 0.0, 0.0, 671.6052, {{1.0, 1.0}}, 0.0, false},
+     {10.5902, 0.0563, 64.4810, 0.0, 0.0, 0.0, 650.4378, {{1.0, 1.0}}, 0.0, false},
+     {8.2723, 0.0623, 51.55, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
+     {8.3313, 0.0561, 50.83, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
    }},
   {103,
    32,
@@ -92,36 +103,36 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
    {
      {
        // LL
-       reduceScatterParameters(10.5737, 0.0129, 8.6531, 248.9148, 2.1255, 0, 0),
+       reduceScatterParameters(10.5737, 0.0129, 8.6531, 0, 0, 2.1255, 248.9148),
        {},
        {},
      },
      {
        // TmaLD
-       reduceScatterParameters(5.9025, 0.2089, 46.7794, 640.7738, 0, 7.3964, 9.5412), // Default
-       reduceScatterParameters(5.9025, 0.2089, 41.1659, 640.7738, 0, 3.6620, 7.3839), // FP16/BF16 Sum
-       reduceScatterParameters(5.9025, 0.2089, 24.6948, 640.7738, 0, 0.4053, 6.5968), // FP8 Sum
+       reduceScatterParameters(5.9025, 0.2089, 46.7794, 9.5412, 7.3964, 0, 640.7738), // Default
+       reduceScatterParameters(5.9025, 0.2089, 41.1659, 7.3839, 3.6620, 0, 640.7738), // FP16/BF16 Sum
+       reduceScatterParameters(5.9025, 0.2089, 24.6948, 6.5968, 0.4053, 0, 640.7738), // FP8 Sum
      },
      {
        // LD
-       reduceScatterParameters(9.6736, 0.2801, 26.0000, 660, 0, 7.3964, 12.3392), // Default
-       reduceScatterParameters(8.4739, 0.2096, 16.9749, 660.0000, 0, 4.0022, 9.5826), // FP16/BF16 Sum
-       reduceScatterParameters(8.4739, 0.2096, 15.8819, 660.0000, 0, 1.9578, 9.3889), // FP8 Sum
+       reduceScatterParameters(9.6736, 0.2801, 26.0000, 12.3392, 7.3964, 0, 660), // Default
+       reduceScatterParameters(8.4739, 0.2096, 16.9749, 9.5826, 4.0022, 0, 660.0000), // FP16/BF16 Sum
+       reduceScatterParameters(8.4739, 0.2096, 15.8819, 9.3889, 1.9578, 0, 660.0000), // FP8 Sum
      },
      {
        // LDMC
-       reduceScatterParameters(10.9124, 0.0736, 24.5386, 750.1525, 0, 0, 0, true),
+       reduceScatterParameters(10.9124, 0.0736, 24.5386, 0, 0, 0, 750.1525, true),
        {},
        {},
      },
    },
    {
-     {7.1084, 0.1065, 2.32, 15.87, 250.0, {{0.99, 0.69}}, 0.0, false},
-     {7.4229, 0.1030, 2.1932, 27.46, 316.0699, {{1.0, 1.0}}, 3.3805, true},
-     {10.0618, 0.0679, 0.0, 64.1577, 671.6052, {{1.0, 1.0}}, 0.0, false, 12.1475, 639.6826, 585.7896},
-     {10.5902, 0.0563, 0.0, 64.4810, 650.4378, {{1.0, 1.0}}, 0.0, false},
-     {8.2723, 0.0623, 0.0, 51.55, 715.1451, {{1.0, 1.0}}, 0.0, true},
-     {8.3313, 0.0561, 0.0, 50.83, 715.1451, {{1.0, 1.0}}, 0.0, true},
+     {7.1084, 0.1065, 15.87, 0.0, 0.0, 2.32, 250.0, {{0.99, 0.69}}, 0.0, false},
+     {7.4229, 0.1030, 27.46, 0.0, 0.0, 2.1932, 316.0699, {{1.0, 1.0}}, 3.3805, true},
+     {10.0618, 0.0679, 64.1577, 0.0, 0.0, 0.0, 671.6052, {{1.0, 1.0}}, 0.0, false, 12.1475, 639.6826, 585.7896},
+     {10.5902, 0.0563, 64.4810, 0.0, 0.0, 0.0, 650.4378, {{1.0, 1.0}}, 0.0, false},
+     {8.2723, 0.0623, 51.55, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
+     {8.3313, 0.0561, 50.83, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
    }},
   {107,
    32,
@@ -129,36 +140,36 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
    {
      {
        // LL
-       reduceScatterParameters(10.1682, 0.1318, 8.6659, 378.2311, 1.5849, 0, 0),
+       reduceScatterParameters(10.1682, 0.1318, 8.6659, 0, 0, 1.5849, 378.2311),
        {},
        {},
      },
      {
        // TmaLD
-       reduceScatterParameters(13.2601, 0.8953, 33.9867, 1004.8552, 0, 7.4807, 7.7706), // Default
-       reduceScatterParameters(13.2601, 0.8953, 37.2708, 1004.8552, 0, 3.0701, 5.9251), // FP16/BF16 Sum
-       reduceScatterParameters(13.2601, 0.8953, 23.4600, 1004.8552, 0, 0.3082, 5.6772), // FP8 Sum
+       reduceScatterParameters(13.2601, 0.8953, 33.9867, 7.7706, 7.4807, 0, 1004.8552), // Default
+       reduceScatterParameters(13.2601, 0.8953, 37.2708, 5.9251, 3.0701, 0, 1004.8552), // FP16/BF16 Sum
+       reduceScatterParameters(13.2601, 0.8953, 23.4600, 5.6772, 0.3082, 0, 1004.8552), // FP8 Sum
      },
      {
        // LD
-       reduceScatterParameters(13.2750, 1.0829, 17.9128, 692.0016, 0, 5.6894, 9.4630), // Default
-       reduceScatterParameters(13.2750, 1.0829, 10.6581, 692.0016, 0, 2.9289, 7.3404), // FP16/BF16 Sum
-       reduceScatterParameters(13.2750, 1.0829, 10.1315, 692.0016, 0, 1.3376, 7.1995), // FP8 Sum
+       reduceScatterParameters(13.2750, 1.0829, 17.9128, 9.4630, 5.6894, 0, 692.0016), // Default
+       reduceScatterParameters(13.2750, 1.0829, 10.6581, 7.3404, 2.9289, 0, 692.0016), // FP16/BF16 Sum
+       reduceScatterParameters(13.2750, 1.0829, 10.1315, 7.1995, 1.3376, 0, 692.0016), // FP8 Sum
      },
      {
        // LDMC
-       reduceScatterParameters(11.7527, 0.2263, 15.1821, 1134.4294, 0, 0, 0, true),
+       reduceScatterParameters(11.7527, 0.2263, 15.1821, 0, 0, 0, 1134.4294, true),
        {},
        {},
      },
    },
    {
-     {7.90, 0.29, 1.50, 18.05, 380.00, {{0.88, 0.60}}, 0.00, false},
-     {8.02, 0.24, 1.55, 26.63, 497.24, {{1.00, 1.00}}, 1.52, true},
-     {22.60, 0.30, 0.00, 73.98, 1170.00, {{1.00, 1.00}}, 0.00, false},
-     {16.59, 0.31, 0.00, 74.10, 1000.00, {{1.00, 1.00}}, 0.00, false},
-     {19.51, 0.19, 0.00, 61.09, 1237.49, {{1.00, 1.00}}, 0.00, true},
-     {16.14, 0.22, 0.00, 61.21, 1100.15, {{1.00, 1.00}}, 0.00, true},
+     {7.90, 0.29, 18.05, 0.0, 0.0, 1.50, 380.00, {{0.88, 0.60}}, 0.00, false},
+     {8.02, 0.24, 26.63, 0.0, 0.0, 1.55, 497.24, {{1.00, 1.00}}, 1.52, true},
+     {22.60, 0.30, 73.98, 0.0, 0.0, 0.00, 1170.00, {{1.00, 1.00}}, 0.00, false},
+     {16.59, 0.31, 74.10, 0.0, 0.0, 0.00, 1000.00, {{1.00, 1.00}}, 0.00, false},
+     {19.51, 0.19, 61.09, 0.0, 0.0, 0.00, 1237.49, {{1.00, 1.00}}, 0.00, true},
+     {16.14, 0.22, 61.21, 0.0, 0.0, 0.00, 1100.15, {{1.00, 1.00}}, 0.00, true},
    }},
 };
 
@@ -267,7 +278,7 @@ static const struct ncclSymkLsaA2AKernelTuningParameters* lsaA2AParametersForKer
     if (input->func != ncclFuncReduceScatter || input->count == 0) return nullptr;
     size_t logicalBytes = input->count * ncclTypeSize(input->datatype);
     if (kernelId != ncclSymkKernelId_ReduceScatter_LL &&
-        (!input->symAligned16B || !input->symInputAligned16B || logicalBytes % 16 != 0))
+        (!input->symAligned16B || !input->symInputAligned16B || logicalBytes % ncclSymkBytePerPack != 0))
       return nullptr;
     const struct ncclSymkLsaA2AReduceScatterTuningParameters& parameters = archTuning->reduceScatter[rsIndex];
     if (parameters.defaultParameters.transferCtaBandwidthGbps <= 0.0) return nullptr;
@@ -345,7 +356,7 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
     // groups; aligned input/output leaves no scalar prefix.
     size_t fullChunk =
       kernelId == ncclSymkKernelId_ReduceScatter_TmaLD ? ncclSymkDeepBytePerChunk : ncclSymkBytePerChunk;
-    constexpr size_t smallChunk = ncclSymkMinWarpsPerBlock * 4 * WARP_SIZE * 4;
+    constexpr size_t smallChunk = ncclSymkSmallBytePerChunk;
     size_t group = size_t(nRanks) * activeCtas;
     size_t fullBytes = (logicalBytes / (group * fullChunk)) * (group * fullChunk);
     size_t smallBytes = ((logicalBytes - fullBytes) / (group * smallChunk)) * (group * smallChunk);

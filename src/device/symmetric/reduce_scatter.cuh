@@ -305,11 +305,11 @@ static __device__ void reduce(ncclSymkArgsHandler const& handler, int tn, int t,
   uint32_t alignment = uint32_t(input.offset - output.offset);
   size_t nBytes = nElts * sizeof(T);
 
-  uint32_t nPreBytes = (16u - input.offset) % 16u;
+  uint32_t nPreBytes = (ncclSymkBytePerPack - input.offset) % ncclSymkBytePerPack;
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t cursor = nPreBytes;
 
-  if (alignment % 16 == 0) {
+  if (alignment % ncclSymkBytePerPack == 0) {
     constexpr int BytePerPack = ncclSymkBytePerPack,
                   UnrollPacks =
 #if __CUDA_ARCH__ >= 1000
@@ -332,9 +332,10 @@ static __device__ void reduce(ncclSymkArgsHandler const& handler, int tn, int t,
     }
   }
 
-  if (sizeof(T) == 4 || (sizeof(T) < 4 && alignment % 4 == 0)) {
-    constexpr int BytePerPack = 4, UnrollPacks = 4, UnrollPeers = 4;
-    constexpr int BytePerChunk = ncclSymkMinWarpsPerBlock * UnrollPacks * WARP_SIZE * BytePerPack;
+  if (sizeof(T) == ncclSymkSmallBytePerPack ||
+      (sizeof(T) < ncclSymkSmallBytePerPack && alignment % ncclSymkSmallBytePerPack == 0)) {
+    constexpr int BytePerPack = ncclSymkSmallBytePerPack, UnrollPacks = ncclSymkSmallUnrollPacks, UnrollPeers = 4;
+    constexpr int BytePerChunk = ncclSymkSmallBytePerChunk;
     uint32_t chunks = (nBytes - cursor) / BytePerChunk;
     chunks -= imodFast32(chunks, nRanks * nBlocks, nRanks_nBlocks_rcp32);
     if (chunks != 0) {

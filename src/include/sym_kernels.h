@@ -203,8 +203,9 @@ constexpr int ncclSymkAllGather_RailRing_ChunkSize = 1 << 20;
 
 constexpr int ncclSymkMinWarpsPerBlock = 4;
 constexpr int ncclSymkBytePerPack = 16;
-constexpr __host__ __device__ int ncclSymkGetBytesPerChunk(int nWarps, int unrollPacks) {
-  return nWarps * unrollPacks * WARP_SIZE * ncclSymkBytePerPack;
+constexpr __host__ __device__ int ncclSymkGetBytesPerChunk(int nWarps, int unrollPacks,
+                                                           int bytePerPack = ncclSymkBytePerPack) {
+  return nWarps * unrollPacks * WARP_SIZE * bytePerPack;
 }
 
 // SM kernel unroll packs
@@ -214,6 +215,13 @@ constexpr int ncclSymkBytePerChunk = ncclSymkGetBytesPerChunk(ncclSymkMinWarpsPe
 // TMA kernel unroll packs
 constexpr int ncclSymkDeepUnrollPacks = 8;
 constexpr int ncclSymkDeepBytePerChunk = ncclSymkGetBytesPerChunk(ncclSymkMinWarpsPerBlock, ncclSymkDeepUnrollPacks);
+
+// ReduceScatter LD/TmaLD small chunks use ordinary loads. Keep the kernel and
+// host model on these shared sizes; kernel changes also require model validation.
+constexpr int ncclSymkSmallBytePerPack = 4;
+constexpr int ncclSymkSmallUnrollPacks = 4;
+constexpr int ncclSymkSmallBytePerChunk =
+  ncclSymkGetBytesPerChunk(ncclSymkMinWarpsPerBlock, ncclSymkSmallUnrollPacks, ncclSymkSmallBytePerPack);
 
 // Multimem bcast deep loop (single warp; shares unroll with ncclSymkDeepUnrollPacks)
 constexpr int ncclSymkMultimemDeepBytePerChunk = ncclSymkGetBytesPerChunk(1, ncclSymkDeepUnrollPacks);

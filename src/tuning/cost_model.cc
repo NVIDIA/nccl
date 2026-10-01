@@ -42,6 +42,11 @@ static ncclResult_t parseList(const char* str, const char* const prefixElems[], 
     subToken = strdup(fullToken);
     char* tmpSubStr;
     char* prefix = strtok_r(subToken, ":", &tmpSubStr);
+    if (prefix == NULL) {
+      WARN("Empty entry when parsing \"%s\"", str);
+      ret = ncclInvalidUsage;
+      goto fail;
+    }
     char* elemList = strtok_r(NULL, ":", &tmpSubStr);
     if (elemList == NULL) {
       if (fullToken != fullStr) {

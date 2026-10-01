@@ -18,7 +18,6 @@
 
 #include "ibvwrap.h"
 #include "mlx5/mlx5dvwrap.h"
-#include "mlx5/mlx5prm.h"
 #include "gin/gin_host.h"
 #include "gin_host_gdaki.h"
 #include "plugin/nccl_net.h"
@@ -396,39 +395,41 @@ struct gdaki_context {
   doca_verbs_comp_channel_t* docaEvent;
 };
 
+#define GDAKI_Q_COUNTER_FIELD(fld) {#fld, MLX5_BYTE_OFF(query_q_counter_out, fld) / 4}
 static const struct {
   const char* name;
   int dw;
 } gdakiQCounterFields[] = {
-  {"rx_write_requests", NCCL_MLX5_Q_COUNTER_RX_WRITE_REQUESTS_DW},
-  {"rx_read_requests", NCCL_MLX5_Q_COUNTER_RX_READ_REQUESTS_DW},
-  {"rx_atomic_requests", NCCL_MLX5_Q_COUNTER_RX_ATOMIC_REQUESTS_DW},
-  {"out_of_buffer", NCCL_MLX5_Q_COUNTER_OUT_OF_BUFFER_DW},
-  {"out_of_sequence", NCCL_MLX5_Q_COUNTER_OUT_OF_SEQUENCE_DW},
-  {"duplicate_request", NCCL_MLX5_Q_COUNTER_DUPLICATE_REQUEST_DW},
-  {"rnr_nak_retry_err", NCCL_MLX5_Q_COUNTER_RNR_NAK_RETRY_ERR_DW},
-  {"packet_seq_err", NCCL_MLX5_Q_COUNTER_PACKET_SEQ_ERR_DW},
-  {"implied_nak_seq_err", NCCL_MLX5_Q_COUNTER_IMPLIED_NAK_SEQ_ERR_DW},
-  {"local_ack_timeout_err", NCCL_MLX5_Q_COUNTER_LOCAL_ACK_TIMEOUT_ERR_DW},
-  {"resp_cqe_error", NCCL_MLX5_Q_COUNTER_RESP_CQE_ERROR_DW},
-  {"req_cqe_error", NCCL_MLX5_Q_COUNTER_REQ_CQE_ERROR_DW},
-  {"req_transport_retries_exceeded", NCCL_MLX5_Q_COUNTER_REQ_TRANSPORT_RETRIES_EXCEEDED_DW},
-  {"resp_cqe_flush_error", NCCL_MLX5_Q_COUNTER_RESP_CQE_FLUSH_ERROR_DW},
-  {"req_cqe_flush_error", NCCL_MLX5_Q_COUNTER_REQ_CQE_FLUSH_ERROR_DW},
+  GDAKI_Q_COUNTER_FIELD(rx_write_requests),
+  GDAKI_Q_COUNTER_FIELD(rx_read_requests),
+  GDAKI_Q_COUNTER_FIELD(rx_atomic_requests),
+  GDAKI_Q_COUNTER_FIELD(out_of_buffer),
+  GDAKI_Q_COUNTER_FIELD(out_of_sequence),
+  GDAKI_Q_COUNTER_FIELD(duplicate_request),
+  GDAKI_Q_COUNTER_FIELD(rnr_nak_retry_err),
+  GDAKI_Q_COUNTER_FIELD(packet_seq_err),
+  GDAKI_Q_COUNTER_FIELD(implied_nak_seq_err),
+  GDAKI_Q_COUNTER_FIELD(local_ack_timeout_err),
+  GDAKI_Q_COUNTER_FIELD(resp_cqe_error),
+  GDAKI_Q_COUNTER_FIELD(req_cqe_error),
+  GDAKI_Q_COUNTER_FIELD(req_transport_retries_exceeded),
+  GDAKI_Q_COUNTER_FIELD(resp_cqe_flush_error),
+  GDAKI_Q_COUNTER_FIELD(req_cqe_flush_error),
 };
+#undef GDAKI_Q_COUNTER_FIELD
 
 // Best-effort: on failure GIN QPs stay on the device default counter set.
 static void gdakiQCounterCreate(struct gdaki_context* ctx, struct ibv_context* context) {
-  uint32_t in[NCCL_MLX5_ALLOC_Q_COUNTER_IN_SIZE_DW] = {};
-  uint32_t out[NCCL_MLX5_ALLOC_Q_COUNTER_OUT_SIZE_DW] = {};
-  in[NCCL_MLX5_CMD_IN_OPCODE_DW] = htobe32(NCCL_MLX5_CMD_OP_ALLOC_Q_COUNTER << 16);
+  uint32_t in[MLX5_ST_SZ_DW(alloc_q_counter_in)] = {};
+  uint32_t out[MLX5_ST_SZ_DW(alloc_q_counter_out)] = {};
+  DEVX_SET(alloc_q_counter_in, in, opcode, MLX5_CMD_OP_ALLOC_Q_COUNTER);
   if (wrap_mlx5dv_devx_obj_create(&ctx->ginQCounter, context, in, sizeof(in), out, sizeof(out)) != ncclSuccess) {
     INFO(NCCL_NET,
          "[%d] GIN GDAKI Q counter not available (status=%#x syndrome=%#x); GIN QPs will use the default counter set",
-         ctx->rank, be32toh(out[NCCL_MLX5_CMD_OUT_STATUS_DW]) >> 24, be32toh(out[NCCL_MLX5_CMD_OUT_SYNDROME_DW]));
+         ctx->rank, DEVX_GET(mbox_out, out, status), DEVX_GET(mbox_out, out, syndrome));
     return;
   }
-  ctx->ginCounterSetId = be32toh(out[NCCL_MLX5_ALLOC_Q_COUNTER_OUT_COUNTER_SET_ID_DW]) & 0xff;
+  ctx->ginCounterSetId = DEVX_GET(alloc_q_counter_out, out, counter_set_id);
   INFO(NCCL_NET, "GIN GDAKI counter set: rank=%d dev=%s port=%u counterSetId=%u", ctx->rank, ctx->ib_dev_name,
        ctx->port_num, ctx->ginCounterSetId);
 }
@@ -439,14 +440,13 @@ static const char* gdakiQCounterString(struct gdaki_context* ctx, char* buf, siz
   buf[0] = '\0';
   if (ctx->ginCounterSetId == 0) return buf;
 
-  uint32_t in[NCCL_MLX5_QUERY_Q_COUNTER_IN_SIZE_DW] = {};
-  uint32_t out[NCCL_MLX5_QUERY_Q_COUNTER_OUT_SIZE_DW] = {};
-  in[NCCL_MLX5_CMD_IN_OPCODE_DW] = htobe32(NCCL_MLX5_CMD_OP_QUERY_Q_COUNTER << 16);
-  in[NCCL_MLX5_QUERY_Q_COUNTER_IN_COUNTER_SET_ID_DW] = htobe32(ctx->ginCounterSetId & 0xff);
+  uint32_t in[MLX5_ST_SZ_DW(query_q_counter_in)] = {};
+  uint32_t out[MLX5_ST_SZ_DW(query_q_counter_out)] = {};
+  DEVX_SET(query_q_counter_in, in, opcode, MLX5_CMD_OP_QUERY_Q_COUNTER);
+  DEVX_SET(query_q_counter_in, in, counter_set_id, ctx->ginCounterSetId);
   if (wrap_mlx5dv_devx_obj_query(ctx->ginQCounter, in, sizeof(in), out, sizeof(out)) != ncclSuccess) {
     INFO(NCCL_NET, "[%d] GIN GDAKI could not query counterSetId=%u (status=%#x syndrome=%#x)", ctx->rank,
-         ctx->ginCounterSetId, be32toh(out[NCCL_MLX5_CMD_OUT_STATUS_DW]) >> 24,
-         be32toh(out[NCCL_MLX5_CMD_OUT_SYNDROME_DW]));
+         ctx->ginCounterSetId, DEVX_GET(mbox_out, out, status), DEVX_GET(mbox_out, out, syndrome));
     return buf;
   }
 

@@ -40,6 +40,7 @@
  * explicit including of MLX5 direct verbs header.
  */
 
+#include <endian.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -196,5 +197,30 @@ struct mlx5dv_qp_init_attr {
 };
 
 struct mlx5dv_devx_obj;
+
+#define __devx_nullp(typ) ((struct mlx5_ifc_##typ##_bits *)NULL)
+#define __devx_bit_sz(typ, fld) sizeof(__devx_nullp(typ)->fld)
+#define __devx_bit_off(typ, fld) offsetof(struct mlx5_ifc_##typ##_bits, fld)
+#define __devx_dw_off(bit_off) ((bit_off) / 32)
+#define __devx_dw_bit_off(bit_sz, bit_off) (32 - (bit_sz) - ((bit_off) & 0x1f))
+#define __devx_mask(bit_sz) ((uint32_t)((1ull << (bit_sz)) - 1))
+#define __devx_dw_mask(bit_sz, bit_off) (__devx_mask(bit_sz) << __devx_dw_bit_off(bit_sz, bit_off))
+
+static inline void _devx_set(void *p, uint32_t value, size_t bit_off, size_t bit_sz) {
+    uint32_t *fld = (uint32_t *)(p) + __devx_dw_off(bit_off);
+    uint32_t dw_mask = __devx_dw_mask(bit_sz, bit_off);
+    uint32_t mask = __devx_mask(bit_sz);
+
+    *fld = htobe32((be32toh(*fld) & (~dw_mask)) | ((value & mask) << __devx_dw_bit_off(bit_sz, bit_off)));
+}
+
+#define DEVX_SET(typ, p, fld, v) _devx_set(p, v, __devx_bit_off(typ, fld), __devx_bit_sz(typ, fld))
+
+static inline uint32_t _devx_get(const void *p, size_t bit_off, size_t bit_sz) {
+    return ((be32toh(*((const uint32_t *)(p) + __devx_dw_off(bit_off))) >> __devx_dw_bit_off(bit_sz, bit_off)) &
+            __devx_mask(bit_sz));
+}
+
+#define DEVX_GET(typ, p, fld) _devx_get(p, __devx_bit_off(typ, fld), __devx_bit_sz(typ, fld))
 
 #endif  // NCCL_MLX5DV_CORE_H_

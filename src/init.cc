@@ -1583,9 +1583,9 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       }
       // Then warn or error based on env var
       if (ncclParamIgnoreNetMismatch()) {
-        INFO(NCCL_INIT,
-             "Detected mixed local Net device counts across ranks (min %d, max %d). Ignoring due to "
-             "NCCL_IGNORE_NET_MISMATCH.",
+        ATTN("Detected mixed local Net device counts across ranks (min %d, max %d); continuing because "
+             "NCCL_IGNORE_NET_MISMATCH=1. Communication may hang if a peer selects a device unavailable on a rank "
+             "with fewer devices; see the NET WARNs on those ranks.",
              minLocalNetCount, maxLocalNetCount);
       } else {
         WARN("Detected mixed local Net device counts across ranks (min %d, max %d). Set NCCL_IGNORE_NET_MISMATCH=1 to "

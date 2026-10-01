@@ -119,7 +119,7 @@ DOCA_OBJDIR      := $(OBJDIR)/transport/net_ib/gdaki/doca-gpunetio
 DOCA_INCLUDES    := $(DOCA_HOME)/include/doca_gpunetio_device.h $(wildcard $(DOCA_HOME)/include/common/*.h) $(wildcard $(DOCA_HOME)/include/device/*.cuh)
 DOCA_INCTARGETS  := $(DOCA_INCLUDES:$(DOCA_HOME)/include/%=$(DOCA_INC_INSTALL)/%)
 INCTARGETS       += $(DOCA_INCTARGETS)
-DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_verbs_dev.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp doca_gpunetio_sdk_wrapper.cpp doca_verbs_dev_sdk_wrapper.cpp doca_verbs_umem_sdk_wrapper.cpp doca_verbs_uar_sdk_wrapper.cpp doca_verbs_cq_sdk_wrapper.cpp doca_verbs_qp_sdk_wrapper.cpp
+DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_verbs_dev.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp doca_gpunetio_signal_map.cpp doca_verbs_utils.cpp doca_gpunetio_sdk_wrapper.cpp doca_verbs_dev_sdk_wrapper.cpp doca_verbs_umem_sdk_wrapper.cpp doca_verbs_uar_sdk_wrapper.cpp doca_verbs_cq_sdk_wrapper.cpp doca_verbs_qp_sdk_wrapper.cpp
 DOCA_LIBOBJ      := $(DOCA_LIBSRC:%.cpp=$(DOCA_OBJDIR)/%.o)
 LIBOBJ           += $(DOCA_LIBOBJ)
 

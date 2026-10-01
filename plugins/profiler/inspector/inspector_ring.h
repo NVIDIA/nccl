@@ -29,6 +29,8 @@ struct inspectorCompletedRing {
   uint64_t enqueued{0};         // cumulative entries ever enqueued (drained + dropped)
   uint64_t dropped{0};          // cumulative entries overwritten before being drained
   uint64_t droppedReported{0};  // value of 'dropped' at the last drain (for deltas)
+  uint64_t droppedItems{0};     // optional payload count inside overwritten records
+  uint64_t (*countItems)(const void*){nullptr};
 };
 
 /*
@@ -58,7 +60,8 @@ static inline bool inspectorRingNonEmpty(const struct inspectorCompletedRing* ri
 // Generic ring operations
 inspectorResult_t inspectorRingInit(struct inspectorCompletedRing* ring,
                                     uint32_t size,
-                                    size_t entrySize);
+                                    size_t entrySize,
+                                    uint64_t (*countItems)(const void*) = nullptr);
 void inspectorRingFinalize(struct inspectorCompletedRing* ring);
 inspectorResult_t inspectorRingEnqueue(struct inspectorCompletedRing* ring,
                                        const void* entry);

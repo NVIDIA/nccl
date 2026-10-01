@@ -9,9 +9,6 @@ set(ENQUEUE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/task_sched.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/sched_profiler.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/sym_sched.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/legacy_sched.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/allgatherv_sched.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/p2p_sched.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/rma_sched.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/task_sched/ce_sched.cc
 )

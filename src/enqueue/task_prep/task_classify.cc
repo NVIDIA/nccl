@@ -9,7 +9,7 @@
 #include "enqueue.h"
 #include "enqueue/task_classify.h"
 
-static ncclResult_t classifyEnqueueP2pTask(
+static ncclResult_t enqueueP2pTask(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* p2pTaskQueue,
   ncclFunc_t func, ncclFunc_t collAPI, void* buff, size_t count, ncclDataType_t datatype, int peer, cudaStream_t stream,
   cudaEvent_t launchCompletionEvent, const struct ncclProfilerApiCtx& profiler,
@@ -38,12 +38,12 @@ static ncclResult_t classifyEnqueueP2pTask(
 
 // Next P2pApi handle for a collective lowered to p2p tasks, in lowering order; nullptr once the
 // handles run out (or when no profiler plugin is loaded and none were emitted).
-static struct ncclProfilerEventRef classifyNextP2pApi(const struct ncclRawTaskColl* coll, int* idx) {
+static void* nextP2pApi(const struct ncclRawTaskColl* coll, int* idx) {
   if (*idx >= coll->nP2pApiEvents) return {};
   return coll->p2pApiEventHandles[(*idx)++];
 }
 
-static ncclResult_t classifyCollToP2pTasks(
+static ncclResult_t collToP2pTasks(
   struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
   struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* p2pTaskQueue) {
   struct ncclRawTaskColl* coll = &tInfo->raw->coll;
@@ -58,24 +58,21 @@ static ncclResult_t classifyCollToP2pTasks(
     for (int r = 0; r < comm->nRanks; r++) {
       void* sendBuff = (void*)((char*)coll->sendbuff + r * coll->count * elemSize);
       void* recvBuff = (void*)((char*)coll->recvbuff + r * coll->count * elemSize);
-      NCCLCHECK(classifyEnqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, sendBuff, coll->count, coll->datatype,
-                                       r, stream, launchCompletionEvent, tInfo->raw->profiler,
-                                       classifyNextP2pApi(coll, &p2pApiIdx)));
-      NCCLCHECK(classifyEnqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, recvBuff, coll->count, coll->datatype,
-                                       r, stream, launchCompletionEvent, tInfo->raw->profiler,
-                                       classifyNextP2pApi(coll, &p2pApiIdx)));
+      NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, sendBuff, coll->count, coll->datatype, r,
+                               stream, launchCompletionEvent, tInfo->raw->profiler, nextP2pApi(coll, &p2pApiIdx)));
+      NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, recvBuff, coll->count, coll->datatype, r,
+                               stream, launchCompletionEvent, tInfo->raw->profiler, nextP2pApi(coll, &p2pApiIdx)));
     }
   } else if (coll->func == ncclFuncGather) {
-    NCCLCHECK(classifyEnqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, (void*)coll->sendbuff, coll->count,
-                                     coll->datatype, coll->root, stream, launchCompletionEvent, tInfo->raw->profiler,
-                                     classifyNextP2pApi(coll, &p2pApiIdx)));
+    NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, (void*)coll->sendbuff, coll->count,
+                             coll->datatype, coll->root, stream, launchCompletionEvent, tInfo->raw->profiler,
+                             nextP2pApi(coll, &p2pApiIdx)));
     if (comm->rank == coll->root) {
       size_t offset = 0;
       for (int r = 0; r < comm->nRanks; r++) {
         void* buff = (void*)((char*)coll->recvbuff + offset);
-        NCCLCHECK(classifyEnqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, buff, coll->count, coll->datatype,
-                                         r, stream, launchCompletionEvent, tInfo->raw->profiler,
-                                         classifyNextP2pApi(coll, &p2pApiIdx)));
+        NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, buff, coll->count, coll->datatype, r,
+                                 stream, launchCompletionEvent, tInfo->raw->profiler, nextP2pApi(coll, &p2pApiIdx)));
         offset += coll->count * elemSize;
       }
     }
@@ -84,15 +81,14 @@ static ncclResult_t classifyCollToP2pTasks(
       size_t offset = 0;
       for (int r = 0; r < comm->nRanks; r++) {
         void* buff = (void*)((char*)coll->sendbuff + offset);
-        NCCLCHECK(classifyEnqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, buff, coll->count, coll->datatype,
-                                         r, stream, launchCompletionEvent, tInfo->raw->profiler,
-                                         classifyNextP2pApi(coll, &p2pApiIdx)));
+        NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, buff, coll->count, coll->datatype, r,
+                                 stream, launchCompletionEvent, tInfo->raw->profiler, nextP2pApi(coll, &p2pApiIdx)));
         offset += coll->count * elemSize;
       }
     }
-    NCCLCHECK(classifyEnqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, coll->recvbuff, coll->count,
-                                     coll->datatype, coll->root, stream, launchCompletionEvent, tInfo->raw->profiler,
-                                     classifyNextP2pApi(coll, &p2pApiIdx)));
+    NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, coll->recvbuff, coll->count, coll->datatype,
+                             coll->root, stream, launchCompletionEvent, tInfo->raw->profiler,
+                             nextP2pApi(coll, &p2pApiIdx)));
   } else {
     return ncclInternalError;
   }
@@ -102,17 +98,17 @@ static ncclResult_t classifyCollToP2pTasks(
   return ncclSuccess;
 }
 
-static bool taskUsesSymKernel(struct ncclTaskTuningInfo* tInfo) {
+static bool isSymKernel(struct ncclTaskTuningInfo* tInfo) {
   return tInfo->tuningOut.valid && tInfo->tuningOut.symKernelId >= 0 &&
          tInfo->tuningOut.symKernelId < ncclSymkKernelId_Count;
 }
 
-static bool taskUsesCe(struct ncclTaskTuningInfo* tInfo) {
+static bool isCeKernel(struct ncclTaskTuningInfo* tInfo) {
   return tInfo->tuningOut.valid && tInfo->tuningOut.ceMethodId >= 0 &&
          tInfo->tuningOut.ceMethodId < ncclCeMethodId_Count;
 }
 
-static bool taskUsesAllGatherV(struct ncclTaskTuningInfo* tInfo) {
+static bool isTaskAllGatherV(struct ncclTaskTuningInfo* tInfo) {
   return tInfo->raw->kind == ncclTaskKindAllGatherV;
 }
 
@@ -138,7 +134,7 @@ ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuning
         (tInfo->raw->coll.func == ncclFuncAlltoAll || tInfo->raw->coll.func == ncclFuncScatter ||
          tInfo->raw->coll.func == ncclFuncGather) &&
         !taskUsesCe(tInfo) && !taskUsesSymKernel(tInfo)) {
-      NCCLCHECK(classifyCollToP2pTasks(comm, tInfo, &ctq->p2pTaskQueue));
+      NCCLCHECK(collToP2pTasks(comm, tInfo, &ctq->p2pTaskQueue));
       continue;
     }
 
@@ -146,11 +142,11 @@ ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuning
       outQueue = &ctq->p2pTaskQueue;
     } else if (tInfo->raw->kind == ncclTaskKindRma) {
       outQueue = &ctq->rmaTaskQueue;
-    } else if (taskUsesCe(tInfo)) {
+    } else if (isCeKernel(tInfo)) {
       outQueue = &ctq->ceTaskQueue;
-    } else if (taskUsesSymKernel(tInfo)) {
+    } else if (isSymKernel(tInfo)) {
       outQueue = &ctq->symTaskQueue;
-    } else if (taskUsesAllGatherV(tInfo)) {
+    } else if (isTaskAllGatherV(tInfo)) {
       outQueue = &ctq->allgathervTaskQueue;
     } else {
       outQueue = &ctq->legacyTaskQueue;

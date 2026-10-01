@@ -64,32 +64,23 @@ static cudaStream_t ceSchedTuningInfoStream(struct ncclTaskTuningInfo* tInfo) {
   return tInfo->raw->coll.stream;
 }
 
-static ncclResult_t ceSchedStreamCaptured(
-    struct ncclComm* comm, cudaStream_t stream,
-    bool* capturedOut, struct ncclCudaGraph* graphOut
-  ) {
+static ncclResult_t ceSchedStreamCaptured(struct ncclComm* comm, cudaStream_t stream, bool* capturedOut,
+                                          struct ncclCudaGraph* graphOut) {
   NCCLCHECK(ncclCudaGetCapturingGraph(graphOut, stream, comm->config.graphUsageMode));
   *capturedOut = ncclCudaGraphValid(*graphOut);
   return ncclSuccess;
 }
 
-static struct ncclCeSchedStreamPlan* ceSchedFindStreamPlan(
-    struct ncclCeSchedStreamPlan* head, cudaStream_t stream
-  ) {
+static struct ncclCeSchedStreamPlan* ceSchedFindStreamPlan(struct ncclCeSchedStreamPlan* head, cudaStream_t stream) {
   for (struct ncclCeSchedStreamPlan* plan = head; plan != nullptr; plan = plan->next) {
     if (plan->stream == stream) return plan;
   }
   return nullptr;
 }
 
-static ncclResult_t ceSchedGetStreamPlan(
-    struct ncclComm* comm,
-    struct ncclCeSchedStreamPlan** head,
-    cudaStream_t stream,
-    bool captured,
-    const struct ncclCudaGraph& graph,
-    struct ncclCeSchedStreamPlan** streamPlanOut
-  ) {
+static ncclResult_t ceSchedGetStreamPlan(struct ncclComm* comm, struct ncclCeSchedStreamPlan** head,
+                                         cudaStream_t stream, bool captured, const struct ncclCudaGraph& graph,
+                                         struct ncclCeSchedStreamPlan** streamPlanOut) {
   struct ncclCeSchedStreamPlan* streamPlan = ceSchedFindStreamPlan(*head, stream);
   if (streamPlan != nullptr) {
     *streamPlanOut = streamPlan;
@@ -108,10 +99,8 @@ static ncclResult_t ceSchedGetStreamPlan(
   return ncclSuccess;
 }
 
-static ncclResult_t ceSchedCollArgsFromTuningInfo(
-    struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
-    struct ncclCeCollArgs* args
-  ) {
+static ncclResult_t ceSchedCollArgsFromTuningInfo(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
+                                                  struct ncclCeCollArgs* args) {
   struct ncclRawTaskColl* raw = &tInfo->raw->coll;
 
   if (tInfo->raw->kind != ncclTaskKindColl) return ncclInternalError;
@@ -144,11 +133,9 @@ static ncclResult_t ceSchedCapturedToken(struct ncclComm* comm, struct ncclCeSch
   return ncclSuccess;
 }
 
-static ncclResult_t ceSchedProxyWaitBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclCeSchedStreamPlan* streamPlan,
-    int npeers, int** peers, int** nsignals,
-    struct ncclRmaProxyDesc* desc) {
+static ncclResult_t ceSchedProxyWaitBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                              struct ncclCeSchedStreamPlan* streamPlan, int npeers, int** peers,
+                                              int** nsignals, struct ncclRmaProxyDesc* desc) {
   ncclResult_t ret = ncclSuccess;
   bool captured = streamPlan->captured;
 
@@ -167,8 +154,12 @@ static ncclResult_t ceSchedProxyWaitBuildDesc(
   if (captured) {
     desc->opSeq = 1;
     desc->waitSignal.needFlush = (rmaProxyCtx->cpuAccessSignalsGdrHandle == NULL);
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle, comm->memManager), ret, fail);
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle, comm->memManager), ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
     NCCLCHECKGOTO(ceSchedCapturedToken(comm, streamPlan), ret, fail);
     desc->reclaimToken = streamPlan->reclaimToken;
     desc->graph = streamPlan->graph;
@@ -192,12 +183,10 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ceSchedProxyPutGroupBuildDesc(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclCeSchedStreamPlan* streamPlan,
-    int nOps, struct ncclRmaPutSignalOp** ops,
-    int ctx,
-    struct ncclRmaProxyDesc* desc) {
+static ncclResult_t ceSchedProxyPutGroupBuildDesc(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                                  struct ncclCeSchedStreamPlan* streamPlan, int nOps,
+                                                  struct ncclRmaPutSignalOp** ops, int ctx,
+                                                  struct ncclRmaProxyDesc* desc) {
   ncclResult_t ret = ncclSuccess;
   bool captured = streamPlan->captured;
   int slot = comm->rank;
@@ -223,8 +212,12 @@ static ncclResult_t ceSchedProxyPutGroupBuildDesc(
     desc->doneSeqGdrHandle = rmaProxyCtx->doneSeqsGdrHandle;
   } else {
     desc->opSeq = 1;
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle, comm->memManager), ret, fail);
-    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle, comm->memManager), ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->readySeq, &desc->readySeqDev, 1, 0, &desc->readySeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
+    NCCLCHECKGOTO(allocMemCPUAccessible(&desc->doneSeq, &desc->doneSeqDev, 1, 0, &desc->doneSeqGdrHandle,
+                                        comm->memManager),
+                  ret, fail);
     NCCLCHECKGOTO(ceSchedCapturedToken(comm, streamPlan), ret, fail);
     desc->reclaimToken = streamPlan->reclaimToken;
     desc->graph = streamPlan->graph;
@@ -248,9 +241,8 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ceSchedHierCollBuildChunk(
-    size_t perRankBytes, int nPeers, size_t maxChunk,
-    struct ceSchedHierChunkPlan* outPlan) {
+static ncclResult_t ceSchedHierCollBuildChunk(size_t perRankBytes, int nPeers, size_t maxChunk,
+                                              struct ceSchedHierChunkPlan* outPlan) {
   ncclResult_t ret = ncclSuccess;
   const size_t align = CE_SCHED_HIER_CHUNK_ALIGN;
 
@@ -312,12 +304,8 @@ static void ceSchedHierCollFreeChunkPlan(struct ceSchedHierChunkPlan* plan) {
   plan->nPeers = 0;
 }
 
-static ncclResult_t ceSchedRailSync(
-    struct ncclComm* comm,
-    struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclCeSchedStreamPlan* streamPlan,
-    int ctx,
-    cudaStream_t stream) {
+static ncclResult_t ceSchedRailSync(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                    struct ncclCeSchedStreamPlan* streamPlan, int ctx, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   int localRank = comm->localRank;
   int nNodes = comm->nNodes;
@@ -346,22 +334,21 @@ static ncclResult_t ceSchedRailSync(
       railPeers[idx] = railPeer;
       railSigOnes[idx] = 1;
 
-      NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(
-          comm, rmaProxyCtx, ctx, captured,
-          nullptr, 0, nullptr, 0,
-          0, railPeer, /*signalIdx=*/0, NCCL_SIGNAL,
-          &groupOps[idx]), ret, fail);
+      NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(comm, rmaProxyCtx, ctx, captured, nullptr, 0, nullptr, 0, 0, railPeer,
+                                           /*signalIdx=*/0, NCCL_SIGNAL, &groupOps[idx]),
+                    ret, fail);
       idx++;
     }
   }
 
   NCCLCHECKGOTO(ncclCalloc(&groupDesc, 1), ret, fail);
-  NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(
-      comm, rmaProxyCtx, streamPlan, nRemoteNodes, &groupOps, ctx, groupDesc), ret, fail);
+  NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(comm, rmaProxyCtx, streamPlan, nRemoteNodes, &groupOps, ctx, groupDesc),
+                ret, fail);
 
   NCCLCHECKGOTO(ncclCalloc(&waitDesc, 1), ret, fail);
-  NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(
-      comm, rmaProxyCtx, streamPlan, nRemoteNodes, &railPeers, &railSigOnes, waitDesc), ret, fail);
+  NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(comm, rmaProxyCtx, streamPlan, nRemoteNodes, &railPeers, &railSigOnes,
+                                          waitDesc),
+                ret, fail);
 
   {
     int startOps = ncclRmaProxyPutGroupStartNumOps(captured);
@@ -472,10 +459,10 @@ static size_t ceSchedHierRingChunkWidth(size_t perRankBytes, size_t cwBytes, siz
 
 // Ring wait for up to two peers, merging the clockwise and counterclockwise
 // entries when they resolve to the same peer.
-static ncclResult_t ceSchedProxyBuildWaitPeersRing(
-    struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
-    struct ncclCeSchedStreamPlan* streamPlan, int npeers, const int* peersIn,
-    const int* nsignalsIn, struct ncclRmaProxyDesc** waitDescOut) {
+static ncclResult_t ceSchedProxyBuildWaitPeersRing(struct ncclComm* comm, struct ncclRmaProxyCtx* rmaProxyCtx,
+                                                   struct ncclCeSchedStreamPlan* streamPlan, int npeers,
+                                                   const int* peersIn, const int* nsignalsIn,
+                                                   struct ncclRmaProxyDesc** waitDescOut) {
   ncclResult_t ret = ncclSuccess;
 
   int realPeers = 0;
@@ -523,8 +510,9 @@ static ncclResult_t ceSchedProxyBuildWaitPeersRing(
   }
 
   NCCLCHECKGOTO(ncclCalloc(&waitDesc, 1), ret, fail);
-  NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(
-      comm, rmaProxyCtx, streamPlan, realPeers, &waitPeers, &waitSigCounts, waitDesc), ret, fail);
+  NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(comm, rmaProxyCtx, streamPlan, realPeers, &waitPeers, &waitSigCounts,
+                                          waitDesc),
+                ret, fail);
   *waitDescOut = waitDesc;
   waitDesc = nullptr;
 
@@ -550,9 +538,8 @@ fail:
 //     wait for chunk's signal; CE-scatter it to local peers via LSA
 //   PutGroupDone                // blocks until all network puts complete
 //   IntraNodeBarrier            // gates user code reading recvbuf
-static ncclResult_t ceSchedHierCeAllGatherDirect(
-    struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
-    struct ncclCeCollArgs* args, cudaStream_t stream) {
+static ncclResult_t ceSchedHierCeAllGatherDirect(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
+                                                 struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
 
   struct ncclRmaProxyState* rmaProxyState = &comm->rmaState.rmaProxyState;
@@ -640,10 +627,11 @@ static ncclResult_t ceSchedHierCeAllGatherDirect(
         size_t subBytes = chunkPlan.chunkBytes[c];
         size_t off = chunkPlan.chunkOff[c];
 
-        NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(
-            comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k], baseCtx + k, captured,
-            sendWin, srcWinOffset + off, recvWin, peerWinOffset + off,
-            subBytes, railPeer, /*signalIdx=*/0, NCCL_SIGNAL, &groupOps[k][ctxFill[k]++]), ret, fail);
+        NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k],
+                                             baseCtx + k, captured, sendWin, srcWinOffset + off, recvWin,
+                                             peerWinOffset + off, subBytes, railPeer, /*signalIdx=*/0, NCCL_SIGNAL,
+                                             &groupOps[k][ctxFill[k]++]),
+                      ret, fail);
       }
     }
 
@@ -651,8 +639,9 @@ static ncclResult_t ceSchedHierCeAllGatherDirect(
     for (int k = 0; k < numCtx; k++) {
       if (ctxOps[k] == 0) continue;
       struct ncclRmaProxyCtx* pc = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k];
-      NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(
-          comm, pc, streamPlan, ctxOps[k], &groupOps[k], baseCtx + k, groupDesc[k]), ret, fail);
+      NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(comm, pc, streamPlan, ctxOps[k], &groupOps[k], baseCtx + k,
+                                                  groupDesc[k]),
+                    ret, fail);
       NCCLCHECKGOTO(ncclRmaProxyPutGroupStartParams(groupDesc[k], groupStartParams + a * startOps), ret, fail);
       NCCLCHECKGOTO(ncclRmaProxyPutGroupDoneParams(groupDesc[k], groupDoneParams + a * doneOps), ret, fail);
       NCCLCHECKGOTO(ncclRmaProxyEnqueueDesc(pc, &groupDesc[k]), ret, fail);
@@ -721,8 +710,9 @@ static ncclResult_t ceSchedHierCeAllGatherDirect(
         waitPeers[0] = railPeer;
         waitSigCounts[0] = 1;
         NCCLCHECKGOTO(ncclCalloc(&waitDesc[c], 1), ret, fail);
-        NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(
-            comm, waitCtx[c], streamPlan, 1, &waitPeers, &waitSigCounts, waitDesc[c]), ret, fail);
+        NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(comm, waitCtx[c], streamPlan, 1, &waitPeers, &waitSigCounts,
+                                                waitDesc[c]),
+                      ret, fail);
       }
     }
 
@@ -862,10 +852,9 @@ struct ceSchedHierAgRingIssueState {
 // Build and submit one bidirectional forwarding round. The caller alternates
 // two parameter slots so the next round can be submitted before the current
 // round's local fanout and completion retirement.
-static ncclResult_t ceSchedHierAgRingIssueRound(
-    struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
-    struct ncclCeCollArgs* args, cudaStream_t stream,
-    struct ceSchedHierAgRingIssueState* st, int step, int slot) {
+static ncclResult_t ceSchedHierAgRingIssueRound(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
+                                                struct ncclCeCollArgs* args, cudaStream_t stream,
+                                                struct ceSchedHierAgRingIssueState* st, int step, int slot) {
   ncclResult_t ret = ncclSuccess;
   struct ncclRmaProxyState* rmaProxyState = &comm->rmaState.rmaProxyState;
   struct ncclDevrWindow* recvWin = args->recvWin;
@@ -886,10 +875,11 @@ static ncclResult_t ceSchedHierAgRingIssueRound(
       int k = c % st->numCtx;
       size_t subBytes = st->cwChunkPlan->chunkBytes[c];
       size_t off = st->cwChunkPlan->chunkOff[c];
-      NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(
-          comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[st->baseCtx + k], st->baseCtx + k, captured,
-          round->srcWinHostCw, round->srcBaseOffsetCw + off, recvWin, round->dstBaseOffsetCw + off,
-          subBytes, st->sendRailPeerCw, /*signalIdx=*/0, NCCL_SIGNAL, &st->groupOps[k][st->ctxFill[k]++]), ret, fail);
+      NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[st->baseCtx + k],
+                                           st->baseCtx + k, captured, round->srcWinHostCw, round->srcBaseOffsetCw + off,
+                                           recvWin, round->dstBaseOffsetCw + off, subBytes, st->sendRailPeerCw,
+                                           /*signalIdx=*/0, NCCL_SIGNAL, &st->groupOps[k][st->ctxFill[k]++]),
+                    ret, fail);
     }
   }
   if (st->ccwChunkPlan->chunkStart != nullptr) {
@@ -897,18 +887,21 @@ static ncclResult_t ceSchedHierAgRingIssueRound(
       int k = c % st->numCtx;
       size_t subBytes = st->ccwChunkPlan->chunkBytes[c];
       size_t off = st->ccwChunkPlan->chunkOff[c];
-      NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(
-          comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[st->baseCtx + k], st->baseCtx + k, captured,
-          round->srcWinHostCcw, round->srcBaseOffsetCcw + off, recvWin, round->dstBaseOffsetCcw + off,
-          subBytes, st->sendRailPeerCcw, /*signalIdx=*/0, NCCL_SIGNAL, &st->groupOps[k][st->ctxFill[k]++]), ret, fail);
+      NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[st->baseCtx + k],
+                                           st->baseCtx + k, captured, round->srcWinHostCcw,
+                                           round->srcBaseOffsetCcw + off, recvWin, round->dstBaseOffsetCcw + off,
+                                           subBytes, st->sendRailPeerCcw, /*signalIdx=*/0, NCCL_SIGNAL,
+                                           &st->groupOps[k][st->ctxFill[k]++]),
+                    ret, fail);
     }
   }
 
   for (int ai = 0; ai < st->nActiveCtx; ai++) {
     int k = st->activeCtxs[ai];
     struct ncclRmaProxyCtx* proxyCtx = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[st->baseCtx + k];
-    NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(
-        comm, proxyCtx, streamPlan, st->ctxOps[k], &st->groupOps[k], st->baseCtx + k, st->groupDesc[k]), ret, fail);
+    NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(comm, proxyCtx, streamPlan, st->ctxOps[k], &st->groupOps[k],
+                                                st->baseCtx + k, st->groupDesc[k]),
+                  ret, fail);
     NCCLCHECKGOTO(ncclRmaProxyPutGroupStartParams(st->groupDesc[k], st->groupStartParams[slot] + ai * startOps), ret,
                   fail);
     NCCLCHECKGOTO(ncclRmaProxyPutGroupDoneParams(st->groupDesc[k], st->groupDoneParams[slot] + ai * doneOps), ret,
@@ -938,9 +931,8 @@ fail:
 //     CE-scatter arrived halves // local fanout via LSA
 //     PutGroupDone              // retire the current round's outbound puts
 //   IntraNodeBarrier            // gates user code reading recvbuf
-static ncclResult_t ceSchedHierCeAllGatherRing(
-    struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
-    struct ncclCeCollArgs* args, cudaStream_t stream) {
+static ncclResult_t ceSchedHierCeAllGatherRing(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
+                                               struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
 
   struct ncclRmaProxyState* rmaProxyState = &comm->rmaState.rmaProxyState;
@@ -962,9 +954,8 @@ static ncclResult_t ceSchedHierCeAllGatherRing(
   size_t perRankBytes = args->nElts * args->eltSize;
   size_t cwBytes = perRankBytes <= 1 ? perRankBytes : perRankBytes / 2;
   size_t ccwBytes = perRankBytes - cwBytes;
-  bool agUseMulticast =
-    ncclCeAllGatherUseMulticast(comm, perRankBytes, captured,
-                                (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes);
+  bool agUseMulticast = ncclCeAllGatherUseMulticast(
+    comm, perRankBytes, captured, (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes);
   int numCtx = ceSchedHierRingNumCtx(rmaProxyState, perRankBytes, captured);
 
   struct ncclRmaProxyCtx* railProxyCtx = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[railCtx];
@@ -1158,19 +1149,17 @@ static ncclResult_t ceSchedHierCeAllGatherRing(
       meta->originRankRecvCcw = comm->nodeRanks[originNodeRecvCcw].localRankToRank[localRank];
       meta->srcWinHostCw = step == 1 ? sendWin : recvWin;
       meta->srcWinHostCcw = step == 1 ? sendWin : recvWin;
-      meta->srcBaseOffsetCw = step == 1 ?
-        (const uint8_t*)sendbuff - (const uint8_t*)sendWin->userPtr :
-        ((const uint8_t*)recvbuff + meta->originRankSendCw * perRankBytes) - (const uint8_t*)recvWin->userPtr;
+      meta->srcBaseOffsetCw = step == 1 ? (const uint8_t*)sendbuff - (const uint8_t*)sendWin->userPtr :
+                                          ((const uint8_t*)recvbuff + meta->originRankSendCw * perRankBytes) -
+                                            (const uint8_t*)recvWin->userPtr;
       meta->dstBaseOffsetCw =
         ((const uint8_t*)recvbuff + meta->originRankSendCw * perRankBytes) - (const uint8_t*)recvWin->userPtr;
-      meta->srcBaseOffsetCcw =
-        (step == 1 ? (const uint8_t*)sendbuff - (const uint8_t*)sendWin->userPtr :
-                     ((const uint8_t*)recvbuff + meta->originRankSendCcw * perRankBytes) -
-                       (const uint8_t*)recvWin->userPtr) +
-        cwBytes;
-      meta->dstBaseOffsetCcw =
-        ((const uint8_t*)recvbuff + meta->originRankSendCcw * perRankBytes) - (const uint8_t*)recvWin->userPtr +
-        cwBytes;
+      meta->srcBaseOffsetCcw = (step == 1 ? (const uint8_t*)sendbuff - (const uint8_t*)sendWin->userPtr :
+                                            ((const uint8_t*)recvbuff + meta->originRankSendCcw * perRankBytes) -
+                                              (const uint8_t*)recvWin->userPtr) +
+                               cwBytes;
+      meta->dstBaseOffsetCcw = ((const uint8_t*)recvbuff + meta->originRankSendCcw * perRankBytes) -
+                               (const uint8_t*)recvWin->userPtr + cwBytes;
     }
 
     issueState.numCtx = numCtx;
@@ -1191,8 +1180,8 @@ static ncclResult_t ceSchedHierCeAllGatherRing(
 
     if (scatterCapacity > 0) NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&ceScatterOps, scatterCapacity), ret, fail);
 
-    NCCLCHECKGOTO(ceSchedHierAgRingIssueRound(
-        comm, streamPlan, args, stream, &issueState, /*step=*/1, /*slot=*/0), ret, fail);
+    NCCLCHECKGOTO(ceSchedHierAgRingIssueRound(comm, streamPlan, args, stream, &issueState, /*step=*/1, /*slot=*/0), ret,
+                  fail);
 
     for (int step = 1; step <= nRounds; step++) {
       struct ceSchedHierAgRingRound* meta = &roundMeta[step];
@@ -1204,9 +1193,9 @@ static ncclResult_t ceSchedHierCeAllGatherRing(
       for (int ai = 0; ai < nActiveCtx; ai++) {
         int k = activeCtxs[ai];
         struct ncclRmaProxyCtx* pc = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k];
-        NCCLCHECKGOTO(ceSchedProxyBuildWaitPeersRing(
-            comm, pc, streamPlan, waitNPeersByActiveCtx[k], waitPeersByActiveCtx[k],
-            waitSignalsByActiveCtx[k], &waitDesc[k]), ret, fail);
+        NCCLCHECKGOTO(ceSchedProxyBuildWaitPeersRing(comm, pc, streamPlan, waitNPeersByActiveCtx[k],
+                                                     waitPeersByActiveCtx[k], waitSignalsByActiveCtx[k], &waitDesc[k]),
+                      ret, fail);
         if (waitDesc[k] != nullptr) {
           waitStartOpsTotal += ncclRmaProxyWaitStartNumOps(waitDesc[k]);
           waitDoneOpsTotal += ncclRmaProxyWaitDoneNumOps(waitDesc[k]);
@@ -1242,8 +1231,8 @@ static ncclResult_t ceSchedHierCeAllGatherRing(
       NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, waitDoneOpsTotal, waitDoneParams), ret, fail);
 
       if (step < nRounds) {
-        NCCLCHECKGOTO(ceSchedHierAgRingIssueRound(
-            comm, streamPlan, args, stream, &issueState, step + 1, slot ^ 1), ret, fail);
+        NCCLCHECKGOTO(ceSchedHierAgRingIssueRound(comm, streamPlan, args, stream, &issueState, step + 1, slot ^ 1), ret,
+                      fail);
       }
 
       ceScatterOps.numOps = 0;
@@ -1366,9 +1355,8 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ceSchedHierCeAllGather(
-    struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
-    struct ncclCeCollArgs* args, cudaStream_t stream) {
+static ncclResult_t ceSchedHierCeAllGather(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
+                                           struct ncclCeCollArgs* args, cudaStream_t stream) {
   size_t perRankBytes = args->nElts * args->eltSize;
   bool useRing = ncclParamHierCeCollAgRailRingEnable() > 0;
   if (comm->rank == 0) {
@@ -1391,9 +1379,8 @@ static ncclResult_t ceSchedHierCeAllGather(
 //   AggregateWait               // per-context wait covering all remote peers
 //   PutGroupDone                // blocks until outbound puts done
 //   IntraNodeBarrier #2         // all ranks in sync
-static ncclResult_t ceSchedHierCeAlltoAll(
-    struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
-    struct ncclCeCollArgs* args, cudaStream_t stream) {
+static ncclResult_t ceSchedHierCeAlltoAll(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
+                                          struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
 
   struct ncclRmaProxyState* rmaProxyState = &comm->rmaState.rmaProxyState;
@@ -1494,10 +1481,11 @@ static ncclResult_t ceSchedHierCeAlltoAll(
           size_t subBytes = chunkPlan.chunkBytes[c];
           size_t off = chunkPlan.chunkOff[c];
 
-          NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(
-              comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k], baseCtx + k, captured,
-              sendWin, srcWinOffset + off, recvWin, peerWinOffset + off,
-              subBytes, peer, /*signalIdx=*/0, NCCL_SIGNAL, &groupOps[k][ctxFill[k]++]), ret, fail);
+          NCCLCHECKGOTO(ncclRmaProxyPutBuildOp(comm, (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k],
+                                               baseCtx + k, captured, sendWin, srcWinOffset + off, recvWin,
+                                               peerWinOffset + off, subBytes, peer, /*signalIdx=*/0, NCCL_SIGNAL,
+                                               &groupOps[k][ctxFill[k]++]),
+                        ret, fail);
         }
         p++;
       }
@@ -1507,8 +1495,9 @@ static ncclResult_t ceSchedHierCeAlltoAll(
     for (int k = 0; k < numCtx; k++) {
       if (ctxOps[k] == 0) continue;
       struct ncclRmaProxyCtx* pc = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k];
-      NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(
-          comm, pc, streamPlan, ctxOps[k], &groupOps[k], baseCtx + k, groupDesc[k]), ret, fail);
+      NCCLCHECKGOTO(ceSchedProxyPutGroupBuildDesc(comm, pc, streamPlan, ctxOps[k], &groupOps[k], baseCtx + k,
+                                                  groupDesc[k]),
+                    ret, fail);
       NCCLCHECKGOTO(ncclRmaProxyPutGroupStartParams(groupDesc[k], groupStartParams + a * startOps), ret, fail);
       NCCLCHECKGOTO(ncclRmaProxyPutGroupDoneParams(groupDesc[k], groupDoneParams + a * doneOps), ret, fail);
       NCCLCHECKGOTO(ncclRmaProxyEnqueueDesc(pc, &groupDesc[k]), ret, fail);
@@ -1572,8 +1561,8 @@ static ncclResult_t ceSchedHierCeAlltoAll(
 
       struct ncclRmaProxyCtx* pc = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[baseCtx + k];
       NCCLCHECKGOTO(ncclCalloc(&waitDesc[k], 1), ret, fail);
-      NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(
-          comm, pc, streamPlan, wp, &waitPeers[k], &waitSigCounts[k], waitDesc[k]), ret, fail);
+      NCCLCHECKGOTO(ceSchedProxyWaitBuildDesc(comm, pc, streamPlan, wp, &waitPeers[k], &waitSigCounts[k], waitDesc[k]),
+                    ret, fail);
       waitStartOpsTotal += ncclRmaProxyWaitStartNumOps(waitDesc[k]);
       waitDoneOpsTotal += ncclRmaProxyWaitDoneNumOps(waitDesc[k]);
     }
@@ -1641,9 +1630,8 @@ fail:
   goto exit;
 }
 
-static ncclResult_t ceSchedLaunchColl(
-    struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
-    struct ncclCeCollArgs* args) {
+static ncclResult_t ceSchedLaunchColl(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan,
+                                      struct ncclCeCollArgs* args) {
   ncclResult_t ret = ncclSuccess;
   cudaStream_t stream = streamPlan->stream;
 
@@ -1656,33 +1644,33 @@ static ncclResult_t ceSchedLaunchColl(
       goto fail;
     }
     switch (args->func) {
-      case ncclFuncAllGather:
-        NCCLCHECKGOTO(ceSchedHierCeAllGather(comm, streamPlan, args, stream), ret, fail);
-        break;
-      case ncclFuncAlltoAll:
-        NCCLCHECKGOTO(ceSchedHierCeAlltoAll(comm, streamPlan, args, stream), ret, fail);
-        break;
-      default:
-        WARN("Hierarchical CE collective not supported for %s", ncclFuncToString(args->func));
-        ret = ncclInvalidUsage;
+    case ncclFuncAllGather:
+      NCCLCHECKGOTO(ceSchedHierCeAllGather(comm, streamPlan, args, stream), ret, fail);
+      break;
+    case ncclFuncAlltoAll:
+      NCCLCHECKGOTO(ceSchedHierCeAlltoAll(comm, streamPlan, args, stream), ret, fail);
+      break;
+    default:
+      WARN("Hierarchical CE collective not supported for %s", ncclFuncToString(args->func));
+      ret = ncclInvalidUsage;
     }
   } else {
     switch (args->func) {
-      case ncclFuncAllGather:
-        NCCLCHECKGOTO(ncclCeAllGather(comm, args, stream), ret, fail);
-        break;
-      case ncclFuncAlltoAll:
-        NCCLCHECKGOTO(ncclCeAlltoAll(comm, args, stream), ret, fail);
-        break;
-      case ncclFuncScatter:
-        NCCLCHECKGOTO(ncclCeScatter(comm, args, stream), ret, fail);
-        break;
-      case ncclFuncGather:
-        NCCLCHECKGOTO(ncclCeGather(comm, args, stream), ret, fail);
-        break;
-      default:
-        WARN("CE collective not supported for %s", ncclFuncToString(args->func));
-        ret = ncclInvalidUsage;
+    case ncclFuncAllGather:
+      NCCLCHECKGOTO(ncclCeAllGather(comm, args, stream), ret, fail);
+      break;
+    case ncclFuncAlltoAll:
+      NCCLCHECKGOTO(ncclCeAlltoAll(comm, args, stream), ret, fail);
+      break;
+    case ncclFuncScatter:
+      NCCLCHECKGOTO(ncclCeScatter(comm, args, stream), ret, fail);
+      break;
+    case ncclFuncGather:
+      NCCLCHECKGOTO(ncclCeGather(comm, args, stream), ret, fail);
+      break;
+    default:
+      WARN("CE collective not supported for %s", ncclFuncToString(args->func));
+      ret = ncclInvalidUsage;
     }
   }
 
@@ -1716,12 +1704,8 @@ ncclResult_t ncclCeSchedPollCallbacks(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-static ncclResult_t launchCeStreamPlan(
-    struct ncclComm* comm,
-    struct ncclCeSchedStreamPlan* streamPlans,
-    struct ncclStrongStream* depStream,
-    struct ncclStrongStream* launchOrderStream
-  ) {
+static ncclResult_t launchCeStreamPlan(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlans,
+                                       struct ncclStrongStream* depStream) {
   ncclResult_t ret = ncclSuccess;
   struct ncclCeSchedStreamPlan* streamPlan = nullptr;
 
@@ -1729,16 +1713,10 @@ static ncclResult_t launchCeStreamPlan(
     cudaStream_t launchStream = streamPlan->stream;
     cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
     cudaStream_t acqDepStream;
-    cudaStream_t acqLaunchOrderStream;
 
     if (depStream) {
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &acqDepStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, acqDepStream, finishedEvent), ret, fail);
-    }
-
-    if (launchOrderStream) {
-      NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, launchOrderStream, false, &acqLaunchOrderStream), ret, fail);
-      NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, acqLaunchOrderStream, finishedEvent), ret, fail);
     }
 
     while (!ncclIntruQueueEmpty(&streamPlan->taskQueue)) {
@@ -1750,16 +1728,10 @@ static ncclResult_t launchCeStreamPlan(
       ceSchedFreeTuningInfoRaw(comm, taskInfo);
     }
 
-    if (depStream || launchOrderStream) {
-      CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
-    }
     if (depStream) {
+      CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, acqDepStream, finishedEvent), ret, fail);
       NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, depStream, false), ret, fail);
-    }
-    if (launchOrderStream) {
-      NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, acqLaunchOrderStream, finishedEvent), ret, fail);
-      NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, launchOrderStream, false), ret, fail);
     }
     if (streamPlan->captured && streamPlan->reclaimToken != nullptr) {
       struct ncclRmaProxyReclaimToken* token = streamPlan->reclaimToken;
@@ -1784,16 +1756,12 @@ fail:
   goto exit;
 }
 
-static ncclResult_t launchCeTasks(
-    struct ncclComm* comm,
-    struct ncclCeSchedPlan* cePlan,
-    struct ncclStrongStream* depStream,
-    struct ncclStrongStream* launchOrderStream
-  ) {
+static ncclResult_t launchCeTasks(struct ncclComm* comm, struct ncclCeSchedPlan* cePlan,
+                                  struct ncclStrongStream* depStream) {
   ncclResult_t ret = ncclSuccess;
 
-  NCCLCHECKGOTO(launchCeStreamPlan(comm, cePlan->noncapturedStreamPlans, depStream, launchOrderStream), ret, fail);
-  NCCLCHECKGOTO(launchCeStreamPlan(comm, cePlan->capturedStreamPlans, depStream, launchOrderStream), ret, fail);
+  NCCLCHECKGOTO(launchCeStreamPlan(comm, cePlan->noncapturedStreamPlans, depStream), ret, fail);
+  NCCLCHECKGOTO(launchCeStreamPlan(comm, cePlan->capturedStreamPlans, depStream), ret, fail);
 
 exit:
   return ret;
@@ -1801,11 +1769,9 @@ fail:
   goto exit;
 }
 
-static ncclResult_t scheduleCeTasks(
-    struct ncclComm* comm,
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-    struct ncclCeSchedPlan* cePlanOut
-  ) {
+static ncclResult_t scheduleCeTasks(struct ncclComm* comm,
+                                    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                    struct ncclCeSchedPlan* cePlanOut) {
   cePlanOut->noncapturedStreamPlans = nullptr;
   cePlanOut->capturedStreamPlans = nullptr;
 
@@ -1826,12 +1792,9 @@ static ncclResult_t scheduleCeTasks(
   return ncclSuccess;
 }
 
-ncclResult_t ncclScheduleCeTasks(
-    struct ncclComm* comm,
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-    struct ncclStrongStream* depStream,
-    struct ncclStrongStream* launchOrderStream
-  ) {
+ncclResult_t ncclScheduleCeTasks(struct ncclComm* comm,
+                                 struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                 struct ncclStrongStream* depStream) {
   NCCLCHECK(ncclCeSchedPollCallbacks(comm));
   if (ncclIntruQueueEmpty(queue)) return ncclSuccess;
 
@@ -1842,6 +1805,6 @@ ncclResult_t ncclScheduleCeTasks(
 
   struct ncclCeSchedPlan cePlan = {};
   NCCLCHECK(scheduleCeTasks(comm, queue, &cePlan));
-  NCCLCHECK(launchCeTasks(comm, &cePlan, depStream, launchOrderStream));
+  NCCLCHECK(launchCeTasks(comm, &cePlan, depStream));
   return ncclSuccess;
 }

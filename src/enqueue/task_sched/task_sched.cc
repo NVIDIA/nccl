@@ -25,7 +25,7 @@ ncclResult_t ncclTaskSchedule(struct ncclComm* comm, struct ncclClassifiedTaskQu
     NCCLCHECK(doLaunches(comm));
   }
   NCCLCHECK(ncclScheduleSymTasks(comm, &ctq->symTaskQueue, depStream, launchOrderStream));
-  NCCLCHECK(ncclScheduleRmaTasks(comm, &ctq->rmaTaskQueue, depStream, launchOrderStream));
-  NCCLCHECK(ncclScheduleCeTasks(comm, &ctq->ceTaskQueue, depStream, launchOrderStream));
+  NCCLCHECK(ncclScheduleRmaTasks(comm, &ctq->rmaTaskQueue, depStream));
+  NCCLCHECK(ncclScheduleCeTasks(comm, &ctq->ceTaskQueue, depStream));
   return ncclSuccess;
 }

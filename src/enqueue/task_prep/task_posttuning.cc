@@ -34,7 +34,7 @@ int64_t ncclParamMaxCTAs();
 int64_t ncclParamNvlsChannels();
 int64_t ncclParamCGAClusterSize();
 
-static void postTuningSetChunkSteps(struct ncclTaskColl* task) {
+static void setChunkSteps(struct ncclTaskColl* task) {
   task->chunkSteps = ncclDefaultChunkStep(task->func);
   task->sliceSteps = ncclDefaultSliceStep(task->func);
 }
@@ -59,7 +59,7 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
   task->trafficBytes = task->count * elementSize * ncclFuncTrafficPerByte(task->func, comm->nRanks);
   task->opHost = raw->opHost;
   task->opDev = raw->opDev;
-  postTuningSetChunkSteps(task);
+  setChunkSteps(task);
   task->launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&tInfo->raw->collConfig);
   ncclTaskCaptureProfilerCtx(task, tInfo->raw->profiler);
 
@@ -85,7 +85,7 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneSymFreeTuningInfoRaw(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
+static ncclResult_t freeRaw(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
   if (tInfo->raw != nullptr) {
     ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
     tInfo->raw = nullptr;
@@ -93,7 +93,7 @@ static ncclResult_t postTuneSymFreeTuningInfoRaw(struct ncclComm* comm, struct n
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneP2pChannelBase(struct ncclComm* comm, int peer, bool isSendNotRecv, uint8_t* baseOut) {
+static ncclResult_t p2pChannelBase(struct ncclComm* comm, int peer, bool isSendNotRecv, uint8_t* baseOut) {
   int round = 0;
   while (peer != (isSendNotRecv ? comm->p2pSchedule[round].sendRank : comm->p2pSchedule[round].recvRank)) {
     round += 1;
@@ -102,8 +102,7 @@ static ncclResult_t postTuneP2pChannelBase(struct ncclComm* comm, int peer, bool
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneP2pRecordPreconnect(struct ncclComm* comm, int peer, bool isSendNotRecv,
-                                                bool* needPreconnect) {
+static ncclResult_t recordP2pPreconnect(struct ncclComm* comm, int peer, bool isSendNotRecv, bool* needPreconnect) {
   struct ncclKernelPlanner* planner = &comm->planner;
   uint8_t base;
 
@@ -111,7 +110,7 @@ static ncclResult_t postTuneP2pRecordPreconnect(struct ncclComm* comm, int peer,
   if (comm->rank == peer) return ncclSuccess;
   if (isSendNotRecv ? planner->peers[peer].sendSeen : planner->peers[peer].recvSeen) return ncclSuccess;
 
-  NCCLCHECK(postTuneP2pChannelBase(comm, peer, isSendNotRecv, &base));
+  NCCLCHECK(p2pChannelBase(comm, peer, isSendNotRecv, &base));
 
   // Mark channels that need pre-connect. planner->peers[peer].send/recvSeen is
   // private to each comm, so we need to set it anyway.
@@ -165,8 +164,8 @@ static ncclResult_t fillP2pTaskFromRaw(struct ncclComm* comm, struct ncclTaskTun
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneP2pRegisterBuffer(struct ncclComm* comm, struct ncclTaskP2p* task, bool isSendNotRecv,
-                                              int protocol) {
+static ncclResult_t registerP2pBuffer(struct ncclComm* comm, struct ncclTaskP2p* task, bool isSendNotRecv,
+                                      int protocol) {
   constexpr int connIndex = 1;
   struct ncclKernelPlanner* planner = &comm->planner;
   int peer = task->root;
@@ -177,7 +176,7 @@ static ncclResult_t postTuneP2pRegisterBuffer(struct ncclComm* comm, struct nccl
   if (protocol != NCCL_PROTO_SIMPLE) return ncclSuccess;
   if (!task->allowUB || task->bytes == 0 || task->buff == nullptr || peer == comm->rank) return ncclSuccess;
 
-  NCCLCHECK(postTuneP2pChannelBase(comm, peer, isSendNotRecv, &base));
+  NCCLCHECK(p2pChannelBase(comm, peer, isSendNotRecv, &base));
 
   int channelId = ncclP2pChannelForPart(comm->p2pnChannels, base, 0);
   struct ncclChannelPeer** channelPeers = comm->channels[channelId].peers;
@@ -210,7 +209,7 @@ static ncclResult_t postTuneP2pRegisterBuffer(struct ncclComm* comm, struct nccl
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneTasksDebug(struct ncclComm* comm) {
+static ncclResult_t debugTasks(struct ncclComm* comm) {
   while (!ncclIntruQueueEmpty(&comm->argsInfoQueue)) {
     struct ncclArgsInfo* argsInfo = ncclIntruQueueDequeue(&comm->argsInfoQueue);
     ncclResult_t ret = ncclArgsGlobalCheck(argsInfo);
@@ -220,23 +219,23 @@ static ncclResult_t postTuneTasksDebug(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneSymTasksLazyInit(
-  struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* symTaskQueue) {
+static ncclResult_t initSym(struct ncclComm* comm,
+                            struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* symTaskQueue) {
   if (ncclIntruQueueEmpty(symTaskQueue)) return ncclSuccess;
   return ncclSymkInitOnce(comm);
 }
 
-static ncclResult_t postTuneCeTasksLazyInit(
-  struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* ceTaskQueue) {
+static ncclResult_t initCe(struct ncclComm* comm,
+                           struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* ceTaskQueue) {
   if (ncclIntruQueueEmpty(ceTaskQueue)) return ncclSuccess;
   if (comm->ceColl.initialized) return ncclSuccess;
   return ncclCeInit(comm);
 }
 
-static ncclResult_t postTuneSymTasks(
+static ncclResult_t preSchedSymTasks(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* symTaskQueue) {
-  NCCLCHECK(postTuneSymTasksLazyInit(comm, symTaskQueue));
-  NCCLCHECK(postTuneTasksDebug(comm));
+  NCCLCHECK(initSym(comm, symTaskQueue));
+  NCCLCHECK(debugTasks(comm));
   return ncclSuccess;
 }
 
@@ -273,9 +272,9 @@ static ncclResult_t applyTuningToCollTask(struct ncclComm* comm, struct ncclTask
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneLegacyRegisterCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task,
-                                                      void* regBufSend[NCCL_MAX_LOCAL_RANKS],
-                                                      void* regBufRecv[NCCL_MAX_LOCAL_RANKS], bool* regNeedConnect) {
+static ncclResult_t registerCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task,
+                                        void* regBufSend[NCCL_MAX_LOCAL_RANKS], void* regBufRecv[NCCL_MAX_LOCAL_RANKS],
+                                        bool* regNeedConnect) {
   struct ncclKernelPlanner* planner = &comm->planner;
 
   *regNeedConnect = true;
@@ -283,10 +282,9 @@ static ncclResult_t postTuneLegacyRegisterCollBuffers(struct ncclComm* comm, str
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneLegacyRegisterNvlsCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task,
-                                                          void* regBufSend[NCCL_MAX_LOCAL_RANKS],
-                                                          void* regBufRecv[NCCL_MAX_LOCAL_RANKS],
-                                                          bool* regNeedConnect) {
+static ncclResult_t registerNvlsCollBuffers(struct ncclComm* comm, struct ncclTaskColl* task,
+                                            void* regBufSend[NCCL_MAX_LOCAL_RANKS],
+                                            void* regBufRecv[NCCL_MAX_LOCAL_RANKS], bool* regNeedConnect) {
   struct ncclKernelPlanner* planner = &comm->planner;
 
   *regNeedConnect = true;
@@ -295,10 +293,9 @@ static ncclResult_t postTuneLegacyRegisterNvlsCollBuffers(struct ncclComm* comm,
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneLegacyEnqueueCollWork(
-  struct ncclComm* comm, struct ncclKernelPlanner* planner, struct ncclTaskColl* task,
-  void* regBufSend[NCCL_MAX_LOCAL_RANKS], void* regBufRecv[NCCL_MAX_LOCAL_RANKS],
-  struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next>* workQueue) {
+static ncclResult_t enqueueCollWork(struct ncclComm* comm, struct ncclKernelPlanner* planner, struct ncclTaskColl* task,
+                                    void* regBufSend[NCCL_MAX_LOCAL_RANKS], void* regBufRecv[NCCL_MAX_LOCAL_RANKS],
+                                    struct ncclIntruQueue<struct ncclWorkList, &ncclWorkList::next>* workQueue) {
   struct ncclDevWorkColl devWork = {};
   struct ncclWorkList* workNode = nullptr;
 
@@ -341,8 +338,8 @@ static ncclResult_t postTuneLegacyEnqueueCollWork(
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneLegacyRecordAlgoNeedConnect(struct ncclComm* comm, int algorithm, bool regNeedConnect,
-                                                        bool* algoNeedConnect, bool* needConnect) {
+static ncclResult_t recordAlgoNeedConnect(struct ncclComm* comm, int algorithm, bool regNeedConnect,
+                                          bool* algoNeedConnect, bool* needConnect) {
   if (!comm->runtimeConn || comm->initAlgoChannels[algorithm]) return ncclSuccess;
 
   if (algorithm == NCCL_ALGO_NVLS_TREE && comm->initAlgoChannels[NCCL_ALGO_NVLS] == false && regNeedConnect == true) {
@@ -357,7 +354,7 @@ static ncclResult_t postTuneLegacyRecordAlgoNeedConnect(struct ncclComm* comm, i
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneLegacyTasks(
+static ncclResult_t preSchedLegacyTasks(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* legacyTaskQueue) {
   bool needConnect = false;
   bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
@@ -386,17 +383,15 @@ static ncclResult_t postTuneLegacyTasks(
       bool regNeedConnect = true;
 
       NCCLCHECK(applyTuningToCollTask(comm, tInfo, task));
-      NCCLCHECK(postTuneLegacyRegisterNvlsCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
-      NCCLCHECK(postTuneLegacyRecordAlgoNeedConnect(comm, tInfo->tuningOut.algo, regNeedConnect, algoNeedConnect,
-                                                    &needConnect));
+      NCCLCHECK(registerNvlsCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
+      NCCLCHECK(recordAlgoNeedConnect(comm, tInfo->tuningOut.algo, regNeedConnect, algoNeedConnect, &needConnect));
       int kind = 2 * task->isCollnet + task->isNvls;
-      NCCLCHECK(postTuneLegacyEnqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
+      NCCLCHECK(enqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
       planner->nTasksColl += 1;
       ncclIntruQueueEnqueue(&taskBins[kind], task);
     } else {
       bool regNeedConnect = true;
-      NCCLCHECK(postTuneLegacyRecordAlgoNeedConnect(comm, tInfo->tuningOut.algo, regNeedConnect, algoNeedConnect,
-                                                    &needConnect));
+      NCCLCHECK(recordAlgoNeedConnect(comm, tInfo->tuningOut.algo, regNeedConnect, algoNeedConnect, &needConnect));
     }
   }
 
@@ -416,9 +411,9 @@ static ncclResult_t postTuneLegacyTasks(
     bool regNeedConnect = true;
 
     NCCLCHECK(applyTuningToCollTask(comm, tInfo, task));
-    NCCLCHECK(postTuneLegacyRegisterCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
+    NCCLCHECK(registerCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
     int kind = 2 * task->isCollnet + task->isNvls;
-    NCCLCHECK(postTuneLegacyEnqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
+    NCCLCHECK(enqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &workBins[kind]));
     planner->nTasksColl += 1;
     ncclIntruQueueEnqueue(&taskBins[kind], task);
   }
@@ -431,12 +426,12 @@ static ncclResult_t postTuneLegacyTasks(
   }
 
   for (struct ncclTaskTuningInfo* tInfo = ncclIntruQueueHead(legacyTaskQueue); tInfo != nullptr; tInfo = tInfo->next) {
-    NCCLCHECK(postTuneSymFreeTuningInfoRaw(comm, tInfo));
+    NCCLCHECK(freeRaw(comm, tInfo));
   }
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneAllGatherVEnsureRingConnected(struct ncclComm* comm) {
+static ncclResult_t ensureRingConnected(struct ncclComm* comm) {
   bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
 
   if (!comm->runtimeConn || comm->initAlgoChannels[NCCL_ALGO_RING]) return ncclSuccess;
@@ -448,8 +443,8 @@ static ncclResult_t postTuneAllGatherVEnsureRingConnected(struct ncclComm* comm)
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
-                                                           int root, struct ncclRawTaskAllGatherVBcast* bcast) {
+static ncclResult_t enqueueBroadcastTask(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo, int root,
+                                         struct ncclRawTaskAllGatherVBcast* bcast) {
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* task =
     ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
@@ -467,7 +462,7 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   task->root = root;
   task->datatype = ncclInt8;
   task->trafficBytes = task->count * ncclFuncTrafficPerByte(task->func, comm->nRanks);
-  postTuningSetChunkSteps(task);
+  setChunkSteps(task);
   ncclTaskCaptureProfilerCtx(task, bcast->profiler);
   task->opHost = ncclSum;
   // Carry over the AllGatherV's resolved channel budget. scheduleCollTasksToPlan clamps
@@ -499,14 +494,14 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   }
   if (task->protocol == NCCL_PROTO_LL) task->trafficBytes *= 4;
 
-  NCCLCHECK(postTuneLegacyRegisterCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
-  NCCLCHECK(postTuneLegacyEnqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &planner->collWorkQueue));
+  NCCLCHECK(registerCollBuffers(comm, task, regBufSend, regBufRecv, &regNeedConnect));
+  NCCLCHECK(enqueueCollWork(comm, planner, task, regBufSend, regBufRecv, &planner->collWorkQueue));
   planner->nTasksColl += 1;
   ncclIntruQueueEnqueue(&planner->collTaskQueue, task);
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneAllGatherVTasks(
+static ncclResult_t preSchedAllGatherVTasks(
   struct ncclComm* comm,
   struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* allgathervTaskQueue) {
   struct ncclKernelPlanner* planner = &comm->planner;
@@ -521,11 +516,11 @@ static ncclResult_t postTuneAllGatherVTasks(
     nRoots = (agv->bcastTasks != nullptr) ? (int)agv->bcastTasks->size() : 0;
     if (nRoots == 0) goto cleanup;
 
-    NCCLCHECK(postTuneAllGatherVEnsureRingConnected(comm));
+    NCCLCHECK(ensureRingConnected(comm));
 
     if (nRoots == 1) {
       auto it = agv->bcastTasks->begin();
-      NCCLCHECK(postTuneAllGatherVEnqueueBroadcastTask(comm, tInfo, it->first, &it->second));
+      NCCLCHECK(enqueueBroadcastTask(comm, tInfo, it->first, &it->second));
       goto cleanup;
     }
 
@@ -564,7 +559,7 @@ static ncclResult_t postTuneAllGatherVTasks(
   return ncclSuccess;
 }
 
-static ncclResult_t postTuneP2pTasks(
+static ncclResult_t preSchedP2pTasks(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* p2pTaskQueue) {
   bool needPreconnect = false;
   struct ncclKernelPlanner* planner = &comm->planner;
@@ -573,7 +568,7 @@ static ncclResult_t postTuneP2pTasks(
     struct ncclRawTaskSendRecv* raw = &tInfo->raw->sendRecv;
     bool isSendNotRecv = raw->func == ncclFuncSend;
 
-    NCCLCHECK(postTuneP2pRecordPreconnect(comm, raw->peer, isSendNotRecv, &needPreconnect));
+    NCCLCHECK(recordP2pPreconnect(comm, raw->peer, isSendNotRecv, &needPreconnect));
   }
 
   if (needPreconnect) {
@@ -587,14 +582,14 @@ static ncclResult_t postTuneP2pTasks(
 
     bool isSendNotRecv = task->func == ncclFuncSend;
 
-    NCCLCHECK(postTuneP2pRegisterBuffer(comm, task, isSendNotRecv, tInfo->tuningOut.proto));
+    NCCLCHECK(registerP2pBuffer(comm, task, isSendNotRecv, tInfo->tuningOut.proto));
 
     ncclIntruQueueEnqueue(isSendNotRecv ? &planner->peers[task->root].sendQueue : &planner->peers[task->root].recvQueue,
                           task);
     planner->nTasksP2p += 1;
     if (isSendNotRecv) planner->nTasksP2pSend += 1;
     else planner->nTasksP2pRecv += 1;
-    NCCLCHECK(postTuneSymFreeTuningInfoRaw(comm, tInfo));
+    NCCLCHECK(freeRaw(comm, tInfo));
   }
   return ncclSuccess;
 }
@@ -602,27 +597,27 @@ static ncclResult_t postTuneP2pTasks(
 /*
  * Initialize copy-engine collectives when any CE tasks are present.
  */
-static ncclResult_t postTuneCeTasks(
+static ncclResult_t preSchedCeTasks(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* ceTaskQueue) {
-  NCCLCHECK(postTuneCeTasksLazyInit(comm, ceTaskQueue));
+  NCCLCHECK(initCe(comm, ceTaskQueue));
   return ncclSuccess;
 }
 
-static void postTuningAccumulateTime(struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                     float* totalTimeUs) {
+static void accumulateTime(struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                           float* totalTimeUs) {
   for (struct ncclTaskTuningInfo* tInfo = ncclIntruQueueHead(queue); tInfo != nullptr; tInfo = tInfo->next) {
     if (tInfo->tuningOut.valid) *totalTimeUs += tInfo->tuningOut.timeUs;
   }
 }
 
-static ncclResult_t postTuningSimulation(struct ncclClassifiedTaskQueues* ctq, ncclSimInfo_t* simInfo) {
+static ncclResult_t taskSimulate(struct ncclClassifiedTaskQueues* ctq, ncclSimInfo_t* simInfo) {
   float totalTimeUs = 0.0f;
 
-  postTuningAccumulateTime(&ctq->symTaskQueue, &totalTimeUs);
-  postTuningAccumulateTime(&ctq->legacyTaskQueue, &totalTimeUs);
-  postTuningAccumulateTime(&ctq->p2pTaskQueue, &totalTimeUs);
-  postTuningAccumulateTime(&ctq->rmaTaskQueue, &totalTimeUs);
-  postTuningAccumulateTime(&ctq->ceTaskQueue, &totalTimeUs);
+  accumulateTime(&ctq->symTaskQueue, &totalTimeUs);
+  accumulateTime(&ctq->legacyTaskQueue, &totalTimeUs);
+  accumulateTime(&ctq->p2pTaskQueue, &totalTimeUs);
+  accumulateTime(&ctq->rmaTaskQueue, &totalTimeUs);
+  accumulateTime(&ctq->ceTaskQueue, &totalTimeUs);
 
   simInfo->estimatedTime = totalTimeUs;
   return ncclSuccess;
@@ -632,17 +627,17 @@ ncclResult_t ncclTaskPostTuning(struct ncclComm* comm, struct ncclClassifiedTask
   if (comm == nullptr || ctq == nullptr) return ncclInvalidArgument;
   if (simInfo != nullptr) {
     if (simInfo != reinterpret_cast<ncclSimInfo_t*>(NCCL_COMM_SIMULATION_SKIP)) {
-      NCCLCHECK(postTuningSimulation(ctq, simInfo));
+      NCCLCHECK(taskSimulate(ctq, simInfo));
     }
     return ncclSuccess;
   }
 
   // Traverse all task families in the order expected by launch preparation.
-  NCCLCHECK(postTuneSymTasks(comm, &ctq->symTaskQueue));
-  NCCLCHECK(postTuneCeTasks(comm, &ctq->ceTaskQueue));
-  NCCLCHECK(postTuneLegacyTasks(comm, &ctq->legacyTaskQueue));
-  NCCLCHECK(postTuneAllGatherVTasks(comm, &ctq->allgathervTaskQueue));
-  NCCLCHECK(postTuneP2pTasks(comm, &ctq->p2pTaskQueue));
+  NCCLCHECK(preSchedSymTasks(comm, &ctq->symTaskQueue));
+  NCCLCHECK(preSchedCeTasks(comm, &ctq->ceTaskQueue));
+  NCCLCHECK(preSchedLegacyTasks(comm, &ctq->legacyTaskQueue));
+  NCCLCHECK(preSchedAllGatherVTasks(comm, &ctq->allgathervTaskQueue));
+  NCCLCHECK(preSchedP2pTasks(comm, &ctq->p2pTaskQueue));
 
   return ncclSuccess;
 }

@@ -18,8 +18,8 @@
 int64_t ncclParamMinCTAs();
 int64_t ncclParamMaxCTAs();
 
-static ncclResult_t preTuningEnqueueRawTask(struct ncclComm* comm, struct ncclRawTask* raw,
-                                            struct ncclTaskTuningInfoQueue* tiq);
+static ncclResult_t prepareTaskTuningInfo(struct ncclComm* comm, struct ncclRawTask* raw,
+                                          struct ncclTaskTuningInfoQueue* tiq);
 
 static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTaskColl* raw,
                                         const ncclCollConfig_t* collConfig, ncclTuningInput_t* in) {
@@ -180,7 +180,7 @@ static ncclResult_t fillAllGatherVTuningInput(struct ncclComm* comm, struct nccl
   return ncclSuccess;
 }
 
-static ncclResult_t preTuningInitAllGatherVRaw(struct ncclRawTask* raw) {
+static ncclResult_t initAllGatherVRaw(struct ncclRawTask* raw) {
   struct ncclRawTaskAllGatherV* agv = &raw->allGatherV;
 
   raw->kind = ncclTaskKindAllGatherV;
@@ -193,8 +193,8 @@ static ncclResult_t preTuningInitAllGatherVRaw(struct ncclRawTask* raw) {
   return ncclSuccess;
 }
 
-static ncclResult_t preTuningAddBcastToAllGatherV(struct ncclComm* comm, struct ncclRawTask* agvRaw,
-                                                  struct ncclRawTask* bcastRaw) {
+static ncclResult_t addBcastToAllGatherV(struct ncclComm* comm, struct ncclRawTask* agvRaw,
+                                         struct ncclRawTask* bcastRaw) {
   struct ncclRawTaskAllGatherV* agv = &agvRaw->allGatherV;
   struct ncclRawTaskColl* bcast = &bcastRaw->coll;
   size_t count = bcast->count * ncclTypeSize(bcast->datatype);
@@ -219,8 +219,8 @@ static ncclResult_t preTuningAddBcastToAllGatherV(struct ncclComm* comm, struct 
   return ncclSuccess;
 }
 
-static ncclResult_t preTuningMergeBcastQueue(struct ncclComm* comm, ncclRawTaskBcastQueueMap* bcastQueue,
-                                             struct ncclTaskTuningInfoQueue* tiq) {
+static ncclResult_t mergeBcastTasks(struct ncclComm* comm, ncclRawTaskBcastQueueMap* bcastQueue,
+                                    struct ncclTaskTuningInfoQueue* tiq) {
   if (bcastQueue == nullptr) return ncclSuccess;
 
   // Each pass builds one AllGatherV by taking a single broadcast from every non-empty root
@@ -228,7 +228,7 @@ static ncclResult_t preTuningMergeBcastQueue(struct ncclComm* comm, ncclRawTaskB
   while (!bcastQueue->empty()) {
     struct ncclRawTask* agvRaw =
       ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
-    NCCLCHECK(preTuningInitAllGatherVRaw(agvRaw));
+    NCCLCHECK(initAllGatherVRaw(agvRaw));
 
     for (auto it = bcastQueue->begin(); it != bcastQueue->end();) {
       if (ncclIntruQueueEmpty(&it->second)) {
@@ -236,18 +236,18 @@ static ncclResult_t preTuningMergeBcastQueue(struct ncclComm* comm, ncclRawTaskB
         continue;
       }
       struct ncclRawTask* bcastRaw = ncclIntruQueueDequeue(&it->second);
-      NCCLCHECK(preTuningAddBcastToAllGatherV(comm, agvRaw, bcastRaw));
+      NCCLCHECK(addBcastToAllGatherV(comm, agvRaw, bcastRaw));
       if (ncclIntruQueueEmpty(&it->second)) it = bcastQueue->erase(it);
       else ++it;
     }
 
-    NCCLCHECK(preTuningEnqueueRawTask(comm, agvRaw, tiq));
+    NCCLCHECK(prepareTaskTuningInfo(comm, agvRaw, tiq));
   }
   return ncclSuccess;
 }
 
-static ncclResult_t preTuningEnqueueRawTask(struct ncclComm* comm, struct ncclRawTask* raw,
-                                            struct ncclTaskTuningInfoQueue* tiq) {
+static ncclResult_t prepareTaskTuningInfo(struct ncclComm* comm, struct ncclRawTask* raw,
+                                          struct ncclTaskTuningInfoQueue* tiq) {
   struct ncclTaskTuningInfo* pt = ncclMemoryStackAlloc<struct ncclTaskTuningInfo>(&comm->memScoped);
   pt->raw = raw;
   pt->tuningOut = NCCL_TUNING_RESULT_INIT;
@@ -279,8 +279,8 @@ ncclResult_t ncclTaskPreTuning(struct ncclComm* comm, struct ncclRawTaskQueue* r
 
   while (!ncclIntruQueueEmpty(&rtq->genericQueue)) {
     raw = ncclIntruQueueDequeue(&rtq->genericQueue);
-    NCCLCHECK(preTuningEnqueueRawTask(comm, raw, tiq));
+    NCCLCHECK(prepareTaskTuningInfo(comm, raw, tiq));
   }
-  NCCLCHECK(preTuningMergeBcastQueue(comm, rtq->bcastQueue, tiq));
+  NCCLCHECK(mergeBcastTasks(comm, rtq->bcastQueue, tiq));
   return ncclSuccess;
 }

@@ -3413,8 +3413,8 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
           return ncclInvalidArgument;
         }
         if (info->signalDescs[i].ctx < 0 || info->signalDescs[i].ctx >= comm->config.numRmaCtx) {
-          WARN("ncclWaitSignal: descriptor %d has invalid context %d (must be in [0, %d))", i,
-               info->signalDescs[i].ctx, comm->config.numRmaCtx);
+          WARN("ncclWaitSignal: descriptor %d has invalid context %d (must be in [0, %d))", i, info->signalDescs[i].ctx,
+               comm->config.numRmaCtx);
           return ncclInvalidArgument;
         }
       }

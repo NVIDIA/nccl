@@ -15,28 +15,16 @@ ncclResult_t ncclScheduleSymTasks(struct ncclComm* comm,
                                   struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
                                   struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
 
-ncclResult_t ncclScheduleLegacyTasks(struct ncclComm* comm,
-                                     struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                     struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
-
-ncclResult_t ncclScheduleAllGatherVTasks(
-  struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-  struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
-
-ncclResult_t ncclScheduleP2pTasks(struct ncclComm* comm,
-                                  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                  struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
-
 ncclResult_t ncclRmaSchedPollCallbacks(struct ncclComm* comm);
 ncclResult_t ncclCeSchedPollCallbacks(struct ncclComm* comm);
 
 ncclResult_t ncclScheduleRmaTasks(struct ncclComm* comm,
                                   struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                  struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
+                                  struct ncclStrongStream* depStream);
 
 ncclResult_t ncclScheduleCeTasks(struct ncclComm* comm,
                                  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                 struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
+                                 struct ncclStrongStream* depStream);
 
 ncclResult_t ncclTaskSchedule(struct ncclComm* comm, struct ncclClassifiedTaskQueues* ctq);
 

@@ -18,6 +18,7 @@
 #include "enqueue/task_sched.h"
 #include "enqueue/task_pretuning.h"
 #include "enqueue/sched_profiler.h"
+#include "config/collconfig.h"
 #include <algorithm>
 #include <cuda_fp16.h>
 #if defined(__CUDA_FP8_TYPES_EXIST__)
@@ -57,6 +58,7 @@ struct ncclSymSchedStreamPlan {
   cudaStream_t stream;
   bool captured;
   struct ncclCudaGraph graph;
+  cudaEvent_t launchCompletionEvent;
   struct ncclSymSchedKernelTaskQueue* kernelTaskQueues;
 };
 
@@ -75,9 +77,7 @@ static ncclDevRedOp_t symSchedRedOp(ncclRedOp_t redOp, ncclDevRedOp_t devRedOp) 
   return devRedOp;
 }
 
-static struct ncclDevRedOpFull symSchedSymkOpDev(
-    struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo
-  ) {
+static struct ncclDevRedOpFull symSchedSymkOpDev(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
   struct ncclRawTaskColl* raw = &tInfo->raw->coll;
   struct ncclDevRedOpFull opDev = raw->opDev;
 
@@ -112,9 +112,8 @@ static struct ncclDevRedOpFull symSchedSymkOpDev(
   return opDev;
 }
 
-static ncclResult_t symSchedWinRegTypeFromTuningInfo(
-    struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo, ncclSymRegType_t* winRegType
-  ) {
+static ncclResult_t symSchedWinRegTypeFromTuningInfo(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
+                                                     ncclSymRegType_t* winRegType) {
   struct ncclRawTaskColl* raw = &tInfo->raw->coll;
   struct ncclDevrWindow* sendWin = nullptr;
   struct ncclDevrWindow* recvWin = nullptr;
@@ -127,9 +126,8 @@ static ncclResult_t symSchedWinRegTypeFromTuningInfo(
   return ncclSuccess;
 }
 
-static ncclResult_t symSchedMakeDevWorkFromTuningInfo(
-    struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo, struct ncclSymkDevWork* outDevWork
-  ) {
+static ncclResult_t symSchedMakeDevWorkFromTuningInfo(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
+                                                      struct ncclSymkDevWork* outDevWork) {
   struct ncclRawTaskColl* raw = &tInfo->raw->coll;
   struct ncclDevrWindow* sendWin = nullptr;
   struct ncclDevrWindow* recvWin = nullptr;
@@ -164,32 +162,23 @@ static cudaStream_t symSchedTuningInfoStream(struct ncclTaskTuningInfo* tInfo) {
   return tInfo->raw->coll.stream;
 }
 
-static ncclResult_t symSchedStreamCaptured(
-    struct ncclComm* comm, cudaStream_t stream,
-    bool* capturedOut, struct ncclCudaGraph* graphOut
-  ) {
+static ncclResult_t symSchedStreamCaptured(struct ncclComm* comm, cudaStream_t stream, bool* capturedOut,
+                                           struct ncclCudaGraph* graphOut) {
   NCCLCHECK(ncclCudaGetCapturingGraph(graphOut, stream, comm->config.graphUsageMode));
   *capturedOut = ncclCudaGraphValid(*graphOut);
   return ncclSuccess;
 }
 
-static struct ncclSymSchedStreamPlan* symSchedFindStreamPlan(
-    struct ncclSymSchedStreamPlan* head, cudaStream_t stream
-  ) {
+static struct ncclSymSchedStreamPlan* symSchedFindStreamPlan(struct ncclSymSchedStreamPlan* head, cudaStream_t stream) {
   for (struct ncclSymSchedStreamPlan* plan = head; plan != nullptr; plan = plan->next) {
     if (plan->stream == stream) return plan;
   }
   return nullptr;
 }
 
-static ncclResult_t symSchedGetStreamPlan(
-    struct ncclComm* comm,
-    struct ncclSymSchedStreamPlan** head,
-    cudaStream_t stream,
-    bool captured,
-    const struct ncclCudaGraph& graph,
-    struct ncclSymSchedStreamPlan** streamPlanOut
-  ) {
+static ncclResult_t symSchedGetStreamPlan(struct ncclComm* comm, struct ncclSymSchedStreamPlan** head,
+                                          cudaStream_t stream, bool captured, const struct ncclCudaGraph& graph,
+                                          struct ncclSymSchedStreamPlan** streamPlanOut) {
   struct ncclSymSchedStreamPlan* streamPlan = symSchedFindStreamPlan(*head, stream);
   if (streamPlan != nullptr) {
     *streamPlanOut = streamPlan;
@@ -200,6 +189,7 @@ static ncclResult_t symSchedGetStreamPlan(
   streamPlan->stream = stream;
   streamPlan->captured = captured;
   streamPlan->graph = graph;
+  streamPlan->launchCompletionEvent = nullptr;
   streamPlan->kernelTaskQueues = nullptr;
   streamPlan->next = *head;
   *head = streamPlan;
@@ -207,12 +197,11 @@ static ncclResult_t symSchedGetStreamPlan(
   return ncclSuccess;
 }
 
-static ncclResult_t symSchedEnqueueKernelTask(
-    struct ncclComm* comm,
-    struct ncclSymSchedStreamPlan* streamPlan,
-    struct ncclTaskTuningInfo* taskInfo
-  ) {
+static ncclResult_t symSchedEnqueueKernelTask(struct ncclComm* comm, struct ncclSymSchedStreamPlan* streamPlan,
+                                              struct ncclTaskTuningInfo* taskInfo) {
   int symKernelId = taskInfo->tuningOut.symKernelId;
+  cudaEvent_t launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&taskInfo->raw->collConfig);
+  if (launchCompletionEvent != nullptr) streamPlan->launchCompletionEvent = launchCompletionEvent;
   // Symmetric selections never populate tuningOut.maxChannels (ncclTuningGetChannels only runs
   // for algo/proto picks), so the channel budget comes from nChannels like the legacy scheduler.
   int maxChannels = taskInfo->tuningOut.nChannels;
@@ -249,9 +238,7 @@ static ncclResult_t symSchedEnqueueKernelTask(
   return ncclSuccess;
 }
 
-static int symSchedCountKernelBatch(
-    struct ncclComm* comm, struct ncclSymSchedKernelTaskQueue* kernelTaskQueue
-  ) {
+static int symSchedCountKernelBatch(struct ncclComm* comm, struct ncclSymSchedKernelTaskQueue* kernelTaskQueue) {
   int nElems = kernelTaskQueue->taskQueue.nElems;
   if (nElems == 0) return 0;
 
@@ -279,9 +266,8 @@ static int symSchedCountKernelBatch(
   return best;
 }
 
-static ncclResult_t symSchedAppendKernelPlan(
-    struct ncclSymSchedKernelTaskQueue* kernelTaskQueue, struct ncclSymSchedKernelPlan* kernelPlan
-  ) {
+static ncclResult_t symSchedAppendKernelPlan(struct ncclSymSchedKernelTaskQueue* kernelTaskQueue,
+                                             struct ncclSymSchedKernelPlan* kernelPlan) {
   struct ncclSymSchedKernelPlan** tail = &kernelTaskQueue->kernelPlans;
   while (*tail != nullptr) tail = &(*tail)->next;
   *tail = kernelPlan;
@@ -289,11 +275,8 @@ static ncclResult_t symSchedAppendKernelPlan(
   return ncclSuccess;
 }
 
-static ncclResult_t symSchedBuildKernelPlan(
-    struct ncclComm* comm,
-    struct ncclSymSchedKernelTaskQueue* kernelTaskQueue,
-    int nWorks
-  ) {
+static ncclResult_t symSchedBuildKernelPlan(struct ncclComm* comm, struct ncclSymSchedKernelTaskQueue* kernelTaskQueue,
+                                            int nWorks) {
   ncclResult_t ret = ncclSuccess;
   struct ncclTaskTuningInfo* headTask = ncclIntruQueueHead(&kernelTaskQueue->taskQueue);
   struct ncclRawTaskColl* headRaw = &headTask->raw->coll;
@@ -392,8 +375,7 @@ static ncclResult_t symSchedBuildKernelPlan(
           devWork.nChannels = 1;
         } else if (cellLeft <= remainCell) {
           assert(devWork.nChannels > 0);
-          if ((remainCell - cellLeft) * NCCL_SYM_KERNEL_CELL_SIZE <= (1 << 10) ||
-              workIndex + 1 == nWorks) {
+          if ((remainCell - cellLeft) * NCCL_SYM_KERNEL_CELL_SIZE <= (1 << 10) || workIndex + 1 == nWorks) {
             devWork.nChannels++;
           }
         } else {
@@ -436,10 +418,8 @@ static ncclResult_t symSchedBuildKernelPlan(
 
   if (comm->rank == 0) {
     INFO(NCCL_TUNING, "%s [Symmetric]: %ld Bytes -> Kernel %s nchannels %d nthreads %d nWorks %d",
-         ncclFuncToString(headRaw->func),
-         logCount * ncclTypeSize(datatype),
-         ncclSymkKernelIdToString(kernelTaskQueue->symKernelId),
-         curChannel, kernelPlan->threadPerBlock, nWorks);
+         ncclFuncToString(headRaw->func), logCount * ncclTypeSize(datatype),
+         ncclSymkKernelIdToString(kernelTaskQueue->symKernelId), curChannel, kernelPlan->threadPerBlock, nWorks);
   }
 
   NCCLCHECKGOTO(symSchedAppendKernelPlan(kernelTaskQueue, kernelPlan), ret, fail);
@@ -453,9 +433,8 @@ fail:
   goto exit;
 }
 
-static ncclResult_t symSchedBuildKernelTaskQueuePlans(
-    struct ncclComm* comm, struct ncclSymSchedKernelTaskQueue* kernelTaskQueue
-  ) {
+static ncclResult_t symSchedBuildKernelTaskQueuePlans(struct ncclComm* comm,
+                                                      struct ncclSymSchedKernelTaskQueue* kernelTaskQueue) {
   kernelTaskQueue->kernelPlans = nullptr;
   while (!ncclIntruQueueEmpty(&kernelTaskQueue->taskQueue)) {
     int nWorks = symSchedCountKernelBatch(comm, kernelTaskQueue);
@@ -465,25 +444,21 @@ static ncclResult_t symSchedBuildKernelTaskQueuePlans(
   return ncclSuccess;
 }
 
-static ncclResult_t symSchedBuildStreamKernelPlans(
-    struct ncclComm* comm, struct ncclSymSchedStreamPlan* streamPlan
-  ) {
-  for (struct ncclSymSchedKernelTaskQueue* kernelTaskQueue = streamPlan->kernelTaskQueues;
-       kernelTaskQueue != nullptr; kernelTaskQueue = kernelTaskQueue->next) {
+static ncclResult_t symSchedBuildStreamKernelPlans(struct ncclComm* comm, struct ncclSymSchedStreamPlan* streamPlan) {
+  for (struct ncclSymSchedKernelTaskQueue* kernelTaskQueue = streamPlan->kernelTaskQueues; kernelTaskQueue != nullptr;
+       kernelTaskQueue = kernelTaskQueue->next) {
     NCCLCHECK(symSchedBuildKernelTaskQueuePlans(comm, kernelTaskQueue));
   }
   return ncclSuccess;
 }
 
-static ncclResult_t symSchedBuildKernelPlans(
-    struct ncclComm* comm, struct ncclSymSchedPlan* symPlan
-  ) {
-  for (struct ncclSymSchedStreamPlan* streamPlan = symPlan->noncapturedStreamPlans;
-       streamPlan != nullptr; streamPlan = streamPlan->next) {
+static ncclResult_t symSchedBuildKernelPlans(struct ncclComm* comm, struct ncclSymSchedPlan* symPlan) {
+  for (struct ncclSymSchedStreamPlan* streamPlan = symPlan->noncapturedStreamPlans; streamPlan != nullptr;
+       streamPlan = streamPlan->next) {
     NCCLCHECK(symSchedBuildStreamKernelPlans(comm, streamPlan));
   }
-  for (struct ncclSymSchedStreamPlan* streamPlan = symPlan->capturedStreamPlans;
-       streamPlan != nullptr; streamPlan = streamPlan->next) {
+  for (struct ncclSymSchedStreamPlan* streamPlan = symPlan->capturedStreamPlans; streamPlan != nullptr;
+       streamPlan = streamPlan->next) {
     NCCLCHECK(symSchedBuildStreamKernelPlans(comm, streamPlan));
   }
   return ncclSuccess;
@@ -504,13 +479,10 @@ static ncclResult_t symSchedGetImplicitOrder(enum ncclImplicitOrder* mode, bool 
   return ncclSuccess;
 }
 
-static ncclResult_t symSchedLaunchKernel(
-    struct ncclComm* comm,
-    struct ncclSymSchedStreamPlan* streamPlan,
-    struct ncclSymSchedKernelPlan* kernelPlan,
-    enum ncclImplicitOrder implicitOrder,
-    cudaEvent_t* launchEventOut
-  ) {
+static ncclResult_t symSchedLaunchKernel(struct ncclComm* comm, struct ncclSymSchedStreamPlan* streamPlan,
+                                         struct ncclSymSchedKernelPlan* kernelPlan,
+                                         enum ncclImplicitOrder implicitOrder, cudaEvent_t launchCompletionEvent,
+                                         cudaEvent_t* launchEventOut) {
   ncclResult_t ret = ncclSuccess;
   cudaStream_t launchStream = streamPlan->stream;
   void* sym = kernelPlan->kernelFn;
@@ -518,17 +490,18 @@ static ncclResult_t symSchedLaunchKernel(
   dim3 block = {(unsigned)kernelPlan->threadPerBlock, 1, 1};
   int smem = kernelPlan->kernelDynSmem;
   int driverVersion = 0;
+  bool userKernelEvent = launchCompletionEvent != nullptr;
+  bool userKernelEventArmed = false;
+  bool relayUserLaunchCompletionEvent = false;
+  cudaStream_t relayStream = nullptr;
 
   if (launchEventOut) *launchEventOut = nullptr;
 
   // Nothing to unwind if this fails, so return directly (a goto here would cross initializers).
   NCCLCHECK(ncclProfilerSchedPreLaunch(kernelPlan->profiler, launchStream));
 
-  void* extra[] = {
-    CU_LAUNCH_PARAM_BUFFER_POINTER, kernelPlan->kernelSymArgs,
-    CU_LAUNCH_PARAM_BUFFER_SIZE, &kernelPlan->kernelArgsSize,
-    CU_LAUNCH_PARAM_END
-  };
+  void* extra[] = {CU_LAUNCH_PARAM_BUFFER_POINTER, kernelPlan->kernelSymArgs, CU_LAUNCH_PARAM_BUFFER_SIZE,
+                   &kernelPlan->kernelArgsSize, CU_LAUNCH_PARAM_END};
 
   CUfunction fn = nullptr;
   NCCLCHECKGOTO(ncclCudaDriverVersion(&driverVersion), ret, do_return);
@@ -552,8 +525,7 @@ static ncclResult_t symSchedLaunchKernel(
 #if CUDART_VERSION >= 12000
     if (compCap >= 90 && driverVersion >= 12000) {
       launchAttrs[attrs].id = CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN;
-      launchAttrs[attrs++].value.memSyncDomain =
-        (CUlaunchMemSyncDomain)ncclParamSymSchedMemSyncDomain();
+      launchAttrs[attrs++].value.memSyncDomain = (CUlaunchMemSyncDomain)ncclParamSymSchedMemSyncDomain();
     }
 #endif
 #if CUDART_VERSION >= 12030
@@ -562,6 +534,19 @@ static ncclResult_t symSchedLaunchKernel(
       launchAttrs[attrs].value.launchCompletionEvent.event = comm->sharedRes->launchEvent;
       launchAttrs[attrs].value.launchCompletionEvent.flags = 0;
       attrs++;
+      // The launch-order event occupies the completion attribute, so relay the user's event.
+      if (userKernelEvent) {
+        NCCLCHECKGOTO(ncclUncapturedStreamPoolAcquire(&comm->sharedRes->uncapturedStreamPool, &relayStream), ret,
+                      do_return);
+        relayUserLaunchCompletionEvent = true;
+        userKernelEventArmed = true;
+      }
+    } else if (userKernelEvent && driverVersion >= 12030) {
+      launchAttrs[attrs].id = CU_LAUNCH_ATTRIBUTE_LAUNCH_COMPLETION_EVENT;
+      launchAttrs[attrs].value.launchCompletionEvent.event = launchCompletionEvent;
+      launchAttrs[attrs].value.launchCompletionEvent.flags = 0;
+      attrs++;
+      userKernelEventArmed = true;
     }
     if (compCap >= 90 && driverVersion >= 12030) {
       launchAttrs[attrs].id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
@@ -586,14 +571,29 @@ static ncclResult_t symSchedLaunchKernel(
     launchConfig.attrs = launchAttrs;
     launchConfig.numAttrs = attrs;
     launchConfig.hStream = launchStream;
-    INFO(NCCL_COLL, "symSchedLaunchKernel grid=(%u,%u,%u) block=(%u,%u,%u) smem=%d launchAttrs=%p numAttrs=%d launchStream=%p fn=%p",
-         grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, (void*)launchAttrs, attrs, (void*)launchStream, (void*)fn);
+    INFO(
+      NCCL_COLL,
+      "symSchedLaunchKernel grid=(%u,%u,%u) block=(%u,%u,%u) smem=%d launchAttrs=%p numAttrs=%d launchStream=%p fn=%p",
+      grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, (void*)launchAttrs, attrs, (void*)launchStream,
+      (void*)fn);
+    if (userKernelEvent && !userKernelEventArmed) {
+      WARN("CUDA launch-completion events require CUDA 12.3 or newer; recording the user event before launch");
+      CUDACHECKGOTO(cudaEventRecord(launchCompletionEvent, launchStream), ret, do_return);
+    }
     CUCHECKGOTO(cuLaunchKernelEx(&launchConfig, fn, nullptr, extra), ret, do_return);
+    if (relayUserLaunchCompletionEvent) {
+      CUDACHECKGOTO(cudaStreamWaitEvent(relayStream, comm->sharedRes->launchEvent, 0), ret, do_return);
+      CUDACHECKGOTO(cudaEventRecord(launchCompletionEvent, relayStream), ret, do_return);
+    }
 #endif
   } else {
-    CUCHECKGOTO(
-      cuLaunchKernel(fn, grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, launchStream, nullptr, extra),
-      ret, do_return);
+    if (userKernelEvent) {
+      WARN("CUDA launch-completion events require CUDA 12.3 or newer; recording the user event before launch");
+      CUDACHECKGOTO(cudaEventRecord(launchCompletionEvent, launchStream), ret, do_return);
+    }
+    CUCHECKGOTO(cuLaunchKernel(fn, grid.x, grid.y, grid.z, block.x, block.y, block.z, smem, launchStream, nullptr,
+                               extra),
+                ret, do_return);
   }
 
   if (launchEventOut) {
@@ -617,12 +617,9 @@ static void CUDART_CB symSchedKernelPlanDestructor(void* arg_) {
   free(arg);
 }
 
-static ncclResult_t launchSymStreamPlan(
-    struct ncclComm* comm,
-    struct ncclSymSchedStreamPlan* streamPlans,
-    struct ncclStrongStream* depStream,
-    struct ncclStrongStream* launchOrderStream
-  ) {
+static ncclResult_t launchSymStreamPlan(struct ncclComm* comm, struct ncclSymSchedStreamPlan* streamPlans,
+                                        struct ncclStrongStream* depStream,
+                                        struct ncclStrongStream* launchOrderStream) {
   ncclResult_t ret = ncclSuccess;
 
   for (struct ncclSymSchedStreamPlan* streamPlan = streamPlans; streamPlan != nullptr; streamPlan = streamPlan->next) {
@@ -642,17 +639,22 @@ static ncclResult_t launchSymStreamPlan(
     }
 
     if (launchOrderStream && implicitOrder != ncclImplicitOrderNone) {
-      NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, launchOrderStream, false, &acqLaunchOrderStream), ret, fail);
+      NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, launchOrderStream, false, &acqLaunchOrderStream), ret,
+                    fail);
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, acqLaunchOrderStream, finishedEvent), ret, fail);
     }
 
-    for (struct ncclSymSchedKernelTaskQueue* kernelTaskQueue = streamPlan->kernelTaskQueues;
-         kernelTaskQueue != nullptr; kernelTaskQueue = kernelTaskQueue->next) {
-      for (struct ncclSymSchedKernelPlan* kernelPlan = kernelTaskQueue->kernelPlans;
-           kernelPlan != nullptr; kernelPlan = kernelPlan->next) {
-        launchEventOut = implicitOrder != ncclImplicitOrderNone &&
-          kernelPlan->next == nullptr && kernelTaskQueue->next == nullptr ? &launchEvent : nullptr;
-        NCCLCHECKGOTO(symSchedLaunchKernel(comm, streamPlan, kernelPlan, implicitOrder, launchEventOut), ret, fail);
+    for (struct ncclSymSchedKernelTaskQueue* kernelTaskQueue = streamPlan->kernelTaskQueues; kernelTaskQueue != nullptr;
+         kernelTaskQueue = kernelTaskQueue->next) {
+      for (struct ncclSymSchedKernelPlan* kernelPlan = kernelTaskQueue->kernelPlans; kernelPlan != nullptr;
+           kernelPlan = kernelPlan->next) {
+        bool lastKernel = kernelPlan->next == nullptr && kernelTaskQueue->next == nullptr;
+        launchEventOut = implicitOrder != ncclImplicitOrderNone && lastKernel ? &launchEvent : nullptr;
+        // Only the last kernel records the stream's user launch-completion event.
+        cudaEvent_t launchCompletionEvent = lastKernel ? streamPlan->launchCompletionEvent : nullptr;
+        NCCLCHECKGOTO(symSchedLaunchKernel(comm, streamPlan, kernelPlan, implicitOrder, launchCompletionEvent,
+                                           launchEventOut),
+                      ret, fail);
         // A captured launch emits its group/coll events on every replay.
         if (kernelPlan->profiler != nullptr && streamPlan->captured) {
           CUDACHECKGOTO(cudaLaunchHostFunc(launchStream, ncclSchedProfilerReplayCallback, kernelPlan->profiler), ret,
@@ -674,14 +676,13 @@ static ncclResult_t launchSymStreamPlan(
     if (streamPlan->captured) {
       for (struct ncclSymSchedKernelTaskQueue* kernelTaskQueue = streamPlan->kernelTaskQueues;
            kernelTaskQueue != nullptr; kernelTaskQueue = kernelTaskQueue->next) {
-        for (struct ncclSymSchedKernelPlan* kernelPlan = kernelTaskQueue->kernelPlans;
-             kernelPlan != nullptr; kernelPlan = kernelPlan->next) {
+        for (struct ncclSymSchedKernelPlan* kernelPlan = kernelTaskQueue->kernelPlans; kernelPlan != nullptr;
+             kernelPlan = kernelPlan->next) {
           struct symSchedKernelPlanFreeArg* freeArg = nullptr;
           NCCLCHECKGOTO(ncclCalloc(&freeArg, 1), ret, fail);
           freeArg->kernelSymArgs = kernelPlan->kernelSymArgs;
           freeArg->profiler = kernelPlan->profiler;
-          ret = ncclCudaGraphAddDestructor(
-              streamPlan->graph, symSchedKernelPlanDestructor, (void*)freeArg);
+          ret = ncclCudaGraphAddDestructor(streamPlan->graph, symSchedKernelPlanDestructor, (void*)freeArg);
           if (ret != ncclSuccess) {
             free(freeArg);
             goto fail;
@@ -693,8 +694,8 @@ static ncclResult_t launchSymStreamPlan(
     } else {
       for (struct ncclSymSchedKernelTaskQueue* kernelTaskQueue = streamPlan->kernelTaskQueues;
            kernelTaskQueue != nullptr; kernelTaskQueue = kernelTaskQueue->next) {
-        for (struct ncclSymSchedKernelPlan* kernelPlan = kernelTaskQueue->kernelPlans;
-             kernelPlan != nullptr; kernelPlan = kernelPlan->next) {
+        for (struct ncclSymSchedKernelPlan* kernelPlan = kernelTaskQueue->kernelPlans; kernelPlan != nullptr;
+             kernelPlan = kernelPlan->next) {
           free(kernelPlan->kernelSymArgs);
           kernelPlan->kernelSymArgs = nullptr;
           ncclSchedProfilerLaunchDestroy(kernelPlan->profiler);
@@ -710,12 +711,8 @@ fail:
   goto exit;
 }
 
-static ncclResult_t launchSymTasks(
-    struct ncclComm* comm,
-    struct ncclSymSchedPlan* symPlan,
-    struct ncclStrongStream* depStream,
-    struct ncclStrongStream* launchOrderStream
-  ) {
+static ncclResult_t launchSymTasks(struct ncclComm* comm, struct ncclSymSchedPlan* symPlan,
+                                   struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream) {
   ncclResult_t ret = ncclSuccess;
 
   NCCLCHECKGOTO(launchSymStreamPlan(comm, symPlan->noncapturedStreamPlans, depStream, launchOrderStream), ret, fail);
@@ -727,11 +724,9 @@ fail:
   goto exit;
 }
 
-static ncclResult_t scheduleSymTasks(
-    struct ncclComm* comm,
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-    struct ncclSymSchedPlan* symPlanOut
-  ) {
+static ncclResult_t scheduleSymTasks(struct ncclComm* comm,
+                                     struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                     struct ncclSymSchedPlan* symPlanOut) {
   symPlanOut->noncapturedStreamPlans = nullptr;
   symPlanOut->capturedStreamPlans = nullptr;
 
@@ -754,12 +749,9 @@ static ncclResult_t scheduleSymTasks(
   return ncclSuccess;
 }
 
-ncclResult_t ncclScheduleSymTasks(
-    struct ncclComm* comm,
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-    struct ncclStrongStream* depStream,
-    struct ncclStrongStream* launchOrderStream
-  ) {
+ncclResult_t ncclScheduleSymTasks(struct ncclComm* comm,
+                                  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                  struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream) {
   if (ncclIntruQueueEmpty(queue)) return ncclSuccess;
 
   NCCLCHECK(ncclDevrInitOnce(comm));

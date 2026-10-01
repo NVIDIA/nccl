@@ -97,6 +97,7 @@ struct doca_gpu_dev_verbs_qp;
 struct doca_dev;
 struct doca_verbs_cq_t;
 struct doca_verbs_qp_t;
+typedef void *doca_gpu_verbs_service_t;
 
 /**
  * @brief GPUNetIO QP handler accessible from CPU
@@ -128,6 +129,16 @@ struct doca_gpu_verbs_qp {
     doca_verbs_cq_t *cq_sq;
     unsigned int refcount;
     bool enable_data_direct;
+
+    /* RQ state used by CPU progress. */
+    doca_verbs_cq_t *cq_rq;  // Receive CQ used by the QP.
+    uint64_t cq_rq_cqe_ci;   // RQ CQ consumer index.
+    uint64_t rq_dbr_pi;      // RQ DBR producer index.
+    __be32 *rq_dbrec_cpu;    // RQ DBR host-resident CPU-proxy DBR or through the GDRCopy alias of a
+                             // GPU-resident DBR.
+    doca_error_t rq_fatal_status;           // Last error code seen on the RQ.
+    doca_gpu_verbs_service_t monitored_by;  // Service currently borrowing this QP for RQ progress,
+                                            // or NULL when detached.
 };
 
 /**
@@ -141,8 +152,6 @@ struct doca_gpu_verbs_qp_error_info {
     int hw_synd_type;
     int wqe_counter;
 };
-
-typedef void *doca_gpu_verbs_service_t;
 
 /**
  * @brief Create a DOCA GPUNETIO handler.
@@ -239,6 +248,10 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu, void *memptr_gpu);
  * GPU external UMEM.
  * @param [in] cq_sq
  * DOCA Verbs CQ SQ CPU object connected to the QP.
+ * @param [in] cq_rq
+ * DOCA Verbs CQ RQ CPU object connected to the QP, or NULL when the QP has no RQ.
+ * @param [in] dbr_cpu_ptr
+ * CPU-accessible QP DBR address required when cq_rq is not NULL.
  * @param [in] send_dbr_mode_ext
  * Send DBR mode.
  * @param [in] cq_type
@@ -256,6 +269,7 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu, void *memptr_gpu);
 doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, struct doca_verbs_qp_t *qp,
                                       enum doca_gpu_dev_verbs_nic_handler nic_handler,
                                       void *gpu_qp_umem_dev_ptr, struct doca_verbs_cq_t *cq_sq,
+                                      struct doca_verbs_cq_t *cq_rq, void *dbr_cpu_ptr,
                                       enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext,
                                       enum doca_gpu_dev_verbs_cq_type cq_type,
                                       bool enable_data_direct, struct doca_gpu_verbs_qp **qp_out);
@@ -477,7 +491,10 @@ doca_error_t doca_gpu_verbs_unexport_multi_qps_dev(doca_gpu_t *gpu_dev,
                                                    struct doca_gpu_dev_verbs_qp *qp_gpus);
 
 /**
- * Reset tracking and memory of a GPUNetIO QP
+ * Reset tracking and memory of a GPUNetIO QP.
+ * If the QP has an RQ, its tracking and memory are reset.
+ *
+ * The caller must ensure that the QP is in the RST state before calling this function.
  *
  * @param [in] qp_gverbs
  * GPUNetIO QP object
@@ -540,6 +557,54 @@ doca_error_t doca_gpu_verbs_check_host_code_compatibility(uint32_t host_code_ver
  * doca_error code - in case of failure:
  */
 doca_error_t doca_gpu_verbs_req_notify_cq(doca_gpu_t *gpu_dev, doca_verbs_cq_t *verbs_cq);
+
+/**
+ * Capability check: UMEM can be allocated on GPU memory.
+ * Whether the NIC control buffers can be put in GPU memory.
+ *
+ * @param [in] gpu_dev
+ * DOCA GPUNetIO handler.
+ * @param [in] net_dev
+ * network device handler
+ *
+ * @return
+ * DOCA_SUCCESS - supported.
+ * doca_error code - in case of failure.
+ */
+doca_error_t doca_gpu_nic_cap_is_gpu_mem_umem_supported(doca_gpu_t *gpu_dev,
+                                                        struct doca_dev *net_dev);
+
+/**
+ * Capability check: UMEM can be allocated on host pinned memory.
+ * Whether the NIC control buffers can be put in host pinned memory.
+ *
+ * @param [in] gpu_dev
+ * DOCA GPUNetIO handler.
+ * @param [in] net_dev
+ * network device handler
+ *
+ * @return
+ * DOCA_SUCCESS - supported.
+ * doca_error code - in case of failure.
+ */
+doca_error_t doca_gpu_nic_cap_is_host_mem_umem_supported(doca_gpu_t *gpu_dev,
+                                                         struct doca_dev *net_dev);
+
+/**
+ * Capability check: DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB is supported.
+ * Whether GPU SMs (CUDA Thread) can ring the doorbell directly.
+ *
+ * @param [in] gpu_dev
+ * DOCA GPUNetIO handler.
+ * @param [in] net_dev
+ * network device handler
+ *
+ * @return
+ * DOCA_SUCCESS - supported.
+ * doca_error code - in case of failure.
+ */
+doca_error_t doca_gpu_nic_cap_is_nic_handler_gpu_sm_db_supported(doca_gpu_t *gpu_dev,
+                                                                 struct doca_dev *net_dev);
 
 #ifdef __cplusplus
 }

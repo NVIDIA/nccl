@@ -46,6 +46,7 @@ extern "C" {
 /* Function pointer types for DOCA Verbs Dev SDK APIs */
 typedef doca_error_t (*doca_verbs_sdk_wrapper_dev_open_from_pd_t)(struct ibv_pd *pd, void **dev);
 typedef doca_error_t (*doca_verbs_sdk_wrapper_dev_close_t)(void *dev);
+typedef struct ibv_context *(*doca_verbs_sdk_wrapper_dev_get_ibv_ctx_t)(void *verbs_context);
 typedef doca_error_t (*doca_verbs_bridge_verbs_pd_import_t)(struct ibv_pd *pd, void **verbs_pd);
 typedef doca_error_t (*doca_verbs_bridge_verbs_context_import_t)(struct ibv_context *ibv_ctx,
                                                                  uint32_t flags,
@@ -54,8 +55,10 @@ typedef doca_error_t (*doca_verbs_pd_destroy_t)(void *verbs_pd);
 typedef doca_error_t (*doca_verbs_context_destroy_t)(void *verbs_context);
 
 /* Global function pointers */
-doca_verbs_sdk_wrapper_dev_open_from_pd_t p_doca_verbs_sdk_wrapper_dev_open_from_pd = nullptr;
-doca_verbs_sdk_wrapper_dev_close_t p_doca_verbs_dev_close = nullptr;
+static doca_verbs_sdk_wrapper_dev_open_from_pd_t p_doca_verbs_sdk_wrapper_dev_open_from_pd =
+    nullptr;
+static doca_verbs_sdk_wrapper_dev_close_t p_doca_verbs_dev_close = nullptr;
+static doca_verbs_sdk_wrapper_dev_get_ibv_ctx_t p_doca_verbs_sdk_wrapper_dev_get_ibv_ctx = nullptr;
 
 static doca_verbs_bridge_verbs_pd_import_t p_doca_verbs_bridge_verbs_pd_import = nullptr;
 static doca_verbs_bridge_verbs_context_import_t p_doca_verbs_bridge_verbs_context_import = nullptr;
@@ -76,37 +79,58 @@ static void *get_verbs_sdk_symbol(const char *symbol_name) {
 }
 
 static void doca_verbs_sdk_wrapper_init(int *ret) {
+    const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
+    char libcommon_versioned_path[doca_sdk_path_length];
     char libcommon_path[doca_sdk_path_length];
+    char libverbs_versioned_path[doca_sdk_path_length];
     char libverbs_path[doca_sdk_path_length];
 
+    memset(libcommon_versioned_path, '\0', doca_sdk_path_length);
     memset(libcommon_path, '\0', doca_sdk_path_length);
+    memset(libverbs_versioned_path, '\0', doca_sdk_path_length);
     memset(libverbs_path, '\0', doca_sdk_path_length);
 
-    if (getenv(DOCA_SDK_LIB_PATH_ENV_VAR) == NULL)
+    if (doca_sdk_lib_path == NULL) {
+        snprintf(libcommon_versioned_path, doca_sdk_path_length, "%s", "libdoca_common.so.2");
         snprintf(libcommon_path, doca_sdk_path_length, "%s", "libdoca_common.so");
-    else
-        snprintf(libcommon_path, doca_sdk_path_length, "%s/%s", getenv(DOCA_SDK_LIB_PATH_ENV_VAR),
+    } else {
+        snprintf(libcommon_versioned_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
+                 "libdoca_common.so.2");
+        snprintf(libcommon_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
                  "libdoca_common.so");
+    }
 
-    if (getenv(DOCA_SDK_LIB_PATH_ENV_VAR) == NULL)
+    if (doca_sdk_lib_path == NULL) {
+        snprintf(libverbs_versioned_path, doca_sdk_path_length, "%s", "libdoca_verbs.so.2");
         snprintf(libverbs_path, doca_sdk_path_length, "%s", "libdoca_verbs.so");
-    else
-        snprintf(libverbs_path, doca_sdk_path_length, "%s/%s", getenv(DOCA_SDK_LIB_PATH_ENV_VAR),
+    } else {
+        snprintf(libverbs_versioned_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
+                 "libdoca_verbs.so.2");
+        snprintf(libverbs_path, doca_sdk_path_length, "%s/%s", doca_sdk_lib_path,
                  "libdoca_verbs.so");
+    }
 
-    common_handle = dlopen(libcommon_path, RTLD_NOW | RTLD_GLOBAL);
+    common_handle = dlopen(libcommon_versioned_path, RTLD_NOW | RTLD_GLOBAL);
+    if (!common_handle) common_handle = dlopen(libcommon_path, RTLD_NOW | RTLD_GLOBAL);
     if (!common_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to find libdoca_common.so library %s (DOCA_SDK_LIB_PATH=%s)",
-                 libcommon_path, getenv(DOCA_SDK_LIB_PATH_ENV_VAR));
+        DOCA_LOG(LOG_ERR,
+                 "Failed to load DOCA SDK library; tried %s then %s "
+                 "(DOCA_SDK_LIB_PATH=%s)",
+                 libcommon_versioned_path, libcommon_path,
+                 doca_sdk_lib_path == NULL ? "(unset)" : doca_sdk_lib_path);
 
         *ret = -1;
         goto exit_error;
     }
 
-    verbs_handle = dlopen(libverbs_path, RTLD_NOW | RTLD_LOCAL);
+    verbs_handle = dlopen(libverbs_versioned_path, RTLD_NOW | RTLD_LOCAL);
+    if (!verbs_handle) verbs_handle = dlopen(libverbs_path, RTLD_NOW | RTLD_LOCAL);
     if (!verbs_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to find libdoca_verbs.so library %s (DOCA_SDK_LIB_PATH=%s)",
-                 libverbs_path, getenv(DOCA_SDK_LIB_PATH_ENV_VAR));
+        DOCA_LOG(LOG_ERR,
+                 "Failed to load DOCA SDK library; tried %s then %s "
+                 "(DOCA_SDK_LIB_PATH=%s)",
+                 libverbs_versioned_path, libverbs_path,
+                 doca_sdk_lib_path == NULL ? "(unset)" : doca_sdk_lib_path);
 
         *ret = -1;
         goto exit_error;
@@ -118,6 +142,10 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
             "doca_rdma_bridge_open_dev_from_pd");
     p_doca_verbs_dev_close =
         (doca_verbs_sdk_wrapper_dev_close_t)get_verbs_sdk_symbol("doca_dev_close");
+
+    p_doca_verbs_sdk_wrapper_dev_get_ibv_ctx =
+        (doca_verbs_sdk_wrapper_dev_get_ibv_ctx_t)get_verbs_sdk_symbol(
+            "doca_verbs_bridge_get_ibv_ctx");
 
     p_doca_verbs_bridge_verbs_pd_import = (doca_verbs_bridge_verbs_pd_import_t)get_verbs_sdk_symbol(
         "doca_verbs_bridge_verbs_pd_import");
@@ -133,7 +161,8 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
     /* Check if all symbols were found */
     if (!p_doca_verbs_sdk_wrapper_dev_open_from_pd || !p_doca_verbs_dev_close ||
         !p_doca_verbs_bridge_verbs_pd_import || !p_doca_verbs_bridge_verbs_context_import ||
-        !p_doca_verbs_pd_destroy || !p_doca_verbs_context_destroy) {
+        !p_doca_verbs_pd_destroy || !p_doca_verbs_context_destroy ||
+        !p_doca_verbs_sdk_wrapper_dev_get_ibv_ctx) {
         DOCA_LOG(LOG_ERR, "Failed to get all required DOCA Verbs Dev SDK symbols\n");
         dlclose(verbs_handle);
         verbs_handle = nullptr;
@@ -245,6 +274,31 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_close(doca_dev_t *net_dev) {
             DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
             return DOCA_SDK_WRAPPER_API_ERROR;
         }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_dev_get_ibv_ctx(doca_dev_t *net_dev,
+                                                                struct ibv_context **ctx) {
+    if (net_dev == nullptr || ctx == nullptr) return DOCA_SDK_WRAPPER_API_INVALID_VALUE;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_verbs_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (net_dev->type != DOCA_VERBS_SDK_LIB_TYPE_SDK) {
+            DOCA_LOG(LOG_ERR, "doca_dev_t is not a SDK instance.");
+            return DOCA_SDK_WRAPPER_NOT_FOUND;
+        }
+
+        if (net_dev->sdk_context == nullptr) {
+            DOCA_LOG(LOG_ERR, "doca_dev_t has no SDK elements.");
+            return DOCA_SDK_WRAPPER_NOT_FOUND;
+        }
+
+        *ctx = p_doca_verbs_sdk_wrapper_dev_get_ibv_ctx(net_dev->sdk_context);
+        if (*ctx == nullptr) return DOCA_SDK_WRAPPER_API_ERROR;
+
+        return DOCA_SDK_WRAPPER_SUCCESS;
     } else
         return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
 }

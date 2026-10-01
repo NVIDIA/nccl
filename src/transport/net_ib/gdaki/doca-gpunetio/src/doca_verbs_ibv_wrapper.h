@@ -61,6 +61,19 @@ extern "C" {
 #include <stdint.h>
 #include <linux/types.h>
 
+struct ibv_device;
+struct ibv_context;
+struct ibv_mr;
+struct ibv_ah;
+struct ibv_cq;
+struct ibv_comp_channel;
+struct ibv_srq;
+struct ibv_srq_init_attr;
+struct ibv_qp;
+struct ibv_qp_init_attr;
+struct ibv_qp_attr;
+struct ibv_port_attr;
+
 union ibv_gid {
     uint8_t raw[16];
     struct {
@@ -151,18 +164,55 @@ enum ibv_access_flags {
     IBV_ACCESS_RELAXED_ORDERING = (1 << 20),
 };
 
-struct ibv_device;
-struct ibv_context;
-struct ibv_mr;
-struct ibv_ah;
-struct ibv_cq;
-struct ibv_comp_channel;
-struct ibv_srq;
-struct ibv_srq_init_attr;
-struct ibv_qp;
-struct ibv_qp_init_attr;
-struct ibv_qp_attr;
-struct ibv_port_attr;
+enum ibv_mw_type { IBV_MW_TYPE_1 = 1, IBV_MW_TYPE_2 = 2 };
+
+struct _compat_ibv_port_attr;
+struct ibv_context_ops {
+    int (*_compat_query_device)(struct ibv_context *context, struct ibv_device_attr *device_attr);
+    int (*_compat_query_port)(struct ibv_context *context, uint8_t port_num,
+                              struct _compat_ibv_port_attr *port_attr);
+    void *(*_compat_alloc_pd)(void);
+    void *(*_compat_dealloc_pd)(void);
+    void *(*_compat_reg_mr)(void);
+    void *(*_compat_rereg_mr)(void);
+    void *(*_compat_dereg_mr)(void);
+    struct ibv_mw *(*alloc_mw)(struct ibv_pd *pd, enum ibv_mw_type type);
+    int (*bind_mw)(struct ibv_qp *qp, struct ibv_mw *mw, struct ibv_mw_bind *mw_bind);
+    int (*dealloc_mw)(struct ibv_mw *mw);
+    void *(*_compat_create_cq)(void);
+    int (*poll_cq)(struct ibv_cq *cq, int num_entries, struct ibv_wc *wc);
+    int (*req_notify_cq)(struct ibv_cq *cq, int solicited_only);
+    void *(*_compat_cq_event)(void);
+    void *(*_compat_resize_cq)(void);
+    void *(*_compat_destroy_cq)(void);
+    void *(*_compat_create_srq)(void);
+    void *(*_compat_modify_srq)(void);
+    void *(*_compat_query_srq)(void);
+    void *(*_compat_destroy_srq)(void);
+    int (*post_srq_recv)(struct ibv_srq *srq, struct ibv_recv_wr *recv_wr,
+                         struct ibv_recv_wr **bad_recv_wr);
+    void *(*_compat_create_qp)(void);
+    void *(*_compat_query_qp)(void);
+    void *(*_compat_modify_qp)(void);
+    void *(*_compat_destroy_qp)(void);
+    int (*post_send)(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **bad_wr);
+    int (*post_recv)(struct ibv_qp *qp, struct ibv_recv_wr *wr, struct ibv_recv_wr **bad_wr);
+    void *(*_compat_create_ah)(void);
+    void *(*_compat_destroy_ah)(void);
+    void *(*_compat_attach_mcast)(void);
+    void *(*_compat_detach_mcast)(void);
+    void *(*_compat_async_event)(void);
+};
+
+struct ibv_context {
+    struct ibv_device *device;
+    struct ibv_context_ops ops;
+    int cmd_fd;
+    int async_fd;
+    int num_comp_vectors;
+    pthread_mutex_t mutex;
+    void *abi_compat;
+};
 
 /* *********** IB Verbs API Wrappers *********** */
 

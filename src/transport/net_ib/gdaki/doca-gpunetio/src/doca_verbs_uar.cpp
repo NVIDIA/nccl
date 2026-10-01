@@ -96,6 +96,7 @@ doca_verbs_uar_open::doca_verbs_uar_open(struct ibv_context *context,
 doca_verbs_uar_open::~doca_verbs_uar_open() { static_cast<void>(destroy()); }
 
 static const off64_t DOCA_VERBS_UAR_DBR_LESS_DB_OFFSET = 0x600LLU;
+static const uintptr_t DOCA_VERBS_UAR_ADAPTER_PAGE_SIZE = uintptr_t{1} << MLX5_ADAPTER_PAGE_SHIFT;
 
 void doca_verbs_uar_open::create() {
     uint32_t mlx5_uar_type{};
@@ -114,8 +115,10 @@ void doca_verbs_uar_open::create() {
     m_uar_id = m_uar->page_id;
     m_reg_addr = m_uar->reg_addr;
     m_base_addr = m_uar->base_addr;
-    m_dbr_less_addr = reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(m_uar->base_addr) +
-                                               DOCA_VERBS_UAR_DBR_LESS_DB_OFFSET);
+
+    const uintptr_t uar_page_addr =
+        reinterpret_cast<uintptr_t>(m_reg_addr) & ~(DOCA_VERBS_UAR_ADAPTER_PAGE_SIZE - 1);
+    m_dbr_less_addr = reinterpret_cast<void *>(uar_page_addr + DOCA_VERBS_UAR_DBR_LESS_DB_OFFSET);
 }
 
 doca_error_t doca_verbs_uar_open::destroy() noexcept {

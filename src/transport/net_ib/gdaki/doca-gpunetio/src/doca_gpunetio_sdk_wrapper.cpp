@@ -59,6 +59,11 @@ typedef doca_error_t (*doca_gpu_dmabuf_fd_t)(void *gpu_dev, void *memptr_gpu, si
                                              int *dmabuf_fd);
 typedef doca_error_t (*doca_gpu_verbs_req_notify_cq_t)(void *gpu_dev, void *verbs_cq);
 
+typedef doca_error_t (*doca_gpu_cap_is_gpu_mem_umem_supported_t)(void *gpu_dev, void *net_dev);
+typedef doca_error_t (*doca_gpu_cap_is_host_mem_umem_supported_t)(void *gpu_dev, void *net_dev);
+typedef doca_error_t (*doca_gpu_cap_is_nic_handler_gpu_sm_db_supported_t)(void *gpu_dev,
+                                                                          void *net_dev);
+
 #if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
 typedef doca_error_t (*doca_log_backend_create_with_file_sdk_t)(FILE *fptr, void **backend);
 static doca_log_backend_create_with_file_sdk_t p_doca_log_backend_create_with_file_sdk = nullptr;
@@ -71,6 +76,11 @@ static doca_gpu_mem_alloc_t p_doca_gpu_mem_alloc = nullptr;
 static doca_gpu_mem_free_t p_doca_gpu_mem_free = nullptr;
 static doca_gpu_dmabuf_fd_t p_doca_gpu_dmabuf_fd = nullptr;
 static doca_gpu_verbs_req_notify_cq_t p_doca_gpu_verbs_req_notify_cq = nullptr;
+static doca_gpu_cap_is_gpu_mem_umem_supported_t p_doca_gpu_cap_is_gpu_mem_umem_supported = nullptr;
+static doca_gpu_cap_is_host_mem_umem_supported_t p_doca_gpu_cap_is_host_mem_umem_supported =
+    nullptr;
+static doca_gpu_cap_is_nic_handler_gpu_sm_db_supported_t
+    p_doca_gpu_cap_is_nic_handler_gpu_sm_db_supported = nullptr;
 
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
@@ -87,12 +97,24 @@ static void *get_gpunetio_sdk_symbol(const char *symbol_name) {
 }
 
 static void doca_gpunetio_sdk_wrapper_init(int *ret) {
+    const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
+    char libcommon_versioned_path[2048];
     char libcommon_path[2048];
+    char libverbs_versioned_path[2048];
     char libverbs_path[2048];
+    char libgpunetio_versioned_path[2048];
     char libgpunetio_path[2048];
+#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
+    void *sdk_log;
+    doca_error_t doca_err = DOCA_SUCCESS;
+    ;
+#endif
 
+    memset(libcommon_versioned_path, '\0', 2048);
     memset(libcommon_path, '\0', 2048);
+    memset(libverbs_versioned_path, '\0', 2048);
     memset(libverbs_path, '\0', 2048);
+    memset(libgpunetio_versioned_path, '\0', 2048);
     memset(libgpunetio_path, '\0', 2048);
 
     /*
@@ -100,46 +122,65 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
      * Assuming LD_LIBRARY_PATH doesn't include the DOCA SDK libs directories, here we need to
      * explicitely dlopen all dependencies with RTLD_GLOBAL.
      */
-    if (getenv(DOCA_SDK_LIB_PATH_ENV_VAR) == NULL)
+    if (doca_sdk_lib_path == NULL) {
+        snprintf(libcommon_versioned_path, 2048, "%s", "libdoca_common.so.2");
         snprintf(libcommon_path, 2048, "%s", "libdoca_common.so");
-    else
-        snprintf(libcommon_path, 2048, "%s/%s", getenv(DOCA_SDK_LIB_PATH_ENV_VAR),
-                 "libdoca_common.so");
+    } else {
+        snprintf(libcommon_versioned_path, 2048, "%s/%s", doca_sdk_lib_path, "libdoca_common.so.2");
+        snprintf(libcommon_path, 2048, "%s/%s", doca_sdk_lib_path, "libdoca_common.so");
+    }
 
-    if (getenv(DOCA_SDK_LIB_PATH_ENV_VAR) == NULL)
+    if (doca_sdk_lib_path == NULL) {
+        snprintf(libverbs_versioned_path, 2048, "%s", "libdoca_verbs.so.2");
         snprintf(libverbs_path, 2048, "%s", "libdoca_verbs.so");
-    else
-        snprintf(libverbs_path, 2048, "%s/%s", getenv(DOCA_SDK_LIB_PATH_ENV_VAR),
-                 "libdoca_verbs.so");
+    } else {
+        snprintf(libverbs_versioned_path, 2048, "%s/%s", doca_sdk_lib_path, "libdoca_verbs.so.2");
+        snprintf(libverbs_path, 2048, "%s/%s", doca_sdk_lib_path, "libdoca_verbs.so");
+    }
 
-    if (getenv(DOCA_SDK_LIB_PATH_ENV_VAR) == NULL)
+    if (doca_sdk_lib_path == NULL) {
+        snprintf(libgpunetio_versioned_path, 2048, "%s", "libdoca_gpunetio.so.2");
         snprintf(libgpunetio_path, 2048, "%s", "libdoca_gpunetio.so");
-    else
-        snprintf(libgpunetio_path, 2048, "%s/%s", getenv(DOCA_SDK_LIB_PATH_ENV_VAR),
-                 "libdoca_gpunetio.so");
+    } else {
+        snprintf(libgpunetio_versioned_path, 2048, "%s/%s", doca_sdk_lib_path,
+                 "libdoca_gpunetio.so.2");
+        snprintf(libgpunetio_path, 2048, "%s/%s", doca_sdk_lib_path, "libdoca_gpunetio.so");
+    }
 
-    common_handle = dlopen(libcommon_path, RTLD_NOW | RTLD_GLOBAL);
+    common_handle = dlopen(libcommon_versioned_path, RTLD_NOW | RTLD_GLOBAL);
+    if (!common_handle) common_handle = dlopen(libcommon_path, RTLD_NOW | RTLD_GLOBAL);
     if (!common_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to find libdoca_common.so library %s (DOCA_SDK_LIB_PATH=%s)",
-                 libcommon_path, getenv(DOCA_SDK_LIB_PATH_ENV_VAR));
+        DOCA_LOG(LOG_ERR,
+                 "Failed to load DOCA SDK library; tried %s then %s "
+                 "(DOCA_SDK_LIB_PATH=%s)",
+                 libcommon_versioned_path, libcommon_path,
+                 doca_sdk_lib_path == NULL ? "(unset)" : doca_sdk_lib_path);
 
         *ret = -1;
         goto exit_error;
     }
 
-    verbs_handle = dlopen(libverbs_path, RTLD_NOW | RTLD_GLOBAL);
+    verbs_handle = dlopen(libverbs_versioned_path, RTLD_NOW | RTLD_GLOBAL);
+    if (!verbs_handle) verbs_handle = dlopen(libverbs_path, RTLD_NOW | RTLD_GLOBAL);
     if (!verbs_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to find libdoca_verbs.so library %s (DOCA_SDK_LIB_PATH=%s)",
-                 libverbs_path, getenv(DOCA_SDK_LIB_PATH_ENV_VAR));
+        DOCA_LOG(LOG_ERR,
+                 "Failed to load DOCA SDK library; tried %s then %s "
+                 "(DOCA_SDK_LIB_PATH=%s)",
+                 libverbs_versioned_path, libverbs_path,
+                 doca_sdk_lib_path == NULL ? "(unset)" : doca_sdk_lib_path);
 
         *ret = -1;
         goto exit_error;
     }
 
-    gpunetio_handle = dlopen(libgpunetio_path, RTLD_NOW | RTLD_LOCAL);
+    gpunetio_handle = dlopen(libgpunetio_versioned_path, RTLD_NOW | RTLD_LOCAL);
+    if (!gpunetio_handle) gpunetio_handle = dlopen(libgpunetio_path, RTLD_NOW | RTLD_LOCAL);
     if (!gpunetio_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to find libdoca_gpunetio.so library %s (DOCA_SDK_LIB_PATH=%s)",
-                 libgpunetio_path, getenv(DOCA_SDK_LIB_PATH_ENV_VAR));
+        DOCA_LOG(LOG_ERR,
+                 "Failed to load DOCA SDK library; tried %s then %s "
+                 "(DOCA_SDK_LIB_PATH=%s)",
+                 libgpunetio_versioned_path, libgpunetio_path,
+                 doca_sdk_lib_path == NULL ? "(unset)" : doca_sdk_lib_path);
 
         *ret = -1;
         goto exit_error;
@@ -153,6 +194,17 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
     p_doca_gpu_dmabuf_fd = (doca_gpu_dmabuf_fd_t)get_gpunetio_sdk_symbol("doca_gpu_dmabuf_fd");
     p_doca_gpu_verbs_req_notify_cq =
         (doca_gpu_verbs_req_notify_cq_t)get_gpunetio_sdk_symbol("doca_gpu_verbs_req_notify_cq");
+
+    /* Optional symbols */
+    p_doca_gpu_cap_is_gpu_mem_umem_supported =
+        (doca_gpu_cap_is_gpu_mem_umem_supported_t)get_gpunetio_sdk_symbol(
+            "doca_gpu_cap_is_gpu_mem_umem_supported");
+    p_doca_gpu_cap_is_host_mem_umem_supported =
+        (doca_gpu_cap_is_host_mem_umem_supported_t)get_gpunetio_sdk_symbol(
+            "doca_gpu_cap_is_host_mem_umem_supported");
+    p_doca_gpu_cap_is_nic_handler_gpu_sm_db_supported =
+        (doca_gpu_cap_is_nic_handler_gpu_sm_db_supported_t)get_gpunetio_sdk_symbol(
+            "doca_gpu_cap_is_nic_handler_gpu_sm_db_supported");
 
 #if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
     p_doca_log_backend_create_with_file_sdk =
@@ -181,6 +233,15 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
     if (!p_doca_log_backend_create_with_file_sdk) {
         DOCA_LOG(LOG_ERR,
                  "Failed to get doca_log_backend_create_with_file_sdk DOCA Verbs Dev SDK symbol\n");
+        dlclose(verbs_handle);
+        verbs_handle = nullptr;
+        *ret = -1;
+        goto exit_error;
+    }
+
+    doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
+    if (doca_err != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
         dlclose(verbs_handle);
         verbs_handle = nullptr;
         *ret = -1;
@@ -223,10 +284,6 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_create(const char *gpu_bus_id, voi
     doca_error_t doca_err;
     const char *val = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
 
-#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
-    void *sdk_log;
-#endif
-
     if (get_sdk_wrapper_env_var() > 0) {
         if (init_gpunetio_sdk_wrapper() != 0) {
             DOCA_LOG(LOG_WARNING,
@@ -235,14 +292,6 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_create(const char *gpu_bus_id, voi
                      val);
             return DOCA_SDK_WRAPPER_NOT_FOUND;
         }
-
-#if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
-        doca_err = p_doca_log_backend_create_with_file_sdk(stderr, &sdk_log);
-        if (doca_err != DOCA_SUCCESS) {
-            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
-            return DOCA_SDK_WRAPPER_API_ERROR;
-        }
-#endif
 
         doca_err = p_doca_gpu_create(gpu_bus_id, gpu_dev);
         if (doca_err == DOCA_SUCCESS) {
@@ -346,6 +395,82 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_req_notify_cq(void *gpu_dev,
         if (doca_err == DOCA_SUCCESS) {
             return DOCA_SDK_WRAPPER_SUCCESS;
         } else {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_gpu_mem_umem_supported(void *gpu_dev,
+                                                                            void *net_dev) {
+    doca_error_t doca_err;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (p_doca_gpu_cap_is_gpu_mem_umem_supported == nullptr) {
+            DOCA_LOG(LOG_ERR,
+                     "DOCA SDK symbol doca_gpu_cap_is_gpu_mem_umem_supported not found at %s",
+                     __func__);
+            return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+        }
+
+        doca_err = p_doca_gpu_cap_is_gpu_mem_umem_supported(gpu_dev, net_dev);
+        if (doca_err == DOCA_SUCCESS)
+            return DOCA_SDK_WRAPPER_SUCCESS;
+        else {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_host_mem_umem_supported(void *gpu_dev,
+                                                                             void *net_dev) {
+    doca_error_t doca_err;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (p_doca_gpu_cap_is_host_mem_umem_supported == nullptr) {
+            DOCA_LOG(LOG_ERR,
+                     "DOCA SDK symbol doca_gpu_cap_is_host_mem_umem_supported not found at %s",
+                     __func__);
+            return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+        }
+
+        doca_err = p_doca_gpu_cap_is_host_mem_umem_supported(gpu_dev, net_dev);
+        if (doca_err == DOCA_SUCCESS)
+            return DOCA_SDK_WRAPPER_SUCCESS;
+        else {
+            DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
+            return DOCA_SDK_WRAPPER_API_ERROR;
+        }
+    } else
+        return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+}
+
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_nic_handler_gpu_sm_db_supported(
+    void *gpu_dev, void *net_dev) {
+    doca_error_t doca_err;
+
+    if (get_sdk_wrapper_env_var() > 0) {
+        if (init_gpunetio_sdk_wrapper() != 0) return DOCA_SDK_WRAPPER_NOT_FOUND;
+
+        if (p_doca_gpu_cap_is_nic_handler_gpu_sm_db_supported == nullptr) {
+            DOCA_LOG(
+                LOG_ERR,
+                "DOCA SDK symbol doca_gpu_cap_is_nic_handler_gpu_sm_db_supported not found at %s",
+                __func__);
+            return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
+        }
+
+        doca_err = p_doca_gpu_cap_is_nic_handler_gpu_sm_db_supported(gpu_dev, net_dev);
+        if (doca_err == DOCA_SUCCESS)
+            return DOCA_SDK_WRAPPER_SUCCESS;
+        else {
             DOCA_LOG(LOG_ERR, "DOCA SDK function in %s returned error %d", __func__, doca_err);
             return DOCA_SDK_WRAPPER_API_ERROR;
         }

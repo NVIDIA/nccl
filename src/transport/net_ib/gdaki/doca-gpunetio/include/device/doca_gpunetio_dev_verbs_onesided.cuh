@@ -526,7 +526,57 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_signal_warp(
     struct doca_gpu_dev_verbs_addr sig_laddr, uint64_t sig_val,
     doca_gpu_dev_verbs_ticket_t *out_ticket,
     uint32_t code_opt = DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_DEFAULT) {
+#if __CUDA_ARCH__ >= 800
+    struct doca_gpu_dev_verbs_wqe *wqe_ptr;
+    uint64_t base_wqe_idx = 0, wqe_idx;
+    uint32_t base_wqe_idx_0 = 0, base_wqe_idx_1 = 0;
+    uint32_t lane_idx = doca_gpu_dev_verbs_get_lane_id();
+
+    DOCA_GPUNETIO_VERBS_ASSERT(out_ticket != NULL);
+    DOCA_GPUNETIO_VERBS_ASSERT(qp != NULL);
+
+    if (lane_idx == 0) {
+        base_wqe_idx = doca_gpu_dev_verbs_reserve_wq_slots<resource_sharing_mode,
+                                                           DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(
+            qp, DOCA_GPUNETIO_VERBS_WARP_SIZE, code_opt);
+        base_wqe_idx_0 = (uint32_t)base_wqe_idx;
+        base_wqe_idx_1 = (uint32_t)(base_wqe_idx >> 32);
+    }
+    __syncwarp();
+
+    base_wqe_idx_0 = __reduce_max_sync(DOCA_GPUNETIO_VERBS_WARP_FULL_MASK, base_wqe_idx_0);
+    base_wqe_idx_1 = __reduce_max_sync(DOCA_GPUNETIO_VERBS_WARP_FULL_MASK, base_wqe_idx_1);
+    base_wqe_idx = ((uint64_t)base_wqe_idx_1) << 32 | base_wqe_idx_0;
+
+    wqe_idx = base_wqe_idx + lane_idx;
+    wqe_ptr = doca_gpu_dev_verbs_get_wqe_ptr(qp, wqe_idx);
+
+    doca_gpu_dev_verbs_wqe_prepare_atomic(
+        qp, wqe_ptr, wqe_idx, DOCA_GPUNETIO_IB_MLX5_OPCODE_ATOMIC_FA,
+        doca_gpu_dev_verbs_get_ctrl_flags<DOCA_GPUNETIO_VERBS_QP_SQ, cq_type>(qp, code_opt),
+        sig_raddr.addr, sig_raddr.key, sig_laddr.addr, sig_laddr.key, sizeof(uint64_t), sig_val, 0);
+
+    __syncwarp();
+    if (lane_idx == 0) {
+        doca_gpu_dev_verbs_mark_wqes_ready<resource_sharing_mode>(
+            qp, base_wqe_idx, base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE - 1);
+
+        // mark_wqes_ready has already called fence.release with sufficiently strong scope. No need
+        // to call it again in submit.
+        constexpr enum doca_gpu_dev_verbs_sync_scope submit_sync_scope =
+            (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU)
+                ? DOCA_GPUNETIO_VERBS_SYNC_SCOPE_THREAD
+                : DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU;
+        doca_gpu_dev_verbs_submit<resource_sharing_mode, submit_sync_scope, nic_handler>(
+            qp, base_wqe_idx + DOCA_GPUNETIO_VERBS_WARP_SIZE, code_opt);
+    }
+    __syncwarp();
+
+    *out_ticket = wqe_idx;
+#else
+    printf("__CUDA_ARCH__ < 800, WARP mode not enabled\n");
     *out_ticket = 0;
+#endif
 }
 
 template <enum doca_gpu_dev_verbs_signal_op sig_op,

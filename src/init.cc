@@ -1577,8 +1577,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       // Log mismatched ranks first
       for (int r = 0; r < nranks; r++) {
         if (allGather3Data[r].localNetDeviceCount < maxLocalNetCount) {
-          INFO(NCCL_INIT, "Rank %d has %d local Net devices (max %d).", r, allGather3Data[r].localNetDeviceCount,
-               maxLocalNetCount);
+          if (ncclParamIgnoreNetMismatch()) {
+            ATTN("Rank %d has %d local Net devices (max %d); continuing because NCCL_IGNORE_NET_MISMATCH=1. "
+                 "Communication may hang if a peer selects a device unavailable on this rank.",
+                 r, allGather3Data[r].localNetDeviceCount, maxLocalNetCount);
+          } else {
+            INFO(NCCL_INIT, "Rank %d has %d local Net devices (max %d).", r, allGather3Data[r].localNetDeviceCount,
+                 maxLocalNetCount);
+          }
         }
       }
       // Then warn or error based on env var

@@ -128,7 +128,8 @@ const char* wrap_ibv_get_device_name(struct ibv_device* device) {
 
 ncclResult_t wrap_ibv_open_device(struct ibv_context** ret,
                                   struct ibv_device* device) { /*returns 0 on success, -1 on failure*/
-  IBV_PTR_CHECK(ibvSymbols, ibv_internal_open_device, ibv_internal_open_device(device), *ret, NULL, "ibv_open_device");
+  IBV_PTR_CHECK_ERRNO(ibvSymbols, ibv_internal_open_device, ibv_internal_open_device(device), *ret, NULL,
+                      "ibv_open_device");
 }
 
 ncclResult_t wrap_ibv_close_device(struct ibv_context* context) { /*returns 0 on success, -1 on failure*/

@@ -360,16 +360,20 @@ static ncclResult_t p2pMap(struct ncclComm* comm, struct ncclProxyConnector* pro
   if (P2P_SAME_PID(myInfo, peerInfo)) {
     if (peerInfo->cudaDev != myInfo->cudaDev) {
       // Same PID different GPUs, enable P2P access
-      // Legacy CUDA IPC
-      cudaError_t err = cudaDeviceEnablePeerAccess(peerInfo->cudaDev, 0);
-      if (err == cudaErrorPeerAccessAlreadyEnabled) {
-        cudaGetLastError();
-      } else if (err != cudaSuccess) {
-        WARN("failed to peer with device %d(=%lx): %d %s", peerInfo->cudaDev, peerInfo->busId, err,
-             cudaGetErrorString(err));
-        return ncclInternalError;
-      }
-      if (ncclCuMemEnable()) {
+      if (!ncclCuMemEnable()) {
+        // Legacy CUDA IPC
+        cudaError_t err = cudaDeviceEnablePeerAccess(peerInfo->cudaDev, 0);
+        if (err == cudaErrorPeerAccessAlreadyEnabled) {
+          cudaGetLastError();
+        } else if (err != cudaSuccess) {
+          WARN("failed to peer with device %d(=%lx): %d %s", peerInfo->cudaDev, peerInfo->busId, err,
+               cudaGetErrorString(err));
+          return ncclInternalError;
+        }
+        *devMem = p2pBuff->directPtr;
+        *ipcPtr = NULL;
+      } else {
+        // CUMEM -- cuMemSetAccess will be invoked by ncclCuMemAllocAddr
         // for intra-process ranks, we should map memHandle of the peers to increase refcount.
         // Otherwise, if peers abort and free the buffer, the rank can suffer invalid access.
         NCCLCHECK(ncclCuMemAllocAddr(devMem, &p2pBuff->ipcDesc.memHandle, p2pBuff->size));
@@ -380,9 +384,6 @@ static ncclResult_t p2pMap(struct ncclComm* comm, struct ncclProxyConnector* pro
         // Pass handle=0 since we already released the reference above; suspend shouldn't release again.
         NCCLCHECK(ncclMemTrackImportFromPeer(comm->memManager, *devMem, p2pBuff->size, 0, ncclCuMemHandleType,
                                              ncclMemOffload, peerInfo->rank, peerInfo->cudaDev, p2pBuff->directPtr));
-      } else {
-        *devMem = p2pBuff->directPtr;
-        *ipcPtr = NULL;
       }
     } else {
       *devMem = p2pBuff->directPtr;

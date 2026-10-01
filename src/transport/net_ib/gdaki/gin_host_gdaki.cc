@@ -597,8 +597,8 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
   if (ctx->ginCounterSetId != 0) {
     doca_error_t qcErr = doca_verbs_qp_attr_set_counter_set_id(verbs_qp_attr, ctx->ginCounterSetId);
     if (qcErr != DOCA_SUCCESS) {
-      // Best-effort: stop attaching the remaining GIN QPs, but keep the Q counter set allocated until teardown since
-      // QPs connected earlier may already reference it.
+      // Best-effort: stop attaching the remaining GIN QPs, but keep the Q counter set allocated until
+      // teardown since QPs connected earlier may already reference it.
       INFO(NCCL_NET,
            "[%d] GIN GDAKI could not program counter_set_id=%u on a QP (err=%d); remaining GIN QPs will use the "
            "default counter set",
@@ -1561,8 +1561,8 @@ ncclResult_t ncclGinGdakiProgress(void* ctx) {
   return ncclSuccess;
 }
 
-// Logs a GIN QP error. When GIN QPs are attached to the GIN Q counter set, the same line carries the cumulative hardware
-// counters of all of them, so triage can tell whether GIN traffic as a whole saw retries, drops, sequence errors, etc.
+// Logs a GIN QP error. When GIN QPs are attached to the GIN Q counter set, the same line carries their cumulative
+// hardware counters, so triage can tell whether GIN traffic as a whole saw retries, drops, sequence errors, etc.
 static void gdakiReportQpError(struct gdaki_context* ctx, struct doca_gpu_verbs_qp* qp,
                                const struct doca_gpu_verbs_qp_error_info* errorInfo) {
   const int nranks = ctx->collComm->nranks;

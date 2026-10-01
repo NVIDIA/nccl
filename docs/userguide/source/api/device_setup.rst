@@ -119,6 +119,18 @@ ncclDevCommRequirements
       Specifies the rank stride when :c:member:`ginConnectionType` is :c:enumerator:`NCCL_GIN_CONNECTION_CUSTOM_STRIDE <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_CUSTOM_STRIDE>`.
       Available since NCCL 2.31.
 
+   .. c:member:: int* ginCustomArray
+
+      An array of length :c:member:`ginCustomArrayCount` which contains a list peers to connect to.
+      This array is only valid when :c:member:`ginConnectionType` is
+      :c:enumerator:`NCCL_GIN_CONNECTION_CUSTOM_ARRAY <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_CUSTOM_ARRAY>`.
+      Connection requests must be bi-directional: if rank *j* appears in rank *i*'s array, rank *i* must also appear
+      in rank *j*'s array. Available since NCCL 2.32.4.
+
+   .. c:member:: int ginCustomArrayCount
+
+      Number of entries in :c:member:`ginCustomArray`. Defaults to ``0``. Available since NCCL 2.32.4.
+
    .. c:member:: ncclDevResourceRequirements_t* resourceRequirementsList
 
       Specifies a list of resource requirements.  This is best set to NULL for now.
@@ -321,6 +333,10 @@ ncclGinConnectionType_t
    .. c:enumerator:: NCCL_GIN_CONNECTION_CUSTOM_STRIDE
 
       Strided GIN connectivity. Each rank is connected to other ranks separated by a fixed stride. Available since NCCL 2.31.
+
+   .. c:enumerator:: NCCL_GIN_CONNECTION_CUSTOM_ARRAY
+
+      Custom GIN connectivity. Each rank is connected to an arbitrary, user-specified set of peers. Available since NCCL 2.32.4.
 
 .. _device_api_host_functions:
 

@@ -24,7 +24,12 @@ typedef struct {
   int queueDepth;
   int trafficClass;
   int backendVersion;
+  // Sorted list of peerArrayCount peers to connect to. Plugins may choose to connect to only these peers to optimize
+  // resource usage. It is still correct to connect to all peers. This field does not affect rank indexing - ranks are always
+  // indexed according to the handles list passed to connect. It is undefined behavior for peerArray to request
+  // unidirectional connectivity (if rank i is in rank j's peerArray, rank j must be in rank i's peerArray).
   int* peerArray;
+  // Number of peers in the peerArray. May be 0 if GIN is requested but this rank requires no GIN connectivity.
   int peerArrayCount;
 } ncclGinConfig_v15_t;
 

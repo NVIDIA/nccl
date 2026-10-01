@@ -762,7 +762,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
 
   if ((ncclParamGinGdakiLAGAwareDisable() == 0) && (gdaki_ctx->gdev->type == DOCA_GPU_LIB_TYPE_OPEN)) {
     DOCACHECKGOTO(doca_verbs_query_device(cComm->ib.context, &devAttr), status, out);
-    isLagTxPortAffinitySupported = doca_verbs_device_attr_get_lag_tx_port_affinity(devAttr);
+    isLagTxPortAffinitySupported = doca_verbs_device_attr_get_is_lag_tx_port_affinity_supported(devAttr);
 
     if (isLagTxPortAffinitySupported) {
       numLagPorts = doca_verbs_device_attr_get_num_lag_ports(devAttr);

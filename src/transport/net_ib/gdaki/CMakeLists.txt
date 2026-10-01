@@ -54,6 +54,8 @@ set(DOCA_SOURCES
     ${DOCA_HOME}/src/doca_verbs_mlx5dv_wrapper.cpp
     ${DOCA_HOME}/src/doca_verbs_ibv_wrapper.cpp
     ${DOCA_HOME}/src/doca_gpunetio_gdrcopy.cpp
+    ${DOCA_HOME}/src/doca_gpunetio_signal_map.cpp
+    ${DOCA_HOME}/src/doca_verbs_utils.cpp
     ${DOCA_HOME}/src/doca_gpunetio_sdk_wrapper.cpp
     ${DOCA_HOME}/src/doca_verbs_dev_sdk_wrapper.cpp
     ${DOCA_HOME}/src/doca_verbs_umem_sdk_wrapper.cpp

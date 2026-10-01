@@ -54,6 +54,12 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
       continue;
     }
     int nSteps = ncclTuningGetNsteps(c, comm->nRanks);
+    // A single NVL domain has one NVLS head per GPU, but the kernel only launches comm->nvlsChannels CTAs (24 by
+    // default on Blackwell). With more heads than CTAs, AllGather/ReduceScatter bandwidth follows the CTAs.
+    bool singleNvlDomainAgRs = (algo == NCCL_ALGO_NVLS && c != ncclFuncAllReduce && comm->nNodes == 1);
+    bool ctaLimited =
+      singleNvlDomainAgRs && (comm->minCompCap >= 100) && (comm->nvlsChannels < comm->graphs[algo].nChannels);
+    int effChannels = ctaLimited ? comm->nvlsChannels : comm->graphs[algo].nChannels;
     float intraBw = comm->graphs[algo].bwIntra * nvlsEfficiency[compCapIndex] * (comm->graphs[algo].nChannels - 1) /
                     comm->graphs[algo].nChannels;
     if (c == ncclFuncAllReduce) {
@@ -65,7 +71,7 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
     float interBw = comm->graphs[algo].bwInter * ((comm->nNodes <= 2 && algo == NCCL_ALGO_NVLS_TREE) ? 2 : 1);
     bw = std::min({intraBw, interBw,
                    algo == NCCL_ALGO_NVLS_TREE ? (float)perChMaxNVLSTreeBw : std::numeric_limits<float>::max()});
-    bw = bw * comm->graphs[algo].nChannels;
+    bw = bw * effChannels;
 
     if (comm->nNodes > 1 && algo == NCCL_ALGO_NVLS && (c == ncclFuncAllGather || c == ncclFuncReduceScatter)) {
       int nHeads = 0;
@@ -111,6 +117,8 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
     if (algo == NCCL_ALGO_NVLS) {
       comm->tuningContext.generalLatencies[c][algo][proto] = intraLat;
       if (comm->nNodes > 1) comm->tuningContext.generalLatencies[c][algo][proto] += interLat;
+      // CTA-limited ReduceScatter also runs slower than the flat NVLS latency (measured on GB200/GB300, 32 GPUs).
+      if (ctaLimited && c == ncclFuncReduceScatter) comm->tuningContext.generalLatencies[c][algo][proto] += 5.0f;
     } else if (algo == NCCL_ALGO_NVLS_TREE) {
       comm->tuningContext.generalLatencies[c][algo][proto] += intraLat + 2 * log2i(comm->nNodes) * interLat;
     }

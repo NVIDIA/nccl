@@ -49,7 +49,8 @@ struct ncclGin {
   ncclResult_t (*devices)(int* ndev);
   ncclResult_t (*getProperties)(int dev, ncclNetProperties_t* props);
   ncclResult_t (*listen)(void* ctx, int dev, void* handle, void** listenComm);
-  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm);
+  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                          volatile uint32_t* abortFlag);
   ncclResult_t (*createContext)(void* collComm, ncclGinConfig_t* config, void** ginCtx,
                                 ncclNetDeviceHandle_t** devHandle);
   ncclResult_t (*regMrSym)(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle,

@@ -20,6 +20,12 @@ static ncclResult_t ncclRma_v14_getRmaProperties(void* collComm, ncclRmaProperti
   return ncclSuccess;
 }
 
+static ncclResult_t ncclRma_v14_connect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
+                                        void** collComm, volatile uint32_t* abortFlag) {
+  (void)abortFlag;
+  return ncclRma_v14->connect(ctx, handles, nranks, rank, listenComm, collComm);
+}
+
 static ncclResult_t ncclRma_v14_createContext(void* collComm, ncclRmaConfig_v17_t* config, void** rmaCtx) {
   ncclRmaConfig_v14_t config_v14;
   memset(&config_v14, 0, sizeof(config_v14));
@@ -63,7 +69,7 @@ ncclRma_t* getNcclRma_v14(void* lib) {
     ncclRma.getRmaProperties = ncclRma_v14_getRmaProperties;
     ncclRma.getProperties = ncclRma_v14->getProperties;
     ncclRma.listen = ncclRma_v14->listen;
-    ncclRma.connect = ncclRma_v14->connect;
+    ncclRma.connect = ncclRma_v14_connect;
     ncclRma.createContext = ncclRma_v14_createContext;
     ncclRma.regMrSym = ncclRma_v14->regMrSym;
     ncclRma.regMrSymDmaBuf = ncclRma_v14->regMrSymDmaBuf;

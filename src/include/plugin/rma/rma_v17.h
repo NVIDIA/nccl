@@ -25,7 +25,8 @@ typedef struct {
   ncclResult_t (*getRmaProperties)(void* collComm, ncclRmaProperties_v16_t* rmaProps);
   ncclResult_t (*getProperties)(int dev, ncclNetProperties_v12_t* props);
   ncclResult_t (*listen)(void* ctx, int dev, void* handle, void** listenComm);
-  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm);
+  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                          volatile uint32_t* abortFlag);
   ncclResult_t (*createContext)(void* collComm, ncclRmaConfig_v17_t* config, void** rmaCtx);
   ncclResult_t (*regMrSym)(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle);
   ncclResult_t (*regMrSymDmaBuf)(void* collComm, void* data, size_t size, int type, uint64_t offset, int fd,

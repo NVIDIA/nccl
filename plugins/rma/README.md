@@ -116,6 +116,9 @@ peers. A `collComm` is initialized in several steps:
 `ncclImpl` initializes a TCP socket in `listen` and stores it in `listenComm`. The address of the socket is included in `handle` so
 that all peers can connect to the socket.
 
+Since v17, `connect` also receives `abortFlag` (may be NULL). It becomes non-zero when the communicator is
+aborted; any blocking wait on the `collComm` should then return an error.
+
 ### Context Setup
 
 RMA contexts are allocated in blocks via `createContext`. Each block of RMA contexts returns a

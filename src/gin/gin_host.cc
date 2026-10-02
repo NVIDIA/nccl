@@ -203,7 +203,7 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
       NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
 
       NCCLCHECKGOTO(backend->ncclGin->connect(backend->ginInstance, handles, ginTeam.nRanks, ginTeam.rank,
-                                              listenComms[backendIdx], backend->ginComms + commIdx),
+                                              listenComms[backendIdx], backend->ginComms + commIdx, comm->abortFlag),
                     ret, fail);
 
       NCCLCHECKGOTO(backend->ncclGin->closeListen(listenComms[backendIdx]), ret, fail);

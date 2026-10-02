@@ -189,6 +189,9 @@ peers. A `collComm` is initialized in several steps:
 `ncclImpl` initializes a TCP socket in `listen` and stores it in `listenComm`. The address of the socket is included in `handle` so
 that all peers can connect to the socket.
 
+Since v15, `connect` also receives `abortFlag` (may be NULL). It becomes non-zero when the communicator is
+aborted; any blocking wait on the `collComm` should then return an error.
+
 ### Context Setup
 
 GIN contexts are allocated in blocks via `createContext`. Each block of GIN contexts has a

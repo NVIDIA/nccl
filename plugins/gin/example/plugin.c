@@ -79,6 +79,10 @@ __hidden ncclResult_t ginConnect(void* ctx, void* handles[], int nranks, int ran
   return ncclSuccess;
 }
 
+__hidden ncclResult_t ginConnect_v15(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm, volatile uint32_t* abortFlag) {
+  return ginConnect(ctx, handles, nranks, rank, listenComm, collComm);
+}
+
 __hidden ncclResult_t ginRegMrSym(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle, void** ginHandle) {
   struct ginMemHandle* m = (struct ginMemHandle*)calloc(1, sizeof(*m));
   if (m == NULL) return ncclSystemError;
@@ -492,7 +496,7 @@ const ncclGin_v15_t ncclGinPlugin_v15 = {
   .getProperties = ginGetProperties_v13,
   .getGinProperties = ginGetGinProperties_v15,
   .listen = ginListen,
-  .connect = ginConnect,
+  .connect = ginConnect_v15,
   .createContext = ginCreateContext_v15,
   .regMrSym = ginRegMrSym,
   .regMrSymDmaBuf = ginRegMrSymDmaBuf,

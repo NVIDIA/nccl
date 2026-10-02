@@ -15,7 +15,7 @@
 
 ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task,
                                        struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
-                                       struct ncclTaskColl** remainTasksHead);
+                                       struct ncclTaskColl** remainTasksHead, bool* needGenkDevComm);
 void convertSymTaskDevOp(struct ncclComm* comm, struct ncclTaskColl* task);
 ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
                                         struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,

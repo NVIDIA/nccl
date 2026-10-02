@@ -101,7 +101,7 @@ static bool ncclGenkTreeChannelSendsGin(struct ncclComm* comm, int channelId) {
   return false;
 }
 
-static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin) {
+static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin, bool* needGenkDevComm) {
   struct ncclGenkDevComm* genk = &comm->symkState.genkComm;
   // Per-call CTA limits may reduce a launch, but cannot exceed this communicator-wide bound.
   int const nChannels = std::min(comm->nChannels, comm->config.maxCTAs);
@@ -126,17 +126,13 @@ static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin) {
   size_t const ginFlowBufferSize =
     (size_t)nRingGinBuffers * ringGinChannelStride + (size_t)nTreeGinBuffers * treeGinChannelStride;
   struct ncclDevResourceRequirements ginFlowReq = {};
-  struct {
-    ncclDevResourceHandle bufHandle;
-    ncclGinSignal_t signal0;
-  } ginFlow = {};
   genk->ginSignal0 = 0;
   if (enableGin) {
     ginFlowReq.bufferSize = alignUp(ginFlowBufferSize, (size_t)128);
     ginFlowReq.bufferAlign = 128;
-    ginFlowReq.outBufferHandle = &ginFlow.bufHandle;
+    ginFlowReq.outBufferHandle = &comm->symkState.genkGinFlow.bufHandle;
     ginFlowReq.ginSignalCount = 2 * nChannels * (ncclGenkRingConnections + ncclGenkTreeConnections);
-    ginFlowReq.outGinSignalStart = &ginFlow.signal0;
+    ginFlowReq.outGinSignalStart = &comm->symkState.genkGinFlow.signal0;
     // Fixed LSA-visible resources are prepended below, leaving this
     // rank-dependent local staging at the end of the window.
     ginFlowReq.next = reqs.resourceRequirementsList;
@@ -200,44 +196,65 @@ static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin) {
   connStateReq.next = reqs.resourceRequirementsList;
   reqs.resourceRequirementsList = &connStateReq;
 
-  NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &genk->devComm, /*isInternal=*/true,
-                                       /*deviceCodeVersion=*/NCCL_VERSION_CODE));
-
-#if !defined(NCCL_OS_WINDOWS)
-  if (enableGin) {
-    genk->ginSignal0 = ginFlow.signal0;
-    genk->ginFlowBuffer = ginFlow.bufHandle;
-    // Pack Ring channels followed by Tree channels.
-    for (int c = 0; c < nChannels; c++) {
-      if (ncclGenkRingChannelSendsGin(comm, c)) {
-        genk->ringGinChannelMask |= (1UL << c);
-      }
-    }
-    for (int c = 0; c < nChannels; c++) {
-      if (ncclGenkTreeChannelSendsGin(comm, c)) {
-        genk->treeGinChannelMask |= (1UL << c);
-      }
-    }
+  if (needGenkDevComm) {
+    // Schedule asynchronous creation of the genk devComm.
+    NCCLCHECK(ncclDevrCommCreateAsync(comm, &reqs, &genk->devComm, /*isInternal=*/true,
+                                      /*deviceCodeVersion=*/NCCL_VERSION_CODE));
+    *needGenkDevComm = true;
+  } else {
+    // genk devComm can be created immediately.
+    NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &genk->devComm, /*isInternal=*/true,
+                                         /*deviceCodeVersion=*/NCCL_VERSION_CODE));
   }
-#endif
   return ncclSuccess;
 }
 
-ncclResult_t ncclGenkInitOnce(struct ncclComm* comm) {
+ncclResult_t ncclGenkInitStart(struct ncclComm* comm, bool* needGenkDevComm) {
   // Genk has its own device communicator and does not need Symk resources.
   NCCLCHECK(ncclDevrInitOnce(comm));
 
   struct ncclSymkState* symk = &comm->symkState;
-  if (!symk->genkInitialized) {
-    NCCLCHECK(ncclGenkInitDevComm(comm, /*enableGin=*/comm->nNodes > 1));
-    symk->genkInitialized = true;
+  if (!symk->genkInitStarted) {
+    NCCLCHECK(ncclGenkInitDevComm(comm, /*enableGin=*/comm->nNodes > 1, needGenkDevComm));
+    symk->genkInitStarted = true;
+  }
+  return ncclSuccess;
+}
 
-    symk->genkComm.workStarted = comm->profiler.symWorkStarted;
-    symk->genkComm.workCompleted = comm->profiler.symWorkCompleted;
-    symk->genkComm.workPhases = comm->profiler.symWorkPhases;
+ncclResult_t ncclGenkInitEnd(struct ncclComm* comm) {
+  bool enableGin = (comm->nNodes > 1);
+
+  struct ncclSymkState* symk = &comm->symkState;
+
+  if (symk->genkInitStarted && !symk->genkInitialized) {
+    struct ncclGenkDevComm* genk = &symk->genkComm;
+
+    genk->workStarted = comm->profiler.symWorkStarted;
+    genk->workCompleted = comm->profiler.symWorkCompleted;
+    genk->workPhases = comm->profiler.symWorkPhases;
 
     NCCLCHECK(ncclGenkInitRingTopology(comm));
     NCCLCHECK(ncclGenkInitTreeTopology(comm));
+
+#if !defined(NCCL_OS_WINDOWS)
+    if (enableGin) {
+      int const nChannels = genk->nResourceChannels;
+      genk->ginSignal0 = symk->genkGinFlow.signal0;
+      genk->ginFlowBuffer = symk->genkGinFlow.bufHandle;
+      // Pack Ring channels followed by Tree channels.
+      for (int c = 0; c < nChannels; c++) {
+        if (ncclGenkRingChannelSendsGin(comm, c)) {
+          genk->ringGinChannelMask |= (1UL << c);
+        }
+      }
+      for (int c = 0; c < nChannels; c++) {
+        if (ncclGenkTreeChannelSendsGin(comm, c)) {
+          genk->treeGinChannelMask |= (1UL << c);
+        }
+      }
+    }
+#endif
+    symk->genkInitialized = true;
   }
   return ncclSuccess;
 }

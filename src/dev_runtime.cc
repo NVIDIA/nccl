@@ -1855,6 +1855,7 @@ struct ncclDevrCommCreateAsyncJob {
   struct ncclDevCommRequirements* reqs;
   struct ncclDevComm* outDevComm;
   uint32_t deviceCodeVersion;
+  bool isInternal;
 };
 
 static void ncclDevrCommCreateAsyncJobFree(void* _job) {
@@ -1868,7 +1869,7 @@ static ncclResult_t ncclDevrCommCreateJob(struct ncclAsyncJob* job_) {
   ncclResult_t ret = ncclSuccess;
 
   CUDACHECKGOTO(cudaSetDevice(job->comm->cudaDev), ret, fail);
-  NCCLCHECKGOTO(ncclDevrCommCreateInternal(job->comm, job->reqs, job->outDevComm, /*isInternal=*/false,
+  NCCLCHECKGOTO(ncclDevrCommCreateInternal(job->comm, job->reqs, job->outDevComm, job->isInternal,
                                            job->deviceCodeVersion),
                 ret, fail);
 
@@ -2059,45 +2060,15 @@ ncclResult_t ncclCommQueryProperties(ncclComm_t comm, ncclCommProperties_t* prop
   return ncclSuccess;
 }
 
-NCCL_API(ncclResult_t, ncclDevCommCreate, ncclComm_t comm, ncclDevCommRequirements_t const* reqs,
-         ncclDevComm_t* outDevComm);
-ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements const* reqs,
-                               struct ncclDevComm* outDevComm) {
-  NCCLCHECK(CommCheck(comm, __func__, "comm"));
-  NCCLCHECK(PtrCheck(reqs, __func__, "reqs"));
-  if (reqs->magic != NCCL_API_MAGIC) {
-    WARN("Cannot create device communicator: ncclDevCommRequirements_t argument must be initialized via "
-         "NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER");
-    return ncclInvalidUsage;
-  }
-
-  uint32_t deviceCodeVersion = reqs->version;
-  if (ncclParamDevApiJit() == 1 || (reqs->version >= NCCL_VERSION(2, 31, 0) && reqs->useRuntimeVersion)) {
-    deviceCodeVersion = NCCL_VERSION_CODE;
-  }
-
-  // Use compile-time compat for the reqs filter, regardless of device code version.
-  struct ncclDevCommCompat* reqsCompat = nullptr;
-  NCCLCHECK(getNcclVersionCompat(reqs->version, &reqsCompat));
-
+ncclResult_t ncclDevrCommCreateAsync(ncclComm_t comm, struct ncclDevCommRequirements const* reqs,
+                                     struct ncclDevComm* outDevComm, bool isInternal, uint32_t deviceCodeVersion) {
   ncclResult_t ret = ncclSuccess;
-  int saveDev;
   struct ncclDevrCommCreateTask* task = nullptr;
   struct ncclDevrCommCreateAsyncJob* createJob = nullptr;
 
-  CUDACHECK(cudaGetDevice(&saveDev));
-  NCCLCHECK(ncclGroupStartInternal());
-
-  if (!comm->symmetricSupport) {
-    WARN("Communicator does not support symmetric memory!");
-    ret = ncclInvalidUsage;
-    goto fail;
-  }
-
-  NCCLCHECKGOTO(ncclCommEnsureReady(comm), ret, fail);
-  CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
-
-  NCCLCHECKGOTO(ncclDevrInitOnce(comm), ret, fail);
+  // Use compile-time compat for the reqs filter, regardless of device code version.
+  struct ncclDevCommCompat* reqsCompat = nullptr;
+  NCCLCHECKGOTO(getNcclVersionCompat(reqs->version, &reqsCompat), ret, fail);
 
   if (ncclParamEnqueueRearchEnable()) {
     NEW_NOTHROW_GOTO(createJob, ncclDevrCommCreateAsyncJob, ret, fail);
@@ -2105,8 +2076,9 @@ ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements c
     createJob->outDevComm = outDevComm;
     createJob->deviceCodeVersion = deviceCodeVersion;
     createJob->reqs = nullptr;
+    createJob->isInternal = isInternal;
     NCCLCHECKGOTO(deepCopyDevCommRequirements(reqs, &createJob->reqs), ret, fail);
-    if (reqsCompat->devCommRequirementsFilter) {
+    if (reqsCompat && reqsCompat->devCommRequirementsFilter) {
       NCCLCHECKGOTO(reqsCompat->devCommRequirementsFilter(comm, createJob->reqs), ret, fail);
     }
     if (comm->gpuCftSupport == 0 && createJob->reqs->cftCaps != NCCL_CFT_NONE) {
@@ -2130,7 +2102,7 @@ ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements c
     NCCLCHECKGOTO(ncclCalloc(&task, 1), ret, fail);
     // reqs must be deep copied to the task so background threads can safely access it
     NCCLCHECKGOTO(deepCopyDevCommRequirements(reqs, &task->reqs), ret, fail);
-    if (reqsCompat->devCommRequirementsFilter) {
+    if (reqsCompat && reqsCompat->devCommRequirementsFilter) {
       NCCLCHECKGOTO(reqsCompat->devCommRequirementsFilter(comm, task->reqs), ret, fail);
     }
     if (comm->gpuCftSupport == 0 && task->reqs->cftCaps != NCCL_CFT_NONE) {
@@ -2146,14 +2118,11 @@ ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements c
     }
     task->outDevComm = outDevComm;
     task->deviceCodeVersion = deviceCodeVersion;
+    task->isInternal = isInternal;
     ncclIntruQueueEnqueue(&comm->devrState.commCreateTaskQueue, task);
-    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);
   }
 
 exit:
-  ncclGroupErrCheck(ret);
-  NCCLCHECK(ncclGroupEndInternal());
-  cudaSetDevice(saveDev);
   return ret;
 fail:
   if (createJob) {
@@ -2164,6 +2133,55 @@ fail:
     freeDevCommRequirements(task->reqs);
     free(task);
   }
+  goto exit;
+}
+
+NCCL_API(ncclResult_t, ncclDevCommCreate, ncclComm_t comm, ncclDevCommRequirements_t const* reqs,
+         ncclDevComm_t* outDevComm);
+ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements const* reqs,
+                               struct ncclDevComm* outDevComm) {
+  NCCLCHECK(CommCheck(comm, __func__, "comm"));
+  NCCLCHECK(PtrCheck(reqs, __func__, "reqs"));
+  if (reqs->magic != NCCL_API_MAGIC) {
+    WARN("Cannot create device communicator: ncclDevCommRequirements_t argument must be initialized via "
+         "NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER");
+    return ncclInvalidUsage;
+  }
+
+  uint32_t deviceCodeVersion = reqs->version;
+  if (ncclParamDevApiJit() == 1 || (reqs->version >= NCCL_VERSION(2, 31, 0) && reqs->useRuntimeVersion)) {
+    deviceCodeVersion = NCCL_VERSION_CODE;
+  }
+
+  ncclResult_t ret = ncclSuccess;
+  int saveDev;
+
+  CUDACHECK(cudaGetDevice(&saveDev));
+  NCCLCHECK(ncclGroupStartInternal());
+
+  if (!comm->symmetricSupport) {
+    WARN("Communicator does not support symmetric memory!");
+    ret = ncclInvalidUsage;
+    goto fail;
+  }
+
+  NCCLCHECKGOTO(ncclCommEnsureReady(comm), ret, fail);
+  CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
+
+  NCCLCHECKGOTO(ncclDevrInitOnce(comm), ret, fail);
+
+  NCCLCHECKGOTO(ncclDevrCommCreateAsync(comm, reqs, outDevComm, /*isInternal=*/false, deviceCodeVersion), ret, fail);
+
+  if (!ncclParamEnqueueRearchEnable()) {
+    ncclGroupCommJoin(comm, ncclGroupTaskTypeSymRegister);
+  }
+
+exit:
+  ncclGroupErrCheck(ret);
+  NCCLCHECKIGNORE(ncclGroupEndInternal(), ret);
+  cudaSetDevice(saveDev);
+  return ret;
+fail:
   goto exit;
 }
 

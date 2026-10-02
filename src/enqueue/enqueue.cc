@@ -422,8 +422,10 @@ ncclResult_t ncclValidateCollConfigLaunchCompletionEvents(struct ncclComm* comm)
 
 // Called once per ncclGroup to organize the user submitted tasks in
 // comm->planner so that they can be peeled off into plans.
-ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool* needConnect, ncclSimInfo_t* simInfo) {
+ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool* needConnect, bool* needGenkDevComm,
+                              ncclSimInfo_t* simInfo) {
   struct ncclKernelPlanner* planner = &comm->planner;
+  if (needGenkDevComm) *needGenkDevComm = false;
 
   NCCLCHECK(ncclValidateCollConfigLaunchCompletionEvents(comm));
   planner->persistent = ncclCudaGraphValid(planner->capturingGraph);
@@ -472,7 +474,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
 
   // Skip symmetric kernels for cross-clique
   if (comm->symmetricSupport && !comm->p2pCrossClique) {
-    NCCLCHECK(ncclMakeSymmetricTaskList(comm, task, &planner->collSymTaskQueue, &task));
+    NCCLCHECK(ncclMakeSymmetricTaskList(comm, task, &planner->collSymTaskQueue, &task, needGenkDevComm));
   }
 
   // Walk the size sorted tasks, binning them by (fn,op,ty).

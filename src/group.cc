@@ -287,7 +287,7 @@ ncclResult_t ncclPrepareTasksAndCollPreconnectFunc(struct ncclAsyncJob* job_) {
   memset(algoNeedConnect, 0, sizeof(bool) * NCCL_NUM_ALGORITHMS);
   CUDACHECK(cudaSetDevice(comm->cudaDev));
   if (!job_->isThreadMain && ncclOsCpuCount(comm->cpuAffinity)) ncclOsSetAffinity(comm->cpuAffinity);
-  NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, job->simInfo));
+  NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, /*needGenkDevComm=*/nullptr, job->simInfo));
   if (comm->cuMemSupport && needConnect) NCCLCHECK(ncclCollPreconnect(comm, algoNeedConnect));
   return ncclSuccess;
 }
@@ -385,7 +385,7 @@ ncclResult_t ncclCommGroupRegisterSymmetric(struct ncclAsyncJob* job_) {
 
   while (!ncclIntruQueueEmpty(&comm->devrState.commCreateTaskQueue)) {
     struct ncclDevrCommCreateTask* task = ncclIntruQueueDequeue(&comm->devrState.commCreateTaskQueue);
-    NCCLCHECKGOTO(ncclDevrCommCreateInternal(comm, task->reqs, task->outDevComm, /*isInternal=*/false,
+    NCCLCHECKGOTO(ncclDevrCommCreateInternal(comm, task->reqs, task->outDevComm, task->isInternal,
                                              task->deviceCodeVersion),
                   ret, fail);
     freeDevCommRequirements(task->reqs); // free additional task memory for reqs
@@ -717,12 +717,12 @@ static ncclResult_t ncclPrepareTasksAndCollPreconnect(
     job->simInfo = simInfo;
     ncclIntruQueueEnqueue(asyncCollJobs, &job->base);
   } else {
-    bool needConnect = false;
+    bool needConnect = false, needGenkDevComm = false;
     bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
     memset(algoNeedConnect, 0, sizeof(bool) * NCCL_NUM_ALGORITHMS);
 
     CUDACHECK(cudaSetDevice(comm->cudaDev));
-    NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, simInfo));
+    NCCLCHECK(ncclPrepareTasks(comm, algoNeedConnect, &needConnect, &needGenkDevComm, simInfo));
 
     if (comm->cuMemSupport && needConnect) {
       ncclResult_t ret;
@@ -739,6 +739,19 @@ static ncclResult_t ncclPrepareTasksAndCollPreconnect(
         NCCLCHECK(ret);
       }
       memcpy(job->algoNeedConnect, algoNeedConnect, sizeof(bool) * NCCL_NUM_ALGORITHMS);
+      ncclIntruQueueEnqueue(asyncCollJobs, &job->base);
+    }
+
+    if (needGenkDevComm) {
+      struct ncclGroupSymmetricJob* job;
+      NEW_NOTHROW(job, ncclGroupSymmetricJob);
+      job->base.func = ncclCommGroupRegisterSymmetric;
+      job->base.undo = nullptr;
+      job->base.destructor = ncclGroupSymmetricJobFree;
+      job->base.state = ncclGroupJobRunning;
+      job->base.abortFlag = comm->abortFlag;
+      job->base.abortFlagDev = comm->abortFlagDev;
+      job->comm = comm;
       ncclIntruQueueEnqueue(asyncCollJobs, &job->base);
     }
   }

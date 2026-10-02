@@ -273,8 +273,8 @@ static void ncclDiagP2pLogEdge(struct ncclComm* comm, const char* phase, int src
                                const struct ncclDiagP2pEdgeInfo* edge, const char* extra) {
   const struct ncclPeerInfo* srcInfo = comm->peerInfo + srcRank;
   const struct ncclPeerInfo* dstInfo = comm->peerInfo + dstRank;
-  INFO(NCCL_INIT,
-       "Diagnostics P2P %s srcRank=%d srcCudaDev=%d srcNvmlDev=%d dstRank=%d dstCudaDev=%d dstNvmlDev=%d path=%s "
+  INFO(NCCL_DIAG,
+       "P2P %s srcRank=%d srcCudaDev=%d srcNvmlDev=%d dstRank=%d dstCudaDev=%d dstNvmlDev=%d path=%s "
        "handle=%s topoRead=%d%s%s",
        phase, srcRank, srcInfo->cudaDev, srcInfo->nvmlDev, dstRank, dstInfo->cudaDev, dstInfo->nvmlDev,
        ncclDiagP2pPathName(edge->pathType), ncclDiagP2pHandleName(edge->handleType), edge->read,
@@ -295,49 +295,56 @@ static void ncclDiagP2pReport(struct ncclComm* comm, int srcRank, int dstRank, c
   char edgeFields[256];
   ncclDiagP2pFormatPeerFields(comm, srcRank, dstRank, edge, edgeFields, sizeof(edgeFields));
 
-  if (result->reason == ncclDiagP2pReasonNoDescriptor) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: destination buffer unavailable %s reason=%s; inspect earlier allocation, export, "
-               "or initialization errors on the destination rank, then %s",
-               edgeFields, ncclDiagP2pReasonName(result->reason), ncclDiagP2pEdgeAdvice(edge));
-    return;
-  }
+  const char* issue;
+  switch (result->reason) {
+  case ncclDiagP2pReasonNoDescriptor:
+    issue = "destination buffer unavailable";
+    INFO(NCCL_DIAG,
+         "P2P %s %s reason=%s; inspect earlier allocation, export, "
+         "or initialization errors on the destination rank, then %s",
+         issue, edgeFields, ncclDiagP2pReasonName(result->reason), ncclDiagP2pEdgeAdvice(edge));
+    break;
 
-  if (result->reason == ncclDiagP2pReasonLocalCuda) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: local CUDA setup failed %s reason=%s; inspect preceding device, stream, "
-               "allocation, or initialization errors on the source rank",
-               edgeFields, ncclDiagP2pReasonName(result->reason));
-    return;
-  }
+  case ncclDiagP2pReasonLocalCuda:
+    issue = "local CUDA setup failed";
+    INFO(NCCL_DIAG,
+         "P2P %s %s reason=%s; inspect preceding device, stream, "
+         "allocation, or initialization errors on the source rank",
+         issue, edgeFields, ncclDiagP2pReasonName(result->reason));
+    break;
 
-  if (result->reason == ncclDiagP2pReasonImport) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: peer-memory import failed %s reason=%s; %s", edgeFields,
-               ncclDiagP2pReasonName(result->reason), ncclDiagP2pImportAdvice(edge));
-    return;
-  }
+  case ncclDiagP2pReasonImport:
+    issue = "peer-memory import failed";
+    INFO(NCCL_DIAG, "P2P %s %s reason=%s; %s", issue, edgeFields, ncclDiagP2pReasonName(result->reason),
+         ncclDiagP2pImportAdvice(edge));
+    break;
 
-  if (result->reason == ncclDiagP2pReasonWriteMismatch) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: write mismatch %s expected=0x%016llx got=0x%016llx verify=0x%016llx; %s",
-               edgeFields, (unsigned long long)ncclDiagP2pWritePattern(srcRank, dstRank),
-               (unsigned long long)result->writeGot, (unsigned long long)result->verifyGot,
-               ncclDiagP2pEdgeAdvice(edge));
-    return;
-  }
+  case ncclDiagP2pReasonWriteMismatch:
+    issue = "write mismatch";
+    INFO(NCCL_DIAG, "P2P %s %s expected=0x%016llx got=0x%016llx verify=0x%016llx; %s", issue, edgeFields,
+         (unsigned long long)ncclDiagP2pWritePattern(srcRank, dstRank), (unsigned long long)result->writeGot,
+         (unsigned long long)result->verifyGot, ncclDiagP2pEdgeAdvice(edge));
+    break;
 
-  if (result->reason == ncclDiagP2pReasonReadMismatch) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: read mismatch %s expected=0x%016llx got=0x%016llx; %s", edgeFields,
-               (unsigned long long)ncclDiagP2pReadPattern(dstRank, srcRank), (unsigned long long)result->readGot,
-               ncclDiagP2pEdgeAdvice(edge));
-    return;
-  }
+  case ncclDiagP2pReasonReadMismatch:
+    issue = "read mismatch";
+    INFO(NCCL_DIAG, "P2P %s %s expected=0x%016llx got=0x%016llx; %s", issue, edgeFields,
+         (unsigned long long)ncclDiagP2pReadPattern(dstRank, srcRank), (unsigned long long)result->readGot,
+         ncclDiagP2pEdgeAdvice(edge));
+    break;
 
-  if (result->reason == ncclDiagP2pReasonTopo) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: topology check failed %s reason=%s; inspect preceding topology records, then %s",
-               edgeFields, ncclDiagP2pReasonName(result->reason), ncclDiagP2pEdgeAdvice(edge));
-    return;
-  }
+  case ncclDiagP2pReasonTopo:
+    issue = "topology check failed";
+    INFO(NCCL_DIAG, "P2P %s %s reason=%s; inspect preceding topology records, then %s", issue, edgeFields,
+         ncclDiagP2pReasonName(result->reason), ncclDiagP2pEdgeAdvice(edge));
+    break;
 
-  DIAG_PRINT("NCCL DIAG [INFO] p2p: launch/check failed %s reason=%s; inspect preceding CUDA or NCCL warnings, then %s",
-             edgeFields, ncclDiagP2pReasonName(result->reason), ncclDiagP2pEdgeAdvice(edge));
+  default:
+    issue = "launch/check failed";
+    INFO(NCCL_DIAG, "P2P %s %s reason=%s; inspect preceding CUDA or NCCL warnings, then %s", issue, edgeFields,
+         ncclDiagP2pReasonName(result->reason), ncclDiagP2pEdgeAdvice(edge));
+    break;
+  }
 }
 
 static void ncclDiagP2pBuildGroupSummary(int nRanks, const struct ncclDiagP2pEdgeResult* allResults,
@@ -375,6 +382,9 @@ static void ncclDiagP2pReportSummary(struct ncclComm* comm, const struct ncclDia
   } else {
     DIAG_PRINT("NCCL DIAG %sp2p: only %llu/%llu GPU-to-GPU peer accesses passed verification", level,
                (unsigned long long)passed, (unsigned long long)tested);
+    if (!ncclDebugShouldLog(NCCL_LOG_INFO, NCCL_DIAG, ncclDebugMask)) {
+      DIAG_PRINT("NCCL DIAG [INFO] p2p: for failure details, rerun with NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=DIAG");
+    }
   }
 }
 
@@ -414,7 +424,7 @@ static void ncclDiagP2pDiscoverLocalEdges(struct ncclComm* comm, const int* rank
       edge->read = 0;
       result->tested = 1;
       ncclDiagP2pSetReason(result, ncclDiagP2pReasonTopo);
-      INFO(NCCL_INIT, "Diagnostics P2P topo check failed srcRank=%d dstRank=%d result=%d", comm->rank, dst, topoRet);
+      INFO(NCCL_DIAG, "P2P topo check failed srcRank=%d dstRank=%d result=%d", comm->rank, dst, topoRet);
       continue;
     }
     if (edge->p2p && intermediateRank != -1) {
@@ -424,6 +434,8 @@ static void ncclDiagP2pDiscoverLocalEdges(struct ncclComm* comm, const int* rank
     } else if (edge->p2p) {
       outPeers[(*outPeerCount)++] = dstSlot;
       result->tested = 1;
+    } else {
+      ncclDiagP2pLogEdge(comm, "skip", comm->rank, dst, edge, "reason=notP2P");
     }
   }
 }
@@ -483,8 +495,7 @@ static ncclResult_t ncclDiagP2pMapSameProcess(struct ncclComm* comm, int dstRank
   if (err == cudaErrorPeerAccessAlreadyEnabled) {
     (void)cudaGetLastError();
   } else if (err != cudaSuccess) {
-    INFO(NCCL_INIT, "Diagnostics: failed to enable peer access to dev %d: %s", dstInfo->cudaDev,
-         cudaGetErrorString(err));
+    INFO(NCCL_DIAG, "P2P failed to enable peer access to dev %d: %s", dstInfo->cudaDev, cudaGetErrorString(err));
     (void)cudaGetLastError();
     return ncclUnhandledCudaError;
   } else {
@@ -570,7 +581,7 @@ static void ncclDiagP2pImportMappings(struct ncclComm* comm, const int* ranks, i
     }
 
     if (importRet == ncclSuccess && mappings[dstSlot].ptr != nullptr) {
-      ncclDiagP2pLogEdge(comm, "import", comm->rank, dst, edge, "import=1");
+      ncclDiagP2pLogEdge(comm, "import", comm->rank, dst, edge, "import=1 status=success");
     } else {
       ncclDiagP2pSetReason(result, ncclDiagP2pReasonImport);
       ncclDiagP2pLogEdge(comm, "import", comm->rank, dst, edge, "import=0 reason=import");
@@ -689,7 +700,7 @@ setup_complete:
     if (setupResults[rank] == ncclSuccess) continue;
     setupRet = setupResults[rank];
     if (comm->rank == 0) {
-      DIAG_PRINT("NCCL DIAG [INFO] p2p: setup failed on rank %d result=%d", rank, setupResults[rank]);
+      INFO(NCCL_DIAG, "P2P setup failed on rank %d result=%d", rank, setupResults[rank]);
     }
   }
   NCCLCHECKGOTO(setupRet, ret, fail);
@@ -748,9 +759,10 @@ setup_complete:
     break;
   }
   if (peerAccessChanged) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: temporarily enabled context-wide CUDA peer access rank=%d cudaDev=%d; "
-               "avoid concurrent CUDA use on this context until diagnostics completes",
-               comm->rank, comm->cudaDev);
+    INFO(NCCL_DIAG,
+         "P2P temporarily enabled context-wide CUDA peer access rank=%d cudaDev=%d; "
+         "avoid concurrent CUDA use on this context until diagnostics completes",
+         comm->rank, comm->cudaDev);
   }
 
   if (outPeerCount > 0 && cudaUsable && stream != nullptr) {
@@ -764,7 +776,7 @@ setup_complete:
       struct ncclDiagP2pRemoteOp* op = remoteOpsHost + i;
       int dstSlot = ncclDiagP2pRankToSlot(p2pRanks, p2pNRanks, op->dstRank);
       struct ncclDiagP2pEdgeInfo* edge = edgeMatrix + p2pRank * p2pNRanks + dstSlot;
-      ncclDiagP2pLogEdge(comm, "write", op->srcRank, op->dstRank, edge, nullptr);
+      ncclDiagP2pLogEdge(comm, "write", op->srcRank, op->dstRank, edge, "status=started");
     }
     ncclResult_t launchRet = ncclDiagP2pRemoteWrite(remoteOpsDev, remoteOpCount, stream);
     if (launchRet != ncclSuccess) writePhaseOk = false;
@@ -823,6 +835,9 @@ setup_complete:
     result->verifyGot = obs->verifyValue;
     if (obs->writeValue != expected || obs->verifyValue != expected) {
       ncclDiagP2pSetReason(result, ncclDiagP2pReasonWriteMismatch);
+    } else if (writePhaseOk && result->reason == ncclDiagP2pReasonNone) {
+      const struct ncclDiagP2pEdgeInfo* edge = edgeMatrix + p2pRank * p2pNRanks + dstSlot;
+      ncclDiagP2pLogEdge(comm, "write", comm->rank, dst, edge, "status=success");
     }
   }
 
@@ -846,7 +861,7 @@ setup_complete:
       struct ncclDiagP2pRemoteOp* op = remoteOpsHost + i;
       int dstSlot = ncclDiagP2pRankToSlot(p2pRanks, p2pNRanks, op->dstRank);
       struct ncclDiagP2pEdgeInfo* edge = edgeMatrix + p2pRank * p2pNRanks + dstSlot;
-      ncclDiagP2pLogEdge(comm, "read", op->srcRank, op->dstRank, edge, nullptr);
+      ncclDiagP2pLogEdge(comm, "read", op->srcRank, op->dstRank, edge, "status=started");
     }
     ncclResult_t launchRet = ncclDiagP2pRemoteRead(remoteOpsDev, remoteOpCount, readbackDev, stream);
     if (launchRet != ncclSuccess) readPhaseOk = false;
@@ -872,7 +887,12 @@ setup_complete:
     if (!readPhaseOk) continue;
     uint64_t expected = ncclDiagP2pReadPattern(dst, comm->rank);
     result->readGot = readbackHost[i];
-    if (readbackHost[i] != expected) ncclDiagP2pSetReason(result, ncclDiagP2pReasonReadMismatch);
+    if (readbackHost[i] != expected) {
+      ncclDiagP2pSetReason(result, ncclDiagP2pReasonReadMismatch);
+    } else {
+      const struct ncclDiagP2pEdgeInfo* edge = edgeMatrix + p2pRank * p2pNRanks + dstSlot;
+      ncclDiagP2pLogEdge(comm, "read", comm->rank, dst, edge, "status=success");
+    }
   }
 
   NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, p2pRanks, p2pRank, p2pNRanks, allResults,
@@ -935,8 +955,8 @@ fail:
     }
   }
   if (cleanupRet != ncclSuccess) {
-    DIAG_PRINT("NCCL DIAG [INFO] p2p: resource cleanup failed rank=%d result=%d; some temporary resources may remain",
-               comm->rank, cleanupRet);
+    INFO(NCCL_DIAG, "P2P resource cleanup failed rank=%d result=%d; some temporary resources may remain", comm->rank,
+         cleanupRet);
   }
   ret = runRet == ncclSuccess ? cleanupRet : runRet;
   if (comm->p2pCrossClique) free(p2pRanks);

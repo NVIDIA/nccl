@@ -787,8 +787,8 @@ ALLOC (non-host memory allocations, typically device-side), ALLOC_HOST (host mem
 CALL (stands for function calls), PROXY (stands for the proxy thread operations), NVLS
 (stands for NVLink SHARP), BOOTSTRAP (stands for early initialization), REG (stands for memory registration), PROFILE
 (stands for coarse-grained profiling of initialization), RAS (stands for reliability, availability, and serviceability
-subsystem), DESTROY (stands for communicator destroy, abort, revoke, and plugin unload/close operations)
-and ALL (includes every subsystem).
+subsystem), DESTROY (stands for communicator destroy, abort, revoke, and plugin unload/close operations),
+DIAG (stands for detailed information from active diagnostics) and ALL (includes every subsystem).
 
 .. _NCCL_DEBUG_TIMESTAMP_FORMAT:
 

@@ -184,7 +184,7 @@ ncclResult_t ncclRmaSocketProxyDeregMrSym(void* collComm, void* mhandle);
 
 /* Connection/context setup (rma_socket_setup.cc). */
 ncclResult_t ncclRmaSocketProxyConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
-                                       void** collComm);
+                                       void** collComm, volatile uint32_t* abortFlag);
 ncclResult_t ncclRmaSocketProxyCreateContext(void* collComm, ncclRmaConfig_t* config, void** rmaCtx);
 ncclResult_t ncclRmaSocketProxyDestroyContext(void* rmaCtx);
 ncclResult_t ncclRmaSocketProxyCloseColl(void* collComm);

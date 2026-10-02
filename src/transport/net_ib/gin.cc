@@ -206,7 +206,8 @@ ncclResult_t ncclGinIbP2PBarrier(struct ncclGinIbCollComm* cComm) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclGinIbConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm) {
+ncclResult_t ncclGinIbConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                              volatile uint32_t* abortFlag) {
   struct ncclIbListenComm* lComm = (struct ncclIbListenComm*)listenComm;
   struct ncclGinIbCollComm* cCommArray = nullptr;
   ncclResult_t ret = ncclSuccess;
@@ -219,6 +220,7 @@ ncclResult_t ncclGinIbConnect(void* ctx, void* handles[], int nranks, int rank, 
   cComm->ctx = ctx;
   cComm->nranks = nranks;
   cComm->rank = rank;
+  cComm->abortFlag = abortFlag;
 
   next = (cComm->rank + 1) % nranks;
   do {
@@ -338,9 +340,9 @@ out:
   return status;
 }
 
-ncclResult_t ncclGinIbGdakiConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
-                                   void** collComm) {
-  NCCLCHECK(ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm));
+ncclResult_t ncclGinIbGdakiConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                                   volatile uint32_t* abortFlag) {
+  NCCLCHECK(ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm, abortFlag));
 
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)*collComm;
   cComm->getProperties = (ncclResult_t (*)(int dev, void* props))ncclGinIbGdakiGetProperties;
@@ -421,13 +423,13 @@ ncclResult_t ncclRmaIbProxyGetProperties(int dev, ncclNetProperties_t* props) {
   return ncclSuccess;
 }
 
-ncclResult_t ncclRmaIbProxyConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
-                                   void** collComm) {
+ncclResult_t ncclRmaIbProxyConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                                   volatile uint32_t* abortFlag) {
   // Check the current GPU supports GDR
   NCCLCHECK(ncclGinIbGdrGpuSupport(/*gdaki*/ false));
 
   // Connect.
-  NCCLCHECK(ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm));
+  NCCLCHECK(ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm, abortFlag));
 
   return ncclSuccess;
 }

@@ -501,7 +501,7 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
                   ret, fail);
     NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
     NCCLCHECKGOTO(rmaProxyState->ncclRma->connect(comm->netContext, handles, nPeers, myPeer, listenComm,
-                                                  rmaProxyState->rmaComms + n),
+                                                  rmaProxyState->rmaComms + n, comm->abortFlag),
                   ret, fail);
     NCCLCHECKGOTO(rmaProxyState->ncclRma->getProperties(localRmaDevs[n], &rmaProxyState->props[n]), ret, fail);
     NCCLCHECKGOTO(rmaProxyState->ncclRma->closeListen(listenComm), ret, fail);

@@ -42,7 +42,8 @@ typedef struct {
   ncclResult_t (*listen)(void* ctx, int dev, void* handle, void** listenComm);
   // Create a group for GIN operations. handles have been created
   // using listen() above. rank indicates caller's rank in the collective network.
-  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm);
+  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                          volatile uint32_t* abortFlag);
   // Create device-side GIN context. devHandle will be passed to device code.
   ncclResult_t (*createContext)(void* collComm, ncclGinConfig_v15_t* config, void** ginCtx,
                                 ncclNetDeviceHandle_v11_t** devHandle);

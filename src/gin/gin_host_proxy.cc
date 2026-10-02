@@ -385,14 +385,15 @@ ncclResult_t ncclGinProxyFlushesAllPutsOnAnySignal(void* collComm, bool* flushes
 }
 
 static ncclResult_t ncclGinProxyConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
-                                        void** collComm) {
+                                        void** collComm, volatile uint32_t* abortFlag) {
   ncclResult_t ret = ncclSuccess;
   struct ncclGinProxyCollComm* cComm = NULL;
   struct ncclGinProxyListenComm* lComm = (struct ncclGinProxyListenComm*)listenComm;
   NCCLCHECK(ncclCalloc(&cComm, 1));
   cComm->nRanks = nranks;
   NCCLCHECKGOTO(rmaBackend->getProperties(lComm->dev, &cComm->props), ret, end);
-  NCCLCHECKGOTO(rmaBackend->connect(ctx, handles, nranks, rank, lComm->listenComm, &cComm->collComm), ret, end);
+  NCCLCHECKGOTO(rmaBackend->connect(ctx, handles, nranks, rank, lComm->listenComm, &cComm->collComm, abortFlag), ret,
+                end);
 
 end:
   if (ret != ncclSuccess) free(cComm);

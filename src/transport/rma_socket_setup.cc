@@ -139,7 +139,7 @@ fail:
 }
 
 ncclResult_t ncclRmaSocketProxyConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
-                                       void** collComm) {
+                                       void** collComm, volatile uint32_t* abortFlag) {
   if (handles == NULL || listenComm == NULL || collComm == NULL || rank < 0 || rank >= nranks) {
     WARN("RMA/Socket : invalid connect arguments handles=%p listenComm=%p collComm=%p rank=%d nranks=%d", handles,
          listenComm, collComm, rank, nranks);

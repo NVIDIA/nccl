@@ -13,6 +13,12 @@
 static ncclGin_v14_t* ncclGin_v14;
 static ncclGin_t ncclGin;
 
+static ncclResult_t ncclGin_v14_connect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
+                                        void** collComm, volatile uint32_t* abortFlag) {
+  (void)abortFlag;
+  return ncclGin_v14->connect(ctx, handles, nranks, rank, listenComm, collComm);
+}
+
 static ncclResult_t ncclGin_v14_getGinProperties(ncclGinProperties_t* ginProps) {
   ncclGinProperties_v14_t ginProps_v14;
   memset(&ginProps_v14, 0, sizeof(ginProps_v14));
@@ -46,7 +52,7 @@ ncclGin_t* getNcclGin_v14(void* lib) {
     ncclGin.getGinProperties = ncclGin_v14_getGinProperties;
     ncclGin.getProperties = ncclGin_v14->getProperties;
     ncclGin.listen = ncclGin_v14->listen;
-    ncclGin.connect = ncclGin_v14->connect;
+    ncclGin.connect = ncclGin_v14_connect;
     ncclGin.createContext = ncclGin_v14_createContext;
     ncclGin.regMrSym = ncclGin_v14->regMrSym;
     ncclGin.regMrSymDmaBuf = ncclGin_v14->regMrSymDmaBuf;

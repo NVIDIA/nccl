@@ -19,6 +19,7 @@ struct ncclGinIbCollComm {
   void* recvComm;
   void* sendComm;
   int dev;
+  volatile uint32_t* abortFlag;
   struct {
     struct ibv_context* context;
     struct ibv_pd* pd;

@@ -69,6 +69,12 @@ static ncclResult_t ncclRma_iputSignal(void* rmaCtx, int context, uint64_t srcOf
                                  signalMhandle, signalValue, signalOp, request);
 }
 
+static ncclResult_t ncclRma_connect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                                    volatile uint32_t* abortFlag) {
+  (void)abortFlag;
+  return ncclRma_v13->connect(ctx, handles, nranks, rank, listenComm, collComm);
+}
+
 static ncclResult_t ncclRma_iput(void* rmaCtx, int context, uint64_t srcOff, void* srcMhandle, size_t size,
                                  uint64_t dstOff, void* dstMhandle, uint32_t rank, uint32_t optFlags, void** request) {
   (void)optFlags;
@@ -96,7 +102,7 @@ ncclRma_t* getNcclRma_v13(void* lib) {
     ncclRma.getRmaProperties = ncclRma_getRmaProperties;
     ncclRma.getProperties = ncclRma_v13->getProperties;
     ncclRma.listen = ncclRma_v13->listen;
-    ncclRma.connect = ncclRma_v13->connect;
+    ncclRma.connect = ncclRma_connect;
     ncclRma.createContext = ncclRma_createContext;
     ncclRma.regMrSym = ncclRma_regMrSym;
     ncclRma.regMrSymDmaBuf = ncclRma_regMrSymDmaBuf;

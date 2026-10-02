@@ -189,6 +189,8 @@ Available Subsystems
 | DESTROY   | Communicator destroy, abort, revoke, and plugin unload/close           |
 |           | operations                                                             |
 +-----------+------------------------------------------------------------------------+
+| DIAG      | Detailed information from active diagnostics                           |
++-----------+------------------------------------------------------------------------+
 | ALL       | All subsystems                                                         |
 +-----------+------------------------------------------------------------------------+
 
@@ -338,6 +340,14 @@ The following examples show typical output for each subsystem (output is truncat
     node-01:631398:631398 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[1] via P2P/CUMEM
     node-01:631398:631465 [0] NCCL INFO Allocated shareable buffer 0x... size 2097152 ipcDesc 0x...
     node-01:631398:631398 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[1] via P2P/CUMEM
+
+**DIAG** - Shows detailed information from active diagnostics (with ``NCCL_RUN_DIAGNOSTICS=1``):
+
+.. code:: shell
+
+    node-02:2273611:2273695 [0] NCCL INFO P2P read srcRank=0 srcCudaDev=0 srcNvmlDev=0 dstRank=1 dstCudaDev=1 dstNvmlDev=1 path=NVL handle=DIRECT topoRead=0 status=started
+    node-02:2273611:2273695 [0] NCCL INFO P2P read srcRank=0 srcCudaDev=0 srcNvmlDev=0 dstRank=2 dstCudaDev=2 dstNvmlDev=2 path=NVL handle=DIRECT topoRead=0 status=started
+    node-02:2273611:2273695 [0] NCCL INFO P2P read srcRank=0 srcCudaDev=0 srcNvmlDev=0 dstRank=3 dstCudaDev=3 dstNvmlDev=3 path=NVL handle=DIRECT topoRead=0 status=started
 
 **TUNING** - Shows algorithm and protocol selection:
 

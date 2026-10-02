@@ -78,10 +78,31 @@ communicator that NCCL expects to communicate directly (e.g., over NVLink or PCI
 from and writes to its peer, and the diagnostic validates the transferred data. The summary counts
 each direction as one peer access. GPU pairs that communicate through an intermediate GPU rather
 than direct peer access are excluded from the summary; their ``reason=indirect`` skip records are
-available with ``NCCL_DEBUG=INFO`` and ``NCCL_DEBUG_SUBSYS=INIT``.
+available with ``NCCL_DEBUG=INFO`` and ``NCCL_DEBUG_SUBSYS=DIAG`` (or ``ALL``).
 
-When a transfer fails, the report identifies the affected GPU pair and the connection path between
-them, narrowing the investigation down to a specific link or device. Conversely, a passing P2P
+The P2P summary is printed directly to stdout by rank 0, independently of debug filtering.
+Individual pair failures are reported only through the DIAG debug subsystem. When peer verification fails and DIAG
+details are disabled by the debug level or subsystem filter, rank 0 prints one hint per run showing
+how to enable them. The DIAG debug subsystem provides
+failure types and affected source/destination ranks, connection paths and handles, expected and
+observed values, and troubleshooting guidance, as well
+as import, skip, and operation start/success records. These details use the normal debug output
+and respect ``NCCL_DEBUG_FILE``. To enable them, use:
+
+.. code:: shell
+
+  NCCL_RUN_DIAGNOSTICS=1 NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=DIAG <application> [arguments]
+
+``NCCL_DEBUG=TRACE`` also includes these records when DIAG or ALL is selected. The default
+subsystem list remains ``INIT,BOOTSTRAP,ENV``. The ``NCCL DIAG`` stdout report prefix is separate
+from the DIAG debug subsystem; debug records retain the standard ``NCCL INFO`` prefix.
+P2P debug records, including failures, start with ``P2P`` without a colon.
+Each failed directed pair is reported once
+by its P2P group leader, with the first recorded failure reason and applicable guidance.
+The reverse direction is a separate pair and can produce its own failure report.
+RAS debug messages continue to use the RAS subsystem.
+
+Conversely, a passing P2P
 check makes intra-node or NVLink connectivity an unlikely culprit, directing the investigation
 toward other components, such as the network between nodes or the application itself.
 

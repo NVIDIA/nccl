@@ -365,7 +365,8 @@ ncclResult_t dumpProxyState(struct ncclProxyProgressState* state) {
   return ncclSuccess;
 }
 
-static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyArgs* args, int subIndex) {
+static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyArgs* args, int subIndex,
+                                      void* localProfilerContext) {
   struct ncclProxySubArgs* sub = args->subs + subIndex;
   if (subIndex >= NCCL_PROXY_MAX_SUBS) {
     WARN("Proxy append out of bounds");
@@ -391,7 +392,8 @@ static ncclResult_t ncclProxyOpToArgs(struct ncclProxyOp* op, struct ncclProxyAr
   sub->taskEventHandle = op->taskEventHandle;
   sub->rank = op->rank;
   sub->pid = op->pid;
-  sub->profilerContext = op->profilerContext;
+  // Use the connection's process identity to keep foreign profiler contexts local.
+  sub->profilerContext = sub->connection->sameProcess ? op->profilerContext : localProfilerContext;
   sub->ringAlgo = op->ringAlgo;
   sub->workCounter = op->workCounter;
   args->nsubs = subIndex + 1;
@@ -434,20 +436,21 @@ exit:
   return ncclSuccess;
 }
 
-static ncclResult_t ProxyAppend(struct ncclProxyProgressState* state, struct ncclProxyOp* op) {
+static ncclResult_t ProxyAppend(struct ncclProxyState* proxyState, struct ncclProxyOp* op) {
+  struct ncclProxyProgressState* state = &proxyState->progressState;
   struct ncclProxyConnection* connection = op->connection;
   int shared = connection->shared;
   struct ncclProxyArgs* args = *connection->proxyAppendPtr;
 
   if (args) {
     if (shared && args->opCount == op->opCount) {
-      NCCLCHECK(ncclProxyOpToArgs(op, args, args->nsubs));
+      NCCLCHECK(ncclProxyOpToArgs(op, args, args->nsubs, proxyState->profilerContext));
       DEBUG_PROXY_PRINT("Insert (%d/%5ld/%5ld) as group with %5ld\n", shared, args->opCount, op->opCount,
                         OP_INDEX(args));
     } else {
       struct ncclProxyArgs* prevArgs = args;
       NCCLCHECK(allocateArgs(state, &args));
-      NCCLCHECK(ncclProxyOpToArgs(op, args, 0));
+      NCCLCHECK(ncclProxyOpToArgs(op, args, 0, proxyState->profilerContext));
       prevArgs->nextPeer = args;
       DEBUG_PROXY_PRINT("Insert  %5ld (%d/%5ld/%5ld) as nextPeer of %5ld\n", OP_INDEX(args), shared, prevArgs->opCount,
                         args->opCount, OP_INDEX(prevArgs));
@@ -456,7 +459,7 @@ static ncclResult_t ProxyAppend(struct ncclProxyProgressState* state, struct ncc
   } else {
     // Nothing running for that peer. Add to the list
     NCCLCHECK(allocateArgs(state, &args));
-    NCCLCHECK(ncclProxyOpToArgs(op, args, 0));
+    NCCLCHECK(ncclProxyOpToArgs(op, args, 0, proxyState->profilerContext));
     if (state->active == NULL) {
       // Create the list
       DEBUG_PROXY_PRINT("Insert  %5ld (%d/%5ld) as first element\n", OP_INDEX(args), shared, args->opCount);
@@ -877,7 +880,7 @@ process_nextops:
     lastPeer = peer;
     if (peerOp->connection == NULL) return ncclInternalError;
     if (peerOp->next != -1) COMPILER_PREFETCH(pool->ops + peerOp->next);
-    NCCLCHECK(ProxyAppend(state, peerOp));
+    NCCLCHECK(ProxyAppend(proxyState, peerOp));
     (*added)++;
     int lastOpIndex = opIndex;
     opIndex = peerOp->next;

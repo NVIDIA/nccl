@@ -1125,7 +1125,8 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
   memcpy(groupJob->groupCommHead, ncclGroupCommHead, sizeof(ncclGroupCommHead));
   groupJob->groupCommPreconnectHead = ncclGroupCommPreconnectHead;
   groupJob->groupError = ncclSuccess;
-  groupJob->hasLegacyColl = ncclGroupCommHead[ncclGroupTaskTypeCollective] != nullptr;
+  groupJob->hasLegacyColl = ncclGroupCommHead[ncclGroupTaskTypeCollective] != nullptr ||
+                            ncclGroupCommHead[ncclGroupTaskTypeSymRegister] != nullptr;
   groupJob->abortFlag = false;
   groupJob->joined = false;
   ncclIntruQueueTransfer(&groupJob->asyncJobs, &ncclAsyncJobs);

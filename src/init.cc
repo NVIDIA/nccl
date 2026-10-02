@@ -1333,6 +1333,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       // NVML device is agnostic to MloPart being used. With MloPart, each partition has a different GPU UUID.
       comm->hasMultiRankNvml |= (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash) &&
                                 (comm->peerInfo[i].nvmlDev == comm->peerInfo[j].nvmlDev);
+      // A process holding several ranks may drive them from one thread; see ncclTaskPrepare.
+      if (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash &&
+          comm->peerInfo[i].pidHash == comm->peerInfo[j].pidHash) {
+        comm->enqueuePath = ncclEnqueuePathPending;
+      }
       if (!ncclParamMultiRankGpuEnable() && (comm->peerInfo[i].hostHash == comm->peerInfo[j].hostHash) &&
           memcmp(&comm->peerInfo[i].gpuUuid, &comm->peerInfo[j].gpuUuid, sizeof(cudaUUID_t)) == 0) {
         WARN("Multiple Ranks are using the same GPU/Partition. Set NCCL_MULTI_RANK_GPU_ENABLE=1 to enable this "

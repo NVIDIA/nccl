@@ -562,6 +562,14 @@ struct ncclKernelPlanner {
 #define NCCL_MAGIC 0x0280028002800280 // Nickel atomic number is 28.
 #define NCCL_COMM_SIMULATION_SKIP 0x01
 
+// Which enqueue path a communicator takes while the rearch path is enabled; decided in
+// ncclTaskPrepare.
+enum ncclEnqueuePath {
+  ncclEnqueuePathRearch = 0,
+  ncclEnqueuePathPending, // some process holds several ranks: decided at the first collective
+  ncclEnqueuePathLegacy,  // one thread drives several ranks
+};
+
 typedef enum ncclGroupTaskType {
   ncclGroupTaskTypeCollective = 0,
   ncclGroupTaskTypeSymRegister = 1,
@@ -738,6 +746,7 @@ struct ncclComm {
   struct ncclComm* intraNext; // next of intra-process comms, intraComm0 is head
   int intraRank;
   int intraRanks;
+  enum ncclEnqueuePath enqueuePath;
   uint32_t intraBarrierPhase;
   char intraPad1[64 - sizeof(uint64_t)];
   uint64_t intraBarrierCounter; // only used if this is intraComm0
@@ -888,6 +897,14 @@ struct ncclComm {
 
   uint64_t endMagic;
 };
+
+int64_t ncclParamEnqueueRearchEnable();
+
+// A communicator with several ranks driven by one thread takes the legacy enqueue path: the
+// rearch group end spawns a thread per rank of the clique, which costs far more than the launch.
+inline bool ncclCommEnqueueRearch(const struct ncclComm* comm) {
+  return ncclParamEnqueueRearchEnable() && comm->enqueuePath != ncclEnqueuePathLegacy;
+}
 
 inline bool ncclNvlsTransportEnabled(const struct ncclComm* comm) {
   return comm->nvlsSupport && !(comm->config.nvlsHostMode & ncclNvlsHostModeDisableTransport);

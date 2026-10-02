@@ -1957,7 +1957,7 @@ ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, nc
     goto fail;
   }
 
-  if (ncclParamEnqueueRearchEnable()) {
+  if (ncclCommEnqueueRearch(comm)) {
     NEW_NOTHROW_GOTO(regJob, ncclDevrRegAsyncJob, ret, fail);
     regJob->comm = comm;
     regJob->userPtr = buff;
@@ -2113,7 +2113,7 @@ ncclResult_t ncclDevrCommCreateAsync(ncclComm_t comm, struct ncclDevCommRequirem
   struct ncclDevCommCompat* reqsCompat = nullptr;
   NCCLCHECKGOTO(getNcclVersionCompat(reqs->version, &reqsCompat), ret, fail);
 
-  if (ncclParamEnqueueRearchEnable()) {
+  if (ncclCommEnqueueRearch(comm)) {
     NEW_NOTHROW_GOTO(createJob, ncclDevrCommCreateAsyncJob, ret, fail);
     createJob->comm = comm;
     createJob->outDevComm = outDevComm;

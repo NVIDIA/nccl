@@ -2914,7 +2914,7 @@ static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* inf
   size_t elementSize;
 
   // Check if CE needs initialization
-  if (ncclParamEnqueueRearchEnable()) {
+  if (ncclCommEnqueueRearch(comm)) {
     if (!comm->ceColl.initialized) {
       NEW_NOTHROW_GOTO(ceInitJob, ncclCeInitAsyncJob, ret, fail);
       ceInitJob->comm = comm;
@@ -3506,7 +3506,7 @@ static void ncclRecordCollConfigLaunchCompletionEvent(struct ncclComm* comm) {
   // execute immediately, so join them here to retain the count until group validation.
   if (comm->nRanks == 1) {
     ncclGroupTaskType_t groupTaskType =
-      ncclParamEnqueueRearchEnable() ? ncclGroupTaskTypeRawTask : ncclGroupTaskTypeCollective;
+      ncclCommEnqueueRearch(comm) ? ncclGroupTaskTypeRawTask : ncclGroupTaskTypeCollective;
     ncclGroupCommJoin(comm, groupTaskType);
   }
   comm->planner.nCollConfigLaunchCompletionEvents += 1;
@@ -3518,7 +3518,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
   ncclFunc_t collAPI = info->coll;
   bool hasLaunchCompletionEvent = ncclInfoHasLaunchCompletionEvent(info);
 
-  if (ncclParamEnqueueRearchEnable() && info->stream != cudaStreamPerThread) {
+  if (ncclCommEnqueueRearch(comm) && info->stream != cudaStreamPerThread) {
     NCCLCHECK(rawTaskAppend(comm, info));
   } else if (info->coll == ncclFuncSend || info->coll == ncclFuncRecv) {
     NCCLCHECK(p2pTaskAppend(comm, info, info->coll, collAPI, (void*)info->recvbuff, info->count, info->datatype,

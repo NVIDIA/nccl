@@ -1017,7 +1017,7 @@ ncclResult_t ncclCommSuspend(ncclComm_t comm, int flags) {
       goto fail;
     }
     INFO(NCCL_INIT, "ncclCommSuspend: rank %d suspending memory", comm->rank);
-    if (ncclParamEnqueueRearchEnable()) {
+    if (ncclCommEnqueueRearch(comm)) {
       NEW_NOTHROW_GOTO(suspendJob, ncclMemManagerSuspendAsyncJob, ret, fail);
       suspendJob->comm = comm;
       NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)suspendJob, ncclCommMemSuspendJob,
@@ -1068,7 +1068,7 @@ ncclResult_t ncclCommResume(ncclComm_t comm) {
     goto fail;
   }
   INFO(NCCL_INIT, "ncclCommResume: rank %d resuming all resources", comm->rank);
-  if (ncclParamEnqueueRearchEnable()) {
+  if (ncclCommEnqueueRearch(comm)) {
     struct ncclMemManagerResumeAsyncJob* resumeJob;
     NEW_NOTHROW_GOTO(resumeJob, ncclMemManagerResumeAsyncJob, ret, fail);
     resumeJob->comm = comm;

@@ -590,6 +590,68 @@ destroy_verbs_qp_attr:
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
 NCCL_PARAM(GinGdakiForceMcst, "GDAKI_FORCE_MCST", 0);
 
+static ncclResult_t gdakiCheckDeviceSupport(doca_gpu_t* gpuDev, doca_dev_t* netDev,
+                                            enum doca_gpu_dev_verbs_nic_handler nicHandler, int rank) {
+  doca_error_t docaStatus = doca_gpu_nic_cap_is_gpu_mem_umem_supported(gpuDev, netDev);
+  if (docaStatus != DOCA_SUCCESS &&
+      !(gpuDev->type == DOCA_GPU_LIB_TYPE_SDK && netDev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK &&
+        docaStatus == DOCA_ERROR_NOT_SUPPORTED)) {
+    WARN("[%d] GIN/GDAKI: GPU memory UMEM is required but is not supported by the selected GPU/NIC pair: DOCA error %d",
+         rank, docaStatus);
+    return ncclInvalidUsage;
+  }
+
+  if (nicHandler & DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_GPU_SM) {
+    docaStatus = doca_gpu_nic_cap_is_nic_handler_gpu_sm_db_supported(gpuDev, netDev);
+    if (docaStatus != DOCA_SUCCESS &&
+        !(gpuDev->type == DOCA_GPU_LIB_TYPE_SDK && netDev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK &&
+          docaStatus == DOCA_ERROR_NOT_SUPPORTED)) {
+      WARN(
+        "[%d] GIN/GDAKI: the requested GPU SM NIC handler is not supported by the selected GPU/NIC pair: DOCA error %d",
+        rank, docaStatus);
+      return ncclInvalidUsage;
+    }
+  }
+
+  return ncclSuccess;
+}
+
+ncclResult_t ncclGinGdakiCheckDeviceSupport(void* collComm) {
+  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+  ncclResult_t status = ncclSuccess;
+  doca_gpu_t* gpuDev = nullptr;
+  doca_dev_t* netDev = nullptr;
+  char pciBusId[MAX_PCI_ADDRESS_LEN];
+  int cudaDev;
+
+  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECK(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, cudaDev));
+  DOCACHECKGOTO(doca_gpu_create(pciBusId, &gpuDev), status, out);
+  DOCACHECKGOTO(doca_verbs_dev_open(cComm->ib.pd, &netDev), status, out);
+  NCCLCHECKGOTO(gdakiCheckDeviceSupport(
+                  gpuDev, netDev, (enum doca_gpu_dev_verbs_nic_handler)ncclParamGinGdakiNicHandler(), cComm->rank),
+                status, out);
+
+out:
+  if (netDev) {
+    doca_error_t docaStatus = doca_verbs_dev_close(netDev);
+    if (docaStatus != DOCA_SUCCESS) {
+      WARN("[%d] GIN/GDAKI: failed to close the temporary NIC device after capability validation: DOCA error %d",
+           cComm->rank, docaStatus);
+      if (status == ncclSuccess) status = ncclSystemError;
+    }
+  }
+  if (gpuDev) {
+    doca_error_t docaStatus = doca_gpu_destroy(gpuDev);
+    if (docaStatus != DOCA_SUCCESS) {
+      WARN("[%d] GIN/GDAKI: failed to destroy the temporary GPU device after capability validation: DOCA error %d",
+           cComm->rank, docaStatus);
+      if (status == ncclSuccess) status = ncclSystemError;
+    }
+  }
+  return status;
+}
+
 ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void** outGinCtx,
                                        ncclNetDeviceHandle_t** outDevHandle) {
   ncclResult_t status = ncclSuccess;
@@ -1148,6 +1210,10 @@ out:
       if (gdaki_ctx->gqps) free(gdaki_ctx->gqps);
       if (gdaki_ctx->companion_gqps) free(gdaki_ctx->companion_gqps);
 
+      if (gdaki_ctx->ndev) {
+        doca_verbs_dev_close(gdaki_ctx->ndev);
+        gdaki_ctx->ndev = nullptr;
+      }
       if (gdaki_ctx->gdev) doca_gpu_destroy(gdaki_ctx->gdev);
       free(gdaki_ctx->gin_gdaki_gpu_ctx_host_staging);
     }

@@ -308,15 +308,42 @@ ncclResult_t ncclGinIbGdakiListen(void* ctx, int dev, void* opaqueHandle, void**
   return ncclNetIb.listen(ctx, ncclGinIbGdakiDevIndexes[dev], opaqueHandle, listenComm);
 }
 
+static ncclResult_t ncclGinIbGdakiValidateDeviceSupport(struct ncclGinIbCollComm* cComm) {
+  ncclResult_t status = ncclSuccess;
+  int* rankSupported = nullptr;
+  int localSupported = 1;
+  int allSupported = 1;
+  int firstUnsupportedRank = -1;
+
+  if (ncclGinIbGdrGpuSupport(true) != ncclSuccess) localSupported = 0;
+  if (ncclGinGdakiCheckDeviceSupport(cComm) != ncclSuccess) localSupported = 0;
+
+  NCCLCHECKGOTO(ncclIbMalloc((void**)&rankSupported, cComm->nranks * sizeof(*rankSupported)), status, out);
+  NCCLCHECKGOTO(cComm->allGather(cComm, &localSupported, rankSupported, sizeof(localSupported)), status, out);
+
+  for (int r = 0; r < cComm->nranks; r++) {
+    allSupported &= rankSupported[r];
+    if (!rankSupported[r] && firstUnsupportedRank == -1) firstUnsupportedRank = r;
+  }
+
+  if (!allSupported) {
+    WARN("[%d] GIN/GDAKI: device validation failed on one or more ranks; first failing GIN rank: %d", cComm->rank,
+         firstUnsupportedRank);
+    status = ncclInvalidUsage;
+  }
+
+out:
+  if (rankSupported) free(rankSupported);
+  return status;
+}
+
 ncclResult_t ncclGinIbGdakiConnect(void* ctx, void* handles[], int nranks, int rank, void* listenComm,
                                    void** collComm) {
-  // Check the current GPU supports GDR
-  NCCLCHECK(ncclGinIbGdrGpuSupport(/*gdaki*/ true));
-
   NCCLCHECK(ncclGinIbConnect(ctx, handles, nranks, rank, listenComm, collComm));
 
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)*collComm;
   cComm->getProperties = (ncclResult_t (*)(int dev, void* props))ncclGinIbGdakiGetProperties;
+  NCCLCHECK(ncclGinIbGdakiValidateDeviceSupport(cComm));
   return ncclSuccess;
 }
 

@@ -90,7 +90,7 @@ static void setMinChunkPayloadBytes(struct ncclGenkDevWorkArgs* args, int minChu
 
 ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskColl* task,
                                        struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
-                                       struct ncclTaskColl** remainTasksHead) {
+                                       struct ncclTaskColl** remainTasksHead, bool* needGenkDevComm) {
   ncclResult_t ret = ncclSuccess;
   int fnOpTySymCount = 0;
   struct ncclTaskColl* tasksSymByFnOpTy[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes * ncclNumSymRegTypes];
@@ -258,6 +258,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       ncclSymkKernelMask const symkLLKernelMask = ncclSymkLLKernelMask() & ~ncclGenkKernelMask();
       if (((1ull << kernelId) & symkLLKernelMask) && headTask->winRegType == ncclSymSendNonregRecvNonreg) {
         NCCLCHECK(ncclSymkInitOnce(comm));
+      }
+      if ((1ull << kernelId) & ncclGenkKernelMask()) {
+        NCCLCHECK(ncclGenkInitStart(comm, needGenkDevComm));
       }
 
       // set all symmetric tasks to the same kernel
@@ -459,7 +462,7 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
   struct ncclTaskColl* headTask = ncclIntruQueueHead(symTaskQueue);
   ncclSymkKernelId const kernelId = (ncclSymkKernelId)headTask->devFuncId;
   if ((1ull << kernelId) & ncclGenkKernelMask()) {
-    NCCLCHECK(ncclGenkInitOnce(comm));
+    NCCLCHECK(ncclGenkInitEnd(comm));
     return ncclSymmetricTaskSchedulerImpl<true, ncclGenkDevWorkArgs>(comm, symTaskQueue, plan,
                                                                      comm->symkState.genkComm);
   }

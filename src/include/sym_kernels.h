@@ -203,9 +203,16 @@ struct ncclSymkDevComm {
 
 struct ncclSymkState {
   bool initialized;
+  bool genkInitStarted;
   bool genkInitialized;
   bool hasLsaMultimem;
   int maxGinInboxBlocks;
+#if !defined(NCCL_OS_WINDOWS)
+  struct {
+    ncclDevResourceHandle bufHandle;
+    ncclGinSignal_t signal0;
+  } genkGinFlow;
+#endif
   struct ncclSymkDevComm kcomm;
   struct ncclGenkDevComm genkComm;
 };
@@ -296,7 +303,8 @@ typedef enum {
 
 // We assume ncclComm contains a field: `ncclSymkState symkState`
 ncclResult_t ncclSymkInitOnce(struct ncclComm* comm);
-ncclResult_t ncclGenkInitOnce(struct ncclComm* comm);
+ncclResult_t ncclGenkInitStart(struct ncclComm* comm, bool* needGenkDevComm);
+ncclResult_t ncclGenkInitEnd(struct ncclComm* comm);
 ncclResult_t ncclSymkFinalize(struct ncclComm* comm);
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,

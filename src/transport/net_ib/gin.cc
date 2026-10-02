@@ -113,6 +113,10 @@ ncclResult_t ncclGinIbFinalize(void* ctx) {
   return ncclIbFinalizeDevices();
 }
 
+static inline bool ncclGinIbAborted(volatile uint32_t* abortFlag) {
+  return abortFlag && COMPILER_ATOMIC_LOAD(abortFlag, std::memory_order_acquire) != 0;
+}
+
 static ncclResult_t ncclGinIbAllGather(struct ncclGinIbCollComm* cComm, void* srcBuf, void* recvBuf, size_t len) {
   ncclResult_t status = ncclSuccess;
   void *rMhandle = NULL, *sMhandle = NULL;
@@ -121,6 +125,7 @@ static ncclResult_t ncclGinIbAllGather(struct ncclGinIbCollComm* cComm, void* sr
   int speer;
   int rpeer;
   int step = 0;
+  bool aborted = false;
   void* rbuf;
   int tag;
 
@@ -162,12 +167,20 @@ static ncclResult_t ncclGinIbAllGather(struct ncclGinIbCollComm* cComm, void* sr
           srequest = NULL;
         }
       }
+      if (ncclGinIbAborted(cComm->abortFlag)) {
+        aborted = true;
+        status = ncclInternalError;
+        goto out;
+      }
     }
     speer = rpeer;
   }
 
 out:
-  if (status != ncclSuccess) {
+  if (aborted) {
+    INFO(NCCL_NET, "NET/IB/GIN: allgather aborted on rank %d/%d at step %d/%d", cComm->rank, cComm->nranks, step,
+         cComm->nranks - 1);
+  } else if (status != ncclSuccess) {
     WARN("NET/IB/GIN: allgather failed (res=%d) on rank %d/%d at step %d/%d", status, cComm->rank, cComm->nranks, step,
          cComm->nranks - 1);
   }
@@ -231,6 +244,11 @@ ncclResult_t ncclGinIbConnect(void* ctx, void* handles[], int nranks, int rank, 
     }
     if (cComm->recvComm == NULL) {
       NCCLCHECKGOTO(ncclIbAcceptImpl(lComm, &cComm->recvComm, NULL, /*nQpsPerDev*/ 1), ret, fail);
+    }
+    if (ncclGinIbAborted(abortFlag)) {
+      INFO(NCCL_NET, "NET/IB/GIN: connect aborted on rank %d/%d", rank, nranks);
+      ret = ncclInternalError;
+      goto fail;
     }
   } while (cComm->sendComm == NULL || cComm->recvComm == NULL);
 
@@ -566,6 +584,12 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
         }
         if (wantAccept && gc->fullRecvComm[acceptPeer] == NULL) {
           NCCLCHECKGOTO(ncclIbAcceptImpl(lComm, &gc->fullRecvComm[acceptPeer], NULL, /*nQpsPerDev*/ 1), ret, end);
+        }
+        if (ncclGinIbAborted(cComm->abortFlag)) {
+          INFO(NCCL_NET, "NET/IB/GIN: proxy context connect aborted on rank %d/%d (peers %d/%d)", cComm->rank, nranks,
+               connectPeer, acceptPeer);
+          ret = ncclInternalError;
+          goto end;
         }
       } while ((wantConnect && gc->fullSendComm[connectPeer] == NULL) ||
                (wantAccept && gc->fullRecvComm[acceptPeer] == NULL));

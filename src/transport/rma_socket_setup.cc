@@ -75,7 +75,8 @@ static ncclResult_t ncclRmaSocketProxySetSendQueueCapacity(struct ncclRmaSocketP
 }
 
 static ncclResult_t ncclRmaSocketProxyConnectPeers(struct ncclRmaSocketProxyCollComm* comm,
-                                                   struct ncclSocket* listenSock, void* handles[]) {
+                                                   struct ncclSocket* listenSock, void* handles[],
+                                                   volatile uint32_t* abortFlag) {
   int nranks = comm->nranks;
   int* accepted = NULL;
   ncclResult_t ret = ncclSuccess;
@@ -103,7 +104,8 @@ static ncclResult_t ncclRmaSocketProxyConnectPeers(struct ncclRmaSocketProxyColl
     }
     struct ncclRmaSocketProxyHandle* handle = (struct ncclRmaSocketProxyHandle*)handles[peer];
     struct ncclRmaSocketProxyPeerSender* sender = &comm->peerSender[peer];
-    NCCLCHECKGOTO(ncclSocketInit(&sender->sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket, NULL, 0),
+    NCCLCHECKGOTO(ncclSocketInit(&sender->sock, &handle->connectAddr, handle->magic, ncclSocketTypeNetSocket,
+                                 abortFlag),
                   ret, fail);
     NCCLCHECKGOTO(ncclSocketConnect(&sender->sock), ret, fail);
     NCCLCHECKGOTO(ncclSocketSend(&sender->sock, &comm->rank, sizeof(comm->rank)), ret, fail);
@@ -118,6 +120,10 @@ static ncclResult_t ncclRmaSocketProxyConnectPeers(struct ncclRmaSocketProxyColl
     NCCLCHECKGOTO(ncclSocketAccept(&acceptedSock, listenSock), ret, fail);
     do {
       NCCLCHECKGOTO(ncclSocketReady(&acceptedSock, &ready), ret, fail);
+      if (abortFlag && COMPILER_ATOMIC_LOAD(abortFlag, std::memory_order_acquire)) {
+        ret = ncclInternalError;
+        goto fail;
+      }
     } while (!ready);
     NCCLCHECKGOTO(ncclSocketRecv(&acceptedSock, &peer, sizeof(peer)), ret, fail);
     if (peer < 0 || peer >= nranks || accepted[peer]) {
@@ -157,7 +163,7 @@ ncclResult_t ncclRmaSocketProxyConnect(void* ctx, void* handles[], int nranks, i
   comm->nranks = nranks;
   comm->nextGlobalRequestId = 0;
   comm->lastError = ncclSuccess;
-  NCCLCHECKGOTO(ncclRmaSocketProxyConnectPeers(comm, listenSock, handles), ret, fail);
+  NCCLCHECKGOTO(ncclRmaSocketProxyConnectPeers(comm, listenSock, handles, abortFlag), ret, fail);
 
   *collComm = comm;
   return ncclSuccess;

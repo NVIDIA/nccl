@@ -25,6 +25,8 @@ static ncclResult_t ncclGin_v14_getGinProperties(ncclGinProperties_t* ginProps) 
   NCCLCHECK(ncclGin_v14->getGinProperties(&ginProps_v14));
   ginProps->supportsStrongSignals = ginProps_v14.supportsStrongSignals;
   ginProps->supportsVASignals = ginProps_v14.supportsVASignals;
+  // v14 plugins predate the barrier preference; NCCL's default barrier is what they have always had.
+  ginProps->barrierOptions = NCCL_GIN_BARRIER_DEFAULT;
   return ncclSuccess;
 }
 

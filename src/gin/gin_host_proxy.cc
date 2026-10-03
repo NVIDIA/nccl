@@ -347,6 +347,7 @@ struct ncclGinProxyListenComm {
 static ncclResult_t ncclGinProxyGetProperties(ncclGinProperties_t* ginProps) {
   ginProps->supportsStrongSignals = true;
   ginProps->supportsVASignals = true;
+  ginProps->barrierOptions = NCCL_GIN_BARRIER_DEFAULT;
   return ncclSuccess;
 }
 

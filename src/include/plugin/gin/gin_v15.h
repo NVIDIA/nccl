@@ -12,6 +12,9 @@
 typedef struct {
   bool supportsStrongSignals;
   bool supportsVASignals;
+  // Barrier preference; see ncclGinBarrierOptions_t in nccl_device/net_device.h. The v14 compatibility layer
+  // reports NCCL_GIN_BARRIER_DEFAULT.
+  ncclGinBarrierOptions_t barrierOptions;
 } ncclGinProperties_v15_t;
 
 typedef struct {

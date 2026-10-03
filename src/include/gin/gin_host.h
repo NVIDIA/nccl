@@ -35,6 +35,7 @@ struct ncclGinBackendState {
   ncclNetProperties_t ginProps[NCCL_GIN_MAX_CONNECTIONS];
   bool supportsStrongSignals;
   bool supportsVASignals;
+  ncclGinBarrierOptions_t barrierOptions;
 };
 
 struct ncclGinState {

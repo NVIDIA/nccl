@@ -187,9 +187,11 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     ginState->supported = true;
 
     ncclGinProperties_t ginProperties;
+    memset(&ginProperties, 0, sizeof(ginProperties));
     NCCLCHECK(gin->getGinProperties(&ginProperties));
     backend->supportsStrongSignals = ginProperties.supportsStrongSignals;
     backend->supportsVASignals = ginProperties.supportsVASignals;
+    backend->barrierOptions = ginProperties.barrierOptions;
   }
   *isAssigned = true;
   return ncclSuccess;

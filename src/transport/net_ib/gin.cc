@@ -307,6 +307,7 @@ ncclResult_t ncclGinIbGdakiDevices(int* ndev) {
 ncclResult_t ncclGinIbGdakiGetGinProperties(ncclGinProperties_t* ginProps) {
   ginProps->supportsStrongSignals = true;
   ginProps->supportsVASignals = true;
+  ginProps->barrierOptions = NCCL_GIN_BARRIER_DEFAULT;
   return ncclSuccess;
 }
 

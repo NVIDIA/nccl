@@ -171,7 +171,12 @@ GIN plugins expose two property queries. `getProperties` returns an
 `ncclNetProperties_t` for a GIN-capable device; this structure is shared with
 the network plugin API and is documented in `plugins/net/README.md`.
 `getGinProperties` returns GIN-specific capabilities, such as strong signal and
-VA signal support.
+VA signal support, and, from v15, the plugin's barrier preference
+(`barrierOptions`). A plugin whose signals are limited can report `NCCL_GIN_BARRIER_SIGNAL_EFFICIENT`, and NCCL's GIN barrier will reduce signal usage (possibly at the cost of performance).
+`NCCL_GIN_BARRIER_DEFAULT`, which NCCL also assumes for v14 and older plugins,
+keeps NCCL's default barrier. The device code NCCL compiles in for a backend
+type must make the same choice, so a new backend that wants the
+signal-efficient barrier needs matching NCCL support.
 
 If an application requires a feature that is not supported by a specific backend, NCCL will not use
 that backend. NCCL will fall back to a backend that supports the required features, if such a backend is available.

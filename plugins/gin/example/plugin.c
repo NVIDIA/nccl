@@ -371,6 +371,7 @@ __hidden ncclResult_t ginCreateContext_v14(void* collComm, ncclGinConfig_v14_t* 
 __hidden ncclResult_t ginGetGinProperties_v15(ncclGinProperties_v15_t* ginProps) {
   ginProps->supportsStrongSignals = true;
   ginProps->supportsVASignals = true;
+  ginProps->barrierOptions = NCCL_GIN_BARRIER_DEFAULT;
   return ncclSuccess;
 }
 

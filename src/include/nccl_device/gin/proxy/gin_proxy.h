@@ -439,6 +439,13 @@ struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_PROXY> {
 };
 
 template <>
+struct ncclGinApi_BarrierOptions<NCCL_NET_DEVICE_GIN_PROXY> {
+  NCCL_DEVICE_INLINE static ncclGinBarrierOptions_t call(ncclGinCtx) {
+    return NCCL_GIN_BARRIER_DEFAULT;
+  }
+};
+
+template <>
 struct ncclGinApi_ResetSignal<NCCL_NET_DEVICE_GIN_PROXY> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinSignalDescriptor signal) {
     ncclGinProxyGpuCtx_t* proxyCtx = &((ncclGinProxyGpuCtx_t*)ctx.handle)[ctx.contextId];

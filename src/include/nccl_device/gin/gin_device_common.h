@@ -202,6 +202,11 @@ template <ncclNetDeviceType backend>
 struct ncclGinApi_FlushesAllPutsOnAnySignal {
   NCCL_DEVICE_INLINE static bool call(ncclGinCtx);
 };
+
+template <ncclNetDeviceType backend>
+struct ncclGinApi_BarrierOptions {
+  NCCL_DEVICE_INLINE static ncclGinBarrierOptions_t call(ncclGinCtx);
+};
 #endif
 
 #ifdef __CUDACC__

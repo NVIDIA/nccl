@@ -28,6 +28,9 @@ struct ncclGin_BackendMask {
   uint32_t contextId;
   NCCL_DEVICE_INLINE ncclGin_BackendMask(ncclDevComm const& c, int contextIndex)
     : comm(c), nConnections(0), connectionId(0), _ginBackend(0), contextId(0) {}
+  NCCL_DEVICE_INLINE ncclGinBarrierOptions_t _barrierOptions() const {
+    return NCCL_GIN_BARRIER_DEFAULT;
+  }
 };
 
 template <ncclNetDeviceType backend>

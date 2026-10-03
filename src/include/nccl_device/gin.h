@@ -321,6 +321,9 @@ struct ncclGin_BackendMask {
   // True when the backend flushes all previously-received puts on any received signal, from any peer.
   NCCL_DEVICE_INLINE bool _flushesAllPutsOnAnySignal() const;
 
+  // The barrier NCCL runs on this backend (ncclGinApi_BarrierOptions); see ncclGinBarrierSlots.
+  NCCL_DEVICE_INLINE ncclGinBarrierOptions_t _barrierOptions() const;
+
   //////////////////////////////////////////////////////////////////////////////
   // internal:
 

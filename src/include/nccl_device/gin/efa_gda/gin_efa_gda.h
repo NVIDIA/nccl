@@ -1006,6 +1006,15 @@ struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_EFA_GDA> {
   }
 };
 
+/* ── BarrierOptions ──────────────────────────────────────────────────────────────── */
+template <>
+struct ncclGinApi_BarrierOptions<NCCL_NET_DEVICE_GIN_EFA_GDA> {
+  // EFA signals are scarce NIC hardware resources; must match what the EFA_GDA plugin reports.
+  NCCL_DEVICE_INLINE static ncclGinBarrierOptions_t call(ncclGinCtx) {
+    return NCCL_GIN_BARRIER_SIGNAL_EFFICIENT;
+  }
+};
+
 /* ── GetSignalPtr ─────────────────────────────────────────────────── */
 
 template <>

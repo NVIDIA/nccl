@@ -101,13 +101,34 @@ struct ncclDevrState {
   struct ncclIntruQueue<struct ncclDevrCommCreateTask, &ncclDevrCommCreateTask::next> commCreateTaskQueue;
 };
 
+struct ncclGinBackendState;
+
 struct ncclDevCommCompat {
   int minVersion, maxVersion;
   ncclResult_t (*commPropertiesFilter)(ncclComm_t comm, struct ncclCommProperties* props);
   ncclResult_t (*devCommRequirementsFilter)(ncclComm_t comm, ncclDevCommRequirements_t* reqs);
   ncclResult_t (*devCommCopyNewToOld)(ncclComm_t comm, void* oldDevComm, struct ncclDevComm const* newDevComm);
   ncclResult_t (*devCommCopyOldToNew)(ncclComm_t comm, struct ncclDevComm* newDevComm, void const* oldDevComm);
+  ncclResult_t (*ginSignalsPerBarrier)(ncclComm_t comm, struct ncclGinBackendState const* backend, int nRanks,
+                                       int* outSlots);
 };
+
+// ginSignalsPerBarrier implementations. Device code before 2.32.4 strides by the team size; from 2.32.4 on it
+// strides by ncclGinBarrierSlots() of the selected backend's barrier preference.
+ncclResult_t ncclDevCommGinSignalsPerBarrier_v22902(ncclComm_t comm, struct ncclGinBackendState const* backend,
+                                                    int nRanks, int* outSlots);
+ncclResult_t ncclDevCommGinSignalsPerBarrier_v23204(ncclComm_t comm, struct ncclGinBackendState const* backend,
+                                                    int nRanks, int* outSlots);
+
+// One of NCCL's own GIN barrier requirements; ncclGinDevCommSetup re-sizes it for each backend it tries.
+struct ncclGinBarrierReq {
+  struct ncclDevResourceRequirements* req;
+  struct ncclTeam team;
+  int nBarriers;
+};
+ncclResult_t ncclGinBarrierSizeRequirement(struct ncclComm* comm, struct ncclGinBackendState const* backend,
+                                           struct ncclDevCommCompat const* devCompat,
+                                           struct ncclGinBarrierReq const* barrierReq);
 
 // Check if GIN resources have been requested as part of `reqs`.
 bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);

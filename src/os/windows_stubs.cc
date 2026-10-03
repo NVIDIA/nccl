@@ -14,6 +14,7 @@
 #include "env.h"
 #include "tuner.h"
 #include "gin/gin_host_win_stub.h"
+#include "dev_runtime.h"
 #include "rma.h"
 #include "device.h"
 
@@ -127,11 +128,18 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion) {
+                                 struct ncclDevResourceRequirements* resReqs,
+                                 struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs,
+                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion,
+                                 struct ncclDevCommCompat const* devCompat) {
   (void)comm;
   (void)reqs;
+  (void)resReqs;
+  (void)barrierReqs;
+  (void)nBarrierReqs;
   (void)devComm;
   (void)deviceCodeVersion;
+  (void)devCompat;
   return ncclSuccess;
 }
 

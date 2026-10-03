@@ -4,6 +4,7 @@ set(DEVCOMM_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/devcomm_v22907.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/devcomm_v23000.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/devcomm_v23100.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/devcomm_v23204.cc
 )
 
 # Add DEVCOMM sources to parent scope

@@ -13,6 +13,7 @@
 #include "register_inline.h"
 #include "gin/gin_host.h"
 #include "gin/gin_host_proxy.h"
+#include "dev_runtime.h"
 #include "compiler.h"
 #include <cmath>
 
@@ -251,14 +252,39 @@ ncclResult_t ncclGinValidateSignalRequest(struct ncclDevCommRequirements const* 
   return ncclSuccess;
 }
 
-static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                               struct ncclDevComm* devComm, uint32_t deviceCodeVersion,
-                                               struct ncclGinBackendState* backend) {
+// Sizes NCCL's own barrier requirements for `backend`, then assigns every requirement its first signal id.
+static ncclResult_t ginAssignSignals(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
+                                     struct ncclDevResourceRequirements* resReqs,
+                                     struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs,
+                                     struct ncclGinBackendState const* backend,
+                                     struct ncclDevCommCompat const* devCompat, int* outSignalCount) {
+  for (int i = 0; i < nBarrierReqs; i++) {
+    NCCLCHECK(ncclGinBarrierSizeRequirement(comm, backend, devCompat, &barrierReqs[i]));
+  }
+  int total = reqs->ginSignalCount;
+  for (struct ncclDevResourceRequirements* rr = resReqs; rr != nullptr; rr = rr->next) {
+    if (rr->outGinSignalStart != nullptr) *rr->outGinSignalStart = total;
+    total += rr->ginSignalCount;
+  }
+  *outSignalCount = total;
+  return ncclSuccess;
+}
+
+static ncclResult_t ginDevCommSetupWithBackend(
+  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevResourceRequirements* resReqs,
+  struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs, struct ncclDevComm* devComm,
+  uint32_t deviceCodeVersion, struct ncclDevCommCompat const* devCompat, struct ncclGinBackendState* backend) {
   ncclGinConfig_t ginConfig;
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
 
+  // Must precede createContext, which allocates the signal table.
+  int ginSignalCount = 0;
+  NCCLCHECK(ginAssignSignals(comm, reqs, resReqs, barrierReqs, nBarrierReqs, backend, devCompat, &ginSignalCount));
+  INFO(NCCL_INIT, "devCommCreate: GIN backend type %d: %d signals (%d requested at id 0), %d counters",
+       backend->ginType, ginSignalCount, reqs->ginSignalCount, reqs->ginCounterCount);
+
   devComm->backendIndex = (uint8_t)(backend - ginState->backends);
-  devComm->ginSignalCount = reqs->ginSignalCount;
+  devComm->ginSignalCount = ginSignalCount;
   devComm->ginCounterCount = reqs->ginCounterCount;
   // Legacy signals default to what is specified in DevCommRequirements
   devComm->ginStrongLegacySignals = reqs->ginStrongSignalsRequired;
@@ -405,7 +431,7 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
   }
 
   ginConfig = {
-    reqs->ginSignalCount,
+    ginSignalCount,
     reqs->ginCounterCount,
     nContextsPerComm,
     reqs->ginQueueDepth,
@@ -477,7 +503,10 @@ end:
 }
 
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion) {
+                                 struct ncclDevResourceRequirements* resReqs,
+                                 struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs,
+                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion,
+                                 struct ncclDevCommCompat const* devCompat) {
   struct ncclGinState* ginState = &comm->sharedRes->ginState;
   ncclGinType_t reqGinType = reqs->ginType;
   int64_t envGinType = ncclParamGinType();
@@ -501,7 +530,8 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
       continue;
     }
 
-    if (ncclSuccess == ginDevCommSetupWithBackend(comm, reqs, devComm, deviceCodeVersion, candidate)) {
+    if (ncclSuccess == ginDevCommSetupWithBackend(comm, reqs, resReqs, barrierReqs, nBarrierReqs, devComm,
+                                                  deviceCodeVersion, devCompat, candidate)) {
       return ncclSuccess;
     }
 

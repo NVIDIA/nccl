@@ -36,11 +36,31 @@ NCCL_PARAM(SymReuseSysmemHandles, "SYM_REUSE_SYSMEM_HANDLES", 0);
 NCCL_PARAM(DevApiJit, "DEV_API_JIT", 0);
 
 extern struct ncclDevCommCompat ncclDevCommCompat_v22902, ncclDevCommCompat_v22907, ncclDevCommCompat_v23000,
-  ncclDevCommCompat_v23100;
+  ncclDevCommCompat_v23100, ncclDevCommCompat_v23204;
 
 // The order of entries in the array shouldn't matter (with the exception of the terminating nullptr)
 static struct ncclDevCommCompat* devCommCompat[] = {&ncclDevCommCompat_v22902, &ncclDevCommCompat_v22907,
-                                                    &ncclDevCommCompat_v23000, &ncclDevCommCompat_v23100, nullptr};
+                                                    &ncclDevCommCompat_v23000, &ncclDevCommCompat_v23100,
+                                                    &ncclDevCommCompat_v23204, nullptr};
+
+// Device code before 2.32.4 has `barrierIndex * team.nRanks` compiled into ncclGinBarrierSession and no
+// signal-efficient barrier, whatever the plugin reports.
+ncclResult_t ncclDevCommGinSignalsPerBarrier_v22902(ncclComm_t comm, struct ncclGinBackendState const* backend,
+                                                    int nRanks, int* outSlots) {
+  (void)comm;
+  (void)backend;
+  *outSlots = nRanks;
+  return ncclSuccess;
+}
+
+// Device code from 2.32.4 strides by the same function it uses here, keyed on the barrier preference the
+// selected backend's plugin reported.
+ncclResult_t ncclDevCommGinSignalsPerBarrier_v23204(ncclComm_t comm, struct ncclGinBackendState const* backend,
+                                                    int nRanks, int* outSlots) {
+  (void)comm;
+  *outSlots = ncclGinBarrierSlots(backend->barrierOptions, nRanks);
+  return ncclSuccess;
+}
 
 // Flags that restrict which window-registration capabilities are enabled. Keep this mask and
 // ncclDevrRegisterMaskFromWinFlags in sync with all public NCCL_WIN_*_ONLY flags.
@@ -1416,6 +1436,7 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   int ginStride, denseBarrierCount;
   ncclTeam_t denseGinTeam;
   struct ncclDevResourceRequirements worldGinBarrierReq;
+  struct ncclGinBarrierReq ginBarrierReqs[4];
   struct ncclDevResourceRequirements cftBarReq;
   struct ncclDevResourceRequirements cftMcBarReq;
   CUmemGenericAllocationHandle memHandle = 0x0;
@@ -1610,6 +1631,11 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   worldGinBarrierReq.next = resReqsHead;
   resReqsHead = &worldGinBarrierReq;
 
+  ginBarrierReqs[0] = {&hybridRailGinBarrierReq, ncclTeamRail(comm), reqs->barrierCount};
+  ginBarrierReqs[1] = {&hybridDenseGinBarrierReq, denseGinTeam, denseBarrierCount};
+  ginBarrierReqs[2] = {&railGinBarrierReq, ncclTeamRail(comm), reqs->railGinBarrierCount};
+  ginBarrierReqs[3] = {&worldGinBarrierReq, ncclTeamWorld(comm), reqs->worldGinBarrierCount};
+
   if (reqs->cftBarrierCount && (reqs->cftCaps & NCCL_CFT)) {
     ncclCftBarrierCreateRequirement(ucTeam, reqs->cftBarrierCount, &outDevComm->cftBarrier, &cftBarReq);
     cftBarReq.next = resReqsHead;
@@ -1630,6 +1656,8 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
     while (rr != nullptr) {
       bufSizeTotal = alignUp(bufSizeTotal, std::max<size_t>(128, rr->bufferAlign));
       if (rr->outBufferHandle != nullptr) *rr->outBufferHandle = bufSizeTotal / 128;
+      // outGinSignalStart is provisional when GIN is enabled: ncclGinDevCommSetup below re-sizes the barrier
+      // requirements for the selected backend, which might shift the start of every subsequent requirement.
       if (rr->outGinSignalStart != nullptr) *rr->outGinSignalStart = ginSignalTotal;
       if (rr->outGinCounterStart != nullptr) *rr->outGinCounterStart = ginCounterTotal;
       bufSizeTotal += rr->bufferSize;
@@ -1641,9 +1669,11 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   }
 
   if (requestedConnectionType != NCCL_GIN_CONNECTION_NONE) {
-    reqs->ginSignalCount = ginSignalTotal;
     reqs->ginCounterCount = ginCounterTotal;
-    NCCLCHECKGOTO(ncclGinDevCommSetup(comm, reqs, outDevComm, deviceCodeVersion), ret, fail);
+    NCCLCHECKGOTO(ncclGinDevCommSetup(comm, reqs, resReqsHead, ginBarrierReqs, 4, outDevComm, deviceCodeVersion,
+                                      devCompat),
+                  ret, fail);
+    ginSignalTotal = outDevComm->ginSignalCount;
     // GIN rounds the context count up to a multiple of its connection count, and the device
     // indexes the signal shadows by that rounded count.
     nGinContexts = outDevComm->ginContextCount;

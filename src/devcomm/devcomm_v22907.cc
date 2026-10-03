@@ -126,4 +126,5 @@ struct ncclDevCommCompat ncclDevCommCompat_v22907 = {
   ncclDevCommRequirementsFilter_v22907,           // devCommRequirementsFilter
   ncclDevCommCopyNewToOld_v22907,                 // devCommCopyNewToOld
   nullptr,                                        // devCommCopyOldToNew -- we'll use the v22902 variant
+  ncclDevCommGinSignalsPerBarrier_v22902,         // ginSignalsPerBarrier
 };

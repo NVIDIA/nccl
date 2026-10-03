@@ -14,7 +14,8 @@ NCCL_API(ncclResult_t, ncclGinBarrierCreateRequirement, ncclComm_t comm, ncclTea
 ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, int nBarriers,
                                              ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq) {
   memset(outReq, 0, sizeof(*outReq));
-  outReq->ginSignalCount = nBarriers * team.nRanks;
+  // Per-peer slots, clamped to 2 so that device code running the two-signal barrier always fits.
+  outReq->ginSignalCount = nBarriers * ncclGinBarrierSlots(NCCL_GIN_BARRIER_DEFAULT, team.nRanks);
   outReq->outGinSignalStart = &outHandle->signal0;
   return ncclSuccess;
 }

@@ -659,6 +659,13 @@ struct ncclGinApi_FlushesAllPutsOnAnySignal<NCCL_NET_DEVICE_GIN_GDAKI> {
 };
 
 template <>
+struct ncclGinApi_BarrierOptions<NCCL_NET_DEVICE_GIN_GDAKI> {
+  NCCL_DEVICE_INLINE static ncclGinBarrierOptions_t call(ncclGinCtx) {
+    return NCCL_GIN_BARRIER_DEFAULT;
+  }
+};
+
+template <>
 struct ncclGinApi_Flush<NCCL_NET_DEVICE_GIN_GDAKI> {
   template <typename Coop>
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, Coop coop, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,

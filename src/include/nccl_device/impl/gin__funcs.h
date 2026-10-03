@@ -699,6 +699,13 @@ NCCL_DEVICE_INLINE bool ncclGin_BackendMask<beMask>::_flushesAllPutsOnAnySignal(
 
 #ifdef __CUDACC__
 template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinBarrierOptions_t ncclGin_BackendMask<beMask>::_barrierOptions() const {
+  return ncclGinCall<ncclGinApi_BarrierOptions>(this->_makeCtx());
+}
+#endif
+
+#ifdef __CUDACC__
+template <unsigned beMask>
 template <typename Coop>
 NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::waitCounter(Coop coop, ncclGinCounter_t counter, uint64_t least,
                                                                  int bits, cuda::memory_order ord) const {

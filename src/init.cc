@@ -3224,7 +3224,6 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
     goto fail;
   }
 
-  comm->finalizeCalled = true;
   /* launch async thread to finalize comm. */
   NEW_NOTHROW_GOTO(job, ncclCommFinalizeAsyncJob, ret, fail);
   job->comm = comm;
@@ -3236,19 +3235,22 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
                                   comm),
                   ret, fail);
   }
+  // Only once the job is queued; a rejected launch must leave the comm finalizable and destroyable.
+  comm->finalizeCalled = true;
 
 exit:
   ncclGroupErrCheck(ret);
   NCCLCHECK(ncclGroupEndInternal());
   if (comm) {
-    if (!comm->config.blocking) {
+    if (!comm->config.blocking && ret == ncclSuccess) {
       NCCLCHECK(ncclCommGetAsyncError(comm, &ret));
     }
     NVTX3_RANGE_ADD_PAYLOAD(CommFinalize, NcclNvtxParamsCommFinalizeSchema, NVTX3_PAYLOAD(comm->commHash));
   }
   return ret;
 fail:
-  if (comm && !comm->config.blocking) (void)ncclCommSetAsyncError(comm, ret);
+  // Same rule as ncclEnqueueCheck: a synchronous ncclInvalidArgument does not become the async state.
+  if (comm && !comm->config.blocking && ret != ncclInvalidArgument) (void)ncclCommSetAsyncError(comm, ret);
   goto exit;
 }
 

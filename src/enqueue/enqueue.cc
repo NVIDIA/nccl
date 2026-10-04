@@ -880,9 +880,16 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
     plan->groupApiEventHandle = task->groupApiEventHandle;
 
     if (comm->rank == 0) {
-      INFO(NCCL_TUNING, "%s: %ld Bytes -> Algo %s proto %s channel{Lo..Hi}={%d..%d} cgaClusterSize %d",
-           ncclFuncToString(task->func), task->count * ncclTypeSize(task->datatype), ncclAlgoToString(task->algorithm),
-           ncclProtoToString(task->protocol), devWork->channelLo, devWork->channelHi, plan->cgaClusterSize);
+      char cgaCSBuf[30];
+      // Append the cgaClusterSize info only if the value is non-default (not 4).
+      if (plan->cgaClusterSize != 4 && ncclDebugShouldLog(NCCL_LOG_INFO, NCCL_TUNING, ncclDebugMask)) {
+        snprintf(cgaCSBuf, sizeof(cgaCSBuf), " cgaClusterSize %d", plan->cgaClusterSize);
+      } else {
+        cgaCSBuf[0] = '\0';
+      }
+      INFO(NCCL_TUNING, "%s: %ld Bytes -> Algo %s proto %s channel{Lo..Hi}={%d..%d}%s", ncclFuncToString(task->func),
+           task->count * ncclTypeSize(task->datatype), ncclAlgoToString(task->algorithm),
+           ncclProtoToString(task->protocol), devWork->channelLo, devWork->channelHi, cgaCSBuf);
 
       if (task->isCollnet) {
         TRACE(NCCL_COLL,

@@ -446,8 +446,16 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
   plan->workStorageType = ncclDevWorkStorageTypeArgs;
 
   if (comm->rank == 0) {
-    INFO(NCCL_TUNING, "%s [Symmetric]: %ld Bytes -> Kernel %s nchannels %d nthreads %d nWorks %d", funcName,
-         logCount * ncclTypeSize(headTask->datatype), kernelName, curChannel, plan->threadPerBlock, workCount);
+    char cgaCSBuf[30];
+    // Append the cgaClusterSize info only if the value is non-default (not 4).
+    if (plan->cgaClusterSize != 4 && ncclDebugShouldLog(NCCL_LOG_INFO, NCCL_TUNING, ncclDebugMask)) {
+      snprintf(cgaCSBuf, sizeof(cgaCSBuf), " cgaClusterSize %d", plan->cgaClusterSize);
+    } else {
+      cgaCSBuf[0] = '\0';
+    }
+    INFO(NCCL_TUNING, "%s [Symmetric]: %ld Bytes -> Kernel %s nchannels %d nthreads %d nWorks %d%s", funcName,
+         logCount * ncclTypeSize(headTask->datatype), kernelName, curChannel, plan->threadPerBlock, workCount,
+         cgaCSBuf);
   }
 
 exit:

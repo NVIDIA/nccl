@@ -3502,10 +3502,14 @@ exit:
   NCCLCHECK(ncclGroupEndInternal());
   /* if depth is 1, ncclGroupEndInternal() will trigger group ops. The state can change
    * so we have to check state here. */
-  if (info->comm && !info->comm->config.blocking) NCCLCHECK(ncclCommGetAsyncError(info->comm, &ret));
+  if (info->comm && !info->comm->config.blocking && ret == ncclSuccess)
+    NCCLCHECK(ncclCommGetAsyncError(info->comm, &ret));
   return ret;
 fail:
-  if (info->comm && !info->comm->config.blocking) (void)ncclCommSetAsyncError(info->comm, ret);
+  // ncclInvalidArgument is returned to the caller and leaves the communicator untouched; only errors that
+  // are fatal for the communicator become its async state.
+  if (info->comm && !info->comm->config.blocking && ret != ncclInvalidArgument)
+    (void)ncclCommSetAsyncError(info->comm, ret);
   goto exit;
 }
 

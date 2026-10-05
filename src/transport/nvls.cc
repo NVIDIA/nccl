@@ -264,7 +264,7 @@ fail:
 
 // Allocate UC backing for a consumer and bind it into its resolved MC-group slice.
 static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPartition* partition, size_t size,
-                                    struct ncclNvlsUcSegment* outUc) {
+                                    cudaStream_t stream, struct ncclNvlsUcSegment* outUc) {
   CUmemAllocationProp ucprop;
   ncclResult_t ret = ncclSuccess;
   size_t ucsize = size;
@@ -286,7 +286,7 @@ static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPa
   CUCHECKGOTO(cuMemCreate(&ucHandle, ucsize, &ucprop, 0), ret, fail1);
   CUCHECKGOTO(cuMemMap((CUdeviceptr)ucptr, ucsize, 0, ucHandle, 0), ret, fail2);
   CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)ucptr, ucsize, &comm->nvlsResources->accessDesc, 1), ret, fail3);
-  CUDACHECKGOTO(cudaMemset(ucptr, 0, ucsize), ret, fail3);
+  NCCLCHECKGOTO(ncclCudaMemsetSync(ucptr, 0, ucsize, stream), ret, fail3);
   // Track NVLS buffer as persistent memory
   NCCLCHECKGOTO(ncclMemTrack(comm->memManager, ucptr, ucsize, ucHandle, ncclCuMemHandleType, ncclMemPersist), ret,
                 fail3);
@@ -348,18 +348,19 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
        "NVLS comm %p headRank %d nHeads %d nvlsRanks %d buffSize %zu nvlsPerRankSize %zu nvlsTotalSize %zu", comm,
        headRank, nHeads, comm->localRanks, buffSize, nvlsPerRankSize, nvlsTotalSize);
 
-  // A prior setup attempt may have bound the data slice and then failed (inited
-  // still false); the slice offset is fixed, so reuse that binding.
-  if (resources->dataUc.ptr == NULL) {
-    NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->dataPartition, nvlsTotalSize, &resources->dataUc), res, fail);
-  }
-
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
                                         /*concurrent=*/false, &hostStream),
                 res, fail);
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream,
                                         /*concurrent=*/false, &deviceStream),
                 res, fail);
+  // A prior setup attempt may have bound the data slice and then failed (inited
+  // still false); the slice offset is fixed, so reuse that binding.
+  if (resources->dataUc.ptr == NULL) {
+    NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->dataPartition, nvlsTotalSize, deviceStream, &resources->dataUc),
+                  res, fail);
+  }
+
   for (int h = 0; h < nHeads; h++) {
     int nvlsPeer = comm->nRanks + 1 + h;
     for (int c = 0; c < nChannels; c++) {
@@ -525,6 +526,12 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     resources->accessDesc.location.id = comm->cudaDev;
     resources->dev = comm->cudaDev;
 
+    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
+                                          /*concurrent=*/false, &hostStream),
+                  res, fail);
+    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode),
+                                          &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
+                  res, fail);
     // Build the single shared MC group for this NVLS domain. The data slice is
     // reserved here but bound later by ncclNvlsBufferSetup.
     {
@@ -546,16 +553,11 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
         NCCLCHECKGOTO(ncclMcArenaInit(comm, &resources->ubArena, &resources->ubPartition), res, fail);
         resources->ubEnabled = true;
       }
-      NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->creditPartition, creditSize, &resources->creditUc), res, fail);
+      NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->creditPartition, creditSize, deviceStream, &resources->creditUc),
+                    res, fail);
     }
 
     // Set up head and tail only for now
-    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
-                                          /*concurrent=*/false, &hostStream),
-                  res, fail);
-    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode),
-                                          &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
-                  res, fail);
     for (int h = 0; h < nHeads; h++) {
       int nvlsPeer = comm->nRanks + 1 + h;
       for (int c = 0; c < nChannels; c++) {

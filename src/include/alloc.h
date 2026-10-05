@@ -580,6 +580,17 @@ finish:
   return result;
 }
 
+static inline ncclResult_t ncclCudaMemsetSync(void* ptr, int value, size_t size, cudaStream_t stream) {
+  ncclResult_t result = ncclSuccess;
+  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  CUDACHECKGOTO(cudaMemsetAsync(ptr, value, size, stream), result, finish);
+  CUDACHECKGOTO(cudaStreamSynchronize(stream), result, finish);
+finish:
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  return result;
+}
+
 template <typename T>
 ncclResult_t ncclCudaFree(T* ptr, struct ncclMemManager* manager, int numSegments = 1) {
   ncclResult_t result = ncclSuccess;

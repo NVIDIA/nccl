@@ -225,8 +225,9 @@ template <typename RemoteAction>
 NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(RemoteAction) {
   return 0;
 }
-template <typename RemoteAction>
-NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const&, RemoteAction) {
+template <unsigned beMask, typename RemoteAction>
+NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const&,
+                                                                                 RemoteAction) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_NONE;
   return desc;
@@ -234,7 +235,9 @@ NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net, ncclGin_SignalInc arg) {
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
+                                                                       ncclGin_SignalInc arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
   desc.indexedSignal.signalId = arg.signal;
@@ -250,7 +253,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_SignalInc) 
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                                  ncclGin_StrongSignalInc arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
@@ -267,7 +271,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_StrongSigna
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                                  ncclGin_WeakSignalInc arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
@@ -284,7 +289,9 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_WeakSignalI
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net, ncclGin_SignalAdd arg) {
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
+                                                                       ncclGin_SignalAdd arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
   desc.indexedSignal.signalId = arg.signal;
@@ -300,7 +307,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_SignalAdd a
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                                  ncclGin_StrongSignalAdd arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
@@ -317,7 +325,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_StrongSigna
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE constexpr ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                                  ncclGin_WeakSignalAdd arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_INDEXED;
@@ -334,7 +343,9 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_WeakSignalA
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net, ncclGin_VASignalInc arg) {
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
+                                                                       ncclGin_VASignalInc arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_VA;
   desc.vaSignal.signalWindow =
@@ -353,7 +364,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_VASignalInc
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                        ncclGin_StrongVASignalInc arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_VA;
@@ -373,7 +385,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_StrongVASig
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                        ncclGin_WeakVASignalInc arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_VA;
@@ -393,7 +406,9 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_WeakVASigna
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net, ncclGin_VASignalAdd arg) {
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
+                                                                       ncclGin_VASignalAdd arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_VA;
   desc.vaSignal.signalWindow =
@@ -412,7 +427,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_VASignalAdd
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                        ncclGin_StrongVASignalAdd arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_VA;
@@ -432,7 +448,8 @@ NCCL_DEVICE_INLINE constexpr uint64_t ncclGin_getSignalOpArg(ncclGin_StrongVASig
 #endif
 
 #ifdef __CUDACC__
-NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin const& net,
+template <unsigned beMask>
+NCCL_DEVICE_INLINE ncclGinSignalDescriptor ncclGin_getSignalDescriptor(ncclGin_BackendMask<beMask> const& net,
                                                                        ncclGin_WeakVASignalAdd arg) {
   ncclGinSignalDescriptor desc{};
   desc.type = NCCL_GIN_SIGNAL_TYPE_VA;
@@ -459,8 +476,8 @@ template <typename LocalAction>
 NCCL_DEVICE_INLINE constexpr bool ncclGin_isCounter(LocalAction) {
   return false;
 }
-template <typename LocalAction>
-NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const&, LocalAction) {
+template <unsigned beMask, typename LocalAction>
+NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin_BackendMask<beMask> const&, LocalAction) {
   return -1u;
 }
 #endif
@@ -469,7 +486,9 @@ NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const
 NCCL_DEVICE_INLINE constexpr bool ncclGin_isCounter(ncclGin_CounterInc) {
   return true;
 }
-NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const& net, ncclGin_CounterInc arg) {
+template <unsigned beMask>
+NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin_BackendMask<beMask> const& net,
+                                                                   ncclGin_CounterInc arg) {
   return arg.counter;
 }
 #endif
@@ -478,7 +497,9 @@ NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const
 NCCL_DEVICE_INLINE constexpr bool ncclGin_isCounter(ncclGin_WeakCounterInc) {
   return true;
 }
-NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin const& net, ncclGin_WeakCounterInc arg) {
+template <unsigned beMask>
+NCCL_DEVICE_INLINE constexpr ncclGinCounter_t ncclGin_getCounterId(ncclGin_BackendMask<beMask> const& net,
+                                                                   ncclGin_WeakCounterInc arg) {
   return arg.counter;
 }
 #endif

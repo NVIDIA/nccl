@@ -660,7 +660,9 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   const int nCounters = config->nCounters;
   const int nContexts = config->nContexts;
   const int queueDepth = config->queueDepth;
-  const int trafficClass = config->trafficClass;
+  const int trafficClass = (config->trafficClass < 0 || config->trafficClass > UINT8_MAX) ?
+                             NCCL_NET_TRAFFIC_CLASS_UNDEF :
+                             config->trafficClass;
   const int backendVersion = config->backendVersion;
 
   if (backendVersion < 0 || backendVersion > NCCL_GIN_GDAKI_GPU_CONTEXT_VERSION) {
@@ -730,7 +732,8 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   const int ib_sl = (ncclParamIbSl() != NCCL_PARAM_VAL_AUTO)       ? ncclParamIbSl() :
                     (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass :
                                                                      NCCL_IB_SL_DEFAULT;
-  const int ib_tc = (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_TC_DEFAULT;
+  int ib_tc = (trafficClass != NCCL_NET_TRAFFIC_CLASS_UNDEF) ? trafficClass : NCCL_IB_TC_DEFAULT;
+  uint8_t globalTc;
   int ib_gid_index = 0;
   uint32_t qpn, qpn_companion;
 
@@ -846,6 +849,10 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     DOCACHECKGOTO(docaStatus, status, out);
   }
 
+  // Match the behavior of libibverbs: global traffic class overrides the user's config and environment variable.
+  if (doca_verbs_query_global_traffic_class(gdaki_ctx->ndev, gdaki_ctx->port_num, &globalTc) == DOCA_SUCCESS) {
+    ib_tc = globalTc;
+  }
   NCCLCHECKGOTO(gdakiCreateVerbsAh(gdaki_ctx, ib_sl, ib_tc, ib_gid_index), status, out);
 
   gdaki_ctx->qp_rq_size = 0;

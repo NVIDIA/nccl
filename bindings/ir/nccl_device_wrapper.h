@@ -517,4 +517,43 @@ __device__ void ncclLocalReduceSumCopy_F8E5M2(ncclCoopAny coop, int nSrc, __nv_f
 
 } // extern "C"
 
+// ncclLsaCopyTma takes ncclCoopAny, same as ncclLsaCopy. The device function
+// still requires the wrapped group to be Thread, Warp, or CTA.
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_I8(
+    ncclCoopAny coop, int8_t* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_U8(
+    ncclCoopAny coop, uint8_t* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_I32(
+    ncclCoopAny coop, int32_t* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_U32(
+    ncclCoopAny coop, uint32_t* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_I64(
+    ncclCoopAny coop, int64_t* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_U64(
+    ncclCoopAny coop, uint64_t* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F16(
+    ncclCoopAny coop, half* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F32(
+    ncclCoopAny coop, float* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F64(
+    ncclCoopAny coop, double* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_BF16(
+    ncclCoopAny coop, __nv_bfloat16* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F8E4M3(
+    ncclCoopAny coop, __nv_fp8_e4m3* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F8E5M2(
+    ncclCoopAny coop, __nv_fp8_e5m2* src, ncclWindow_t dstWindow,
+    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+
 #endif // _NCCL_DEVICE_WRAPPER_H_

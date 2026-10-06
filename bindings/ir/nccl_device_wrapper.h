@@ -53,8 +53,7 @@
 #define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
 #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
 #else
-#define NCCL_DEVICE_INLINE
-#define NCCL_HOST_DEVICE_INLINE inline __attribute__((always_inline))
+#error "nccl_device_wrapper.h requires __NCCL_DEVICE_LTOIR_LIB__ or __clang_llvm_bitcode_lib__"
 #endif
 #endif
 

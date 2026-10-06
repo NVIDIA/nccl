@@ -48,23 +48,16 @@ NCCL_DEVICE_DEFINES := -DNCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1
 # Include paths
 NCCL_INCLUDES := -I$(BUILDDIR)/include -I../../src/include -I../../src/include/nccl_device -I../../src/device
 CUDA_INCLUDES := -I$(CUDA_INC) -I$(CUDA_INC)/cccl
-# Empty stubs for headers clang's CUDA wrapper unconditionally includes but
-# CUDA 13 removed (e.g. texture_fetch_functions.h). NCCL device code doesn't
-# use the legacy texture/surface reference APIs, so it's OK to be empty.
-CLANG_COMPAT_INCLUDES := -Iclang_compat
 
 # Clang flags for LLVM IR generation
 # Clang supports extended device lambdas but does not define nvcc's feature macro.
 COMMON_CLANG_FLAGS := -std=$(BITCODE_CXX_STD) -x cuda \
-               		  --cuda-path=$(CUDA_HOME) --cuda-device-only \
-               		  --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
-               		  $(CLANG_COMPAT_INCLUDES) \
-               		  $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
-               		  -D__clang_llvm_bitcode_lib__ \
+                      --cuda-path=$(CUDA_HOME) --cuda-device-only \
+                      --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
+                      $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
+                      -D__clang_llvm_bitcode_lib__ \
                       -D__CUDACC_EXTENDED_LAMBDA__ \
-                      $(NCCL_DEVICE_DEFINES) \
-               		  -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
-               		  -D_NV_RSQRT_SPECIFIER=
+                      $(NCCL_DEVICE_DEFINES)
 
 CLANG_FLAGS := -c -emit-llvm -O1 $(COMMON_CLANG_FLAGS)
 
@@ -124,7 +117,6 @@ $(FINAL_LTO_IR): $(LLVM_SRC) $(WRAPPER_HEADER) util.h
 	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
 		$(NCCL_INCLUDES) $(CUDA_INCLUDES) \
 		$(NCCL_DEVICE_DEFINES) \
-		-DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
 		-D__NCCL_DEVICE_LTOIR_LIB__ \
 		-o $@ $(LLVM_SRC)
 

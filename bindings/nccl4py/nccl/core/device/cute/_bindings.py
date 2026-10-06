@@ -344,6 +344,24 @@ def nccl_lsa_copy(
 
 
 @cute.extern(
+    name="ncclLsaCopyTma",
+    source=_BC,
+    name_mangler=_reduce_copy_name_mangler,
+)
+def nccl_lsa_copy_tma(
+    coop: ncclCoopAny,
+    src: _LLVMPtrType,
+    dst_window: _LLVMPtrType,
+    dst_offset: cutlass.Int64,
+    count: cutlass.Int64,
+    team: ncclTeam,
+    smem: _LLVMPtrType,
+    smem_bytes: cutlass.Int32,
+    dtype: cutlass.Constexpr[ReduceCopyAllDTypes],
+) -> None: ...
+
+
+@cute.extern(
     name="ncclMultimemCopy",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,

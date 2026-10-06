@@ -32,6 +32,8 @@ import nccl.core.device.cute as nccl_cute
 
 
 NUM_ELEMS = 16
+# lsa_copy_tma_kernel requires a shared memory staging buffer
+TMA_SMEM_BYTES = 4096
 
 
 @cute.kernel
@@ -59,6 +61,55 @@ def lsa_reduce_sum_kernel(
     )
 
 
+@cute.kernel
+def lsa_copy_kernel(
+    src_window: nccl_cute.Window,
+    dst_window: nccl_cute.Window,
+    lsa_rank: cutlass.Int32,
+    lsa_size: cutlass.Int32,
+):
+    """Broadcast this rank's source into its slot of every LSA peer window."""
+    layout = cute.make_layout(NUM_ELEMS)
+    src = src_window.tensor(cutlass.Float32, layout)
+    dst_offset = lsa_rank * (NUM_ELEMS * 4)
+    dst = dst_window.tensor(cutlass.Float32, layout, dst_offset)
+    nccl_cute.lsa_copy(
+        nccl_cute.cta(),
+        src,
+        dst_window,
+        dst,
+        NUM_ELEMS,
+        team=nccl_cute.Team(nRanks=lsa_size, rank=lsa_rank, stride=cutlass.Int32(1)),
+    )
+
+
+@cute.kernel
+def lsa_copy_tma_kernel(
+    src_window: nccl_cute.Window,
+    dst_window: nccl_cute.Window,
+    lsa_rank: cutlass.Int32,
+    lsa_size: cutlass.Int32,
+):
+    """Same broadcast as :func:`lsa_copy_kernel`, staged through shared memory."""
+    allocator = cutlass.memory.SmemAllocator()
+    smem = allocator.allocate_array(
+        element_type=cutlass.Int8, num_elems=TMA_SMEM_BYTES, byte_alignment=16)
+    layout = cute.make_layout(NUM_ELEMS)
+    src = src_window.tensor(cutlass.Float32, layout)
+    dst_offset = lsa_rank * (NUM_ELEMS * 4)
+    dst = dst_window.tensor(cutlass.Float32, layout, dst_offset)
+    nccl_cute.lsa_copy_tma(
+        nccl_cute.cta(),
+        src,
+        dst_window,
+        dst,
+        NUM_ELEMS,
+        team=nccl_cute.Team(nRanks=lsa_size, rank=lsa_rank, stride=cutlass.Int32(1)),
+        smem=smem,
+        smem_bytes=TMA_SMEM_BYTES,
+    )
+
+
 @cute.jit
 def run_lsa_reduce_sum(
     src_window: nccl_cute.Window,
@@ -69,6 +120,35 @@ def run_lsa_reduce_sum(
     lsa_reduce_sum_kernel(src_window, dst_window, lsa_rank, lsa_size).launch(
         grid=[1, 1, 1],
         block=[cute.size(WARP_SIZE, mode=[0]), 1, 1],
+        cooperative=True,
+    )
+
+
+@cute.jit
+def run_lsa_copy(
+    src_window: nccl_cute.Window,
+    dst_window: nccl_cute.Window,
+    lsa_rank: cutlass.Int32,
+    lsa_size: cutlass.Int32,
+):
+    lsa_copy_kernel(src_window, dst_window, lsa_rank, lsa_size).launch(
+        grid=[1, 1, 1],
+        block=[cute.size(WARP_SIZE, mode=[0]), 1, 1],
+        cooperative=True,
+    )
+
+
+@cute.jit
+def run_lsa_copy_tma(
+    src_window: nccl_cute.Window,
+    dst_window: nccl_cute.Window,
+    lsa_rank: cutlass.Int32,
+    lsa_size: cutlass.Int32,
+):
+    lsa_copy_tma_kernel(src_window, dst_window, lsa_rank, lsa_size).launch(
+        grid=[1, 1, 1],
+        block=[cute.size(WARP_SIZE, mode=[0]), 1, 1],
+        smem=TMA_SMEM_BYTES,
         cooperative=True,
     )
 
@@ -116,6 +196,22 @@ def main() -> int:
     )
     device.sync()
 
+    copy_dst = nccl.cupy.empty(lsa_team.n_ranks * NUM_ELEMS, dtype="float32")
+    copy_dst_win = nccl_comm.register_window(copy_dst)
+
+    # Example using lsa_copy_tma with TMA as transfer mechanism
+    comm_mpi.Barrier()
+    run_lsa_copy(src_window, nccl_cute.Window(copy_dst_win), lsa_team.rank, lsa_team.n_ranks)
+    device.sync()
+    comm_mpi.Barrier()
+
+    major, _ = device.compute_capability
+    if major >= 10:
+        run_lsa_copy_tma(src_window, nccl_cute.Window(copy_dst_win), lsa_team.rank, lsa_team.n_ranks)
+        device.sync()
+        comm_mpi.Barrier()
+
+    copy_dst_win.close()
     src_win_resource.close()
     dst_win_resource.close()
     nccl_comm.destroy()

@@ -85,6 +85,8 @@ def _to_ptr(x, *, loc=None, ip=None):
         * cutlass numeric (has ``.ir_value()``) -- ``inttoptr``.
         * integer ``ir.Value`` -- ``inttoptr``.
         * Python int -- wrap in ``cutlass.Int64``, then ``inttoptr``.
+        * typed ``!llvm.ptr<N>`` (e.g. shared ``ptr<3>`` from smem) --
+          ``addrspacecast`` to generic ``!llvm.ptr``.
 
     Returns:
         ``!llvm.ptr`` ir.Value.
@@ -98,6 +100,14 @@ def _to_ptr(x, *, loc=None, ip=None):
         int_value = x
     else:
         int_value = cutlass.Int64(x).ir_value()
+
+    # ATP, we've converted x to some int value.
+    # Normally we now just do llvm.inttoptr to interpret it as a pointer...
+    # But SMEM allocators are special... instead of being !llvm.ptr, it's actually !llvm.ptr<3>
+    if isinstance(int_value, ir.Value) and str(int_value.type).startswith("!llvm.ptr"):
+        if int_value.type == ptr_type:
+            return int_value
+        return llvm.addrspacecast(res=ptr_type, arg=int_value, loc=loc, ip=ip)
     return llvm.inttoptr(res=ptr_type, arg=int_value, loc=loc, ip=ip)
 
 

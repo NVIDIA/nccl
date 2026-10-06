@@ -108,6 +108,19 @@ find_package(CUDAToolkit REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+# Match Make's CUDA runtime selection, including compiler-generated link steps.
+set(CUDARTLIB "cudart_static" CACHE STRING "CUDA runtime library (cudart_static or cudart)")
+set_property(CACHE CUDARTLIB PROPERTY STRINGS cudart_static cudart)
+if(CUDARTLIB STREQUAL "cudart_static")
+    set(NCCL_CUDART_TARGET CUDA::cudart_static)
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Static)
+elseif(CUDARTLIB STREQUAL "cudart")
+    set(NCCL_CUDART_TARGET CUDA::cudart)
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
+else()
+    message(FATAL_ERROR "Unsupported CUDARTLIB '${CUDARTLIB}'; expected cudart_static or cudart")
+endif()
+
 # CUDA version detection
 string(REGEX MATCH "([0-9]+\\.[0-9]+)" CUDA_VERSION "${CUDAToolkit_VERSION}")
 

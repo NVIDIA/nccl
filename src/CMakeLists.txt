@@ -29,11 +29,6 @@ if(NVTX)
     list(APPEND LIBSRCFILES init_nvtx.cc)
 endif()
 
-# Add compatibility shim if using static cudart
-if(CUDARTLIB STREQUAL "cudart_static")
-    list(APPEND LIBSRCFILES enhcompat.cc)
-endif()
-
 # Configure pkg-config file
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/nccl.pc.in
@@ -233,7 +228,7 @@ target_link_libraries(nccl
     PRIVATE
     Threads::Threads
     ${CMAKE_DL_LIBS}
-    CUDA::cudart
+    ${NCCL_CUDART_TARGET}
     ${EXTRA_LIBS}
 )
 
@@ -299,7 +294,7 @@ add_dependencies(ncclparam nccl_header)
 target_link_libraries(ncclparam
     PRIVATE
     nccl
-    CUDA::cudart
+    ${NCCL_CUDART_TARGET}
 )
 
 set_target_properties(ncclparam PROPERTIES
@@ -352,7 +347,7 @@ target_link_libraries(nccl_static
     PUBLIC
     Threads::Threads
     ${CMAKE_DL_LIBS}
-    CUDA::cudart
+    ${NCCL_CUDART_TARGET}
     ${EXTRA_LIBS}
 )
 
@@ -370,6 +365,11 @@ set_target_properties(nccl_static PROPERTIES
 )
 
 ###################### Install targets / headers / pkg-config ############################
+# Keep OS-specific link options on the shared library and propagate them to
+# static-library consumers, where CUDA runtime symbols are resolved.
+target_link_options(nccl PRIVATE ${OS_LINK_OPTIONS})
+target_link_options(nccl_static INTERFACE ${OS_LINK_OPTIONS})
+
 install(TARGETS nccl nccl_static
   EXPORT NCCLTargets
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"

@@ -85,7 +85,9 @@ CUDARTLIB  ?= cudart_static
 
 # Use compatibility shim only with static cudart; see https://github.com/NVIDIA/nccl/issues/658
 ifeq ($(CUDARTLIB), cudart_static)
-	LIBSRCFILES += enhcompat.cc
+ifeq ($(NCCL_OS_LINUX), 1)
+	LIBSRCFILES += os/linux_enhcompat.cc
+endif
 endif
 
 INCTARGETS := $(INCEXPORTS:%=$(INCDIR)/%)

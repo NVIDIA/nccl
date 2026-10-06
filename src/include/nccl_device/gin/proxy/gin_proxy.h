@@ -32,15 +32,6 @@ struct ncclGinCpuProxyRequest {
 static_assert(sizeof(ncclGinCpuProxyRequest) <= sizeof(ncclGinRequest_t),
               "ncclGinCpuProxyRequest must fit in ncclGinRequest_t");
 
-// Clang's CUDA mode skips sm_32_intrinsics.hpp; clang <= 20 has no __stwt
-// declarations.
-#if defined(__clang__) && defined(__CUDA__) && (__clang_major__ < 21)
-NCCL_DEVICE_INLINE void __stwt(uint4* addr, const uint4& val) {
-  asm("st.global.wt.v4.u32 [%0], {%1,%2,%3,%4};" ::"l"(addr), "r"(val.x), "r"(val.y), "r"(val.z), "r"(val.w)
-      : "memory");
-}
-#endif
-
 namespace nccl {
 namespace gin {
 namespace proxy {

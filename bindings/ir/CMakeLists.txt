@@ -59,13 +59,6 @@ set(CUDA_INCLUDES
     -I${CUDAToolkit_INCLUDE_DIRS}/cccl
 )
 
-# Empty stubs for headers clang's CUDA wrapper unconditionally includes but
-# CUDA 13 removed (e.g. texture_fetch_functions.h). NCCL device code doesn't
-# use the legacy texture/surface reference APIs, so it's OK to be empty.
-set(CLANG_COMPAT_INCLUDES
-    -I${CMAKE_CURRENT_SOURCE_DIR}/clang_compat
-)
-
 # Common clang flags used for both preprocessing and IR generation
 # Clang supports extended device lambdas but does not define nvcc's feature macro.
 set(COMMON_CLANG_FLAGS
@@ -74,15 +67,11 @@ set(COMMON_CLANG_FLAGS
     --cuda-path=${CUDAToolkit_ROOT_DIR}
     --cuda-device-only
     --cuda-gpu-arch=${BITCODE_LIB_ARCH}
-    ${CLANG_COMPAT_INCLUDES}
     ${NCCL_INCLUDES}
     ${CUDA_INCLUDES}
     -D__clang_llvm_bitcode_lib__
     -D__CUDACC_EXTENDED_LAMBDA__
     ${NCCL_DEVICE_DEFINES}
-    -DCUDA_MAJOR=${CUDA_MAJOR}
-    -DCUDA_MINOR=${CUDA_MINOR}
-    -D_NV_RSQRT_SPECIFIER=
 )
 
 # Clang flags for LLVM IR generation
@@ -187,8 +176,6 @@ add_custom_command(
         ${NCCL_INCLUDES}
         ${CUDA_INCLUDES}
         ${NCCL_DEVICE_DEFINES}
-        -DCUDA_MAJOR=${CUDA_MAJOR}
-        -DCUDA_MINOR=${CUDA_MINOR}
         -D__NCCL_DEVICE_LTOIR_LIB__
         -o ${FINAL_LTO_IR}
         ${LLVM_SRC}

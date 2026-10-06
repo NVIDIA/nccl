@@ -44,6 +44,18 @@
                                                           int nDst, type* dstBase, size_t dstDispl, size_t count) { \
     ncclLocalReduceSumCopy<type, ncclCoopAny, size_t>(coop, nSrc, srcBase, srcDispl, nDst, dstBase, dstDispl, count); \
   }
+#define NCCL_IR_DEFINE_ncclLsaCopyTma(suffix, type) \
+  NCCL_DEVICE_INLINE void ncclLsaCopyTma_##suffix(ncclCoopAny coop, type* src, ncclWindow_t dstWindow, \
+                                                  size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, \
+                                                  int smemBytesTotal) { \
+    if (NCCL_DEVICE_DEBUG_CHECKS) { \
+      assert((coop.vtable == ncclCoopAny::get_vtable<ncclCoopThread>() || \
+              coop.vtable == ncclCoopAny::get_vtable<ncclCoopWarp>() || \
+              coop.vtable == ncclCoopAny::get_vtable<ncclCoopCta>()) && \
+             "ncclLsaCopyTma requires Thread, Warp, or CTA"); \
+    } \
+    ncclLsaCopyTma<type, ncclCoopAny, size_t>(coop, src, dstWindow, dstOffset, count, team, smemPtr, smemBytesTotal); \
+  }
 
 NCCL_IR_DEFINE_API_ALL_TYPES(ncclLsaReduceSum)
 NCCL_IR_DEFINE_API_MULTIMEM_TYPES(ncclMultimemReduceSum)
@@ -52,5 +64,6 @@ NCCL_IR_DEFINE_API_MULTIMEM_TYPES(ncclMultimemCopy)
 NCCL_IR_DEFINE_API_ALL_TYPES(ncclLsaReduceSumCopy)
 NCCL_IR_DEFINE_API_MULTIMEM_TYPES(ncclMultimemReduceSumCopy)
 NCCL_IR_DEFINE_API_ALL_TYPES(ncclLocalReduceSumCopy)
+NCCL_IR_DEFINE_API_ALL_TYPES(ncclLsaCopyTma)
 
 #endif // _NCCL_DEVICE_WRAPPER_IMPL_REDUCE_COPY_H_

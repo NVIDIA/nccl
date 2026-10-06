@@ -101,6 +101,31 @@ static bool ncclGenkTreeChannelSendsGin(struct ncclComm* comm, int channelId) {
   return false;
 }
 
+static void ncclGenkAddGinPeer(struct ncclComm* comm, int peer, int* peers, int* nPeers) {
+  if (!ncclGenkPeerNeedsGin(comm, peer)) return;
+  for (int i = 0; i < *nPeers; i++) {
+    if (peers[i] == peer) return;
+  }
+  peers[(*nPeers)++] = peer;
+}
+
+static void ncclGenkGinPeers(struct ncclComm* comm, int* peers, int* nPeers) {
+  struct ncclGenkDevComm const* genk = &comm->symkState.genkComm;
+  *nPeers = 0;
+  for (int c = 0; c < genk->nRingChannels; c++) {
+    struct ncclRing const& ring = comm->channels[c].ring;
+    ncclGenkAddGinPeer(comm, ring.next, peers, nPeers);
+    ncclGenkAddGinPeer(comm, ring.prev, peers, nPeers);
+  }
+  for (int c = 0; c < genk->nTreeChannels; c++) {
+    struct ncclTree const& tree = comm->channels[c].tree;
+    ncclGenkAddGinPeer(comm, tree.up, peers, nPeers);
+    for (int i = 0; i < NCCL_MAX_TREE_ARITY; i++) {
+      ncclGenkAddGinPeer(comm, tree.down[i], peers, nPeers);
+    }
+  }
+}
+
 static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin, bool* needGenkDevComm) {
   struct ncclGenkDevComm* genk = &comm->symkState.genkComm;
   // Per-call CTA limits may reduce a launch, but cannot exceed this communicator-wide bound.
@@ -109,7 +134,7 @@ static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin, b
   struct ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
   reqs.ginStrongSignalsRequired = enableGin;
   reqs.ginVaSignalsRequired = false;
-
+  int* ginCustomArray = nullptr;
 #if !defined(NCCL_OS_WINDOWS)
   int nRingGinBuffers = 0;
   int nTreeGinBuffers = 0;
@@ -133,14 +158,20 @@ static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin, b
     ginFlowReq.outBufferHandle = &comm->symkState.genkGinFlow.bufHandle;
     ginFlowReq.ginSignalCount = 2 * nChannels * (ncclGenkRingConnections + ncclGenkTreeConnections);
     ginFlowReq.outGinSignalStart = &comm->symkState.genkGinFlow.signal0;
+
+    int nGinPeers;
+    NCCLCHECK(ncclCalloc(&ginCustomArray, comm->nRanks));
+    ncclGenkGinPeers(comm, ginCustomArray, &nGinPeers);
     // Fixed LSA-visible resources are prepended below, leaving this
     // rank-dependent local staging at the end of the window.
     ginFlowReq.next = reqs.resourceRequirementsList;
     reqs.resourceRequirementsList = &ginFlowReq;
     // Give each expanded Tree topology group its own context.
     reqs.ginContextCount = DIVUP(genk->nTreeChannels, genk->nTreeSearchChannels);
-    reqs.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+    reqs.ginConnectionType = NCCL_GIN_CONNECTION_CUSTOM_ARRAY;
     reqs.ginType = NCCL_GIN_TYPE_PROXY;
+    reqs.ginCustomArray = ginCustomArray;
+    reqs.ginCustomArrayCount = nGinPeers;
   }
 #else
   (void)enableGin;
@@ -196,17 +227,22 @@ static ncclResult_t ncclGenkInitDevComm(struct ncclComm* comm, bool enableGin, b
   connStateReq.next = reqs.resourceRequirementsList;
   reqs.resourceRequirementsList = &connStateReq;
 
+  ncclResult_t ret = ncclSuccess;
   if (needGenkDevComm) {
     // Schedule asynchronous creation of the genk devComm.
-    NCCLCHECK(ncclDevrCommCreateAsync(comm, &reqs, &genk->devComm, /*isInternal=*/true,
-                                      /*deviceCodeVersion=*/NCCL_VERSION_CODE));
+    NCCLCHECKGOTO(ncclDevrCommCreateAsync(comm, &reqs, &genk->devComm, /*isInternal=*/true,
+                                          /*deviceCodeVersion=*/NCCL_VERSION_CODE),
+                  ret, exit);
     *needGenkDevComm = true;
   } else {
     // genk devComm can be created immediately.
-    NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &genk->devComm, /*isInternal=*/true,
-                                         /*deviceCodeVersion=*/NCCL_VERSION_CODE));
+    NCCLCHECKGOTO(ncclDevrCommCreateInternal(comm, &reqs, &genk->devComm, /*isInternal=*/true,
+                                             /*deviceCodeVersion=*/NCCL_VERSION_CODE),
+                  ret, exit);
   }
-  return ncclSuccess;
+exit:
+  free(ginCustomArray);
+  return ret;
 }
 
 ncclResult_t ncclGenkInitStart(struct ncclComm* comm, bool* needGenkDevComm) {

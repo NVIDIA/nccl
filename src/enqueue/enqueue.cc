@@ -3476,11 +3476,16 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
 }
 
 ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
-  // Early-out on invalid or revoked communicator
+  // Early-out on invalid, revoked or suspended communicator
   ncclResult_t ret = CommCheck(info->comm, info->opName, "comm");
   if (ret != ncclSuccess) return ncclGroupErrCheck(ret);
   if (info->comm->revokedFlag) {
     WARN("%s: communicator was revoked", info->opName);
+    return ncclGroupErrCheck(ncclInvalidUsage);
+  }
+  // Suspended memory is unmapped; a kernel or connection setup would fault on it.
+  if (info->comm->memManager && info->comm->memManager->released) {
+    WARN("%s: communicator is suspended, call ncclCommResume first", info->opName);
     return ncclGroupErrCheck(ncclInvalidUsage);
   }
   // Profiler - If a group API event has already started, update the profilerGroupDepth so that the depth

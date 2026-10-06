@@ -191,6 +191,15 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
       NCCLCHECKGOTO(backend->ncclGin->getProperties(localGinDevs[commIdx % nLocalGinDevs], backend->ginProps + commIdx),
                     ret, fail);
 
+      // Topo logic queries backend 0 and assumes the device set and ordering is consistent across backends. Log if this is not true.
+      if (backendIdx && commIdx < ginState->backends[0].ginCommCount &&
+          (backend->ginProps[commIdx].guid != ginState->backends[0].ginProps[commIdx].guid ||
+           backend->ginProps[commIdx].port != ginState->backends[0].ginProps[commIdx].port)) {
+        ATTN("GIN: backend %s device order differs from backend %s at local index %d."
+             "This may cause performance degredation. Please report this to the NCCL developers.",
+             backend->ncclGin->name, ginState->backends[0].ncclGin->name, commIdx);
+      }
+
       NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
 
       NCCLCHECKGOTO(backend->ncclGin->connect(backend->ginInstance, handles, ginTeam.nRanks, ginTeam.rank,

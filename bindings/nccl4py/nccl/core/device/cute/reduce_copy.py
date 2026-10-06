@@ -7,6 +7,8 @@ iterators.
 
 import cutlass
 import cutlass.cute as cute
+from cutlass.base_dsl import Arch
+from cutlass.cutlass_dsl import BaseDSL
 
 from . import _bindings
 from ._helpers import _to_coop_value, _to_ptr, _to_value
@@ -58,6 +60,39 @@ def lsa_copy(
         _window_offset(dst_window, dst),
         cutlass.Int64(count),
         _to_value(team),
+        src.element_type,
+    )
+
+
+_TMA_ALIGN_BYTES = 16
+
+def _check_lsa_copy_tma_reqs(smem, smem_bytes):
+    BaseDSL._get_dsl().check_arch(lambda arch: arch >= Arch.sm_100)
+    if isinstance(smem, cute.Pointer) and smem.alignment < _TMA_ALIGN_BYTES:
+        raise ValueError(
+            f"lsa_copy_tma: smem must be {_TMA_ALIGN_BYTES}-byte aligned, got "
+            f"{smem.alignment}-byte alignment (allocate it with "
+            f"byte_alignment={_TMA_ALIGN_BYTES})")
+    if isinstance(smem_bytes, int) and smem_bytes % _TMA_ALIGN_BYTES:
+        raise ValueError(
+            f"lsa_copy_tma: smem_bytes must be a multiple of "
+            f"{_TMA_ALIGN_BYTES}, got {smem_bytes}")
+
+
+def lsa_copy_tma(
+    coop, src, dst_window, dst, count, *, team, smem, smem_bytes
+) -> None:
+    """Copy a rank-local source tensor into an LSA window via TMA."""
+    _check_lsa_copy_tma_reqs(smem, smem_bytes)
+    _bindings.nccl_lsa_copy_tma(
+        _to_coop_value(coop),
+        _tensor_ptr(src),
+        dst_window.ptr,
+        _window_offset(dst_window, dst),
+        cutlass.Int64(count),
+        _to_value(team),
+        _to_ptr(smem),
+        cutlass.Int32(smem_bytes),
         src.element_type,
     )
 
@@ -128,6 +163,7 @@ __all__ = [
     "lsa_reduce_sum",
     "multimem_reduce_sum",
     "lsa_copy",
+    "lsa_copy_tma",
     "multimem_copy",
     "lsa_reduce_sum_copy",
     "multimem_reduce_sum_copy",

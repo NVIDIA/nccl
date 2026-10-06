@@ -25,7 +25,7 @@ installed `nvidia-nccl-cuXX` wheel.
 | `05_barriers.py` | All three barrier session types, both factory forms, all fence levels | >=2 | GIN network, 2.31.0+ for the `Gin` factories |
 | `06_resource_buffers.py` | The five `resource_buffer_*` address translations | >=2, one node | peer access, multicast |
 | `07_compile_with_fake_args.py` | Compile with type-only arguments before creating NCCL resources, then invoke with real resources | **exactly 2** | GIN network |
-| `08_reduce_copy.py` | Device-side `ReduceCopy`: `lsa_reduce_sum` across registered windows into each rank's local buffer | >=2, one node | peer access |
+| `08_reduce_copy.py` | Device-side `ReduceCopy`: `lsa_reduce_sum`, `lsa_copy`, and SM100+ `lsa_copy_tma` | >=2, one node | peer access; TMA needs SM100+ |
 
 "Exactly 2" means the example hardcodes a rank 0 -> rank 1 transfer and
 rejects any other count rather than idling the extra ranks.
@@ -131,6 +131,7 @@ same install -- which is how the wheel and a source build ship them. If you
 | `ThreadScope` / `GinResourceSharingMode` | 04 |
 | `GinFenceLevel` | 05 |
 | `GinBackendMask` | 00, 04, 05, 07 |
+| `lsa_reduce_sum` / `lsa_copy` / `lsa_copy_tma` | 08 |
 
 Not exercised: `Gin.value()` and the raw `.ptr` accessors (binding
 plumbing); the `is_descriptor` / `descriptor_ptr` arguments, which need an

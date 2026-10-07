@@ -20,8 +20,8 @@ static ncclResult_t evaluateLsaEstimate(struct ncclTuningInput_t* input, enum nc
   NCCLCHECK(ncclSymkLsaA2AModel(input, kernelId, nBlocks, &estimate->timeUs, modeled));
   if (*modeled) {
     estimate->ctaSelectionTimeUs = estimate->timeUs;
-    bool vrReduction =
-      input->comm->minCompCap == 107 && (input->func == ncclFuncReduceScatter || input->func == ncclFuncAllReduce);
+    bool vrReduction = RUBIN_AND_LATER(input->comm->minCompCap) &&
+                       (input->func == ncclFuncReduceScatter || input->func == ncclFuncAllReduce);
     selectionCostPercent = vrReduction ? 0.0100f : 0.0200f;
   } else {
     NCCLCHECK(ncclSymkLsaBaseModel(input, kernelId, nBytes, nBlocks, estimate, modeled));
@@ -70,22 +70,29 @@ ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     }
   }
 
-  struct ncclSymkLsaEstimate selectedEstimate;
+  struct ncclSymkLsaEstimate candidates[ncclSymkMaxBlocks + 1];
   bool modeled = false;
-  NCCLCHECK(evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, &selectedEstimate, &modeled));
+  NCCLCHECK(evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, &candidates[nMaxBlocks], &modeled));
   if (!modeled) return ncclSuccess;
   *nBlocks = nMaxBlocks;
-  float maxCtaSelectionTimeUs = static_cast<float>(selectedEstimate.ctaSelectionTimeUs);
+  // Evaluate every candidate before choosing the fewest CTAs within 2.5% of the best estimate.
+  double bestCtaSelectionTimeUs = candidates[nMaxBlocks].ctaSelectionTimeUs;
   for (int candidate = nMinBlocks; candidate < nMaxBlocks; candidate += candidate == 1 ? 1 : 2) {
-    struct ncclSymkLsaEstimate candidateEstimate;
+    struct ncclSymkLsaEstimate& candidateEstimate = candidates[candidate];
     NCCLCHECK(evaluateLsaEstimate(input, kernelId, nBytes, candidate, &candidateEstimate, &modeled));
-    if (modeled && candidateEstimate.ctaSelectionTimeUs <= 1.025 * maxCtaSelectionTimeUs) {
-      selectedEstimate = candidateEstimate;
+    if (!modeled) {
+      candidateEstimate.ctaSelectionTimeUs = INFINITY;
+      continue;
+    }
+    bestCtaSelectionTimeUs = std::min(bestCtaSelectionTimeUs, candidateEstimate.ctaSelectionTimeUs);
+  }
+  for (int candidate = nMinBlocks; candidate < nMaxBlocks; candidate += candidate == 1 ? 1 : 2) {
+    if (candidates[candidate].ctaSelectionTimeUs <= 1.025 * bestCtaSelectionTimeUs) {
       *nBlocks = candidate;
       break;
     }
   }
-  *timeUs = selectedEstimate.timeUs;
-  *selectionTimeUs = selectedEstimate.selectionTimeUs;
+  *timeUs = candidates[*nBlocks].timeUs;
+  *selectionTimeUs = candidates[*nBlocks].selectionTimeUs;
   return ncclSuccess;
 }

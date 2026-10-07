@@ -68,7 +68,6 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
     size_t inputOff = sendWin ? (uintptr_t)raw->sendbuff - (uintptr_t)sendWin->userPtr : (uintptr_t)raw->sendbuff;
     size_t outputOff = recvWin ? (uintptr_t)raw->recvbuff - (uintptr_t)recvWin->userPtr : (uintptr_t)raw->recvbuff;
     in->symAligned16B = (uint32_t(inputOff - outputOff) % 16 == 0);
-    in->symInputAligned16B = (inputOff % 16 == 0);
   }
 
   sendbuffSize = elementSize * ncclFuncSendCount(raw->func, comm->nRanks, raw->count);

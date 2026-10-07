@@ -71,7 +71,6 @@ struct ncclTuningInput_t {
   int collNetSupport;
   int nvlsSupport;
   bool symAligned16B; // Check for TMA eligibility in sym scheduler
-  bool symInputAligned16B; // Input window offset is 16-byte aligned; used by RS fits.
   int captured;
   int inPlace;
   int minCTAs;  // resolved lower CTA bound (env > per-call > comm)

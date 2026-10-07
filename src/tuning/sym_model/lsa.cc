@@ -20,9 +20,9 @@ static ncclResult_t evaluateLsaEstimate(struct ncclTuningInput_t* input, enum nc
   NCCLCHECK(ncclSymkLsaA2AModel(input, kernelId, nBlocks, &estimate->timeUs, modeled));
   if (*modeled) {
     estimate->ctaSelectionTimeUs = estimate->timeUs;
-    // VR RS measurements favor LL at small sizes; a 2% CTA cost reverses
-    // that ranking in favor of slower LDMC launches. Use 1% for this model.
-    selectionCostPercent = input->comm->minCompCap == 107 && input->func == ncclFuncReduceScatter ? 0.0100f : 0.0200f;
+    bool vrReduction =
+      input->comm->minCompCap == 107 && (input->func == ncclFuncReduceScatter || input->func == ncclFuncAllReduce);
+    selectionCostPercent = vrReduction ? 0.0100f : 0.0200f;
   } else {
     NCCLCHECK(ncclSymkLsaBaseModel(input, kernelId, nBytes, nBlocks, estimate, modeled));
     if (!*modeled) return ncclSuccess;

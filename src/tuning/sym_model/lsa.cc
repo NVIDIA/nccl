@@ -35,7 +35,7 @@ static ncclResult_t evaluateLsaEstimate(struct ncclTuningInput_t* input, enum nc
 ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
                               float* timeUs, float* selectionTimeUs, int* nBlocks) {
   struct ncclComm* comm = input->comm;
-  int nMaxBlocks = std::min<int>(ncclSymkLsaMaxCtas(comm, kernelId), input->maxCTAs);
+  int nMaxBlocks = std::min<int>(ncclSymkMaxBlocks, input->maxCTAs);
   int nMinBlocks = std::min(input->minCTAs, nMaxBlocks);
 
   *timeUs = FLT_MAX;

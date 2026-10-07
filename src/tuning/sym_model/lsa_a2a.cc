@@ -58,24 +58,20 @@ struct ncclSymkLsaA2AReduceScatterTuningParameters {
 
 struct ncclSymkLsaA2AArchTuningParameters {
   int computeCapability;
-  int rankSharedMulticastCtaBudget;
-  int allGatherMulticastCtaLimit;
   struct ncclSymkLsaA2AReduceScatterTuningParameters reduceScatter[ncclSymkLsaA2AReduceScatterKernel_Count];
   struct ncclSymkLsaA2AKernelTuningParameters allGather[ncclSymkLsaA2AAllGatherKernel_Count];
 };
 
-static constexpr struct ncclSymkLsaA2AKernelTuningParameters reduceScatterParameters(
+static constexpr struct ncclSymkLsaA2AKernelTuningParameters lsaA2AParameters(
   double baseLatUs, double rankLatUs, double ctaBw, double smallChunkCtaBw, double reduceScalarCtaBw, double llCtaBw,
   double peakBw, bool peakRankEfficiency = false) {
   return {baseLatUs,          rankLatUs, ctaBw, smallChunkCtaBw, reduceScalarCtaBw, llCtaBw, peakBw, {{1.0, 1.0}}, 0.0,
           peakRankEfficiency, 0.0,       0.0};
 }
 
-// Each row owns CTA limits and fitted timing terms for one compute capability.
+// Each row owns model parameters for one compute capability.
 static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParameters[] = {
   {100,
-   32,
-   0,
    {},
    {
      {7.1084, 0.1065, 15.87, 0.0, 0.0, 2.32, 250.0, {{0.99, 0.69}}, 0.0, false},
@@ -86,30 +82,28 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
      {8.3313, 0.0561, 50.83, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
    }},
   {103,
-   32,
-   0,
    {
      {
        // LL
-       reduceScatterParameters(10.5737, 0.0129, 8.6531, 0, 0, 2.1255, 248.9148),
+       lsaA2AParameters(10.5737, 0.0129, 8.6531, 0, 0, 2.1255, 248.9148),
        {},
        {},
      },
      {
        // TmaLD
-       reduceScatterParameters(5.9025, 0.2089, 46.7794, 9.5412, 7.3964, 0, 640.7738), // Default
-       reduceScatterParameters(5.9025, 0.2089, 41.1659, 7.3839, 3.6620, 0, 640.7738), // FP16/BF16 Sum
-       reduceScatterParameters(5.9025, 0.2089, 24.6948, 6.5968, 0.4053, 0, 640.7738), // FP8 Sum
+       lsaA2AParameters(5.9025, 0.2089, 46.7794, 9.5412, 7.3964, 0, 640.7738), // Default
+       lsaA2AParameters(5.9025, 0.2089, 41.1659, 7.3839, 3.6620, 0, 640.7738), // FP16/BF16 Sum
+       lsaA2AParameters(5.9025, 0.2089, 24.6948, 6.5968, 0.4053, 0, 640.7738), // FP8 Sum
      },
      {
        // LD
-       reduceScatterParameters(9.6736, 0.2801, 26.0000, 12.3392, 7.3964, 0, 660), // Default
-       reduceScatterParameters(8.4739, 0.2096, 16.9749, 9.5826, 4.0022, 0, 660.0000), // FP16/BF16 Sum
-       reduceScatterParameters(8.4739, 0.2096, 15.8819, 9.3889, 1.9578, 0, 660.0000), // FP8 Sum
+       lsaA2AParameters(9.6736, 0.2801, 26.0000, 12.3392, 7.3964, 0, 660), // Default
+       lsaA2AParameters(8.4739, 0.2096, 16.9749, 9.5826, 4.0022, 0, 660.0000), // FP16/BF16 Sum
+       lsaA2AParameters(8.4739, 0.2096, 15.8819, 9.3889, 1.9578, 0, 660.0000), // FP8 Sum
      },
      {
        // LDMC
-       reduceScatterParameters(10.9124, 0.0736, 24.5386, 0, 0, 0, 750.1525, true),
+       lsaA2AParameters(10.9124, 0.0736, 24.5386, 0, 0, 0, 750.1525, true),
        {},
        {},
      },
@@ -123,30 +117,28 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
      {8.3313, 0.0561, 50.83, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
    }},
   {107,
-   32,
-   ncclSymkMaxBlocks,
    {
      {
        // LL
-       reduceScatterParameters(10.1682, 0.1318, 8.6659, 0, 0, 1.5849, 378.2311),
+       lsaA2AParameters(10.1682, 0.1318, 8.6659, 0, 0, 1.5849, 378.2311),
        {},
        {},
      },
      {
        // TmaLD
-       reduceScatterParameters(13.2601, 0.8953, 33.9867, 7.7706, 7.4807, 0, 1004.8552), // Default
-       reduceScatterParameters(13.2601, 0.8953, 37.2708, 5.9251, 3.0701, 0, 1004.8552), // FP16/BF16 Sum
-       reduceScatterParameters(13.2601, 0.8953, 23.4600, 5.6772, 0.3082, 0, 1004.8552), // FP8 Sum
+       lsaA2AParameters(13.2601, 0.8953, 33.9867, 7.7706, 7.4807, 0, 1004.8552), // Default
+       lsaA2AParameters(13.2601, 0.8953, 37.2708, 5.9251, 3.0701, 0, 1004.8552), // FP16/BF16 Sum
+       lsaA2AParameters(13.2601, 0.8953, 23.4600, 5.6772, 0.3082, 0, 1004.8552), // FP8 Sum
      },
      {
        // LD
-       reduceScatterParameters(13.2750, 1.0829, 17.9128, 9.4630, 5.6894, 0, 692.0016), // Default
-       reduceScatterParameters(13.2750, 1.0829, 10.6581, 7.3404, 2.9289, 0, 692.0016), // FP16/BF16 Sum
-       reduceScatterParameters(13.2750, 1.0829, 10.1315, 7.1995, 1.3376, 0, 692.0016), // FP8 Sum
+       lsaA2AParameters(13.2750, 1.0829, 17.9128, 9.4630, 5.6894, 0, 692.0016), // Default
+       lsaA2AParameters(13.2750, 1.0829, 10.6581, 7.3404, 2.9289, 0, 692.0016), // FP16/BF16 Sum
+       lsaA2AParameters(13.2750, 1.0829, 10.1315, 7.1995, 1.3376, 0, 692.0016), // FP8 Sum
      },
      {
        // LDMC
-       reduceScatterParameters(11.7527, 0.2263, 15.1821, 0, 0, 0, 1134.4294, true),
+       lsaA2AParameters(11.7527, 0.2263, 15.1821, 0, 0, 0, 1134.4294, true),
        {},
        {},
      },
@@ -199,28 +191,6 @@ static int lsaA2AReduceScatterKernelIndex(enum ncclSymkKernelId kernelId) {
     return ncclSymkLsaA2AReduceScatterKernel_LDMC;
   default:
     return -1;
-  }
-}
-
-int ncclSymkLsaMaxCtas(const struct ncclComm* comm, enum ncclSymkKernelId kernelId) {
-  const struct ncclSymkLsaA2AArchTuningParameters* archTuning = lsaA2AArchTuningForComm(comm);
-  int rankSharedMulticastCtaBudget =
-    archTuning == nullptr ? (comm->minCompCap < 100 ? 16 : 32) : archTuning->rankSharedMulticastCtaBudget;
-  switch (kernelId) {
-  case ncclSymkKernelId_AllGather_TmaSTMC:
-  case ncclSymkKernelId_AllGather_STMC:
-    if (archTuning != nullptr && archTuning->allGatherMulticastCtaLimit > 0) {
-      return archTuning->allGatherMulticastCtaLimit;
-    }
-    // fall through
-  case ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC:
-    return divUp(rankSharedMulticastCtaBudget, comm->nRanks);
-  case ncclSymkKernelId_ReduceScatter_LDMC:
-    // Let the fitted RS model choose saturation instead of imposing a rank-scaled cap.
-    return comm->minCompCap == 103 || comm->minCompCap == 107 ? ncclSymkMaxBlocks :
-                                                                divUp(rankSharedMulticastCtaBudget, comm->nRanks);
-  default:
-    return ncclSymkMaxBlocks;
   }
 }
 

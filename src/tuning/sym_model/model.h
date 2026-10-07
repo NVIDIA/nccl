@@ -29,7 +29,6 @@ ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
 ncclResult_t ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
                                   int nBlocks, struct ncclSymkLsaEstimate* estimate, bool* modeled);
 
-int ncclSymkLsaMaxCtas(const struct ncclComm* comm, enum ncclSymkKernelId kernelId);
 ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId,
                                  int requestedCtas, float* timeUs, bool* modeled);
 

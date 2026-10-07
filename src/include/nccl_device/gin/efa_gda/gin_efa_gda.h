@@ -23,6 +23,7 @@
 
 #include "../gin_device_common.h"
 #include "gin_efa_gda_dev.h"
+#include "gin_efa_gda_wqe.h"
 
 /* efa-dp-direct device functions (inline implementations) */
 #include "../../transport/net_efa_gda/efa-dp-direct/include/device/efa_cuda_dp_impl.cuh"
@@ -158,6 +159,53 @@ struct PutValuePayloadEncoder {
   }
 };
 
+/* ── Thread-exclusive Put (NCCL_GIN_RESOURCE_SHARING_THREAD) ─────────
+ * One thread posts per QP, so the SQ cursors use plain loads and stores. Only
+ * Put is specialized; Get and PutValue take the GPU path. Do not mix THREAD and
+ * CTA/GPU posting on one QP without a flush in between. */
+
+NCCL_DEVICE_INLINE static void postPutThread(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah, uint16_t qpn,
+                                             uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
+                                             const RdmaSgeEncoder& sge, uint32_t optFlags) {
+  efa_cuda_qp* qp = (efa_cuda_qp*)ep->qp;
+  const uint32_t slot = qp->sq.wq.pc;
+  const uint32_t next = slot + 1u;
+
+  /* SQ credit: explicit global relaxed system load of the NIC counter
+   * (cuda::atomic_ref on a generic pointer adds an LDL + NANOSLEEP fallback). */
+  const uint64_t cntr = (uint64_t)__cvta_generic_to_global(ep->local_cntr_value);
+  uint64_t done;
+  do {
+    asm volatile("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(done) : "l"(cntr));
+  } while (((next - (uint32_t)done) & EFA_CNTR_MASK) > ep->sq_size);
+  qp->sq.wq.pc = next;
+
+  const uint32_t sq_idx = slot & qp->sq.wq.queue_mask;
+  const uint32_t phase = (slot >> qp->sq.wq.queue_size_shift) & 1u;
+  EfaGdaWriteWqeRegs(phase, ah, qpn, qkey, dstAddr, dstRkey, sge.addr, sge.lkey, sge.bytes)
+    .storeMmio((uint64_t)__cvta_generic_to_global(qp->sq.wq.buf + sq_idx * 64u));
+  /* Release the written slot for any later shared-mode poster (see the
+   * contract above); kept outside the ring branch so a deferred put never
+   * leaves this cursor behind pc. */
+  qp->sq.wq.wqes_completed = next;
+
+  /* A single fence after filling the whole queue doesn't guarantee the doorbell
+   * reached the RNIC, and a second fence after the doorbell is expensive.
+   * Fencing every half queue avoids both, at the cost of halving the batch size. */
+  const uint32_t safeBatch = qp->sq.wq.max_batch >> 1;
+  const bool ring = (optFlags & ncclGinOptFlagsAggregateRequests) == 0 || (next - qp->sq.wq.wqes_posted) >= safeBatch;
+  if (ring) {
+    /* One fence publishes every WQE this thread wrote since the last ring. */
+    cuda::atomic_thread_fence(cuda::memory_order_acq_rel, cuda::thread_scope_system);
+    asm volatile("st.mmio.relaxed.sys.global.b32 [%0], %1;"
+                 :
+                 : "l"((uint64_t)__cvta_generic_to_global(qp->sq.wq.db)), "r"(next)
+                 : "memory");
+    ep->submitted_count += (uint64_t)(next - qp->sq.wq.wqes_posted);
+    qp->sq.wq.wqes_posted = next;
+  }
+}
+
 /* ── postRdmaOp: shared post path for Put, PutValue and Get ──────── */
 
 /* Posts an RDMA operation on `ep`'s local QP to the remote QP given by
@@ -168,10 +216,25 @@ struct PutValuePayloadEncoder {
  *
  * PayloadEncoder runs after this lane's SQ slot is known and either attaches
  * a local SGE or writes inline data into the WQE. */
-template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op = EFA_GDA_RDMA_WRITE, typename PayloadEncoder>
-NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah, uint16_t qpn,
-                                          uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
-                                          PayloadEncoder payloadEncoder, uint32_t optFlags = ncclGinOptFlagsDefault) {
+template <bool threadMode>
+struct PostRdmaOpModeTag {};
+
+/* C++14 does not discard the body of a normal `if`, so put the THREAD-only
+ * encoder behind an overload boundary. This keeps Get and PutValue well-formed
+ * when NCCL_IF_CONSTEXPR falls back to `if` with CUDA 12. */
+template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op>
+NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<true>, nccl_ofi_gin_gdaki_dev_endpoint_handle* ep,
+                                              uint16_t ah, uint16_t qpn, uint32_t qkey, uint64_t dstAddr,
+                                              uint32_t dstRkey, const RdmaSgeEncoder& sge, uint32_t optFlags) {
+  static_assert(mode == NCCL_GIN_RESOURCE_SHARING_THREAD, "EFA GDA THREAD tag requires THREAD sharing");
+  static_assert(op == EFA_GDA_RDMA_WRITE, "EFA GDA THREAD mode specializes Put only");
+  postPutThread(ep, ah, qpn, qkey, dstAddr, dstRkey, sge, optFlags);
+}
+
+template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op, typename PayloadEncoder>
+NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<false>, nccl_ofi_gin_gdaki_dev_endpoint_handle* ep,
+                                              uint16_t ah, uint16_t qpn, uint32_t qkey, uint64_t dstAddr,
+                                              uint32_t dstRkey, PayloadEncoder payloadEncoder, uint32_t optFlags) {
   efa_cuda_qp* qp = (efa_cuda_qp*)ep->qp;
   uint64_t* submitted_count_ptr = &ep->submitted_count;
   uint64_t* local_cntr_ptr = ep->local_cntr_value;
@@ -370,6 +433,14 @@ NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle
     }
     group.sync();   /* chunk fully posted before the next chunk */
   }
+}
+
+template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op = EFA_GDA_RDMA_WRITE, typename PayloadEncoder>
+NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah, uint16_t qpn,
+                                          uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
+                                          PayloadEncoder payloadEncoder, uint32_t optFlags = ncclGinOptFlagsDefault) {
+  postRdmaOpImpl<mode, op>(PostRdmaOpModeTag<mode == NCCL_GIN_RESOURCE_SHARING_THREAD>{}, ep, ah, qpn, qkey, dstAddr,
+                           dstRkey, payloadEncoder, optFlags);
 }
 
 /* ── putImplMode: mode-templated Put implementation ─────────────── */
@@ -619,6 +690,11 @@ NCCL_DEVICE_INLINE static void putImpl(ncclGinCtx ctx, Coop coop, int peer, bool
                                        ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
                                        cuda::thread_scope given, uint32_t optFlags) {
   switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
+  case NCCL_GIN_RESOURCE_SHARING_THREAD:
+    putImplMode<NCCL_GIN_RESOURCE_SHARING_THREAD>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff, bytes,
+                                                  signal, signalOp, signalOpArg, hasCounter, counterId, hasDescriptor,
+                                                  descriptor, required, given, optFlags);
+    break;
   case NCCL_GIN_RESOURCE_SHARING_CTA:
     putImplMode<NCCL_GIN_RESOURCE_SHARING_CTA>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff, bytes, signal,
                                                signalOp, signalOpArg, hasCounter, counterId, hasDescriptor, descriptor,

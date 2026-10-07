@@ -759,8 +759,15 @@ static doca_error_t create_qp(
 
     if (nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO) {
         bool can_register = false;
-        status =
-            doca_gpu_verbs_can_gpu_register_uar(external_uar->open->get_reg_addr(), &can_register);
+        void *reg_addr = NULL;
+
+        status = doca_verbs_uar_reg_addr_get(external_uar, &reg_addr);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to get UAR reg address");
+            goto destroy_resources;
+        }
+
+        status = doca_gpu_verbs_can_gpu_register_uar(reg_addr, &can_register);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to check if UAR can be registered on GPU");
             goto destroy_resources;
@@ -1139,7 +1146,7 @@ doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *
 
     if ((qp_init_attr->send_dbr_mode_ext ==
          DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
-        !qp_init_attr->gpu_dev->open->support_gdrcopy) {
+        !doca_gpu_gdrcopy_is_supported()) {
         DOCA_LOG(LOG_ERR, "SW-emulated no DBR feature is not supported without GDRCopy");
         return DOCA_ERROR_NOT_SUPPORTED;
     }
@@ -1187,7 +1194,7 @@ doca_error_t doca_gpu_verbs_create_qp_hl(struct doca_gpu_verbs_qp_init_attr_hl *
         return DOCA_ERROR_NOT_SUPPORTED;
     }
 
-    if (enable_rq && !qp_init_attr->gpu_dev->open->support_gdrcopy) {
+    if (enable_rq && !doca_gpu_gdrcopy_is_supported()) {
         DOCA_LOG(LOG_ERR,
                  "RQ is not supported without GDRCopy: CPU progress needs a host mapping of "
                  "the receive doorbell record");
@@ -1350,7 +1357,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
 
     if ((qp_init_attr->send_dbr_mode_ext ==
          DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
-        !qp_init_attr->gpu_dev->open->support_gdrcopy) {
+        !doca_gpu_gdrcopy_is_supported()) {
         DOCA_LOG(LOG_ERR, "SW-emulated no DBR feature is not supported without GDRCopy");
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -1582,6 +1589,7 @@ doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr
     struct doca_gpu_verbs_umem_hl *cq_umem = NULL, *cq_dbr_umem = NULL;
     struct doca_gpu_verbs_umem_hl *sq_umem = NULL, *sq_dbr_umem = NULL;
     uint32_t cq_size_per_qp, sq_size_per_qp, dbr_size_per_qp;
+    doca_verbs_uar_t *probe_uar = NULL;
 
     if (qp_init_attr == NULL || qp_list == NULL || num_qps == 0) return DOCA_ERROR_INVALID_VALUE;
     if (qp_init_attr->gpu_dev == NULL || qp_init_attr->net_dev == NULL ||
@@ -1590,7 +1598,7 @@ doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr
 
     if ((qp_init_attr->send_dbr_mode_ext ==
          DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
-        !qp_init_attr->gpu_dev->open->support_gdrcopy) {
+        !doca_gpu_gdrcopy_is_supported()) {
         DOCA_LOG(LOG_ERR, "SW-emulated no DBR feature is not supported without GDRCopy");
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -1637,22 +1645,28 @@ doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr
     /* Pre-resolve AUTO nic_handler so that shared slab memory type is correct */
     enum doca_gpu_dev_verbs_nic_handler resolved_nic_handler;
     if (qp_init_attr->nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO) {
-        doca_verbs_uar_t *probe_uar = NULL;
+        bool can_register = false;
+        void *reg_addr = NULL;
+
         status = create_uar(
             qp_init_attr->net_dev, qp_init_attr->nic_handler,
             !!(qp_init_attr->flags & DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_PREFER_UAR_SHARING),
             &probe_uar);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to create probe UAR for AUTO resolution");
-            return status;
+            goto exit_error;
         }
-        bool can_register = false;
-        status =
-            doca_gpu_verbs_can_gpu_register_uar(probe_uar->open->get_reg_addr(), &can_register);
-        doca_verbs_uar_destroy(probe_uar);
+
+        status = doca_verbs_uar_reg_addr_get(probe_uar, &reg_addr);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to get probe UAR reg_addr for AUTO resolution");
+            goto exit_error;
+        }
+
+        status = doca_gpu_verbs_can_gpu_register_uar(reg_addr, &can_register);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to check if UAR can be registered on GPU");
-            return status;
+            goto exit_error;
         }
         resolved_nic_handler = can_register ? DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB
                                             : DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY;
@@ -1661,12 +1675,15 @@ doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr
     }
 
     list = (struct doca_gpu_verbs_qp_list_hl *)calloc(1, sizeof(struct doca_gpu_verbs_qp_list_hl));
-    if (list == NULL) return DOCA_ERROR_NO_MEMORY;
+    if (list == NULL) {
+        status = DOCA_ERROR_NO_MEMORY;
+        goto exit_error;
+    }
 
     list->qps = (struct doca_gpu_verbs_qp_hl *)calloc(num_qps, sizeof(struct doca_gpu_verbs_qp_hl));
     if (list->qps == NULL) {
-        free(list);
-        return DOCA_ERROR_NO_MEMORY;
+        status = DOCA_ERROR_NO_MEMORY;
+        goto exit_error;
     }
     list->num_qps = num_qps;
 
@@ -1750,23 +1767,30 @@ doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr
     list->sq_umem = sq_umem;
     list->sq_dbr_umem = sq_dbr_umem;
     *qp_list = list;
-    return DOCA_SUCCESS;
 
 exit_error:
-    for (uint32_t i = 0; i < num_qps; i++) {
-        struct doca_gpu_verbs_qp_hl *qp_ = &list->qps[i];
-        /* Null out suballocated pointers so destroy_internal skips doca_gpu_mem_free on them */
-        qp_->qp_umem_gpu_ptr = NULL;
-        qp_->qp_umem_dbr_gpu_ptr = NULL;
-        qp_->cq_sq_umem_gpu_ptr = NULL;
-        doca_gpu_verbs_destroy_qp_hl_internal(qp_);
+    if (probe_uar) doca_verbs_uar_destroy(probe_uar);
+    if (status) {
+        if (list) {
+            if (list->qps) {
+                for (uint32_t i = 0; i < num_qps; i++) {
+                    struct doca_gpu_verbs_qp_hl *qp_ = &list->qps[i];
+                    /* Null out suballocated pointers so destroy_internal skips doca_gpu_mem_free on
+                     * them */
+                    qp_->qp_umem_gpu_ptr = NULL;
+                    qp_->qp_umem_dbr_gpu_ptr = NULL;
+                    qp_->cq_sq_umem_gpu_ptr = NULL;
+                    doca_gpu_verbs_destroy_qp_hl_internal(qp_);
+                }
+                free(list->qps);
+            }
+            free(list);
+        }
+        if (cq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_umem);
+        if (cq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_dbr_umem);
+        if (sq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_umem);
+        if (sq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_dbr_umem);
     }
-    if (cq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_umem);
-    if (cq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_dbr_umem);
-    if (sq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_umem);
-    if (sq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_dbr_umem);
-    free(list->qps);
-    free(list);
     return status;
 }
 
@@ -1804,6 +1828,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
     struct doca_gpu_verbs_umem_hl *sq_umem = NULL, *sq_dbr_umem = NULL;
     uint32_t cq_size_per_qp, sq_size_per_qp, dbr_size_per_qp;
     uint32_t total_qps;
+    doca_verbs_uar_t *probe_uar = NULL;
 
     if (qp_init_attr == NULL || qpg_list == NULL || num_qp_groups == 0)
         return DOCA_ERROR_INVALID_VALUE;
@@ -1829,7 +1854,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
 
     if ((qp_init_attr->send_dbr_mode_ext ==
          DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
-        !qp_init_attr->gpu_dev->open->support_gdrcopy) {
+        !doca_gpu_gdrcopy_is_supported()) {
         DOCA_LOG(LOG_ERR, "SW-emulated no DBR feature is not supported without GDRCopy");
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -1861,22 +1886,28 @@ doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
     /* Pre-resolve AUTO nic_handler so that shared slab memory type is correct */
     enum doca_gpu_dev_verbs_nic_handler resolved_nic_handler;
     if (qp_init_attr->nic_handler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO) {
-        doca_verbs_uar_t *probe_uar = NULL;
+        bool can_register = false;
+        void *reg_addr = NULL;
+
         status = create_uar(
             qp_init_attr->net_dev, qp_init_attr->nic_handler,
             !!(qp_init_attr->flags & DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_PREFER_UAR_SHARING),
             &probe_uar);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to create probe UAR for AUTO resolution");
-            return status;
+            goto exit_error;
         }
-        bool can_register = false;
-        status =
-            doca_gpu_verbs_can_gpu_register_uar(probe_uar->open->get_reg_addr(), &can_register);
-        doca_verbs_uar_destroy(probe_uar);
+
+        status = doca_verbs_uar_reg_addr_get(probe_uar, &reg_addr);
+        if (status != DOCA_SUCCESS) {
+            DOCA_LOG(LOG_ERR, "Failed to get probe UAR reg_addr for AUTO resolution");
+            goto exit_error;
+        }
+
+        status = doca_gpu_verbs_can_gpu_register_uar(reg_addr, &can_register);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to check if UAR can be registered on GPU");
-            return status;
+            goto exit_error;
         }
         resolved_nic_handler = can_register ? DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB
                                             : DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY;
@@ -1886,13 +1917,16 @@ doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
 
     list = (struct doca_gpu_verbs_qp_group_list_hl *)calloc(
         1, sizeof(struct doca_gpu_verbs_qp_group_list_hl));
-    if (list == NULL) return DOCA_ERROR_NO_MEMORY;
+    if (list == NULL) {
+        status = DOCA_ERROR_NO_MEMORY;
+        goto exit_error;
+    }
 
     list->qpgs = (struct doca_gpu_verbs_qp_group_hl *)calloc(
         num_qp_groups, sizeof(struct doca_gpu_verbs_qp_group_hl));
     if (list->qpgs == NULL) {
-        free(list);
-        return DOCA_ERROR_NO_MEMORY;
+        status = DOCA_ERROR_NO_MEMORY;
+        goto exit_error;
     }
     list->num_qp_groups = num_qp_groups;
 
@@ -2026,29 +2060,35 @@ doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
     list->sq_umem = sq_umem;
     list->sq_dbr_umem = sq_dbr_umem;
     *qpg_list = list;
-    return DOCA_SUCCESS;
 
 exit_error:
-    for (uint32_t i = 0; i < num_qp_groups; i++) {
-        struct doca_gpu_verbs_qp_hl *main_ = &list->qpgs[i].qp_main;
-        struct doca_gpu_verbs_qp_hl *comp_ = &list->qpgs[i].qp_companion;
-        /* Null out suballocated ptrs so destroy_internal skips doca_gpu_mem_free */
-        comp_->qp_umem_gpu_ptr = NULL;
-        comp_->qp_umem_dbr_gpu_ptr = NULL;
-        comp_->cq_sq_umem_gpu_ptr = NULL;
-        comp_->external_uar = NULL; /* owned by main; don't double-free */
-        doca_gpu_verbs_destroy_qp_hl_internal(comp_);
-        main_->qp_umem_gpu_ptr = NULL;
-        main_->qp_umem_dbr_gpu_ptr = NULL;
-        main_->cq_sq_umem_gpu_ptr = NULL;
-        doca_gpu_verbs_destroy_qp_hl_internal(main_);
+    if (probe_uar) doca_verbs_uar_destroy(probe_uar);
+    if (status) {
+        if (list) {
+            if (list->qpgs) {
+                for (uint32_t i = 0; i < num_qp_groups; i++) {
+                    struct doca_gpu_verbs_qp_hl *main_ = &list->qpgs[i].qp_main;
+                    struct doca_gpu_verbs_qp_hl *comp_ = &list->qpgs[i].qp_companion;
+                    /* Null out suballocated ptrs so destroy_internal skips doca_gpu_mem_free */
+                    comp_->qp_umem_gpu_ptr = NULL;
+                    comp_->qp_umem_dbr_gpu_ptr = NULL;
+                    comp_->cq_sq_umem_gpu_ptr = NULL;
+                    comp_->external_uar = NULL; /* owned by main; don't double-free */
+                    doca_gpu_verbs_destroy_qp_hl_internal(comp_);
+                    main_->qp_umem_gpu_ptr = NULL;
+                    main_->qp_umem_dbr_gpu_ptr = NULL;
+                    main_->cq_sq_umem_gpu_ptr = NULL;
+                    doca_gpu_verbs_destroy_qp_hl_internal(main_);
+                }
+                free(list->qpgs);
+            }
+            free(list);
+        }
+        if (cq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_umem);
+        if (cq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_dbr_umem);
+        if (sq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_umem);
+        if (sq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_dbr_umem);
     }
-    if (cq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_umem);
-    if (cq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, cq_dbr_umem);
-    if (sq_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_umem);
-    if (sq_dbr_umem) destroy_umem_hl(qp_init_attr->gpu_dev, sq_dbr_umem);
-    free(list->qpgs);
-    free(list);
     return status;
 }
 

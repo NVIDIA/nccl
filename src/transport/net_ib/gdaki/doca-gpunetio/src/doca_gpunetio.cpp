@@ -96,22 +96,6 @@ struct doca_gpu_verbs_service {
     std::set<struct doca_gpu_verbs_qp *> *qps;
 };
 
-static inline bool priv_query_async_store_release_support(void) {
-    int current_device;
-    int compute_cap_major;
-    cudaError_t status = cudaSuccess;
-
-    status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaGetDevice(&current_device));
-    if (status != cudaSuccess) return false;
-
-    status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaDeviceGetAttribute(
-        &compute_cap_major, cudaDevAttrComputeCapabilityMajor, current_device));
-    if (status != cudaSuccess) return false;
-
-    return (compute_cap_major >= GPU_FULL_ASYNC_STORE_RELEASE_SUPPORT_COMPUTE_CAP_MAJOR);
-    return (compute_cap_major >= GPU_FULL_ASYNC_STORE_RELEASE_SUPPORT_COMPUTE_CAP_MAJOR);
-}
-
 bool priv_is_power_of_two(uint64_t x) { return x && (x & (x - 1)) == 0; }
 
 static size_t priv_get_page_size() {
@@ -122,17 +106,50 @@ static size_t priv_get_page_size() {
 }
 
 doca_error_t doca_gpu_create(const char *gpu_bus_id, doca_gpu_t **gpu_dev) {
+    struct doca_gpu_internal *gpu_dev_internal_ = nullptr;
     doca_gpu_t *gpu_dev_ = nullptr;
+    CUdevice cuda_dev;
     int dmabuf_supported = 0, order = 0;
     CUresult res_drv = CUDA_SUCCESS;
     cudaError_t res_cuda = cudaSuccess;
     doca_sdk_wrapper_error_t err;
 
-    gpu_dev_ = (doca_gpu_t *)calloc(1, sizeof(doca_gpu_t));
-    if (gpu_dev_ == nullptr) {
+    gpu_dev_internal_ = (struct doca_gpu_internal *)calloc(1, sizeof(*gpu_dev_internal_));
+    if (gpu_dev_internal_ == nullptr) {
         DOCA_LOG(LOG_ERR, "error in %s: failed to allocate memory for doca_gpu_t", __func__);
         return DOCA_ERROR_NO_MEMORY;
     }
+    gpu_dev_ = &(gpu_dev_internal_->gpu_dev);
+
+    res_cuda = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaDeviceGetByPCIBusId(&cuda_dev, gpu_bus_id));
+    if (res_cuda != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Invalid GPU bus id provided (ret %d).", res_cuda);
+        goto exit_error;
+    }
+
+    res_drv = doca_gpu_cuda_wrapper_cuDeviceGetAttribute(
+        &(dmabuf_supported), CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, cuda_dev);
+    if (res_drv != CUDA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "cuDeviceGetAttribute CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED returned %d.",
+                 res_drv);
+        goto exit_error;
+    }
+
+    (dmabuf_supported == 1 ? (gpu_dev_internal_->support_dmabuf = true)
+                           : (gpu_dev_internal_->support_dmabuf = false));
+
+    res_drv = doca_gpu_cuda_wrapper_cuDeviceGetAttribute(
+        &order, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING, cuda_dev);
+    if (res_drv != CUDA_SUCCESS) {
+        DOCA_LOG(
+            LOG_ERR,
+            "cuDeviceGetAttribute CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING returned %d.",
+            res_drv);
+        goto exit_error;
+    }
+
+    gpu_dev_internal_->need_mcst = true;
+    if (order >= CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER) gpu_dev_internal_->need_mcst = false;
 
     /* Try with DOCA SDK first */
     err = doca_gpu_sdk_wrapper_create(gpu_bus_id, &(gpu_dev_->sdk));
@@ -162,44 +179,7 @@ doca_error_t doca_gpu_create(const char *gpu_bus_id, doca_gpu_t **gpu_dev) {
         goto exit_error;
     }
 
-    res_cuda = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
-        cudaDeviceGetByPCIBusId(&gpu_dev_->open->cuda_dev, gpu_bus_id));
-    if (res_cuda != cudaSuccess) {
-        DOCA_LOG(LOG_ERR, "Invalid GPU bus id provided (ret %d).", res_cuda);
-        goto exit_error;
-    }
-
-    res_drv = doca_gpu_cuda_wrapper_cuDeviceGetAttribute(
-        &(dmabuf_supported), CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED, gpu_dev_->open->cuda_dev);
-    if (res_drv != CUDA_SUCCESS) {
-        DOCA_LOG(LOG_ERR, "cuDeviceGetAttribute CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED returned %d.",
-                 res_drv);
-        goto exit_error;
-    }
-
-    (dmabuf_supported == 1 ? (gpu_dev_->open->support_dmabuf = true)
-                           : (gpu_dev_->open->support_dmabuf = false));
-
-    res_drv = doca_gpu_cuda_wrapper_cuDeviceGetAttribute(
-        &order, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING, gpu_dev_->open->cuda_dev);
-    if (res_drv != CUDA_SUCCESS) {
-        DOCA_LOG(
-            LOG_ERR,
-            "cuDeviceGetAttribute CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING returned %d.",
-            res_drv);
-        goto exit_error;
-    }
-
-    gpu_dev_->open->need_mcst = true;
-    if (order >= CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER) gpu_dev_->open->need_mcst = false;
-
-    gpu_dev_->open->support_wq_gpumem = true;
-    gpu_dev_->open->support_cq_gpumem = true;
-    gpu_dev_->open->support_uar_gpumem = true;
-    gpu_dev_->open->support_bf_uar = true;
-    gpu_dev_->open->support_async_store_release = priv_query_async_store_release_support();
-    gpu_dev_->open->support_gdrcopy = doca_gpu_gdrcopy_is_supported();
-    gpu_dev_->open->support_gdrcopy_data_direct = doca_gpu_gdrcopy_supports_force_pcie();
+    gpu_dev_->open->cuda_dev = cuda_dev;
 
     try {
         gpu_dev_->open->mtable = new std::unordered_map<uintptr_t, struct doca_gpu_mtable *>();
@@ -324,7 +304,7 @@ doca_error_t doca_gpu_mem_alloc(doca_gpu_t *gpu_dev, size_t size, size_t alignme
     }
 
     if (is_data_direct_mtype) {
-        if (!gpu_dev->open->support_gdrcopy_data_direct) {
+        if (!doca_gpu_gdrcopy_supports_force_pcie()) {
             DOCA_LOG(LOG_ERR,
                      "DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT memory type is not supported on this "
                      "GPU.");
@@ -385,7 +365,7 @@ doca_error_t doca_gpu_mem_alloc(doca_gpu_t *gpu_dev, size_t size, size_t alignme
         mentry->align_addr_gpu = (uintptr_t)cudev_memptr_gpu_;
         mentry->align_addr_cpu = 0;
     } else if (is_gpu_cpu_mtype) {
-        if (gpu_dev->open->support_gdrcopy == true) {
+        if (doca_gpu_gdrcopy_is_supported()) {
             bool force_pcie = is_data_direct_mtype;
 
             mentry->size_orig = mentry->size + alignment;
@@ -581,7 +561,7 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu_dev, void *memptr_gpu) {
         DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaFree((void *)mentry->base_addr));
     else if (mentry->mtype == DOCA_GPU_MEM_TYPE_GPU_CPU ||
              mentry->mtype == DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT) {
-        if (gpu_dev->open->support_gdrcopy)
+        if (doca_gpu_gdrcopy_is_supported())
             doca_gpu_gdrcopy_destroy_mapping(mentry->gdr_mh, (void *)mentry->align_addr_cpu,
                                              mentry->size);
         DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaFree((void *)mentry->base_addr));
@@ -626,7 +606,7 @@ doca_error_t doca_gpu_get_dmabuf_fd(doca_gpu_t *gpu_dev, void *memptr_gpu, size_
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    if (gpu_dev->open->support_dmabuf == false) {
+    if (priv_doca_gpu_t_to_doca_gpu_internal(gpu_dev)->support_dmabuf == false) {
         DOCA_LOG(LOG_ERR, "DMABuf not supported on this system by this CUDA installation.");
         return DOCA_ERROR_NOT_SUPPORTED;
     }
@@ -902,23 +882,8 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
     enum doca_verbs_qp_send_dbr_mode send_dbr_mode;
     bool nic_handler_must_be_cpu_proxy = false;
 
-    // Will introduce SDK wrapper once done with DOCA Verbs
-    if (gpu_dev == nullptr || gpu_dev->open == nullptr || qp == nullptr || cq_sq == nullptr ||
-        qp_out == nullptr)
+    if (gpu_dev == nullptr || qp == nullptr || cq_sq == nullptr || qp_out == nullptr)
         return DOCA_ERROR_INVALID_VALUE;
-
-    if (qp->type != DOCA_VERBS_SDK_LIB_TYPE_OPEN || qp->open == nullptr)
-        return DOCA_ERROR_NOT_SUPPORTED;
-
-    if (qp->open->get_cq_sq() != cq_sq) {
-        DOCA_LOG(LOG_ERR, "SQ CQ mismatch");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    if (qp->open->get_cq_rq() != cq_rq) {
-        DOCA_LOG(LOG_ERR, "RQ CQ mismatch");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
 
     status = normalize_export_cq_type(&cq_type);
     if (status != DOCA_SUCCESS) return status;
@@ -933,19 +898,19 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
     }
 
     if ((send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
-        !gpu_dev->open->support_gdrcopy) {
+        !doca_gpu_gdrcopy_is_supported()) {
         DOCA_LOG(LOG_ERR, "SW-emulated no DBR feature is not supported without GDRCopy");
         status = DOCA_ERROR_NOT_SUPPORTED;
         goto out;
     }
 
     if (cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST) {
-        if (!gpu_dev->open->support_gdrcopy) {
+        if (!doca_gpu_gdrcopy_is_supported()) {
             DOCA_LOG(LOG_ERR, "Host-collapsed CQ type is not supported without GDRCopy");
             status = DOCA_ERROR_NOT_SUPPORTED;
             goto out;
         }
-        if (enable_data_direct && !gpu_dev->open->support_gdrcopy_data_direct) {
+        if (enable_data_direct && !doca_gpu_gdrcopy_supports_force_pcie()) {
             DOCA_LOG(LOG_ERR,
                      "GDRCopy does not support data-direct, cannot enable data-direct with "
                      "host-collapsed CQ type");
@@ -1098,7 +1063,7 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
 
     if (!nic_handler_must_be_cpu_proxy) {
         if (send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) {
-            assert(gpu_dev->open->support_gdrcopy);
+            assert(doca_gpu_gdrcopy_is_supported());
             qp_gverbs->sq_dbrec = qp_cpu_->sq_dbrec;
             qp_gverbs->sq_db = sq_db;
             qp_gverbs->cpu_proxy = true;
@@ -1208,7 +1173,7 @@ doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
 
         if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
             ((qp->qp_cpu->nic_handler & DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_CPU_PROXY) == 0)) {
-            assert(qp->gpu_dev->open->support_gdrcopy);
+            assert(doca_gpu_gdrcopy_is_supported());
             qp->cpu_db = &qp->qp_gpu_h->sq_wqe_pi;
         }
     }
@@ -1281,7 +1246,7 @@ doca_error_t doca_gpu_verbs_export_multi_qps_dev(doca_gpu_t *gpu_dev,
         need_data_direct |= qp->enable_data_direct;
     }
 
-    if (need_cpu_mapping) assert(gpu_dev->open->support_gdrcopy);
+    if (need_cpu_mapping) assert(doca_gpu_gdrcopy_is_supported());
 
     if (need_cpu_mapping)
         mtype =
@@ -1437,8 +1402,7 @@ static inline void priv_cpu_proxy_progress_cq(struct doca_gpu_verbs_qp *qp, bool
     struct doca_gpunetio_ib_mlx5_cqe64 *cqe64 =
         reinterpret_cast<struct doca_gpunetio_ib_mlx5_cqe64 *>(cq->cqe_daddr);
 
-    if (qp->qp_gpu_h == nullptr)
-        goto out;
+    if (qp->qp_gpu_h == nullptr) goto out;
 
     old_cqe_ci = cq->cqe_ci;
 
@@ -1465,7 +1429,7 @@ static inline void priv_cpu_proxy_progress_cq(struct doca_gpu_verbs_qp *qp, bool
     if (new_cqe_ci > old_cqe_ci) {
         uint64_t *gpu_cqe_ci = &qp->qp_gpu_h->cq_sq.cqe_ci;
 
-        if (qp->gpu_dev->open->need_mcst) {
+        if (priv_doca_gpu_t_to_doca_gpu_internal(qp->gpu_dev)->need_mcst) {
             (void)READ_ONCE(*gpu_cqe_ci);
         }
 

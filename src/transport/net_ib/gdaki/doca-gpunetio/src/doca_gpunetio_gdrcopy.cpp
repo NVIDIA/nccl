@@ -218,20 +218,38 @@ bool doca_gpu_gdrcopy_is_supported() {
 }
 
 bool doca_gpu_gdrcopy_supports_force_pcie() {
-    if (!doca_gpu_gdrcopy_is_supported()) return false;
-    if (!doca_gpu_gdrcopy_ftable || !doca_gpu_gdrcopy_ftable->handle) return false;
-    if (!doca_gpu_gdrcopy_ftable->get_attribute || !doca_gpu_gdrcopy_ftable->pin_buffer_v2)
-        return false;
+    static bool is_tried_init = false;
+    static bool is_supported = false;
 
-    int supported = 0;
-    int rc = doca_gpu_gdrcopy_ftable->get_attribute(
-        doca_gpu_gdr, GDR_ATTR_SUPPORT_PIN_FLAG_FORCE_PCIE, &supported);
-    if (rc != 0 || supported == 0) {
-        DOCA_LOG(LOG_INFO, "GDRCopy forced-PCIe attribute unsupported (rc=%d value=%d)", rc,
-                 supported);
-        return false;
+    if (!is_tried_init) {
+        if (!doca_gpu_gdrcopy_is_supported()) {
+            is_supported = false;
+            goto out;
+        }
+        if (!doca_gpu_gdrcopy_ftable || !doca_gpu_gdrcopy_ftable->handle) {
+            is_supported = false;
+            goto out;
+        }
+        if (!doca_gpu_gdrcopy_ftable->get_attribute || !doca_gpu_gdrcopy_ftable->pin_buffer_v2) {
+            is_supported = false;
+            goto out;
+        }
+
+        int supported = 0;
+        int rc = doca_gpu_gdrcopy_ftable->get_attribute(
+            doca_gpu_gdr, GDR_ATTR_SUPPORT_PIN_FLAG_FORCE_PCIE, &supported);
+        if (rc != 0 || supported == 0) {
+            DOCA_LOG(LOG_INFO, "GDRCopy forced-PCIe attribute unsupported (rc=%d value=%d)", rc,
+                     supported);
+            is_supported = false;
+            goto out;
+        }
+        is_supported = true;
     }
-    return true;
+
+out:
+    is_tried_init = true;
+    return is_supported;
 }
 
 static int priv_doca_gpu_gdrcopy_create_mapping(void *dev_aligned_ptr, size_t size, bool force_pcie,

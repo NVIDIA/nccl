@@ -333,6 +333,13 @@ The *flags* parameter controls which resources are released:
 
 - *NCCL_SUSPEND_MEM* (``0x01``) -- Release dynamic GPU memory allocations held by the communicator.
 
+This function is a collective call: all ranks of *comm* must call it. When a single thread manages multiple ranks
+(multiple GPUs per thread), the calls must be grouped with *ncclGroupStart*/*ncclGroupEnd* to avoid a hang.
+
+A group may contain *ncclCommSuspend* calls for multiple ranks, but it must not also contain other operations
+on a communicator being suspended. All outstanding operations on each communicator must complete before it is
+suspended.
+
 A suspended communicator can be restored to an active state by calling *ncclCommResume*.
 
 ncclCommResume
@@ -342,6 +349,15 @@ ncclCommResume
 
 Resume all previously suspended resources on communicator *comm*. After this call returns successfully, the
 communicator is fully operational and can be used for NCCL operations again.
+
+This function is a collective call: all ranks of *comm* must call it, and every rank must have previously been
+suspended. When a single thread manages multiple ranks (multiple GPUs per thread), the calls must be grouped with
+*ncclGroupStart*/*ncclGroupEnd* to avoid a hang.
+
+A group may contain *ncclCommResume* calls for multiple ranks, but it must not also contain other operations
+on a communicator being resumed. The resume call, or the outermost group containing it, must complete successfully
+before operations are submitted on the communicator. For a nonblocking communicator, wait until
+*ncclCommGetAsyncError* reports *ncclSuccess*.
 
 ncclCommMemStats
 ----------------

@@ -11,6 +11,7 @@
 #include "cudawrap.h"
 #include "channel.h"
 #include "platforms/platforms.h"
+#include "coll_sizes.h"
 
 NCCL_PARAM(Nthreads, "NTHREADS", -2);
 NCCL_PARAM(Ll128Nthreads, "LL128_NTHREADS", -2);
@@ -256,4 +257,204 @@ int ncclTuningGetActiveChannels(struct ncclTuningInput_t* const input, const str
   return ncclComputeCollChannelLayout(input->count, elementSize, trafficPerByte, trafficPerChannel,
                                       /*currentTraffic=*/0, /*channelId=*/0, maxChannels)
     .nChannels;
+}
+
+static ncclResult_t ncclChunkingNVLSTreeTuning(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func,
+                                               int algo, int proto, int chunkSteps, int regBufType,
+                                               /* in/out */ int* chunkSize, int* maxChunkSize, int* stepSize) {
+  // Use uint64_t so that concurrentOps*chunkSize*X does not overflow.
+  // However, nChannels * comm->channels[0].nvls.nHeads should easily fit in 32 bits.
+  // coverity[overflow_before_widen]
+  uint64_t concurrentOps = nChannels * comm->channels[0].nvls.nHeads;
+  if ((nBytes < (32 * (concurrentOps * *chunkSize))) && (*chunkSize > 262144)) *chunkSize = 262144;
+  if ((nBytes < (16 * (concurrentOps * *chunkSize))) && (*chunkSize > 131072)) *chunkSize = 131072;
+  if ((nBytes < (4 * (concurrentOps * *chunkSize))) && (*chunkSize > 65536)) *chunkSize = 65536;
+  if ((nBytes < (1 * (concurrentOps * *chunkSize))) && (*chunkSize > 32768)) *chunkSize = 32768;
+  int ratio = 1;
+  // Account for using multiple NICs on VR.
+  if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && RUBIN_AND_LATER(comm->minCompCap)) ratio = 2;
+  *chunkSize = std::min({comm->nvlsChunkSize, comm->nvlsTreeMaxChunkSize, ratio * *chunkSize});
+
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingNVLSTuning(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func,
+                                           int algo, int proto, int chunkSteps, int regBufType,
+                                           /* in/out */ int* chunkSize, int* maxChunkSize, int* stepSize) {
+  if ((regBufType & NCCL_NVLS_REG_BUFFER) && (func == ncclFuncAllGather || func == ncclFuncReduceScatter)) {
+    *chunkSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
+  } else {
+    int maxChunkSize = comm->nvlsChunkSize;
+    if (comm->nNodes > 1 &&
+        comm->tuningContext.generalBandwidths[ncclFuncAllReduce][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] < 150) {
+      maxChunkSize = 32768;
+    }
+    if (*chunkSize > maxChunkSize) *chunkSize = maxChunkSize;
+    // Use uint64_t so that concurrentOps*chunkSize*X does not overflow.
+    // However, nChannels * comm->channels[0].nvls.nHeads should easily fit in 32 bits.
+    // coverity[overflow_before_widen]
+    uint64_t concurrentOps = nChannels * comm->channels[0].nvls.nHeads;
+    if ((nBytes < (64 * (concurrentOps * *chunkSize))) && (*chunkSize > 65536)) *chunkSize = 65536;
+    if ((nBytes < (8 * (concurrentOps * *chunkSize))) && (*chunkSize > 32768)) *chunkSize = 32768;
+    if ((nBytes < (2 * (concurrentOps * *chunkSize))) && (*chunkSize > 16384)) *chunkSize = 16384;
+  }
+
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingCollnetChainTuning(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func,
+                                                   int algo, int proto, int chunkSteps, int regBufType,
+                                                   /* in/out */ int* chunkSize, int* maxChunkSize, int* stepSize) {
+  *stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
+  *chunkSize = std::min(256 * 1024, *stepSize * chunkSteps);
+  while (nBytes / (nChannels * *chunkSize) < comm->channels[0].collnetChain.depth * 64 && *chunkSize > 131072) {
+    *chunkSize /= 2;
+  }
+  while (nBytes / (nChannels * *chunkSize) < comm->channels[0].collnetChain.depth * 8 && *chunkSize > 65536) {
+    *chunkSize /= 2;
+  }
+  while (nBytes / (nChannels * *chunkSize) < comm->channels[0].collnetChain.depth && *chunkSize > 32768)
+    *chunkSize /= 2;
+
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingCollnetDirectTuning(struct ncclComm* comm, int nChannels, size_t nBytes,
+                                                    ncclFunc_t func, int algo, int proto, int chunkSteps,
+                                                    int regBufType, /* in/out */ int* chunkSize, int* maxChunkSize,
+                                                    int* stepSize) {
+  // Optimize chunkSize / nSteps
+  while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * *chunkSize) <
+           comm->channels[0].collnetDirect.depth * 64 &&
+         *chunkSize > 131072) {
+    *chunkSize /= 2;
+  }
+  while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * *chunkSize) <
+           comm->channels[0].collnetDirect.depth * 8 &&
+         *chunkSize > 65536) {
+    *chunkSize /= 2;
+  }
+  while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * *chunkSize) <
+           comm->channels[0].collnetDirect.depth * 8 &&
+         *chunkSize > 32768) {
+    *chunkSize /= 2;
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingTreeTuning(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func,
+                                           int algo, int proto, int chunkSteps, int regBufType,
+                                           /* in/out */ int* chunkSize, int* maxChunkSize, int* stepSize) {
+  if (proto == NCCL_PROTO_LL128) {
+    int nNodes = comm->nNodes;
+    float ppn = comm->nRanks / (float)nNodes;
+    float nstepsLL128 = 1 + log2i(nNodes) + 0.1 * ppn;
+    // Yes, we are OK with the division on the left side of the < operand being integer.
+    // coverity[integer_division]
+    while (nBytes / (nChannels * *chunkSize) < nstepsLL128 * 64 / ppn && *chunkSize > 131072) *chunkSize /= 2;
+    // coverity[integer_division]
+    while (nBytes / (nChannels * *chunkSize) < nstepsLL128 * 16 / ppn && *chunkSize > 32768) *chunkSize /= 2;
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingPATTuning(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func,
+                                          int algo, int proto, int chunkSteps, int regBufType,
+                                          /* in/out */ int* chunkSize, int* maxChunkSize, int* stepSize) {
+  switch (func) {
+  case ncclFuncAllGather:
+    while (*chunkSize * nChannels * 32 > nBytes && *chunkSize > 65536) *chunkSize /= 2;
+    break;
+  case ncclFuncReduceScatter:
+    while (*chunkSize * nChannels * 16 > nBytes && *chunkSize > 65536) *chunkSize /= 2;
+    break;
+  default:
+    break;
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingAlgoTuning(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func,
+                                           int algo, int proto, int chunkSteps, int regBufType,
+                                           /* in/out */ int* chunkSize, int* maxChunkSize, int* stepSize) {
+  switch (algo) {
+  case NCCL_ALGO_COLLNET_CHAIN:
+    return ncclChunkingCollnetChainTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType, chunkSize,
+                                          maxChunkSize, stepSize);
+  case NCCL_ALGO_COLLNET_DIRECT:
+    return ncclChunkingCollnetDirectTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType,
+                                           chunkSize, maxChunkSize, stepSize);
+  case NCCL_ALGO_TREE:
+    return ncclChunkingTreeTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType, chunkSize,
+                                  maxChunkSize, stepSize);
+  case NCCL_ALGO_PAT:
+    return ncclChunkingPATTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType, chunkSize,
+                                 maxChunkSize, stepSize);
+  case NCCL_ALGO_NVLS:
+    return ncclChunkingNVLSTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType, chunkSize,
+                                  maxChunkSize, stepSize);
+  case NCCL_ALGO_NVLS_TREE:
+    return ncclChunkingNVLSTreeTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType, chunkSize,
+                                      maxChunkSize, stepSize);
+  default:
+    break;
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingPluginTuning(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func,
+                                             int algo, int proto, int chunkSteps, int regBufType,
+                                             /* in/out */ int* chunkSize, int* maxChunkSize, int* stepSize) {
+  if (comm->tuner != nullptr && comm->tuner->getChunkSize != nullptr) {
+    size_t tunerChunkSize = *chunkSize;
+    NCCLCHECK(comm->tuner->getChunkSize(comm->tunerContext, func, nBytes, algo, proto, nChannels, &tunerChunkSize));
+    if (tunerChunkSize > (size_t)*maxChunkSize) {
+      INFO(NCCL_TUNING, "%s: tuner chunk size %zu exceeds buffer max %d, clamping", ncclFuncToString(func),
+           tunerChunkSize, *maxChunkSize);
+      tunerChunkSize = *maxChunkSize;
+    }
+    *chunkSize = (int)tunerChunkSize;
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclChunkingCorrectnessEnforcement(struct ncclComm* comm, int nChannels, size_t nBytes,
+                                                       ncclFunc_t func, int algo, int proto, int chunkSteps,
+                                                       int regBufType, /* in/out */ int* chunkSize, int* maxChunkSize,
+                                                       int* stepSize) {
+  // Multi-RPN PAT stages through the NVLS FIFO, so the per-step chunk
+  // must fit a single NVLS slot (nvlsChunkSize).
+  if ((func == ncclFuncAllGather || func == ncclFuncReduceScatter) && algo == NCCL_ALGO_PAT && !comm->isOneRPN &&
+      comm->nvlsChunkSize > 0) {
+    *chunkSize = std::min(comm->nvlsChunkSize, *chunkSize);
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTuningComputeChunkSize(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func, int algo,
+                                        int proto, int chunkSteps, int regBufType, /*outputs*/ int* outChunkSize,
+                                        int* outChunkSteps, int* outStepSize) {
+  if ((unsigned)proto >= NCCL_NUM_PROTOCOLS) {
+    WARN("Invalid Protocol %d", proto);
+    return ncclInternalError;
+  }
+  size_t grainSize = ncclProtoGrainSize(proto);
+  int stepSize = comm->buffSizes[proto] / NCCL_STEPS;
+  chunkSteps = ncclGetChunkSteps(proto, algo, chunkSteps);
+  int chunkSize = ncclGetChunkSize(proto, stepSize, chunkSteps);
+  // Buffer-based ceiling; plugins may increase chunk size up to this limit.
+  int bufferMaxChunkSize = chunkSize;
+
+  NCCLCHECK(ncclChunkingAlgoTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType, &chunkSize,
+                                   &bufferMaxChunkSize, &stepSize));
+  NCCLCHECK(ncclChunkingPluginTuning(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType, &chunkSize,
+                                     &bufferMaxChunkSize, &stepSize));
+  NCCLCHECK(ncclChunkingCorrectnessEnforcement(comm, nChannels, nBytes, func, algo, proto, chunkSteps, regBufType,
+                                               &chunkSize, &bufferMaxChunkSize, &stepSize));
+
+  *outChunkSize = chunkSize / grainSize * grainSize; // align chunkSize to multiple grainSize
+  *outChunkSteps = chunkSteps;
+
+  *outStepSize = stepSize;
+  return ncclSuccess;
 }

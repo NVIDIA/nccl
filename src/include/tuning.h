@@ -148,5 +148,8 @@ double ncclTuningGetSmLatReduceScatterRailA2A(struct ncclComm* comm, bool ldmc);
 int ncclTuningCalcSatBlocksReduceScatterRailA2A(struct ncclComm* comm, bool ldmc);
 
 int64_t ncclParamSymNoWinEnable();
+ncclResult_t ncclTuningComputeChunkSize(struct ncclComm* comm, int nChannels, size_t nBytes, ncclFunc_t func, int algo,
+                                        int proto, int chunkSteps, int regBufType, /*outputs*/ int* outChunkSize,
+                                        int* outChunkSteps, int* outStepSize);
 
 #endif

@@ -2294,11 +2294,18 @@ ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, i
   return ncclSuccess;
 }
 
-static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl* info, int nChannels, size_t nBytes,
-                                     /*outputs*/ uint32_t* outChunkSize, uint32_t* outDirectFlags,
-                                     struct ncclProxyOp* proxyOp) {
+static void calcCollDirectFlags(struct ncclTaskColl* info, uint32_t* outDirectFlags) {
+  if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT) {
+    *outDirectFlags = NCCL_P2P_WRITE;
+  } else {
+    *outDirectFlags = 0;
+  }
+}
+
+static ncclResult_t calcCollProxyOp(struct ncclComm* comm, struct ncclTaskColl* info, int nChannels, size_t nBytes,
+                                    int chunkSize, int chunkSteps, int sliceSteps, int stepSize,
+                                    /*output*/ struct ncclProxyOp* proxyOp) {
   ncclPattern_t pattern;
-  size_t grainSize = ncclProtoGrainSize(info->protocol);
 
   switch (info->func) {
   case ncclFuncBroadcast:
@@ -2334,115 +2341,6 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
 
   int nstepsPerLoop, nchunksPerLoop;
   size_t loopOffset = 0;
-  int stepSize = comm->buffSizes[info->protocol] / NCCL_STEPS;
-  int chunkSteps = ncclGetChunkSteps(info->protocol, info->algorithm, info->chunkSteps);
-  int sliceSteps = ncclGetSliceSteps(info->protocol, info->algorithm, info->sliceSteps);
-  int chunkSize = ncclGetChunkSize(info->protocol, stepSize, chunkSteps);
-  // Buffer-based ceiling; plugins may increase chunk size up to this limit.
-  int bufferMaxChunkSize = chunkSize;
-
-  if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT) {
-    // Optimize chunkSize / nSteps
-    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) <
-             comm->channels[0].collnetDirect.depth * 64 &&
-           chunkSize > 131072) {
-      chunkSize /= 2;
-    }
-    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) <
-             comm->channels[0].collnetDirect.depth * 8 &&
-           chunkSize > 65536) {
-      chunkSize /= 2;
-    }
-    while (nBytes / (nChannels * comm->channels[0].collnetDirect.nHeads * chunkSize) <
-             comm->channels[0].collnetDirect.depth * 8 &&
-           chunkSize > 32768) {
-      chunkSize /= 2;
-    }
-  } else if (info->algorithm == NCCL_ALGO_COLLNET_CHAIN) {
-    stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
-    chunkSize = std::min(256 * 1024, stepSize * chunkSteps);
-    while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth * 64 && chunkSize > 131072) {
-      chunkSize /= 2;
-    }
-    while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth * 8 && chunkSize > 65536) {
-      chunkSize /= 2;
-    }
-    while (nBytes / (nChannels * chunkSize) < comm->channels[0].collnetChain.depth && chunkSize > 32768) chunkSize /= 2;
-  } else if (info->algorithm == NCCL_ALGO_NVLS) {
-    if ((info->regBufType & NCCL_NVLS_REG_BUFFER) &&
-        (info->func == ncclFuncAllGather || info->func == ncclFuncReduceScatter)) {
-      chunkSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
-    } else {
-      int maxChunkSize = comm->nvlsChunkSize;
-      if (comm->nNodes > 1 &&
-          comm->tuningContext.generalBandwidths[ncclFuncAllReduce][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] < 150) {
-        maxChunkSize = 32768;
-      }
-      if (chunkSize > maxChunkSize) chunkSize = maxChunkSize;
-      // Use uint64_t so that concurrentOps*chunkSize*X does not overflow.
-      // However, nChannels * comm->channels[0].nvls.nHeads should easily fit in 32 bits.
-      // coverity[overflow_before_widen]
-      uint64_t concurrentOps = nChannels * comm->channels[0].nvls.nHeads;
-      if ((nBytes < (64 * (concurrentOps * chunkSize))) && (chunkSize > 65536)) chunkSize = 65536;
-      if ((nBytes < (8 * (concurrentOps * chunkSize))) && (chunkSize > 32768)) chunkSize = 32768;
-      if ((nBytes < (2 * (concurrentOps * chunkSize))) && (chunkSize > 16384)) chunkSize = 16384;
-    }
-  } else if (info->algorithm == NCCL_ALGO_NVLS_TREE) {
-    // Use uint64_t so that concurrentOps*chunkSize*X does not overflow.
-    // However, nChannels * comm->channels[0].nvls.nHeads should easily fit in 32 bits.
-    // coverity[overflow_before_widen]
-    uint64_t concurrentOps = nChannels * comm->channels[0].nvls.nHeads;
-    if ((nBytes < (32 * (concurrentOps * chunkSize))) && (chunkSize > 262144)) chunkSize = 262144;
-    if ((nBytes < (16 * (concurrentOps * chunkSize))) && (chunkSize > 131072)) chunkSize = 131072;
-    if ((nBytes < (4 * (concurrentOps * chunkSize))) && (chunkSize > 65536)) chunkSize = 65536;
-    if ((nBytes < (1 * (concurrentOps * chunkSize))) && (chunkSize > 32768)) chunkSize = 32768;
-    int ratio = 1;
-    // Account for using multiple NICs on VR.
-    if (comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && RUBIN_AND_LATER(comm->minCompCap)) ratio = 2;
-    chunkSize = std::min({comm->nvlsChunkSize, comm->nvlsTreeMaxChunkSize, ratio * chunkSize});
-  } else if (info->algorithm == NCCL_ALGO_TREE && info->protocol == NCCL_PROTO_LL128) {
-    int nNodes = comm->nNodes;
-    float ppn = comm->nRanks / (float)nNodes;
-    float nstepsLL128 = 1 + log2i(nNodes) + 0.1 * ppn;
-    // Yes, we are OK with the division on the left side of the < operand being integer.
-    // coverity[integer_division]
-    while (nBytes / (nChannels * chunkSize) < nstepsLL128 * 64 / ppn && chunkSize > 131072) chunkSize /= 2;
-    // coverity[integer_division]
-    while (nBytes / (nChannels * chunkSize) < nstepsLL128 * 16 / ppn && chunkSize > 32768) chunkSize /= 2;
-  } else if (info->func == ncclFuncAllGather && info->algorithm == NCCL_ALGO_PAT) {
-    while (chunkSize * nChannels * 32 > nBytes && chunkSize > 65536) chunkSize /= 2;
-  } else if (info->func == ncclFuncReduceScatter && info->algorithm == NCCL_ALGO_PAT) {
-    while (chunkSize * nChannels * 16 > nBytes && chunkSize > 65536) chunkSize /= 2;
-  }
-
-  // Compute directFlags of work struct.
-  if (info->algorithm == NCCL_ALGO_COLLNET_DIRECT) {
-    *outDirectFlags = NCCL_P2P_WRITE;
-  } else {
-    *outDirectFlags = 0;
-  }
-
-  if (comm->tuner != nullptr && comm->tuner->getChunkSize != nullptr) {
-    size_t tunerChunkSize = chunkSize;
-    NCCLCHECK(comm->tuner->getChunkSize(comm->tunerContext, info->func, nBytes, info->algorithm, info->protocol,
-                                        nChannels, &tunerChunkSize));
-    if (tunerChunkSize > (size_t)bufferMaxChunkSize) {
-      INFO(NCCL_TUNING, "%s: tuner chunk size %zu exceeds buffer max %d, clamping", ncclFuncToString(info->func),
-           tunerChunkSize, bufferMaxChunkSize);
-      tunerChunkSize = bufferMaxChunkSize;
-    }
-    chunkSize = (int)tunerChunkSize;
-  }
-
-  // Multi-RPN PAT stages through the NVLS FIFO, so the per-step chunk
-  // must fit a single NVLS slot (nvlsChunkSize).
-  if ((info->func == ncclFuncAllGather || info->func == ncclFuncReduceScatter) && info->algorithm == NCCL_ALGO_PAT &&
-      !comm->isOneRPN && comm->nvlsChunkSize > 0) {
-    chunkSize = std::min(comm->nvlsChunkSize, chunkSize);
-  }
-
-  // Compute nSteps for proxies
-  chunkSize = chunkSize / grainSize * grainSize; // align chunkSize to multiple grainSize
   switch (pattern) {
   case ncclPatternTreeUp:
   case ncclPatternTreeDown:
@@ -2595,6 +2493,19 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
     return ncclInternalError;
   }
 
+  return ncclSuccess;
+}
+
+static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl* info, int nChannels, size_t nBytes,
+                                     /*outputs*/ uint32_t* outChunkSize, uint32_t* outDirectFlags,
+                                     struct ncclProxyOp* proxyOp) {
+  int chunkSize, chunkSteps, stepSize;
+  NCCLCHECK(ncclTuningComputeChunkSize(comm, nChannels, nBytes, info->func, info->algorithm, info->protocol,
+                                       info->chunkSteps, info->regBufType, &chunkSize, &chunkSteps, &stepSize));
+  int sliceSteps = ncclGetSliceSteps(info->protocol, info->algorithm, info->sliceSteps);
+  calcCollDirectFlags(info, outDirectFlags);
+  NCCLCHECK(calcCollProxyOp(comm, info, nChannels, nBytes, chunkSize, chunkSteps, sliceSteps, stepSize, proxyOp));
+  // Registered ring AllGather may override the chunk size in the proxy operation.
   *outChunkSize = proxyOp->chunkSize;
   return ncclSuccess;
 }

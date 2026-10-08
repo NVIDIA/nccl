@@ -11,10 +11,11 @@
 #include "profiler_v7.h"
 
 // v8 extends v7 by letting NCCL stamp authoritative timestamps on every
-// event (start via the descriptor, stop via a new stop descriptor) so the
-// plugin does not have to compute its own CPU clocks. That matters for events
-// NCCL reconstructs after the fact, where a host clock read at emission time
-// would describe when the plugin was called rather than when the work ran.
+// event, so the plugin does not have to compute its own CPU clocks. That
+// matters for events NCCL reconstructs after the fact, where a host clock read
+// at emission time would describe when the plugin was called rather than when
+// the work ran. The same descriptor type carries the start timestamps to
+// startEvent and the stop timestamps to stopEvent.
 //
 // This is opt-in and off by default: a plugin asks for it by setting
 // ncclProfilerConfig_v8_t::ncclSourcedTimings during init (see below). Until
@@ -25,15 +26,26 @@
 //
 // Clocks:
 //  - tsGpu     : GPU globaltimer nanoseconds (arbitrary epoch). Set for
-//                events whose timing is GPU-derived (KernelCh and KernelPhase
-//                always; Coll/P2p in lossy mode, derived from their first/last
-//                KernelCh). 0 for purely host-side events.
+//                events whose timing is GPU-derived: KernelCh and KernelPhase
+//                always, and Coll/P2p when NCCL derives their timing from the
+//                first/last KernelCh. 0 for purely host-side events.
 //  - tsCpuMono : CLOCK_MONOTONIC nanoseconds. Canonical timebase for
 //                ordering/durations. For host-side events it is sampled at the
 //                call site; for GPU-derived events it is tsGpu mapped through
 //                the profiler thread's GPU->CPU calibration.
 //  - tsCpuReal : CLOCK_REALTIME nanoseconds. Wall-clock anchor for human
 //                readability only (may jump); never use for durations.
+//
+// Accuracy: tsCpuUncertainty carries a symmetric +/- bound on tsCpuMono and
+// tsCpuReal. Host-sampled events read the clock at the call site and report 0.
+// GPU-derived events are mapped through a calibration anchor that NCCL builds
+// by reading the GPU clock from the host: the GPU read landed somewhere inside
+// a CPU interval of width w, and NCCL reports that interval's midpoint, so the
+// bound is w/2. NCCL probes several times per anchor and keeps the tightest,
+// but it cannot drive w to zero -- a descheduled probe thread or a busy GPU
+// widens it. The bound covers the anchor only, not drift accumulated between
+// anchors. Plugins needing a confidence interval should use it (and may drop
+// samples whose bound is too wide for their purpose); the rest can ignore it.
 //
 // CE events (ncclProfileCeColl/CeSync/CeBatch) are intentionally left with
 // zeroed timestamps here: their completion is tracked by CUDA events inside
@@ -46,10 +58,13 @@ typedef struct {
   void* parentObj;              // pointer to the profiler parent object
   int rank;                     // originating rank
 
-  // NCCL-stamped start timestamps (see clock notes above). 0 == unavailable.
+  // NCCL-stamped timestamps (see clock notes above). 0 == unavailable.
+  // These are the event's start time in startEvent and its stop time in
+  // stopEvent; the fields below them are meaningful in startEvent only.
   uint64_t tsGpu;               // GPU globaltimer ns (GPU-derived events only)
   uint64_t tsCpuMono;           // CLOCK_MONOTONIC ns (canonical)
   uint64_t tsCpuReal;           // CLOCK_REALTIME ns (wall-clock anchor)
+  uint64_t tsCpuUncertainty;    // +/- bound on tsCpuMono/tsCpuReal, ns
 
   union {
     // All v7 descriptors
@@ -172,16 +187,6 @@ typedef struct {
   };
 } ncclProfilerEventDescr_v8_t;
 
-// New in v8: the stop timestamps carried by stopEvent. Same clock semantics
-// as the descriptor's start timestamps. Passing NULL (or zeroed fields) means
-// "no NCCL-stamped stop time available"; the plugin should fall back to its
-// previous behavior in that case.
-typedef struct {
-  uint64_t tsGpu;               // GPU globaltimer ns (GPU-derived events only)
-  uint64_t tsCpuMono;           // CLOCK_MONOTONIC ns (canonical)
-  uint64_t tsCpuReal;           // CLOCK_REALTIME ns (wall-clock anchor)
-} ncclProfilerEventStopDescr_v8_t;
-
 // v8 uses the same state args structure as v7.
 typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_v8_t;
 
@@ -194,10 +199,25 @@ typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_v8_t;
 // communicator. The pointer is only valid for the duration of the init() call,
 // and may be NULL, in which case every default applies.
 //
-// This is append-only: new members are added at the end, and existing ones are
-// never removed or reordered. A plugin built against an older v8 header
-// therefore stays source- and binary-compatible; check `size` before reading a
-// member that the running NCCL may predate.
+// This is append-only: new members are added at the end and existing ones are
+// never removed or reordered, so the struct can gain toggles over time without
+// another interface version bump. The header fields are what make that safe:
+//
+//  - size    : sizeof(ncclProfilerConfig_v8_t) as the caller compiled it. NCCL
+//              and the plugin are built separately and can disagree on how many
+//              members exist. Whichever side is newer compares size against its
+//              own sizeof and touches only the members that fit, so an older
+//              plugin loaded by a newer NCCL (or the reverse) reads and writes
+//              just the prefix both agree on rather than running off the end.
+//  - magic   : a fixed tag confirming the pointer really is a config struct.
+//              init() receives it as a bare pointer, so a plugin that guessed
+//              the wrong interface version would otherwise read unrelated
+//              memory as toggles and silently enable them.
+//  - version : the layout revision of this struct, bumped if a change cannot be
+//              expressed by appending alone (say, redefining what an existing
+//              toggle means). It is deliberately not the NCCL release version;
+//              plugins should branch on size and version, never on which NCCL
+//              they happen to be loaded by.
 #define NCCL_PROFILER_CONFIG_MAGIC   (0x50524f46u)  // 'PROF'
 #define NCCL_PROFILER_CONFIG_VERSION (1u)
 
@@ -235,9 +255,13 @@ typedef struct {
   // start timestamps (see ncclProfilerEventDescr_v8_t).
   ncclResult_t (*startEvent)(void* context, void** eHandle, ncclProfilerEventDescr_v8_t* eDescr);
 
-  // stopEvent - stop/finalize an event. eStopDescr carries NCCL-stamped stop
-  // timestamps and may be NULL when none are available.
-  ncclResult_t (*stopEvent)(void* eHandle, ncclProfilerEventStopDescr_v8_t* eStopDescr);
+  // stopEvent - stop/finalize an event. eDescr reuses the start descriptor
+  // type to carry the NCCL-stamped stop timestamps; only the tsGpu, tsCpuMono,
+  // tsCpuReal and tsCpuUncertainty fields are meaningful here, and the rest
+  // (type, parentObj, rank, union) are zeroed. The event being stopped is
+  // identified by eHandle alone. eDescr may be NULL when no timestamps are
+  // available.
+  ncclResult_t (*stopEvent)(void* eHandle, ncclProfilerEventDescr_v8_t* eDescr);
 
   // recordEventState - record event state transitions and updates
   ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v8_t eState,

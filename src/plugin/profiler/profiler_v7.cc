@@ -144,7 +144,7 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
   return ncclProfiler_v7->startEvent(ctx, eHandle, &eDescr_v7);
 }
 
-static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventStopDescr_t* eStopDescr) {
+static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
   // v7 plugins don't take stop timestamps; drop the stop descriptor.
   (void)eStopDescr;
   return ncclProfiler_v7->stopEvent(eHandle);

@@ -108,7 +108,6 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v8_t;
 typedef ncclProfiler_v8_t ncclProfiler_t;
 typedef ncclProfilerEventDescr_v8_t ncclProfilerEventDescr_t;
 typedef ncclProfilerEventStateArgs_v8_t ncclProfilerEventStateArgs_t;
-typedef ncclProfilerEventStopDescr_v8_t ncclProfilerEventStopDescr_t;
 typedef ncclProfilerConfig_v8_t ncclProfilerConfig_t;
 
 #define NCCL_PROFILER_NET_VER_BITS (16)

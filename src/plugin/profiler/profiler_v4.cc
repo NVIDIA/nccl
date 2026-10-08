@@ -116,7 +116,7 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
   return ncclProfiler_v4->recordEventState(eHandle, (ncclProfilerEventState_v4_t)eState, &eStateArgs_v4);
 }
 
-static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventStopDescr_t* eStopDescr) {
+static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
   // v4 stopEvent takes no stop timestamps; drop the v7 stop descriptor.
   (void)eStopDescr;
   return ncclProfiler_v4->stopEvent(eHandle);

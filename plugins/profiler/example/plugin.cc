@@ -1386,7 +1386,7 @@ __hidden ncclResult_t exampleProfilerStartEvent_v8(void* context, void** eHandle
   return exampleProfilerStartEvent_v7(context, eHandle, &d7);
 }
 
-__hidden ncclResult_t exampleProfilerStopEvent_v8(void* eHandle, ncclProfilerEventStopDescr_v8_t* eStopDescr) {
+__hidden ncclResult_t exampleProfilerStopEvent_v8(void* eHandle, ncclProfilerEventDescr_v8_t* eStopDescr) {
   // This example ignores the NCCL-stamped stop timestamps.
   (void)eStopDescr;
   return exampleProfilerStopEvent_v7(eHandle);

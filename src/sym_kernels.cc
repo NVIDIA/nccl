@@ -110,6 +110,8 @@ constexpr ncclSymkKernelMask kernelMask_Tma =
 
 constexpr ncclSymkKernelMask kernelMask_DynamicSmem = kernelMask_Tma;
 
+constexpr ncclSymkKernelMask kernelMask_Symk = (kernelMask_AG | kernelMask_AR | kernelMask_RS) & ~kernelMask_Genk;
+
 ncclSymkKernelMask ncclSymkLLKernelMask() {
   return kernelMask_LL;
 }
@@ -138,6 +140,10 @@ ncclSymkKernelMask ncclSymkARKernelMask() {
 
 ncclSymkKernelMask ncclSymkRSKernelMask() {
   return kernelMask_RS;
+}
+
+ncclSymkKernelMask ncclSymkNonGenkKernelMask() {
+  return kernelMask_Symk;
 }
 
 // Host picker: true when nBytes is large enough for this kernel's TMA deep loop at nBlocks.
@@ -187,6 +193,7 @@ static ncclSymkKernelMask kernelMask_coll(ncclFunc_t coll) {
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 1)
+NCCL_PARAM(SymGenkEnable, "SYM_GENK_ENABLE", 0)
 
 static bool ncclGenkGinAvailable(struct ncclComm* comm) {
 #if !defined(NCCL_OS_WINDOWS)
@@ -433,7 +440,7 @@ ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   if (!symAligned16B) kmask &= ~kernelMask_Tma;
   // Specialized kernels still require direct NVLink; Genk can also use LSA over CUDA P2P or GIN.
   if (!comm->isAllDirectNvlink) kmask &= kernelMask_Genk;
-  if (comm->minCompCap < 90) kmask &= ~kernelMask_Genk;
+  if (ncclParamSymGenkEnable() == 0 || comm->minCompCap < 90) kmask &= ~kernelMask_Genk;
 
   bool const hasGin = ncclParamSymGinKernelsEnable() != 0;
   bool const hasMultipleLsaTeams = ncclTeamLsa(comm).nRanks < comm->nRanks;

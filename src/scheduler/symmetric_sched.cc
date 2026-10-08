@@ -20,8 +20,6 @@
 #include <cuda_fp8.h>
 #endif
 
-extern int64_t ncclParamSingleProcMemRegEnable();
-
 ncclDevRedOp_t symkRedOp(ncclRedOp_t redOp, ncclDevRedOp_t devRedOp) {
   if (redOp == ncclAvg) {
     return ncclDevSumPostDiv;
@@ -194,7 +192,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       input.devRedOp = symkOp;
       input.datatype = headTask->datatype;
       input.nBytes = countTotal * ncclTypeSize(headTask->datatype);
-      input.numPipeOps = 0;
+      input.numPipeOps = divUp(nWorks, comm->nChannels);
       input.count = headTask->count;
       input.countMax = countMax;
       input.nWorks = nWorks;
@@ -216,7 +214,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &input.collNetSupport));
       NCCLCHECK(ncclGetRegBuff(comm, headTask, &input.regBuff));
       struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;
-      NCCLCHECK(ncclTuningCompute(&input, &bestTuning));
+      NOWARN(ncclTuningCompute(&input, &bestTuning), NCCL_TUNING);
       kernelId = (ncclSymkKernelId)bestTuning.symKernelId;
       nChannels = bestTuning.nChannels;
       nWarps = bestTuning.nWarps;
@@ -254,7 +252,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         continue;
       }
 
-      // Specialized LL kernels need their communicator even without a registered user window.
+      // Specialized LL kernels don't require registered user windows but they still need an initialized devComm.
       ncclSymkKernelMask const symkLLKernelMask = ncclSymkLLKernelMask() & ~ncclGenkKernelMask();
       if (((1ull << kernelId) & symkLLKernelMask) && headTask->winRegType == ncclSymSendNonregRecvNonreg) {
         NCCLCHECK(ncclSymkInitOnce(comm));

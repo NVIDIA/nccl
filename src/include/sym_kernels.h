@@ -346,6 +346,7 @@ ncclSymkKernelMask ncclGenkKernelMask();
 ncclSymkKernelMask ncclSymkAGKernelMask();
 ncclSymkKernelMask ncclSymkARKernelMask();
 ncclSymkKernelMask ncclSymkRSKernelMask();
+ncclSymkKernelMask ncclSymkNonGenkKernelMask();
 size_t ncclSymkRsGinChunkBytes();
 
 constexpr int ncclSymkAllGather_RailRing_ChunkSize = 1 << 20;
@@ -384,4 +385,5 @@ constexpr int ncclSymkAlign256BDeepUnrollPacks = 16;
 constexpr int ncclSymkAlign256BDeepBytePerChunk =
   ncclSymkGetBytesPerChunk(ncclSymkMinWarpsPerBlock, ncclSymkAlign256BDeepUnrollPacks);
 
+int64_t ncclParamSymGenkEnable();
 #endif

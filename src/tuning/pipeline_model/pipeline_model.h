@@ -29,6 +29,7 @@ typedef ncclResult_t (*ncclTuningPipelineCompute_t)(struct ncclTuningInput_t* co
 
 struct ncclTuningPipeline {
   size_t channelSize;
+  size_t nominalChunkSize;
   size_t chunkSize;
   size_t sliceSize;
   size_t nSlices;
@@ -46,21 +47,16 @@ struct ncclTuningPipelineStep {
   float lat, busBw;
 };
 
-inline ncclResult_t ncclTuningPreComputePipeline(struct ncclTuningInput_t* const inputs,
-                                                 struct ncclTuningResult_t* tuning,
-                                                 struct ncclTuningPipeline* pipeline /*output*/) {
-  struct ncclComm* comm = inputs->comm;
+inline ncclResult_t ncclTuningPipelineComputeSliceSize(
+  struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* tuning, struct ncclTuningPipeline* pipeline) {
   int protocol = tuning->proto;
-  int chunkSteps = inputs->chunkSteps;
-  int sliceSteps = inputs->sliceSteps;
-  chunkSteps = ncclGetChunkSteps(protocol, tuning->algo, chunkSteps);
-  sliceSteps = ncclGetSliceSteps(protocol, tuning->algo, sliceSteps);
-  size_t stepSize = comm->buffSizes[protocol] / NCCL_STEPS;
   size_t elementSize = ncclTypeSize(inputs->datatype);
-  pipeline->channelSize = ncclSizePerChannel(inputs->nBytes, tuning->nChannels);
-  size_t nominalChunkSize = ncclGetChunkSize(protocol, stepSize, chunkSteps);
-  pipeline->chunkSize = nominalChunkSize < pipeline->channelSize ? nominalChunkSize : pipeline->channelSize;
-  size_t nominalSliceSize = ncclNominalSliceSize(nominalChunkSize, chunkSteps, sliceSteps);
+
+  int chunkSteps = ncclGetChunkSteps(protocol, tuning->algo, inputs->chunkSteps);
+  int sliceSteps = ncclGetSliceSteps(protocol, tuning->algo, inputs->sliceSteps);
+
+  size_t nominalSliceSize = ncclNominalSliceSize(pipeline->nominalChunkSize, chunkSteps, sliceSteps);
+
   if (protocol == NCCL_PROTO_SIMPLE && pipeline->chunkSize != 0) {
     size_t chunkElements = DIVUP(pipeline->chunkSize, elementSize);
     size_t nominalSliceElements = nominalSliceSize / elementSize;
@@ -70,6 +66,30 @@ inline ncclResult_t ncclTuningPreComputePipeline(struct ncclTuningInput_t* const
   } else {
     pipeline->sliceSize = pipeline->chunkSize < nominalSliceSize ? pipeline->chunkSize : nominalSliceSize;
   }
+
+  return ncclSuccess;
+}
+
+inline ncclResult_t ncclTuningPipelineComputeChunkSize(struct ncclTuningInput_t* const inputs,
+                                                       struct ncclTuningResult_t* tuning,
+                                                       struct ncclTuningPipeline* pipeline /*output*/) {
+  struct ncclComm* comm = inputs->comm;
+  int protocol = tuning->proto;
+  int chunkSteps = inputs->chunkSteps;
+  chunkSteps = ncclGetChunkSteps(protocol, tuning->algo, chunkSteps);
+  size_t stepSize = comm->buffSizes[protocol] / NCCL_STEPS;
+  pipeline->channelSize = ncclSizePerChannel(inputs->nBytes, tuning->nChannels);
+  pipeline->nominalChunkSize = ncclGetChunkSize(protocol, stepSize, chunkSteps);
+  pipeline->chunkSize = std::min(pipeline->nominalChunkSize, pipeline->channelSize);
+
+  return ncclSuccess;
+}
+
+inline ncclResult_t ncclTuningPreComputePipeline(struct ncclTuningInput_t* const inputs,
+                                                 struct ncclTuningResult_t* tuning,
+                                                 struct ncclTuningPipeline* pipeline /*output*/) {
+  NCCLCHECK(ncclTuningPipelineComputeChunkSize(inputs, tuning, pipeline));
+  NCCLCHECK(ncclTuningPipelineComputeSliceSize(inputs, tuning, pipeline));
 
   return ncclSuccess;
 }

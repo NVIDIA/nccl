@@ -54,7 +54,7 @@ def coop_and_teams_kernel(dev_comm: nccl_cute.DevComm):
     """
     tidx, _, _ = cute.arch.thread_idx()
 
-    # Each coop allocates its own ncclCoopAny on the stack; they are cheap.
+    # Each coop allocates its own ncclIrCoop storage on the stack; they are cheap.
     block = nccl_cute.cta()
     lane_group = nccl_cute.warp()
     single = nccl_cute.thread()

@@ -306,16 +306,10 @@ template <typename T, typename Coop, typename DstLambda, typename IntCount>
 NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count,
                                        char* smemPtr, int smemBytesTotal) {
   static_assert(std::is_same<Coop, ncclCoopThread>::value || std::is_same<Coop, ncclCoopWarp>::value ||
-                  std::is_same<Coop, ncclCoopCta>::value || std::is_same<Coop, ncclCoopAny>::value,
-                "ncclLsaCopyTma requires Thread, Warp, or CTA, optionally wrapped in ncclCoopAny");
+                  std::is_same<Coop, ncclCoopCta>::value,
+                "ncclLsaCopyTma requires Thread, Warp, or CTA");
   static_assert(16 % sizeof(T) == 0, "ncclLsaCopyTma requires a type whose size divides the 16-byte TMA pack");
 #if NCCL_DEVICE_DEBUG_CHECKS
-  if constexpr (std::is_same<Coop, ncclCoopAny>::value) {
-    assert((coop.vtable == ncclCoopAny::get_vtable<ncclCoopThread>() ||
-            coop.vtable == ncclCoopAny::get_vtable<ncclCoopWarp>() ||
-            coop.vtable == ncclCoopAny::get_vtable<ncclCoopCta>()) &&
-           "ncclLsaCopyTma requires Thread, Warp, or CTA");
-  }
   if ((count * sizeof(T)) % 16 != 0) {
     if (coop.thread_rank() == 0) {
       assert(false && "ncclLsaCopyTma: count * sizeof(T) is not a multiple of 16; copy refused");
@@ -348,16 +342,10 @@ template <typename T, typename Coop, typename IntCount>
 NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclSymPtr<T> dst, IntCount count, ncclTeam team,
                                        char* smemPtr, int smemBytesTotal) {
   static_assert(std::is_same<Coop, ncclCoopThread>::value || std::is_same<Coop, ncclCoopWarp>::value ||
-                  std::is_same<Coop, ncclCoopCta>::value || std::is_same<Coop, ncclCoopAny>::value,
-                "ncclLsaCopyTma requires Thread, Warp, or CTA, optionally wrapped in ncclCoopAny");
+                  std::is_same<Coop, ncclCoopCta>::value,
+                "ncclLsaCopyTma requires Thread, Warp, or CTA");
   static_assert(16 % sizeof(T) == 0, "ncclLsaCopyTma requires a type whose size divides the 16-byte TMA pack");
 #if NCCL_DEVICE_DEBUG_CHECKS
-  if constexpr (std::is_same<Coop, ncclCoopAny>::value) {
-    assert((coop.vtable == ncclCoopAny::get_vtable<ncclCoopThread>() ||
-            coop.vtable == ncclCoopAny::get_vtable<ncclCoopWarp>() ||
-            coop.vtable == ncclCoopAny::get_vtable<ncclCoopCta>()) &&
-           "ncclLsaCopyTma requires Thread, Warp, or CTA");
-  }
   if ((count * sizeof(T)) % 16 != 0) {
     if (coop.thread_rank() == 0) {
       assert(false && "ncclLsaCopyTma: count * sizeof(T) is not a multiple of 16; copy refused");

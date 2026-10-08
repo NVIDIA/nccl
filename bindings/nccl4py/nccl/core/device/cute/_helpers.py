@@ -1,7 +1,7 @@
 """Hand-written internal utilities for the CuTeDSL bindings.
 
 Holds the ``_alloca_*`` stack-storage helpers, ``_load_cft_le_info``, and the
-``_to_ptr`` / ``_to_coop_value`` / ``_to_value`` coercion helpers.
+``_to_ptr`` / ``_to_coop_ptr`` / ``_to_value`` coercion helpers.
 Device bitcode discovery lives in :mod:`_bindings`, next to the
 ``@cute.extern`` stubs that link against it.
 """
@@ -11,7 +11,6 @@ from cutlass.cutlass_dsl import ir
 from cutlass._mlir.dialects import llvm
 from cutlass.cutlass_dsl import dsl_user_op
 
-from ._structs import ncclCoopAny
 from .types import CftLeInfo
 
 
@@ -112,30 +111,9 @@ def _to_ptr(x, *, loc=None, ip=None):
 
 
 @dsl_user_op
-def _to_coop_value(x, *, loc=None, ip=None):
-    """Coerce a :class:`Coop` to a bare ``ncclCoopAny`` struct ir.Value.
-
-    :class:`Coop` only carries a pointer to alloca'd storage (cheap
-    property access); by-value externs need the full struct loaded here.
-    The result is a bare struct ir.Value (not a wrapper) so the
-    ``@cute.extern`` matcher recognizes it against an ``ncclCoopAny``
-    annotation.
-
-    Args:
-        x: accepted forms --
-
-            * ``ncclCoopAny`` struct ir.Value -- passthrough.
-            * ``@cute.native_struct`` pointer-wrapper around alloca'd
-              ``ncclCoopAny`` storage (e.g. :class:`Coop`) -- load it.
-
-    Returns:
-        ``ncclCoopAny`` struct ir.Value.
-    """
-    if isinstance(x, ir.Value):
-        return x
-    if hasattr(x, "ptr"):
-        return llvm.load(ncclCoopAny._struct_type, x.ptr, loc=loc, ip=ip)
-    return _to_value(x)
+def _to_coop_ptr(x, *, loc=None, ip=None):
+    """Return a Coop's storage pointer, or coerce a raw address to !llvm.ptr."""
+    return _to_ptr(x.ptr if hasattr(x, "ptr") else x, loc=loc, ip=ip)
 
 
 def _to_value(x):

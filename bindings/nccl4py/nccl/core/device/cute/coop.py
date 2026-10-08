@@ -1,6 +1,6 @@
-"""Cooperative groups (``ncclCoopAny``) for the device API.
+"""Cooperative groups (``ncclIrCoop``) for the device API.
 
-:class:`Coop` wraps a stack-alloca'd ``ncclCoopAny`` storage block.
+:class:`Coop` wraps a stack-alloca'd ``ncclIrCoop`` storage block.
 Construct via the module-level factories::
 
     coop = nccl_cute.cta()
@@ -18,12 +18,12 @@ import cutlass.cute as cute
 
 from . import _bindings
 from ._helpers import _alloca_struct
-from ._structs import _LLVMPtrType, ncclCoopAny
+from ._structs import _LLVMPtrType, ncclIrCoop
 
 
 @cute.native_struct
 class Coop:
-    """Pointer wrapper for ``ncclCoopAny``.
+    """Pointer wrapper for ``ncclIrCoop``.
 
     Construct via :func:`cta` / :func:`warp` / :func:`thread` /
     :func:`lanes` / :func:`warp_span`. Methods/properties forward to the
@@ -62,7 +62,7 @@ def cta() -> Coop:
     Returns:
         :class:`Coop`.
     """
-    ptr = _alloca_struct(ncclCoopAny)
+    ptr = _alloca_struct(ncclIrCoop)
     _bindings.nccl_coop_any_init_cta(ptr)
     return Coop(ptr=ptr)
 
@@ -73,7 +73,7 @@ def warp() -> Coop:
     Returns:
         :class:`Coop`.
     """
-    ptr = _alloca_struct(ncclCoopAny)
+    ptr = _alloca_struct(ncclIrCoop)
     _bindings.nccl_coop_any_init_warp(ptr)
     return Coop(ptr=ptr)
 
@@ -84,7 +84,7 @@ def thread() -> Coop:
     Returns:
         :class:`Coop`.
     """
-    ptr = _alloca_struct(ncclCoopAny)
+    ptr = _alloca_struct(ncclIrCoop)
     _bindings.nccl_coop_any_init_thread(ptr)
     return Coop(ptr=ptr)
 
@@ -98,7 +98,7 @@ def lanes(lane_mask: int) -> Coop:
     Returns:
         :class:`Coop`.
     """
-    ptr = _alloca_struct(ncclCoopAny)
+    ptr = _alloca_struct(ncclIrCoop)
     _bindings.nccl_coop_any_init_lanes(ptr, cutlass.Uint32(lane_mask))
     return Coop(ptr=ptr)
 
@@ -114,7 +114,7 @@ def warp_span(warp0: int, n_warps: int, id: int) -> Coop:
     Returns:
         :class:`Coop`.
     """
-    ptr = _alloca_struct(ncclCoopAny)
+    ptr = _alloca_struct(ncclIrCoop)
     _bindings.nccl_coop_any_init_warp_span(
         ptr, cutlass.Int32(warp0), cutlass.Int32(n_warps), cutlass.Int32(id))
     return Coop(ptr=ptr)

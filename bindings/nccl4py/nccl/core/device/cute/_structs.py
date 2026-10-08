@@ -175,18 +175,17 @@ class DevCommValue:
     cft_multimem_barrier: ncclCftBarrierHandle
 
 
-@cute.native_struct
-class _ncclCoopStorage:
-    space: _array_i8(16)
+class _CoopOpaqueStorage:
+    @staticmethod
+    def mlir_type():
+        return ir.Type.parse("!llvm.array<3 x i64>")
 
 
 @cute.native_struct
-class ncclCoopAny:
-    """``struct ncclCoopAny`` -- 16-byte aligned-to-ptr storage + vtable ptr
-    (src/include/nccl_device/coop.h)."""
+class ncclIrCoop:
+    """Opaque 24-byte, 8-byte-aligned coop storage from the IR wrapper header."""
 
-    storage: _ncclCoopStorage
-    vtable: _LLVMPtrType
+    storage: _CoopOpaqueStorage
 
 
 @cute.native_struct

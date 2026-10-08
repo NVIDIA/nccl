@@ -16,8 +16,9 @@ from cutlass._mlir.dialects import llvm
 from cutlass.cutlass_dsl import dsl_user_op
 
 from . import _bindings
-from ._helpers import _to_ptr, _to_coop_value, _to_value
-from ._structs import _LLVMPtrType, ncclGin_C, ncclTeam, ncclCoopAny
+from ._helpers import _to_ptr, _to_coop_ptr, _to_value
+from ._structs import _LLVMPtrType, ncclGin_C, ncclTeam
+from .coop import Coop
 from .types import MemoryOrder, ThreadScope
 
 
@@ -38,7 +39,7 @@ class Gin:
         dst,
         src_win,
         src,
-        coop: ncclCoopAny,
+        coop: Coop,
         *,
         is_signal: bool = False,
         signal_id: int = 0,
@@ -96,7 +97,7 @@ class Gin:
             cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             cutlass.Boolean(is_counter), cutlass.Int32(counter_id),
-            _to_coop_value(coop),
+            _to_coop_ptr(coop),
             cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
             cutlass.Int32(opt_flags),
@@ -109,7 +110,7 @@ class Gin:
         dst_win,
         dst,
         value: int,
-        coop: ncclCoopAny,
+        coop: Coop,
         *,
         is_signal: bool = False,
         signal_id: int = 0,
@@ -157,7 +158,7 @@ class Gin:
             cutlass.Int64(value), cutlass.Int64(size),
             cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
-            _to_coop_value(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
+            _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
             cutlass.Int32(opt_flags),
         )
@@ -170,7 +171,7 @@ class Gin:
         remote,
         local_win,
         local,
-        coop: ncclCoopAny,
+        coop: Coop,
         *,
         is_descriptor: bool = False,
         descriptor_ptr=0,
@@ -207,7 +208,7 @@ class Gin:
             remote_win.ptr, cutlass.Int64(remote_offset),
             local_win.ptr, cutlass.Int64(local_offset),
             cutlass.Int64(size),
-            _to_coop_value(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
+            _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(opt_flags),
         )
 
@@ -219,7 +220,7 @@ class Gin:
         signal_id: int,
         signal_op: int,
         signal_op_arg: int,
-        coop: ncclCoopAny,
+        coop: Coop,
         *,
         is_descriptor: bool = False,
         descriptor_ptr=0,
@@ -249,7 +250,7 @@ class Gin:
             self.ptr, _to_value(team), cutlass.Int32(peer),
             cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
-            _to_coop_value(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
+            _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
             cutlass.Int32(opt_flags),
         )
@@ -278,7 +279,7 @@ class Gin:
 
     def wait_signal(
         self,
-        coop: ncclCoopAny,
+        coop: Coop,
         *,
         signal: int = 0,
         least: int = 1,
@@ -297,7 +298,7 @@ class Gin:
                 :class:`~nccl.core.device.cute.types.MemoryOrder`.
         """
         _bindings.nccl_gin_wait_signal(
-            self.ptr, _to_coop_value(coop), cutlass.Int32(signal),
+            self.ptr, _to_coop_ptr(coop), cutlass.Int32(signal),
             cutlass.Int64(least), cutlass.Int32(bits), cutlass.Int32(int(ord)))
 
     def read_counter(
@@ -324,7 +325,7 @@ class Gin:
 
     def wait_counter(
         self,
-        coop: ncclCoopAny,
+        coop: Coop,
         *,
         counter: int = 0,
         least: int = 1,
@@ -343,7 +344,7 @@ class Gin:
                 :class:`~nccl.core.device.cute.types.MemoryOrder`.
         """
         _bindings.nccl_gin_wait_counter(
-            self.ptr, _to_coop_value(coop), cutlass.Int32(counter),
+            self.ptr, _to_coop_ptr(coop), cutlass.Int32(counter),
             cutlass.Int64(least), cutlass.Int32(bits), cutlass.Int32(int(ord)))
 
     def reset_counter(self, *, counter: int) -> None:
@@ -386,7 +387,7 @@ class Gin:
             _bindings.nccl_gin_get_signal_shadow_ptr(self.ptr, cutlass.Int32(signal)),
         )
 
-    def flush(self, coop: ncclCoopAny, ord: MemoryOrder = MemoryOrder.ACQUIRE) -> None:
+    def flush(self, coop: Coop, ord: MemoryOrder = MemoryOrder.ACQUIRE) -> None:
         """Flush pending GIN operations.
 
         Args:
@@ -394,7 +395,7 @@ class Gin:
             ord: ``cuda::memory_order``; default ``ACQUIRE``. See
                 :class:`~nccl.core.device.cute.types.MemoryOrder`.
         """
-        _bindings.nccl_gin_flush(self.ptr, _to_coop_value(coop), cutlass.Int32(int(ord)))
+        _bindings.nccl_gin_flush(self.ptr, _to_coop_ptr(coop), cutlass.Int32(int(ord)))
 
     @dsl_user_op
     def value(self, *, loc=None, ip=None) -> ncclGin_C:

@@ -3654,22 +3654,34 @@ static ncclResult_t ncclCommInitChildComm(ncclComm_t comm, ncclComm_t* newcomm, 
   CUDACHECK(cudaGetDevice(&oldDev));
   NCCLCHECKGOTO(CommCheck(comm, caller, "comm"), res, exit);
   NCCLCHECKGOTO(PtrCheck(newcomm, caller, "newcomm"), res, exit);
+  NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, exit);
+  /* *newcomm should be NCCL_COMM_NULL until comm split fully completes. */
+  *newcomm = NCCL_COMM_NULL;
   if (isShrink) {
     NCCLCHECKGOTO(PtrCheck(excludeRanksList, caller, "excludeRanksList"), res, exit);
     NCCLCHECKGOTO(excludeRanksCount > 0 ? ncclSuccess : ncclInvalidArgument, res, exit);
     // excludeRanksList may not be sorted, need to sort it
     qsort(excludeRanksList, excludeRanksCount, sizeof(int), compareInts);
-    // ranks in excludeRanksList should not call into this function
-    NCCLCHECKGOTO(bsearch(&comm->rank, excludeRanksList, excludeRanksCount, sizeof(int), compareInts) ?
-                    ncclInvalidArgument :
-                    ncclSuccess,
-                  res, exit);
+    if (bsearch(&comm->rank, excludeRanksList, excludeRanksCount, sizeof(int), compareInts) != NULL) {
+      WARN("excludeRanksList is invalid: Must not exclude self (rank %d)", comm->rank);
+      res = ncclInvalidArgument;
+      goto exit;
+    }
+    for (int i = 0; i < excludeRanksCount; i++) {
+      if (excludeRanksList[i] < 0 || excludeRanksList[i] >= comm->nRanks) {
+        WARN("excludeRanksList is invalid: Rank %d is out-of-bounds", excludeRanksList[i]);
+        res = ncclInvalidArgument;
+        goto exit;
+      }
+      if (i > 0 && excludeRanksList[i] == excludeRanksList[i - 1]) {
+        WARN("excludeRanksList is invalid: Rank %d is listed more than once", excludeRanksList[i]);
+        res = ncclInvalidArgument;
+        goto exit;
+      }
+    }
   }
-  NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, exit);
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), res, exit);
 
-  /* *newcomm should be NCCL_COMM_NULL until comm split fully complete. */
-  *newcomm = NCCL_COMM_NULL;
   if (!isShrink && color == NCCL_SPLIT_NOCOLOR) {
     INFO(NCCL_INIT, "Rank %d has color with NCCL_SPLIT_NOCOLOR, not creating a new communicator", comm->rank);
   } else {

@@ -27,7 +27,8 @@ static ncclResult_t ncclTuningPipelineRingGetAlgoStep(struct ncclComm* comm, int
                                                       struct ncclTuningPipelineStep* inter) {
   const struct ncclTopoGraph* graph = &comm->graphs[algo];
   int nSteps = ncclTuningGetNsteps(func, comm->nRanks);
-  int nInterSteps = (comm->nNodes == 1) ? 0 : (func == ncclFuncAllReduce) ? (2 * (comm->nNodes - 1)) : comm->nNodes - 1;
+  int nInterSteps = (comm->nNodes == 1) ? 0 : (func == ncclFuncAllReduce) ? (2 * (comm->nNodes)) : comm->nNodes;
+  if (comm->nRanks == comm->nNodes) nInterSteps = nSteps;
   float bwFactor = ncclTuningProtoBWFactor(proto) / graph->nCtasPerChannel;
   float intraBw = bwFactor * graph->bwIntra, interBw = bwFactor * graph->bwInter;
   int intraHw, interHw;
@@ -48,9 +49,24 @@ static int ncclTuningPipelineRingIsValid(struct ncclTuningInput_t* const inputs,
 static inline ncclResult_t ncclTuningPipelineRingComputePipeline(struct ncclTuningInput_t* const inputs,
                                                                  struct ncclTuningResult_t* tuning,
                                                                  struct ncclTuningPipeline* pipeline /*output*/) {
-  NCCLCHECK(ncclTuningPreComputePipeline(inputs, tuning, pipeline));
-
   struct ncclComm* comm = inputs->comm;
+  NCCLCHECK(ncclTuningPipelineComputeChunkSize(inputs, tuning, pipeline));
+
+  size_t chunkWorkSize = pipeline->channelSize;
+
+  if (tuning->algo == NCCL_ALGO_RING && (inputs->func == ncclFuncAllReduce || inputs->func == ncclFuncAllGather ||
+                                         inputs->func == ncclFuncReduceScatter)) {
+    size_t elementSize = ncclTypeSize(inputs->datatype);
+
+    size_t elements = DIVUP(pipeline->channelSize, elementSize);
+    size_t alignedRankElements = ncclElementAlignedDivUp(elements, comm->nRanks, elementSize, (size_t)16);
+    chunkWorkSize = std::min(pipeline->channelSize, alignedRankElements * elementSize);
+  }
+
+  pipeline->chunkSize = std::min(pipeline->nominalChunkSize, chunkWorkSize);
+
+  NCCLCHECK(ncclTuningPipelineComputeSliceSize(inputs, tuning, pipeline));
+
   // Counts the number of slices transferred through a link.
   size_t sliceCount = (pipeline->sliceSize == 0) ? 0 : DIVUP(pipeline->channelSize, pipeline->sliceSize);
 

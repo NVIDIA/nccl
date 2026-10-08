@@ -132,4 +132,14 @@ __host__ __device__ inline Int ncclSimpleSliceSize(Int nelem, int slicesPerChunk
   return aligned > minimum ? aligned : minimum;
 }
 
+// Divides elements by divider while maintaining alignment
+template <typename Int>
+__host__ __device__ inline Int ncclElementAlignedDivUp(Int elements, int divider, Int elementSize, Int alignment) {
+  Int alignmentElements = alignment / elementSize;
+  Int rankElements = DIVUP(elements, static_cast<Int>(divider));
+  Int alignedRankElements = DIVUP(rankElements, alignmentElements) * alignmentElements;
+
+  return alignedRankElements;
+}
+
 #endif // NCCL_COLL_SIZES_H_

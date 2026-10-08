@@ -508,10 +508,8 @@ struct FuncPreMulSum;
 The list initializers of a constructor start on a new line, break before the `:`.
 
 ```cpp
-ncclGin_C::ncclGin_C(ncclDevComm const& comm, unsigned backendMask, int contextIndex)
-  : comm(comm), backendMask(backendMask) {
-  ncclGinInitCommon(this, comm, contextIndex);
-}
+WorkQueue::WorkQueue(int capacity_)
+  : capacity(capacity_), head(0), tail(0) {}
 ```
 
 ---

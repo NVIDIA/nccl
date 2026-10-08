@@ -188,21 +188,14 @@ class ncclIrCoop:
     storage: _CoopOpaqueStorage
 
 
+class _GinOpaqueStorage:
+    @staticmethod
+    def mlir_type():
+        return ir.Type.parse("!llvm.array<5 x i64>")
+
+
 @cute.native_struct
-class ncclGin_C:
-    """``struct ncclGin_C`` (bindings/ir/nccl_device_wrapper.h).
+class ncclIrGin:
+    """Opaque 40-byte, 8-byte-aligned GIN storage from the IR wrapper header."""
 
-    The bitfield triple ``{nConnections:8, connectionId:8, _ginBackend:8}``
-    is represented as a single ``Uint32`` ``flags`` field; padding fields
-    match the natural alignment of the C++ layout.
-    """
-
-    comm: _LLVMPtrType
-    flags: cutlass.Uint32
-    contextId: cutlass.Uint32
-    resourceSharingMode: cutlass.Int8
-    _pad0: _array_i8(7)
-    ginHandle: _LLVMPtrType
-    signalShadows: _LLVMPtrType
-    backendMask: cutlass.Uint32
-    _pad1: _array_i8(4)
+    storage: _GinOpaqueStorage

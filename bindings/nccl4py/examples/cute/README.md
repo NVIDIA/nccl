@@ -88,21 +88,14 @@ would use is unavailable, and print their own results:
 
 ```
 ===== 05_barriers.py =====
-WARNING: NCCL 2.30.7 passes ncclGin_C by value; skipping world_gin,
-rail_gin, gin_session, world_hybrid and hybrid_session
-[rank 0] [SUCCESS] LSA barriers and the GIN_ALL_CONTEXTS barrier completed
+[rank 0] [SUCCESS] LSA, GIN and hybrid barriers completed
 ```
 
 A machine that lacks a capability entirely warns and exits 0; a wrong rank
 count or topology is an `ERROR` with a non-zero exit.
 
-Two device symbols changed after 2.30.7, in different releases, so the
-affected sections check `nccl.get_version()` and skip rather than fail:
-`ncclGinGet` only gained C linkage in **2.31.1**, and the barrier-session
-entry points started taking `ncclGin_C` by pointer in **2.31.0**. The check
-reads the loaded `libnccl.so` and assumes `libnccl_device.bc` came from the
-same install -- which is how the wheel and a source build ship them. If you
-`LD_PRELOAD` one, point `NCCL_HOME` at the other's build.
+Use `libnccl.so` and `libnccl_device.bc` from the same build. If you `LD_PRELOAD`
+one, point `NCCL_HOME` at that build as well.
 
 ## API coverage
 
@@ -130,11 +123,10 @@ same install -- which is how the wheel and a source build ship them. If you
 | `MemoryOrder` | 02-06 |
 | `ThreadScope` / `GinResourceSharingMode` | 04 |
 | `GinFenceLevel` | 05 |
-| `GinBackendMask` | 00, 04, 05, 07 |
 | `lsa_reduce_sum` / `lsa_copy` / `lsa_copy_tma` | 08 |
 
-Not exercised: `Gin.value()` and the raw `.ptr` accessors (binding
+Not exercised: the raw `.ptr` accessors (binding
 plumbing); the `is_descriptor` / `descriptor_ptr` arguments, which need an
 `ncclGinDescriptorSmem` this layer does not wrap; and pass-through knobs
 left at their defaults -- `opt_flags`, `signal_op=1` (Add), the non-GPU
-resource-sharing modes, and the individual `GinBackendMask` bits.
+resource-sharing modes.

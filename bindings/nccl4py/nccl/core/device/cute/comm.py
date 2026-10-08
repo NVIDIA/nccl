@@ -17,12 +17,12 @@ from . import _bindings
 from ._helpers import _alloca_cft_le_info, _alloca_struct, _load_cft_le_info, _to_value
 from ._structs import (
     DevCommValue,
-    ncclGin_C,
+    ncclIrGin,
     ncclTeam as Team,
 )
 from .gin import Gin
 from .handles import GinBarrierHandle, LsaBarrierHandle, MultimemHandle
-from .types import CftLeInfo, CftTeamMode, GinBackendMask, GinResourceSharingMode
+from .types import CftLeInfo, CftTeamMode, GinResourceSharingMode
 
 
 def _device_function_entry_block():
@@ -363,15 +363,13 @@ class DevComm:
 
     def gin(
         self,
-        backend: GinBackendMask,
         context_id: int,
         *,
         resource_sharing_mode: GinResourceSharingMode = GinResourceSharingMode.GPU,
     ) -> Gin:
-        """Allocate and initialize a :class:`Gin` rooted on this comm.
+        """Allocate and initialize an ALL-mask :class:`Gin` rooted on this comm.
 
         Args:
-            backend: backend selection mask.
             context_id: GIN context id.
             resource_sharing_mode: scope at which GIN network resources are
                 shared: across the GPU, within each CTA, or exclusively by
@@ -381,11 +379,13 @@ class DevComm:
         Returns:
             Initialized :class:`Gin`.
         """
-        storage = _alloca_struct(ncclGin_C)
-        _bindings.nccl_gin_c_init(
-            storage, cutlass.Int32(int(backend)), self.ptr,
+        storage = _alloca_struct(ncclIrGin)
+        _bindings.nccl_ir_gin_init(
+            storage, self.ptr,
             cutlass.Int32(context_id), cutlass.Uint8(int(resource_sharing_mode)))
-        return Gin(ptr=storage)
+        return Gin(
+            ptr=storage,
+            _legacy_signal_is_strong=cutlass.Boolean(self.value.gin_strong_legacy_signals))
 
 
 @cutlass.register_jit_arg_adapter(DevCommResource)

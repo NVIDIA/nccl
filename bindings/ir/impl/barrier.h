@@ -60,11 +60,11 @@ NCCL_DEVICE_INLINE void ncclIrLsaBarrierSessionDestroy(ncclIrLsaBarrierSession* 
 }
 
 NCCL_DEVICE_INLINE void ncclIrGinBarrierSessionInit(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
-                                                    ncclGin_C const* net, ncclTeam team, ncclGinBarrierHandle handle,
+                                                    ncclIrGin const* net, ncclTeam team, ncclGinBarrierHandle handle,
                                                     uint32_t index) {
   using Session = ncclGinBarrierSession<ncclCoopAny>;
   ::new (session)
-    Session(*reinterpret_cast<ncclCoopAny const*>(coop), reinterpret_cast<ncclGin const&>(*net), team, handle, index);
+    Session(*reinterpret_cast<ncclCoopAny const*>(coop), *reinterpret_cast<ncclGin const*>(net), team, handle, index);
 }
 
 NCCL_DEVICE_INLINE void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
@@ -85,13 +85,13 @@ NCCL_DEVICE_INLINE void ncclIrGinBarrierSessionDestroy(ncclIrGinBarrierSession* 
 }
 
 NCCL_DEVICE_INLINE void ncclIrBarrierSessionInit(ncclIrBarrierSession* session, ncclIrCoop const* coop,
-                                                 ncclTeam innerTeam, ncclTeam outerTeam, ncclGin_C const* net,
+                                                 ncclTeam innerTeam, ncclTeam outerTeam, ncclIrGin const* net,
                                                  ncclLsaBarrierHandle const innerBarHandle,
                                                  ncclGinBarrierHandle const outerBarHandle, uint32_t index,
                                                  bool multimem, ncclMultimemHandle const innerMmHandle) {
   using Session = ncclBarrierSession<ncclCoopAny>;
   ::new (session)
-    Session(*reinterpret_cast<ncclCoopAny const*>(coop), innerTeam, outerTeam, reinterpret_cast<ncclGin const&>(*net),
+    Session(*reinterpret_cast<ncclCoopAny const*>(coop), innerTeam, outerTeam, *reinterpret_cast<ncclGin const*>(net),
             innerBarHandle, outerBarHandle, index, multimem, innerMmHandle);
 }
 

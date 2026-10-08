@@ -241,6 +241,44 @@ static void inspectorPluginP2pInfoCleanup(struct inspectorP2pInfo *p2pInfo) {
   inspectorEventPoolReleaseP2p(p2pInfo);
 }
 
+
+/*
+ * Description:
+ *   Returns an event's start or stop time in epoch microseconds.
+ *
+ *   Prefers NCCL's stamped CLOCK_REALTIME (ns), which marks the true
+ *   event instant even when the callback fires long after the kernel
+ *   ran, and falls back to the host wall clock when NCCL did not stamp
+ *   one (older NCCL, or an event NCCL does not stamp).
+ *
+ *   CLOCK_REALTIME shares the epoch of the prior gettimeofday path, so
+ *   emitted *_timestamp_us fields and their datetime rendering are
+ *   unchanged, and durations (stop - start) stay correct because both
+ *   ends use it.
+ *
+ *   Start and stop arrive in the same descriptor type, so one accessor
+ *   serves either end.
+ *
+ * Thread Safety:
+ *   Thread-safe (reads only the caller's descriptor).
+ *
+ * Input:
+ *
+ *   const ncclProfilerEventDescr_t *eDescr - event descriptor, may be
+ *   nullptr.
+ *
+ * Output:
+ *   None.
+ *
+ * Return:
+ *   uint64_t - timestamp in epoch microseconds.
+ */
+static inline uint64_t inspectorNcclTsUsec(const ncclProfilerEventDescr_t* eDescr) {
+  return (eDescr != nullptr
+          && eDescr->tsCpuReal != 0) ? (eDescr->tsCpuReal / 1000) : inspectorGetTime();
+}
+
+
 /*
  * Description:
  *   Initializes a new inspectorCollInfo structure for a collective
@@ -262,19 +300,6 @@ static void inspectorPluginP2pInfoCleanup(struct inspectorP2pInfo *p2pInfo) {
  * Return:
  *   None.
  */
-// Event start/stop time in epoch microseconds. Prefer NCCL's stamped
-// CLOCK_REALTIME (ns) -- it marks the true event instant even when the
-// callback fires long after the kernel ran -- and fall back to the
-// host wall clock when NCCL did not stamp one (older NCCL, or an event NCCL
-// does not stamp). CLOCK_REALTIME is the same epoch as the prior gettimeofday
-// path, so emitted *_timestamp_us fields and their datetime rendering are
-// unchanged; durations (stop-start) stay correct as both ends use it.
-// Start and stop both arrive in the same descriptor type, so one accessor
-// serves either end.
-static inline uint64_t inspectorNcclTsUsec(const ncclProfilerEventDescr_t* eDescr) {
-  return (eDescr != nullptr && eDescr->tsCpuReal != 0) ? (eDescr->tsCpuReal / 1000) : inspectorGetTime();
-}
-
 static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
                                         ncclProfilerEventDescr_t *eDescr,
                                         struct inspectorCommInfo *commInfo) {

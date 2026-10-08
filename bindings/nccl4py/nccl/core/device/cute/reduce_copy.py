@@ -11,7 +11,7 @@ from cutlass.base_dsl import Arch
 from cutlass.cutlass_dsl import BaseDSL
 
 from . import _bindings
-from ._helpers import _to_coop_value, _to_ptr, _to_value
+from ._helpers import _to_coop_ptr, _to_ptr, _to_value
 
 
 def _tensor_ptr(tensor):
@@ -28,7 +28,7 @@ def lsa_reduce_sum(
 ) -> None:
     """Reduce an LSA window tensor into a rank-local destination tensor."""
     _bindings.nccl_lsa_reduce_sum(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         src_window.ptr,
         _window_offset(src_window, src),
         _tensor_ptr(dst),
@@ -41,7 +41,7 @@ def lsa_reduce_sum(
 def multimem_reduce_sum(coop, mc_src, dst, count) -> None:
     """Reduce from a multimem tensor into a local destination tensor."""
     _bindings.nccl_multimem_reduce_sum(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         _tensor_ptr(mc_src),
         _tensor_ptr(dst),
         cutlass.Int64(count),
@@ -54,7 +54,7 @@ def lsa_copy(
 ) -> None:
     """Copy a rank-local source tensor into an LSA window tensor."""
     _bindings.nccl_lsa_copy(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         _tensor_ptr(src),
         dst_window.ptr,
         _window_offset(dst_window, dst),
@@ -85,7 +85,7 @@ def lsa_copy_tma(
     """Copy a rank-local source tensor into an LSA window via TMA."""
     _check_lsa_copy_tma_reqs(smem, smem_bytes)
     _bindings.nccl_lsa_copy_tma(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         _tensor_ptr(src),
         dst_window.ptr,
         _window_offset(dst_window, dst),
@@ -100,7 +100,7 @@ def lsa_copy_tma(
 def multimem_copy(coop, src, mc_dst, count) -> None:
     """Copy a local source tensor into a multimem destination tensor."""
     _bindings.nccl_multimem_copy(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         _tensor_ptr(src),
         _tensor_ptr(mc_dst),
         cutlass.Int64(count),
@@ -113,7 +113,7 @@ def lsa_reduce_sum_copy(
 ) -> None:
     """Reduce and copy between LSA window tensors in the same team."""
     _bindings.nccl_lsa_reduce_sum_copy(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         src_window.ptr,
         _window_offset(src_window, src),
         dst_window.ptr,
@@ -127,7 +127,7 @@ def lsa_reduce_sum_copy(
 def multimem_reduce_sum_copy(coop, mc_src, mc_dst, count) -> None:
     """Reduce from and copy to multimem tensors."""
     _bindings.nccl_multimem_reduce_sum_copy(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         _tensor_ptr(mc_src),
         _tensor_ptr(mc_dst),
         cutlass.Int64(count),
@@ -147,7 +147,7 @@ def local_reduce_sum_copy(
 ) -> None:
     """Reduce from local source tensors and copy to destination tensors."""
     _bindings.nccl_local_reduce_sum_copy(
-        _to_coop_value(coop),
+        _to_coop_ptr(coop),
         cutlass.Int32(n_src),
         _tensor_ptr(src_base),
         cutlass.Int64(src_displ),

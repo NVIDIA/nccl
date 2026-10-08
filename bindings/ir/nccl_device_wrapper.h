@@ -56,28 +56,28 @@
 #error "nccl_device_wrapper.h requires __NCCL_DEVICE_LTOIR_LIB__ or __clang_llvm_bitcode_lib__"
 #endif
 
-#include "nccl_device/coop.h"
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
+#include <cuda_fp8.h>
+
 #include "nccl_device/core.h"
-#include "nccl_device/ll_a2a.h"
-#include "nccl_device/lsa_barrier.h"
 #include "nccl_device/gin_barrier.h"
-#include "nccl_device/barrier.h"
-#include "nccl_device/ptr.h"
-#include "nccl_device/reduce_copy.h"
 
 #include "nccl_device/impl/core__types.h"
-#include "nccl_device/impl/comm__types.h"
-#include "nccl_device/impl/ll_a2a__types.h"
 #include "nccl_device/impl/lsa_barrier__types.h"
-#include "nccl_device/impl/gin__types.h"
 #include "nccl_device/impl/gin_barrier__types.h"
-#include "nccl_device/impl/barrier__types.h"
-#include "nccl_device/impl/ptr__types.h"
-#include "nccl_device/impl/reduce_copy__types.h"
+
+struct ncclDevComm;
 
 ////////////////////////////////////////////////////////////////////////////////
 // IR wrapper types
 ////////////////////////////////////////////////////////////////////////////////
+
+/****************************** Coop types ***********************************/
+
+struct ncclIrCoop {
+  uint64_t storage[3];
+};
 
 /****************************** GIN types ************************************/
 
@@ -106,16 +106,16 @@ struct ncclGin_C {
 
 /************************ Barrier session storage ****************************/
 
-struct ncclLsaBarrierSession_C {
-  ncclLsaBarrierSession<ncclCoopAny> bar;
+struct ncclIrLsaBarrierSession {
+  uint64_t storage[10];
 };
 
-struct ncclGinBarrierSession_C {
-  ncclGinBarrierSession<ncclCoopAny> bar;
+struct ncclIrGinBarrierSession {
+  uint64_t storage[12];
 };
 
-struct ncclBarrierSession_C {
-  ncclBarrierSession<ncclCoopAny> bar;
+struct ncclIrBarrierSession {
+  uint64_t storage[46];
 };
 
 extern "C" {
@@ -124,39 +124,79 @@ extern "C" {
 // Core API
 ////////////////////////////////////////////////////////////////////////////////
 
+/******************************* Team APIs ************************************/
+
+__device__ ncclTeam ncclIrTeamWorld(ncclDevComm const* comm);
+__device__ ncclTeam ncclIrTeamLsa(ncclDevComm const* comm);
+__device__ ncclTeam ncclIrTeamCft(ncclDevComm const* comm, ncclCftTeamMode_t mode = NCCL_CFT_TEAM_FLAT);
+__device__ ncclTeam ncclIrTeamCftMultimem(ncclDevComm const* comm);
+__device__ int ncclIrTeamRankToWorld(ncclDevComm const* comm, ncclTeam team, int rank);
+__device__ int ncclIrTeamRankToLsa(ncclDevComm const* comm, ncclTeam team, int rank);
+__device__ ncclTeam ncclIrTeamRail(ncclDevComm const* comm);
+
+/****************************** Window APIs ***********************************/
+
+__device__ void* ncclIrGetLocalPointer(ncclWindow_t w, size_t offset);
+__device__ void* ncclIrGetLsaPointer(ncclWindow_t w, size_t offset, int peer);
+__device__ void* ncclIrGetPeerPointer(ncclWindow_t w, size_t offset, int peer);
+__device__ void* ncclIrGetMultimemPointer(ncclWindow_t w, size_t offset, ncclMultimemHandle mmHandle);
+__device__ void* ncclIrGetLsaMultimemPointer(ncclWindow_t w, size_t offset, ncclDevComm const* comm);
+__device__ void ncclIrGetCftLeInfo(ncclWindow_t w, size_t offset, int peerCft, ncclTeam cftTeam,
+                                   ncclDevComm const* comm, ncclCftLeId* leId, size_t* leOffset);
+__device__ void ncclIrGetPeerLeInfo(ncclWindow_t w, size_t offset, int peerWorld, ncclDevComm const* comm,
+                                    ncclCftLeId* leId, size_t* leOffset);
+__device__ void ncclIrGetMultimemLeInfo(ncclWindow_t w, size_t offset, ncclDevComm const* comm, ncclCftLeId* leId,
+                                        size_t* leOffset);
+
+/************************** Resource buffer APIs ******************************/
+
+__device__ void* ncclIrGetResourceBufferLocalPointer(ncclDevComm const* comm, ncclDevResourceHandle h);
+__device__ void* ncclIrGetResourceBufferLsaPointer(ncclDevComm const* comm, ncclDevResourceHandle h, int peer);
+__device__ void* ncclIrGetResourceBufferPeerPointer(ncclDevComm const* comm, ncclDevResourceHandle h, ncclTeam team,
+                                                    int peer);
+__device__ void* ncclIrGetResourceBufferMultimemPointer(ncclDevComm const* comm, ncclDevResourceHandle h,
+                                                        ncclMultimemHandle mmHandle);
+__device__ void* ncclIrGetResourceBufferLsaMultimemPointer(ncclDevComm const* comm, ncclDevResourceHandle h);
+__device__ void ncclIrGetResourceBufferCftLeInfo(ncclDevComm const* comm, ncclDevResourceHandle h, int peerCft,
+                                                 ncclCftLeId* leId, size_t* leOffset);
+__device__ void ncclIrGetResourceBufferPeerLeInfo(ncclDevComm const* comm, ncclDevResourceHandle h, int peerWorld,
+                                                  ncclCftLeId* leId, size_t* leOffset);
+__device__ void ncclIrGetResourceBufferMultimemLeInfo(ncclDevComm const* comm, ncclDevResourceHandle h,
+                                                      ncclCftLeId* leId, size_t* leOffset);
+
 /************************* ncclDevComm field accessors ***********************/
 
 /*
  * ncclDevComm is a public C struct, the following accessors are deprecated and will be removed.
  */
-__device__ int ncclDevComm_Rank(ncclDevComm const* comm);
-__device__ int ncclDevComm_NRanks(ncclDevComm const* comm);
-__device__ int ncclDevComm_LsaRank(ncclDevComm const* comm);
-__device__ int ncclDevComm_LsaSize(ncclDevComm const* comm);
-__device__ ncclLsaBarrierHandle ncclDevComm_LsaBarrier(ncclDevComm const* comm);
-__device__ ncclGinBarrierHandle ncclDevComm_RailGinBarrier(ncclDevComm const* comm);
-__device__ ncclLsaBarrierHandle ncclDevComm_HybridLsaBarrier(ncclDevComm const* comm);
-__device__ ncclGinBarrierHandle ncclDevComm_HybridRailGinBarrier(ncclDevComm const* comm);
-__device__ ncclGinBarrierHandle ncclDevComm_WorldGinBarrier(ncclDevComm const* comm);
-__device__ ncclMultimemHandle ncclDevComm_LsaMultimem(ncclDevComm const* comm);
+__device__ int ncclIrDevCommRank(ncclDevComm const* comm);
+__device__ int ncclIrDevCommNRanks(ncclDevComm const* comm);
+__device__ int ncclIrDevCommLsaRank(ncclDevComm const* comm);
+__device__ int ncclIrDevCommLsaSize(ncclDevComm const* comm);
+__device__ ncclLsaBarrierHandle ncclIrDevCommLsaBarrier(ncclDevComm const* comm);
+__device__ ncclGinBarrierHandle ncclIrDevCommRailGinBarrier(ncclDevComm const* comm);
+__device__ ncclLsaBarrierHandle ncclIrDevCommHybridLsaBarrier(ncclDevComm const* comm);
+__device__ ncclGinBarrierHandle ncclIrDevCommHybridRailGinBarrier(ncclDevComm const* comm);
+__device__ ncclGinBarrierHandle ncclIrDevCommWorldGinBarrier(ncclDevComm const* comm);
+__device__ ncclMultimemHandle ncclIrDevCommLsaMultimem(ncclDevComm const* comm);
 
 /****************************** Peer pointer API ******************************/
-__device__ void* ncclGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam tm, int peer);
+__device__ void* ncclIrGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam tm, int peer);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Cooperative group API
 ////////////////////////////////////////////////////////////////////////////////
 
-__device__ void ncclCoopAnyInitThread(ncclCoopAny* coop);
-__device__ void ncclCoopAnyInitWarp(ncclCoopAny* coop);
-__device__ void ncclCoopAnyInitLanes(ncclCoopAny* coop, uint32_t lane_mask);
-__device__ void ncclCoopAnyInitWarpSpan(ncclCoopAny* coop, int warp0, int nWarps, int id);
-__device__ void ncclCoopAnyInitCta(ncclCoopAny* coop);
+__device__ void ncclIrCoopInitThread(ncclIrCoop* coop);
+__device__ void ncclIrCoopInitWarp(ncclIrCoop* coop);
+__device__ void ncclIrCoopInitLanes(ncclIrCoop* coop, uint32_t lane_mask);
+__device__ void ncclIrCoopInitWarpSpan(ncclIrCoop* coop, int warp0, int nWarps, int id);
+__device__ void ncclIrCoopInitCta(ncclIrCoop* coop);
 
-__device__ int ncclCoopThreadRank(const ncclCoopAny* coop);
-__device__ int ncclCoopSize(const ncclCoopAny* coop);
-__device__ int ncclCoopNumThreads(const ncclCoopAny* coop);
-__device__ void ncclCoopSync(const ncclCoopAny* coop);
+__device__ int ncclIrCoopThreadRank(ncclIrCoop const* coop);
+__device__ int ncclIrCoopSize(ncclIrCoop const* coop);
+__device__ int ncclIrCoopNumThreads(ncclIrCoop const* coop);
+__device__ void ncclIrCoopSync(ncclIrCoop* coop);
 
 ////////////////////////////////////////////////////////////////////////////////
 // GIN API
@@ -165,10 +205,10 @@ __device__ void ncclCoopSync(const ncclCoopAny* coop);
 /************************** GIN initialization APIs ***************************/
 
 // Helper init function that wraps placement new
-__device__ void ncclGin_C_init(ncclGin_C* net, unsigned backendMask, ncclDevComm const& comm, int contextIndex);
+__device__ void ncclGin_C_init(ncclGin_C* net, unsigned backendMask, ncclDevComm const* comm, int contextIndex);
 
 // Helper init function with explicit resource sharing mode.
-__device__ void ncclGin_C_initWithResourceSharingMode(ncclGin_C* net, unsigned backendMask, ncclDevComm const& comm,
+__device__ void ncclGin_C_initWithResourceSharingMode(ncclGin_C* net, unsigned backendMask, ncclDevComm const* comm,
                                                       int contextIndex, ncclGinResourceSharingMode resourceSharingMode);
 
 /************************** GIN data movement APIs ****************************/
@@ -176,13 +216,13 @@ __device__ void ncclGin_C_initWithResourceSharingMode(ncclGin_C* net, unsigned b
 __device__ void ncclGinPut(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
                            ncclWindow_t srcWin, size_t srcOffset, size_t bytes, bool isSignal, ncclGinSignal_t signalId,
                            ncclGinSignalOp_t signalOp, uint64_t signalOpArg, bool isCounter, ncclGinCounter_t counterId,
-                           ncclCoopAny coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
+                           ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
                            cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease);
 
 __device__ void ncclGinPut_v2(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
                               ncclWindow_t srcWin, size_t srcOffset, size_t bytes, bool isSignal,
                               ncclGinSignal_t signalId, ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
-                              bool isCounter, ncclGinCounter_t counterId, ncclCoopAny coop, bool isDescriptor,
+                              bool isCounter, ncclGinCounter_t counterId, ncclIrCoop const* coop, bool isDescriptor,
                               ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                               cuda::thread_scope requiredRelease, uint32_t optFlags);
 
@@ -192,19 +232,19 @@ __device__ void ncclGinPut_v3(ncclGin_C* net, ncclTeam team, int peer, ncclWindo
                               ncclWindow_t srcWin, size_t srcOffset, size_t bytes, ncclGinSignalType signalType,
                               ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
                               ncclGinSignalOp_t signalOp, uint64_t signalOpArg, bool isCounter,
-                              ncclGinCounter_t counterId, ncclCoopAny coop, bool isDescriptor,
+                              ncclGinCounter_t counterId, ncclIrCoop const* coop, bool isDescriptor,
                               ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                               cuda::thread_scope requiredRelease, uint32_t optFlags, ncclGinSegmentType_t segmentType);
 
 __device__ void ncclGinPutValue(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
                                 uint64_t value, size_t size, bool isSignal, ncclGinSignal_t signalId,
-                                ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclCoopAny coop, bool isDescriptor,
-                                ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                                 cuda::thread_scope requiredRelease);
 
 __device__ void ncclGinPutValue_v2(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
                                    uint64_t value, size_t size, bool isSignal, ncclGinSignal_t signalId,
-                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclCoopAny coop,
+                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
                                    bool isDescriptor, ncclGinDescriptorSmem* descriptor,
                                    cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
                                    uint32_t optFlags);
@@ -213,38 +253,38 @@ __device__ void ncclGinPutValue_v2(ncclGin_C* net, ncclTeam team, int peer, nccl
 __device__ void ncclGinPutValue_v3(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
                                    uint64_t value, size_t size, ncclGinSignalType signalType, ncclWindow_t signalWin,
                                    size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
-                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclCoopAny coop,
+                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
                                    bool isDescriptor, ncclGinDescriptorSmem* descriptor,
                                    cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
                                    uint32_t optFlags);
 
 __device__ void ncclGinGet(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
-                           ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclCoopAny coop, bool isDescriptor,
-                           ncclGinDescriptorSmem* descriptor, uint32_t optFlags);
+                           ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclIrCoop const* coop,
+                           bool isDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags);
 
 // Full C API counterpart of ncclGin::get with explicit segment type selection.
 __device__ void ncclGinGet_v2(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
-                              ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclCoopAny coop,
+                              ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclIrCoop const* coop,
                               bool isDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags,
                               ncclGinSegmentType_t segmentType);
 
 /***************************** GIN signaling APIs *****************************/
 
 __device__ void ncclGinSignal(ncclGin_C* net, ncclTeam team, int peer, bool isSignal, ncclGinSignal_t signalId,
-                              ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclCoopAny coop, bool isDescriptor,
-                              ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                              ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                              bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                               cuda::thread_scope requiredRelease);
 
 __device__ void ncclGinSignal_v2(ncclGin_C* net, ncclTeam team, int peer, bool isSignal, ncclGinSignal_t signalId,
-                                 ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclCoopAny coop, bool isDescriptor,
-                                 ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                 ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                 bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
 
 // Full C API counterpart of ncclGin::signal with explicit indexed/VA and strong/weak signal selection.
 __device__ void ncclGinSignal_v3(ncclGin_C* net, ncclTeam team, int peer, ncclGinSignalType signalType,
                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
-                                 ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclCoopAny coop, bool isDescriptor,
-                                 ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                 ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                 bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
 
 __device__ uint64_t ncclGinReadSignal(ncclGin_C* net, ncclGinSignal_t signal, int bits, cuda::memory_order ord);
@@ -252,26 +292,26 @@ __device__ uint64_t ncclGinReadSignal(ncclGin_C* net, ncclGinSignal_t signal, in
 __device__ uint64_t ncclGinReadSignalVA(ncclGin_C* net, ncclWindow_t signalWindow, size_t signalOffset, int bits,
                                         cuda::memory_order ord);
 
-__device__ void ncclGinWaitSignal(ncclGin_C* net, ncclCoopAny coop, ncclGinSignal_t signal, uint64_t least, int bits,
-                                  cuda::memory_order ord);
+__device__ void ncclGinWaitSignal(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal, uint64_t least,
+                                  int bits, cuda::memory_order ord);
 
-__device__ ncclResult_t ncclGinWaitSignalTimeout(ncclGin_C* net, ncclCoopAny coop, ncclGinSignal_t signal,
+__device__ ncclResult_t ncclGinWaitSignalTimeout(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
                                                  uint64_t least, int bits, cuda::memory_order ord,
                                                  uint64_t timeoutCycles);
 
-__device__ void ncclGinWaitSignalVA(ncclGin_C* net, ncclCoopAny coop, ncclWindow_t signalWindow, size_t signalOffset,
-                                    uint64_t least, int bits, cuda::memory_order ord);
+__device__ void ncclGinWaitSignalVA(ncclGin_C* net, ncclIrCoop const* coop, ncclWindow_t signalWindow,
+                                    size_t signalOffset, uint64_t least, int bits, cuda::memory_order ord);
 
-__device__ ncclResult_t ncclGinWaitSignalTimeoutVA(ncclGin_C* net, ncclCoopAny coop, ncclWindow_t signalWindow,
+__device__ ncclResult_t ncclGinWaitSignalTimeoutVA(ncclGin_C* net, ncclIrCoop const* coop, ncclWindow_t signalWindow,
                                                    size_t signalOffset, uint64_t least, int bits,
                                                    cuda::memory_order ord, uint64_t timeoutCycles);
 
 __device__ void ncclGinIncreaseSignalShadow(ncclGin_C* net, ncclGinSignal_t signal, uint64_t delta);
 
-__device__ void ncclGinWaitSignalMeetShadow(ncclGin_C* net, ncclCoopAny coop, ncclGinSignal_t signal, int bits,
+__device__ void ncclGinWaitSignalMeetShadow(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal, int bits,
                                             cuda::memory_order ord);
 
-__device__ void ncclGinWaitSignalFollowShadow(ncclGin_C* net, ncclCoopAny coop, ncclGinSignal_t signal,
+__device__ void ncclGinWaitSignalFollowShadow(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
                                               uint64_t leastDelta, uint64_t* before, uint64_t* delta, int bits,
                                               cuda::memory_order ord);
 
@@ -285,10 +325,10 @@ __device__ void ncclGinResetSignalVA(ncclGin_C* net, ncclWindow_t signalWindow, 
 
 __device__ uint64_t ncclGinReadCounter(ncclGin_C* net, ncclGinCounter_t counter, int bits, cuda::memory_order ord);
 
-__device__ void ncclGinWaitCounter(ncclGin_C* net, ncclCoopAny coop, ncclGinCounter_t counter, uint64_t least, int bits,
-                                   cuda::memory_order ord);
+__device__ void ncclGinWaitCounter(ncclGin_C* net, ncclIrCoop const* coop, ncclGinCounter_t counter, uint64_t least,
+                                   int bits, cuda::memory_order ord);
 
-__device__ ncclResult_t ncclGinWaitCounterTimeout(ncclGin_C* net, ncclCoopAny coop, ncclGinCounter_t counter,
+__device__ ncclResult_t ncclGinWaitCounterTimeout(ncclGin_C* net, ncclIrCoop const* coop, ncclGinCounter_t counter,
                                                   uint64_t least, int bits, cuda::memory_order ord,
                                                   uint64_t timeoutCycles);
 
@@ -296,22 +336,23 @@ __device__ void ncclGinResetCounter(ncclGin_C* net, ncclGinCounter_t counter);
 
 /************************ GIN flush and request APIs *************************/
 
-__device__ void ncclGinFlush(ncclGin_C* net, ncclCoopAny coop, cuda::memory_order ord);
+__device__ void ncclGinFlush(ncclGin_C* net, ncclIrCoop const* coop, cuda::memory_order ord);
 
-__device__ void ncclGinFlush_v2(ncclGin_C* net, ncclCoopAny coop, cuda::memory_order ord, bool isDescriptor,
+__device__ void ncclGinFlush_v2(ncclGin_C* net, ncclIrCoop const* coop, cuda::memory_order ord, bool isDescriptor,
                                 ncclGinDescriptorSmem* descriptor);
 
-__device__ ncclResult_t ncclGinFlushTimeout(ncclGin_C* net, ncclCoopAny coop, cuda::memory_order ord, bool isDescriptor,
-                                            ncclGinDescriptorSmem* descriptor, uint64_t timeoutCycles);
+__device__ ncclResult_t ncclGinFlushTimeout(ncclGin_C* net, ncclIrCoop const* coop, cuda::memory_order ord,
+                                            bool isDescriptor, ncclGinDescriptorSmem* descriptor,
+                                            uint64_t timeoutCycles);
 
 __device__ void ncclGinFlushAsync(ncclGin_C* net, ncclTeam team, uint32_t peer, ncclGinRequest_t* outRequest,
-                                  ncclCoopAny coop, uint32_t optFlags, bool isDescriptor,
+                                  ncclIrCoop const* coop, uint32_t optFlags, bool isDescriptor,
                                   ncclGinDescriptorSmem* descriptor);
 
-__device__ void ncclGinWait(ncclGin_C* net, ncclGinRequest_t* request, ncclCoopAny coop, bool isDescriptor,
+__device__ void ncclGinWait(ncclGin_C* net, ncclGinRequest_t* request, ncclIrCoop const* coop, bool isDescriptor,
                             ncclGinDescriptorSmem* descriptor, cuda::memory_order ord);
 
-__device__ ncclResult_t ncclGinWaitTimeout(ncclGin_C* net, ncclGinRequest_t* request, ncclCoopAny coop,
+__device__ ncclResult_t ncclGinWaitTimeout(ncclGin_C* net, ncclGinRequest_t* request, ncclIrCoop const* coop,
                                            bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
                                            uint64_t timeoutCycles);
 
@@ -325,235 +366,237 @@ __device__ ncclResult_t ncclGinWaitTimeout(ncclGin_C* net, ncclGinRequest_t* req
  * Used by the Python device API to allocate session storage with the correct
  * size via llvm.alloca, without duplicating the C++ struct layout in Python.
  */
-__device__ size_t ncclLsaBarrierSession_C_size();
-__device__ size_t ncclGinBarrierSession_C_size();
-__device__ size_t ncclBarrierSession_C_size();
+__device__ size_t ncclIrLsaBarrierSessionSize();
+__device__ size_t ncclIrGinBarrierSessionSize();
+__device__ size_t ncclIrBarrierSessionSize();
 
 /************************* LSA Barrier Session APIs **************************/
-__device__ void ncclLsaBarrierSessionInit(ncclLsaBarrierSession_C* session, ncclCoopAny coop, ncclDevComm const& comm,
-                                          ncclTeam team, ncclLsaBarrierHandle handle, uint32_t index,
-                                          bool multimem = false, ncclMultimemHandle mmHandle = {});
-__device__ void ncclLsaBarrierSessionArrive(ncclLsaBarrierSession_C* session, ncclCoopAny coop,
+__device__ void ncclIrLsaBarrierSessionInit(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
+                                            ncclDevComm const* comm, ncclTeam team, ncclLsaBarrierHandle handle,
+                                            uint32_t index, bool multimem = false, ncclMultimemHandle mmHandle = {});
+__device__ void ncclIrLsaBarrierSessionArrive(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
+                                              cuda::memory_order order);
+__device__ void ncclIrLsaBarrierSessionWait(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                             cuda::memory_order order);
-__device__ void ncclLsaBarrierSessionWait(ncclLsaBarrierSession_C* session, ncclCoopAny coop, cuda::memory_order order);
-__device__ void ncclLsaBarrierSessionSync(ncclLsaBarrierSession_C* session, ncclCoopAny coop, cuda::memory_order order);
+__device__ void ncclIrLsaBarrierSessionSync(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
+                                            cuda::memory_order order);
 // Collectively finalize the placement-new object and persist its epoch. Does not free storage.
-__device__ void ncclLsaBarrierSessionDestroy(ncclLsaBarrierSession_C* session);
+__device__ void ncclIrLsaBarrierSessionDestroy(ncclIrLsaBarrierSession* session);
 
 /************************* GIN Barrier Session APIs **************************/
-__device__ void ncclGinBarrierSessionInit(ncclGinBarrierSession_C* session, ncclCoopAny coop, ncclGin_C const* net,
-                                          ncclTeam team, ncclGinBarrierHandle handle, uint32_t index);
+__device__ void ncclIrGinBarrierSessionInit(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
+                                            ncclGin_C const* net, ncclTeam team, ncclGinBarrierHandle handle,
+                                            uint32_t index);
 
 // All-contexts variant of session-init: rail/world/etc. signal/wait happens on context 0,
 // fence iterates every GIN context on the comm.
-__device__ void ncclGinBarrierSessionInitAllContexts(ncclGinBarrierSession_C* session, ncclCoopAny coop,
-                                                     ncclDevComm const& comm, ncclTeam team,
-                                                     ncclGinBarrierHandle handle, uint32_t index);
+__device__ void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
+                                                       ncclDevComm const* comm, ncclTeam team,
+                                                       ncclGinBarrierHandle handle, uint32_t index);
 
-__device__ void ncclGinBarrierSessionSync(ncclGinBarrierSession_C* session, ncclCoopAny coop, cuda::memory_order order,
-                                          ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
+__device__ void ncclIrGinBarrierSessionSync(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
+                                            cuda::memory_order order,
+                                            ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
 // Finalize the placement-new object. Currently a no-op -- the underlying destructor is
 // empty -- but required for lifetime symmetry with Init. Does not free storage.
-__device__ void ncclGinBarrierSessionDestroy(ncclGinBarrierSession_C* session);
+__device__ void ncclIrGinBarrierSessionDestroy(ncclIrGinBarrierSession* session);
 
 /*************************** Barrier Session APIs ****************************/
-__device__ void ncclBarrierSessionInit(ncclBarrierSession_C* session, ncclCoopAny coop, ncclTeam innerTeam,
-                                       ncclTeam outerTeam, ncclGin_C const* net,
-                                       ncclLsaBarrierHandle const innerBarHandle,
-                                       ncclGinBarrierHandle const outerBarHandle, uint32_t index, bool multimem = false,
-                                       ncclMultimemHandle const innerMmHandle = {});
+__device__ void ncclIrBarrierSessionInit(ncclIrBarrierSession* session, ncclIrCoop const* coop, ncclTeam innerTeam,
+                                         ncclTeam outerTeam, ncclGin_C const* net,
+                                         ncclLsaBarrierHandle const innerBarHandle,
+                                         ncclGinBarrierHandle const outerBarHandle, uint32_t index,
+                                         bool multimem = false, ncclMultimemHandle const innerMmHandle = {});
 
-__device__ void ncclBarrierSessionSync(ncclBarrierSession_C* session, ncclCoopAny coop, cuda::memory_order order,
-                                       ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
+__device__ void ncclIrBarrierSessionSync(ncclIrBarrierSession* session, ncclIrCoop const* coop,
+                                         cuda::memory_order order,
+                                         ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
 // Collectively finalize all nested sessions and persist the inner LSA epoch. Does not free storage.
-__device__ void ncclBarrierSessionDestroy(ncclBarrierSession_C* session);
+__device__ void ncclIrBarrierSessionDestroy(ncclIrBarrierSession* session);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Reduce and copy APIs
 ////////////////////////////////////////////////////////////////////////////////
 
 /******************************* LSA reduce-sum *******************************/
-__device__ void ncclLsaReduceSum_I8(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, int8_t* dst,
-                                    size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_U8(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, uint8_t* dst,
-                                    size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_I32(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, int32_t* dst,
-                                     size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_U32(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, uint32_t* dst,
-                                     size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_I64(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, int64_t* dst,
-                                     size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_U64(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, uint64_t* dst,
-                                     size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_F16(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, half* dst,
-                                     size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_F32(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, float* dst,
-                                     size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_F64(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, double* dst,
-                                     size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_BF16(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, __nv_bfloat16* dst,
+__device__ void ncclIrLsaReduceSum_I8(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, int8_t* dst,
                                       size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_F8E4M3(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, __nv_fp8_e4m3* dst,
-                                        size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSum_F8E5M2(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset, __nv_fp8_e5m2* dst,
-                                        size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_U8(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, uint8_t* dst,
+                                      size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_I32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, int32_t* dst,
+                                       size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_U32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, uint32_t* dst,
+                                       size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_I64(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, int64_t* dst,
+                                       size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_U64(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, uint64_t* dst,
+                                       size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_F16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, half* dst,
+                                       size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_F32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, float* dst,
+                                       size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_F64(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, double* dst,
+                                       size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_BF16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                        __nv_bfloat16* dst, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_F8E4M3(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                          __nv_fp8_e4m3* dst, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSum_F8E5M2(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                          __nv_fp8_e5m2* dst, size_t count, ncclTeam team);
 
 /*************************** Multimem reduce-sum *****************************/
-__device__ void ncclMultimemReduceSum_I32(ncclCoopAny coop, int32_t* mcSrc, int32_t* dst, size_t count);
-__device__ void ncclMultimemReduceSum_U32(ncclCoopAny coop, uint32_t* mcSrc, uint32_t* dst, size_t count);
-__device__ void ncclMultimemReduceSum_I64(ncclCoopAny coop, int64_t* mcSrc, int64_t* dst, size_t count);
-__device__ void ncclMultimemReduceSum_U64(ncclCoopAny coop, uint64_t* mcSrc, uint64_t* dst, size_t count);
-__device__ void ncclMultimemReduceSum_F16(ncclCoopAny coop, half* mcSrc, half* dst, size_t count);
-__device__ void ncclMultimemReduceSum_F32(ncclCoopAny coop, float* mcSrc, float* dst, size_t count);
-__device__ void ncclMultimemReduceSum_F64(ncclCoopAny coop, double* mcSrc, double* dst, size_t count);
-__device__ void ncclMultimemReduceSum_BF16(ncclCoopAny coop, __nv_bfloat16* mcSrc, __nv_bfloat16* dst, size_t count);
-__device__ void ncclMultimemReduceSum_F8E4M3(ncclCoopAny coop, __nv_fp8_e4m3* mcSrc, __nv_fp8_e4m3* dst, size_t count);
-__device__ void ncclMultimemReduceSum_F8E5M2(ncclCoopAny coop, __nv_fp8_e5m2* mcSrc, __nv_fp8_e5m2* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_I32(ncclIrCoop const* coop, int32_t* mcSrc, int32_t* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_U32(ncclIrCoop const* coop, uint32_t* mcSrc, uint32_t* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_I64(ncclIrCoop const* coop, int64_t* mcSrc, int64_t* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_U64(ncclIrCoop const* coop, uint64_t* mcSrc, uint64_t* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_F16(ncclIrCoop const* coop, half* mcSrc, half* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_F32(ncclIrCoop const* coop, float* mcSrc, float* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_F64(ncclIrCoop const* coop, double* mcSrc, double* dst, size_t count);
+__device__ void ncclIrMultimemReduceSum_BF16(ncclIrCoop const* coop, __nv_bfloat16* mcSrc, __nv_bfloat16* dst,
+                                             size_t count);
+__device__ void ncclIrMultimemReduceSum_F8E4M3(ncclIrCoop const* coop, __nv_fp8_e4m3* mcSrc, __nv_fp8_e4m3* dst,
+                                               size_t count);
+__device__ void ncclIrMultimemReduceSum_F8E5M2(ncclIrCoop const* coop, __nv_fp8_e5m2* mcSrc, __nv_fp8_e5m2* dst,
+                                               size_t count);
 
 /********************************** LSA copy *********************************/
-__device__ void ncclLsaCopy_I8(ncclCoopAny coop, int8_t* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                               ncclTeam team);
-__device__ void ncclLsaCopy_U8(ncclCoopAny coop, uint8_t* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                               ncclTeam team);
-__device__ void ncclLsaCopy_I32(ncclCoopAny coop, int32_t* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                                ncclTeam team);
-__device__ void ncclLsaCopy_U32(ncclCoopAny coop, uint32_t* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                                ncclTeam team);
-__device__ void ncclLsaCopy_I64(ncclCoopAny coop, int64_t* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                                ncclTeam team);
-__device__ void ncclLsaCopy_U64(ncclCoopAny coop, uint64_t* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                                ncclTeam team);
-__device__ void ncclLsaCopy_F16(ncclCoopAny coop, half* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                                ncclTeam team);
-__device__ void ncclLsaCopy_F32(ncclCoopAny coop, float* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                                ncclTeam team);
-__device__ void ncclLsaCopy_F64(ncclCoopAny coop, double* src, ncclWindow_t dstWindow, size_t dstOffset, size_t count,
-                                ncclTeam team);
-__device__ void ncclLsaCopy_BF16(ncclCoopAny coop, __nv_bfloat16* src, ncclWindow_t dstWindow, size_t dstOffset,
+__device__ void ncclIrLsaCopy_I8(ncclIrCoop const* coop, int8_t* src, ncclWindow_t dstWindow, size_t dstOffset,
                                  size_t count, ncclTeam team);
-__device__ void ncclLsaCopy_F8E4M3(ncclCoopAny coop, __nv_fp8_e4m3* src, ncclWindow_t dstWindow, size_t dstOffset,
+__device__ void ncclIrLsaCopy_U8(ncclIrCoop const* coop, uint8_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                 size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_I32(ncclIrCoop const* coop, int32_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_U32(ncclIrCoop const* coop, uint32_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_I64(ncclIrCoop const* coop, int64_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_U64(ncclIrCoop const* coop, uint64_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_F16(ncclIrCoop const* coop, half* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_F32(ncclIrCoop const* coop, float* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_F64(ncclIrCoop const* coop, double* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_BF16(ncclIrCoop const* coop, __nv_bfloat16* src, ncclWindow_t dstWindow, size_t dstOffset,
                                    size_t count, ncclTeam team);
-__device__ void ncclLsaCopy_F8E5M2(ncclCoopAny coop, __nv_fp8_e5m2* src, ncclWindow_t dstWindow, size_t dstOffset,
-                                   size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_F8E4M3(ncclIrCoop const* coop, __nv_fp8_e4m3* src, ncclWindow_t dstWindow,
+                                     size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaCopy_F8E5M2(ncclIrCoop const* coop, __nv_fp8_e5m2* src, ncclWindow_t dstWindow,
+                                     size_t dstOffset, size_t count, ncclTeam team);
 
 /****************************** Multimem copy ********************************/
-__device__ void ncclMultimemCopy_I32(ncclCoopAny coop, int32_t* src, int32_t* mcDst, size_t count);
-__device__ void ncclMultimemCopy_U32(ncclCoopAny coop, uint32_t* src, uint32_t* mcDst, size_t count);
-__device__ void ncclMultimemCopy_I64(ncclCoopAny coop, int64_t* src, int64_t* mcDst, size_t count);
-__device__ void ncclMultimemCopy_U64(ncclCoopAny coop, uint64_t* src, uint64_t* mcDst, size_t count);
-__device__ void ncclMultimemCopy_F16(ncclCoopAny coop, half* src, half* mcDst, size_t count);
-__device__ void ncclMultimemCopy_F32(ncclCoopAny coop, float* src, float* mcDst, size_t count);
-__device__ void ncclMultimemCopy_F64(ncclCoopAny coop, double* src, double* mcDst, size_t count);
-__device__ void ncclMultimemCopy_BF16(ncclCoopAny coop, __nv_bfloat16* src, __nv_bfloat16* mcDst, size_t count);
-__device__ void ncclMultimemCopy_F8E4M3(ncclCoopAny coop, __nv_fp8_e4m3* src, __nv_fp8_e4m3* mcDst, size_t count);
-__device__ void ncclMultimemCopy_F8E5M2(ncclCoopAny coop, __nv_fp8_e5m2* src, __nv_fp8_e5m2* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_I32(ncclIrCoop const* coop, int32_t* src, int32_t* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_U32(ncclIrCoop const* coop, uint32_t* src, uint32_t* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_I64(ncclIrCoop const* coop, int64_t* src, int64_t* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_U64(ncclIrCoop const* coop, uint64_t* src, uint64_t* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_F16(ncclIrCoop const* coop, half* src, half* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_F32(ncclIrCoop const* coop, float* src, float* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_F64(ncclIrCoop const* coop, double* src, double* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_BF16(ncclIrCoop const* coop, __nv_bfloat16* src, __nv_bfloat16* mcDst, size_t count);
+__device__ void ncclIrMultimemCopy_F8E4M3(ncclIrCoop const* coop, __nv_fp8_e4m3* src, __nv_fp8_e4m3* mcDst,
+                                          size_t count);
+__device__ void ncclIrMultimemCopy_F8E5M2(ncclIrCoop const* coop, __nv_fp8_e5m2* src, __nv_fp8_e5m2* mcDst,
+                                          size_t count);
 
 /**************************** LSA reduce-sum-copy ****************************/
-__device__ void ncclLsaReduceSumCopy_I8(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                        ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_U8(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                        ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_I32(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                         ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_U32(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                         ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_I64(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                         ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_U64(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                         ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_F16(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                         ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_F32(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                         ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_F64(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                         ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_BF16(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
+__device__ void ncclIrLsaReduceSumCopy_I8(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_F8E4M3(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
+__device__ void ncclIrLsaReduceSumCopy_U8(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                          ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_I32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_U32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_I64(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_U64(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_F16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_F32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_F64(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_BF16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
                                             ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
-__device__ void ncclLsaReduceSumCopy_F8E5M2(ncclCoopAny coop, ncclWindow_t srcWindow, size_t srcOffset,
-                                            ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_F8E4M3(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                              ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
+__device__ void ncclIrLsaReduceSumCopy_F8E5M2(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                              ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam team);
 
 /************************ Multimem reduce-sum-copy **************************/
-__device__ void ncclMultimemReduceSumCopy_I32(ncclCoopAny coop, int32_t* mcSrc, int32_t* mcDst, size_t count);
-__device__ void ncclMultimemReduceSumCopy_U32(ncclCoopAny coop, uint32_t* mcSrc, uint32_t* mcDst, size_t count);
-__device__ void ncclMultimemReduceSumCopy_I64(ncclCoopAny coop, int64_t* mcSrc, int64_t* mcDst, size_t count);
-__device__ void ncclMultimemReduceSumCopy_U64(ncclCoopAny coop, uint64_t* mcSrc, uint64_t* mcDst, size_t count);
-__device__ void ncclMultimemReduceSumCopy_F16(ncclCoopAny coop, half* mcSrc, half* mcDst, size_t count);
-__device__ void ncclMultimemReduceSumCopy_F32(ncclCoopAny coop, float* mcSrc, float* mcDst, size_t count);
-__device__ void ncclMultimemReduceSumCopy_F64(ncclCoopAny coop, double* mcSrc, double* mcDst, size_t count);
-__device__ void ncclMultimemReduceSumCopy_BF16(ncclCoopAny coop, __nv_bfloat16* mcSrc, __nv_bfloat16* mcDst,
-                                               size_t count);
-__device__ void ncclMultimemReduceSumCopy_F8E4M3(ncclCoopAny coop, __nv_fp8_e4m3* mcSrc, __nv_fp8_e4m3* mcDst,
+__device__ void ncclIrMultimemReduceSumCopy_I32(ncclIrCoop const* coop, int32_t* mcSrc, int32_t* mcDst, size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_U32(ncclIrCoop const* coop, uint32_t* mcSrc, uint32_t* mcDst, size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_I64(ncclIrCoop const* coop, int64_t* mcSrc, int64_t* mcDst, size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_U64(ncclIrCoop const* coop, uint64_t* mcSrc, uint64_t* mcDst, size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_F16(ncclIrCoop const* coop, half* mcSrc, half* mcDst, size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_F32(ncclIrCoop const* coop, float* mcSrc, float* mcDst, size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_F64(ncclIrCoop const* coop, double* mcSrc, double* mcDst, size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_BF16(ncclIrCoop const* coop, __nv_bfloat16* mcSrc, __nv_bfloat16* mcDst,
                                                  size_t count);
-__device__ void ncclMultimemReduceSumCopy_F8E5M2(ncclCoopAny coop, __nv_fp8_e5m2* mcSrc, __nv_fp8_e5m2* mcDst,
-                                                 size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_F8E4M3(ncclIrCoop const* coop, __nv_fp8_e4m3* mcSrc, __nv_fp8_e4m3* mcDst,
+                                                   size_t count);
+__device__ void ncclIrMultimemReduceSumCopy_F8E5M2(ncclIrCoop const* coop, __nv_fp8_e5m2* mcSrc, __nv_fp8_e5m2* mcDst,
+                                                   size_t count);
 
 /*************************** Local reduce-sum-copy ***************************/
-__device__ void ncclLocalReduceSumCopy_I8(ncclCoopAny coop, int nSrc, int8_t* srcBase, size_t srcDispl, int nDst,
-                                          int8_t* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_U8(ncclCoopAny coop, int nSrc, uint8_t* srcBase, size_t srcDispl, int nDst,
-                                          uint8_t* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_I32(ncclCoopAny coop, int nSrc, int32_t* srcBase, size_t srcDispl, int nDst,
-                                           int32_t* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_U32(ncclCoopAny coop, int nSrc, uint32_t* srcBase, size_t srcDispl, int nDst,
-                                           uint32_t* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_I64(ncclCoopAny coop, int nSrc, int64_t* srcBase, size_t srcDispl, int nDst,
-                                           int64_t* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_U64(ncclCoopAny coop, int nSrc, uint64_t* srcBase, size_t srcDispl, int nDst,
-                                           uint64_t* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_F16(ncclCoopAny coop, int nSrc, half* srcBase, size_t srcDispl, int nDst,
-                                           half* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_F32(ncclCoopAny coop, int nSrc, float* srcBase, size_t srcDispl, int nDst,
-                                           float* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_F64(ncclCoopAny coop, int nSrc, double* srcBase, size_t srcDispl, int nDst,
-                                           double* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_BF16(ncclCoopAny coop, int nSrc, __nv_bfloat16* srcBase, size_t srcDispl,
-                                            int nDst, __nv_bfloat16* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_F8E4M3(ncclCoopAny coop, int nSrc, __nv_fp8_e4m3* srcBase, size_t srcDispl,
-                                              int nDst, __nv_fp8_e4m3* dstBase, size_t dstDispl, size_t count);
-__device__ void ncclLocalReduceSumCopy_F8E5M2(ncclCoopAny coop, int nSrc, __nv_fp8_e5m2* srcBase, size_t srcDispl,
-                                              int nDst, __nv_fp8_e5m2* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_I8(ncclIrCoop const* coop, int nSrc, int8_t* srcBase, size_t srcDispl,
+                                            int nDst, int8_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_U8(ncclIrCoop const* coop, int nSrc, uint8_t* srcBase, size_t srcDispl,
+                                            int nDst, uint8_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_I32(ncclIrCoop const* coop, int nSrc, int32_t* srcBase, size_t srcDispl,
+                                             int nDst, int32_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_U32(ncclIrCoop const* coop, int nSrc, uint32_t* srcBase, size_t srcDispl,
+                                             int nDst, uint32_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_I64(ncclIrCoop const* coop, int nSrc, int64_t* srcBase, size_t srcDispl,
+                                             int nDst, int64_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_U64(ncclIrCoop const* coop, int nSrc, uint64_t* srcBase, size_t srcDispl,
+                                             int nDst, uint64_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_F16(ncclIrCoop const* coop, int nSrc, half* srcBase, size_t srcDispl, int nDst,
+                                             half* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_F32(ncclIrCoop const* coop, int nSrc, float* srcBase, size_t srcDispl,
+                                             int nDst, float* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_F64(ncclIrCoop const* coop, int nSrc, double* srcBase, size_t srcDispl,
+                                             int nDst, double* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_BF16(ncclIrCoop const* coop, int nSrc, __nv_bfloat16* srcBase, size_t srcDispl,
+                                              int nDst, __nv_bfloat16* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_F8E4M3(ncclIrCoop const* coop, int nSrc, __nv_fp8_e4m3* srcBase,
+                                                size_t srcDispl, int nDst, __nv_fp8_e4m3* dstBase, size_t dstDispl,
+                                                size_t count);
+__device__ void ncclIrLocalReduceSumCopy_F8E5M2(ncclIrCoop const* coop, int nSrc, __nv_fp8_e5m2* srcBase,
+                                                size_t srcDispl, int nDst, __nv_fp8_e5m2* dstBase, size_t dstDispl,
+                                                size_t count);
+
+/*************************** TMA copy ***************************/
+// Requires a coop initialized as Thread, Warp, or CTA.
+__device__ void ncclIrLsaCopyTma_I8(ncclIrCoop const* coop, int8_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                    size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_U8(ncclIrCoop const* coop, uint8_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                    size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_I32(ncclIrCoop const* coop, int32_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_U32(ncclIrCoop const* coop, uint32_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_I64(ncclIrCoop const* coop, int64_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_U64(ncclIrCoop const* coop, uint64_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_F16(ncclIrCoop const* coop, half* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_F32(ncclIrCoop const* coop, float* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_F64(ncclIrCoop const* coop, double* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_BF16(ncclIrCoop const* coop, __nv_bfloat16* src, ncclWindow_t dstWindow,
+                                      size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_F8E4M3(ncclIrCoop const* coop, __nv_fp8_e4m3* src, ncclWindow_t dstWindow,
+                                        size_t dstOffset, size_t count, ncclTeam team, char* smemPtr,
+                                        int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_F8E5M2(ncclIrCoop const* coop, __nv_fp8_e5m2* src, ncclWindow_t dstWindow,
+                                        size_t dstOffset, size_t count, ncclTeam team, char* smemPtr,
+                                        int smemBytesTotal);
 
 } // extern "C"
-
-// ncclLsaCopyTma takes ncclCoopAny, same as ncclLsaCopy. The device function
-// still requires the wrapped group to be Thread, Warp, or CTA.
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_I8(
-    ncclCoopAny coop, int8_t* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_U8(
-    ncclCoopAny coop, uint8_t* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_I32(
-    ncclCoopAny coop, int32_t* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_U32(
-    ncclCoopAny coop, uint32_t* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_I64(
-    ncclCoopAny coop, int64_t* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_U64(
-    ncclCoopAny coop, uint64_t* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F16(
-    ncclCoopAny coop, half* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F32(
-    ncclCoopAny coop, float* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F64(
-    ncclCoopAny coop, double* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_BF16(
-    ncclCoopAny coop, __nv_bfloat16* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F8E4M3(
-    ncclCoopAny coop, __nv_fp8_e4m3* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
-NCCL_IR_EXTERN_C __device__ void ncclLsaCopyTma_F8E5M2(
-    ncclCoopAny coop, __nv_fp8_e5m2* src, ncclWindow_t dstWindow,
-    size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, int smemBytesTotal);
 
 #endif // _NCCL_DEVICE_WRAPPER_H_

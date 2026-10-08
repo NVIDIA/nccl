@@ -98,7 +98,7 @@ NCCL_DEVICE_INLINE void ncclLsaCopy(Coop, T*, ncclWindow_t, size_t, IntCount, nc
 
 // TMA Copy/Broadcast (1->N), sm100+ only
 // Each form takes the staging buffer pointer followed by its capacity in bytes.
-// Coop is Thread, Warp, or CTA, optionally wrapped in ncclCoopAny.
+// Coop is Thread, Warp, or CTA.
 // 4.1T] LSA TMA Copy (lambda-based)
 template <typename T, typename Coop, typename DstLambda, typename IntCount>
 NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop, T*, DstLambda, int, IntCount, char*, int);

@@ -23,7 +23,6 @@ from ._structs import (
     ncclLsaBarrierHandle,
     ncclGinBarrierHandle,
     ncclMultimemHandle,
-    ncclCoopAny,
 )
 
 
@@ -60,96 +59,96 @@ _BC = BitCode(_device_bitcode_path())
 
 # === Coop API ===
 
-@cute.extern(name="ncclCoopAnyInitThread", source=_BC)
+@cute.extern(name="ncclIrCoopInitThread", source=_BC)
 def nccl_coop_any_init_thread(coop: _LLVMPtrType) -> None: ...
 
-@cute.extern(name="ncclCoopAnyInitWarp", source=_BC)
+@cute.extern(name="ncclIrCoopInitWarp", source=_BC)
 def nccl_coop_any_init_warp(coop: _LLVMPtrType) -> None: ...
 
-@cute.extern(name="ncclCoopAnyInitLanes", source=_BC)
+@cute.extern(name="ncclIrCoopInitLanes", source=_BC)
 def nccl_coop_any_init_lanes(coop: _LLVMPtrType, lane_mask: cutlass.Uint32) -> None: ...
 
-@cute.extern(name="ncclCoopAnyInitWarpSpan", source=_BC)
+@cute.extern(name="ncclIrCoopInitWarpSpan", source=_BC)
 def nccl_coop_any_init_warp_span(
     coop: _LLVMPtrType, warp0: cutlass.Int32, n_warps: cutlass.Int32,
     id: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclCoopAnyInitCta", source=_BC)
+@cute.extern(name="ncclIrCoopInitCta", source=_BC)
 def nccl_coop_any_init_cta(coop: _LLVMPtrType) -> None: ...
 
-@cute.extern(name="ncclCoopThreadRank", source=_BC)
+@cute.extern(name="ncclIrCoopThreadRank", source=_BC)
 def nccl_coop_thread_rank(coop: _LLVMPtrType) -> cutlass.Int32: ...
 
-@cute.extern(name="ncclCoopSize", source=_BC)
+@cute.extern(name="ncclIrCoopSize", source=_BC)
 def nccl_coop_size(coop: _LLVMPtrType) -> cutlass.Int32: ...
 
-@cute.extern(name="ncclCoopNumThreads", source=_BC)
+@cute.extern(name="ncclIrCoopNumThreads", source=_BC)
 def nccl_coop_num_threads(coop: _LLVMPtrType) -> cutlass.Int32: ...
 
-@cute.extern(name="ncclCoopSync", source=_BC)
+@cute.extern(name="ncclIrCoopSync", source=_BC)
 def nccl_coop_sync(coop: _LLVMPtrType) -> None: ...
 
 
 # === Core API (teams + window pointers) ===
 
-@cute.extern(name="ncclTeamWorld", source=_BC)
+@cute.extern(name="ncclIrTeamWorld", source=_BC)
 def nccl_team_world(dev_comm: _LLVMPtrType) -> ncclTeam: ...
 
-@cute.extern(name="ncclTeamLsa", source=_BC)
+@cute.extern(name="ncclIrTeamLsa", source=_BC)
 def nccl_team_lsa(dev_comm: _LLVMPtrType) -> ncclTeam: ...
 
-@cute.extern(name="ncclTeamRail", source=_BC)
+@cute.extern(name="ncclIrTeamRail", source=_BC)
 def nccl_team_rail(dev_comm: _LLVMPtrType) -> ncclTeam: ...
 
 # `mode` is ncclCftTeamMode_t, i.e. nccl.bindings.nccl.CftTeamMode. The C
 # declaration defaults it to FLAT; the symbol takes it explicitly.
-@cute.extern(name="ncclTeamCft", source=_BC)
+@cute.extern(name="ncclIrTeamCft", source=_BC)
 def nccl_team_cft(
     dev_comm: _LLVMPtrType, mode: cutlass.Int32,
 ) -> ncclTeam: ...
 
-@cute.extern(name="ncclTeamCftMultimem", source=_BC)
+@cute.extern(name="ncclIrTeamCftMultimem", source=_BC)
 def nccl_team_cft_multimem(dev_comm: _LLVMPtrType) -> ncclTeam: ...
 
-@cute.extern(name="ncclTeamRankToWorld", source=_BC)
+@cute.extern(name="ncclIrTeamRankToWorld", source=_BC)
 def nccl_team_rank_to_world(
     dev_comm: _LLVMPtrType, team: ncclTeam, rank: cutlass.Int32,
 ) -> cutlass.Int32: ...
 
-@cute.extern(name="ncclTeamRankToLsa", source=_BC)
+@cute.extern(name="ncclIrTeamRankToLsa", source=_BC)
 def nccl_team_rank_to_lsa(
     dev_comm: _LLVMPtrType, team: ncclTeam, rank: cutlass.Int32,
 ) -> cutlass.Int32: ...
 
-@cute.extern(name="ncclGetLocalPointer", source=_BC)
+@cute.extern(name="ncclIrGetLocalPointer", source=_BC)
 def nccl_get_local_pointer(
     window: _LLVMPtrType, offset: cutlass.Int64,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetLsaPointer", source=_BC)
+@cute.extern(name="ncclIrGetLsaPointer", source=_BC)
 def nccl_get_lsa_pointer(
     window: _LLVMPtrType, offset: cutlass.Int64, peer: cutlass.Int32,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetPeerPointer", source=_BC)
+@cute.extern(name="ncclIrGetPeerPointer", source=_BC)
 def nccl_get_peer_pointer(
     window: _LLVMPtrType, offset: cutlass.Int64, peer: cutlass.Int32,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetPeerPointerTeam", source=_BC)
+@cute.extern(name="ncclIrGetPeerPointerTeam", source=_BC)
 def nccl_get_peer_pointer_team(
     window: _LLVMPtrType, offset: cutlass.Int64, team: ncclTeam,
     peer: cutlass.Int32,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetMultimemPointer", source=_BC)
+@cute.extern(name="ncclIrGetMultimemPointer", source=_BC)
 def nccl_get_multimem_pointer(
     window: _LLVMPtrType, offset: cutlass.Int64,
     mm_handle: ncclMultimemHandle,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetLsaMultimemPointer", source=_BC)
+@cute.extern(name="ncclIrGetLsaMultimemPointer", source=_BC)
 def nccl_get_lsa_multimem_pointer(
     window: _LLVMPtrType, offset: cutlass.Int64, dev_comm: _LLVMPtrType,
 ) -> _LLVMPtrType: ...
@@ -157,29 +156,29 @@ def nccl_get_lsa_multimem_pointer(
 
 # === Resource buffer pointers ===
 
-@cute.extern(name="ncclGetResourceBufferLocalPointer", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferLocalPointer", source=_BC)
 def nccl_get_resource_buffer_local_pointer(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetResourceBufferLsaPointer", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferLsaPointer", source=_BC)
 def nccl_get_resource_buffer_lsa_pointer(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32, peer: cutlass.Int32,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetResourceBufferPeerPointer", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferPeerPointer", source=_BC)
 def nccl_get_resource_buffer_peer_pointer(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32, team: ncclTeam,
     peer: cutlass.Int32,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetResourceBufferMultimemPointer", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferMultimemPointer", source=_BC)
 def nccl_get_resource_buffer_multimem_pointer(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32,
     mm_handle: ncclMultimemHandle,
 ) -> _LLVMPtrType: ...
 
-@cute.extern(name="ncclGetResourceBufferLsaMultimemPointer", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferLsaMultimemPointer", source=_BC)
 def nccl_get_resource_buffer_lsa_multimem_pointer(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32,
 ) -> _LLVMPtrType: ...
@@ -190,38 +189,38 @@ def nccl_get_resource_buffer_lsa_multimem_pointer(
 # `le_id` and `le_offset` are out-params: pointers to caller-owned
 # ncclCftLeId (uint32) and size_t storage.
 
-@cute.extern(name="ncclGetCftLeInfo", source=_BC)
+@cute.extern(name="ncclIrGetCftLeInfo", source=_BC)
 def nccl_get_cft_le_info(
     window: _LLVMPtrType, offset: cutlass.Int64, peer_cft: cutlass.Int32,
     cft_team: ncclTeam, dev_comm: _LLVMPtrType, le_id: _LLVMPtrType,
     le_offset: _LLVMPtrType,
 ) -> None: ...
 
-@cute.extern(name="ncclGetPeerLeInfo", source=_BC)
+@cute.extern(name="ncclIrGetPeerLeInfo", source=_BC)
 def nccl_get_peer_le_info(
     window: _LLVMPtrType, offset: cutlass.Int64, peer_world: cutlass.Int32,
     dev_comm: _LLVMPtrType, le_id: _LLVMPtrType, le_offset: _LLVMPtrType,
 ) -> None: ...
 
-@cute.extern(name="ncclGetMultimemLeInfo", source=_BC)
+@cute.extern(name="ncclIrGetMultimemLeInfo", source=_BC)
 def nccl_get_multimem_le_info(
     window: _LLVMPtrType, offset: cutlass.Int64, dev_comm: _LLVMPtrType,
     le_id: _LLVMPtrType, le_offset: _LLVMPtrType,
 ) -> None: ...
 
-@cute.extern(name="ncclGetResourceBufferCftLeInfo", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferCftLeInfo", source=_BC)
 def nccl_get_resource_buffer_cft_le_info(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32, peer_cft: cutlass.Int32,
     le_id: _LLVMPtrType, le_offset: _LLVMPtrType,
 ) -> None: ...
 
-@cute.extern(name="ncclGetResourceBufferPeerLeInfo", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferPeerLeInfo", source=_BC)
 def nccl_get_resource_buffer_peer_le_info(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32, peer_world: cutlass.Int32,
     le_id: _LLVMPtrType, le_offset: _LLVMPtrType,
 ) -> None: ...
 
-@cute.extern(name="ncclGetResourceBufferMultimemLeInfo", source=_BC)
+@cute.extern(name="ncclIrGetResourceBufferMultimemLeInfo", source=_BC)
 def nccl_get_resource_buffer_multimem_le_info(
     dev_comm: _LLVMPtrType, handle: cutlass.Uint32, le_id: _LLVMPtrType,
     le_offset: _LLVMPtrType,
@@ -290,7 +289,7 @@ def _reduce_copy_name_mangler(ffi):
         raise TypeError(f"{ffi.name} requires a constexpr dtype")
     dtype = dtype_param.value
 
-    if ffi.name.startswith("ncclMultimem") and dtype not in _REDUCE_COPY_MULTIMEM_DTYPES:
+    if ffi.name.startswith("ncclIrMultimem") and dtype not in _REDUCE_COPY_MULTIMEM_DTYPES:
         raise TypeError(f"{ffi.name} does not support {dtype}")
 
     suffix = _CUTE_DTYPE_SUFFIX_MAPPING[dtype]
@@ -298,12 +297,12 @@ def _reduce_copy_name_mangler(ffi):
 
 
 @cute.extern(
-    name="ncclLsaReduceSum",
+    name="ncclIrLsaReduceSum",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_lsa_reduce_sum(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     src_window: _LLVMPtrType,
     src_offset: cutlass.Int64,
     dst: _LLVMPtrType,
@@ -314,12 +313,12 @@ def nccl_lsa_reduce_sum(
 
 
 @cute.extern(
-    name="ncclMultimemReduceSum",
+    name="ncclIrMultimemReduceSum",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_multimem_reduce_sum(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     mc_src: _LLVMPtrType,
     dst: _LLVMPtrType,
     count: cutlass.Int64,
@@ -328,12 +327,12 @@ def nccl_multimem_reduce_sum(
 
 
 @cute.extern(
-    name="ncclLsaCopy",
+    name="ncclIrLsaCopy",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_lsa_copy(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     src: _LLVMPtrType,
     dst_window: _LLVMPtrType,
     dst_offset: cutlass.Int64,
@@ -344,12 +343,12 @@ def nccl_lsa_copy(
 
 
 @cute.extern(
-    name="ncclLsaCopyTma",
+    name="ncclIrLsaCopyTma",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_lsa_copy_tma(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     src: _LLVMPtrType,
     dst_window: _LLVMPtrType,
     dst_offset: cutlass.Int64,
@@ -362,12 +361,12 @@ def nccl_lsa_copy_tma(
 
 
 @cute.extern(
-    name="ncclMultimemCopy",
+    name="ncclIrMultimemCopy",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_multimem_copy(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     src: _LLVMPtrType,
     mc_dst: _LLVMPtrType,
     count: cutlass.Int64,
@@ -376,12 +375,12 @@ def nccl_multimem_copy(
 
 
 @cute.extern(
-    name="ncclLsaReduceSumCopy",
+    name="ncclIrLsaReduceSumCopy",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_lsa_reduce_sum_copy(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     src_window: _LLVMPtrType,
     src_offset: cutlass.Int64,
     dst_window: _LLVMPtrType,
@@ -393,12 +392,12 @@ def nccl_lsa_reduce_sum_copy(
 
 
 @cute.extern(
-    name="ncclMultimemReduceSumCopy",
+    name="ncclIrMultimemReduceSumCopy",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_multimem_reduce_sum_copy(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     mc_src: _LLVMPtrType,
     mc_dst: _LLVMPtrType,
     count: cutlass.Int64,
@@ -407,12 +406,12 @@ def nccl_multimem_reduce_sum_copy(
 
 
 @cute.extern(
-    name="ncclLocalReduceSumCopy",
+    name="ncclIrLocalReduceSumCopy",
     source=_BC,
     name_mangler=_reduce_copy_name_mangler,
 )
 def nccl_local_reduce_sum_copy(
-    coop: ncclCoopAny,
+    coop: _LLVMPtrType,
     n_src: cutlass.Int32,
     src_base: _LLVMPtrType,
     src_displ: cutlass.Int64,
@@ -448,7 +447,7 @@ def nccl_gin_put(
     signal_op_arg: cutlass.Int64,  # signal_op_arg
     is_counter: cutlass.Boolean,   # is_counter
     counter_id: cutlass.Int32,     # counter_id
-    coop: ncclCoopAny,             # coop
+    coop: _LLVMPtrType,             # coop
     is_descriptor: cutlass.Boolean,  # is_descriptor
     descriptor_ptr: _LLVMPtrType,  # descriptor_ptr
     given_release: cutlass.Int32,  # given_release
@@ -469,7 +468,7 @@ def nccl_gin_put_value(
     signal_id: cutlass.Int32,      # signal_id
     signal_op: cutlass.Int32,      # signal_op
     signal_op_arg: cutlass.Int64,  # signal_op_arg
-    coop: ncclCoopAny,             # coop
+    coop: _LLVMPtrType,             # coop
     is_descriptor: cutlass.Boolean,  # is_descriptor
     descriptor_ptr: _LLVMPtrType,  # descriptor_ptr
     given_release: cutlass.Int32,  # given_release
@@ -487,7 +486,7 @@ def nccl_gin_get(
     local_win: _LLVMPtrType,       # local window
     local_offset: cutlass.Int64,   # local offset
     size: cutlass.Int64,           # size
-    coop: ncclCoopAny,             # coop
+    coop: _LLVMPtrType,             # coop
     is_descriptor: cutlass.Boolean,  # is_descriptor
     descriptor_ptr: _LLVMPtrType,  # descriptor_ptr
     opt_flags: cutlass.Int32,      # opt_flags
@@ -495,7 +494,7 @@ def nccl_gin_get(
 
 @cute.extern(name="ncclGinFlush", source=_BC)
 def nccl_gin_flush(
-    gin: _LLVMPtrType, coop: ncclCoopAny, ord: cutlass.Int32,
+    gin: _LLVMPtrType, coop: _LLVMPtrType, ord: cutlass.Int32,
 ) -> None: ...
 
 @cute.extern(name="ncclGinSignal_v2", source=_BC)
@@ -507,7 +506,7 @@ def nccl_gin_signal(
     signal_id: cutlass.Int32,      # signal_id
     signal_op: cutlass.Int32,      # signal_op
     signal_op_arg: cutlass.Int64,  # signal_op_arg
-    coop: ncclCoopAny,             # coop
+    coop: _LLVMPtrType,             # coop
     is_descriptor: cutlass.Boolean,  # is_descriptor
     descriptor_ptr: _LLVMPtrType,  # descriptor_ptr
     given_release: cutlass.Int32,  # given_release
@@ -523,7 +522,7 @@ def nccl_gin_read_signal(
 
 @cute.extern(name="ncclGinWaitSignal", source=_BC)
 def nccl_gin_wait_signal(
-    gin: _LLVMPtrType, coop: ncclCoopAny, signal: cutlass.Int32,
+    gin: _LLVMPtrType, coop: _LLVMPtrType, signal: cutlass.Int32,
     least: cutlass.Int64, bits: cutlass.Int32, ord: cutlass.Int32,
 ) -> None: ...
 
@@ -535,7 +534,7 @@ def nccl_gin_read_counter(
 
 @cute.extern(name="ncclGinWaitCounter", source=_BC)
 def nccl_gin_wait_counter(
-    gin: _LLVMPtrType, coop: ncclCoopAny, counter: cutlass.Int32,
+    gin: _LLVMPtrType, coop: _LLVMPtrType, counter: cutlass.Int32,
     least: cutlass.Int64, bits: cutlass.Int32, ord: cutlass.Int32,
 ) -> None: ...
 
@@ -557,83 +556,83 @@ def nccl_gin_get_signal_shadow_ptr(
 
 # === LSA Barrier Session API ===
 
-@cute.extern(name="ncclLsaBarrierSessionInit", source=_BC)
+@cute.extern(name="ncclIrLsaBarrierSessionInit", source=_BC)
 def nccl_lsa_barrier_session_init(
-    session: _LLVMPtrType, coop: ncclCoopAny, dev_comm: _LLVMPtrType,
+    session: _LLVMPtrType, coop: _LLVMPtrType, dev_comm: _LLVMPtrType,
     team: ncclTeam, handle: ncclLsaBarrierHandle, index: cutlass.Uint32,
     multimem: cutlass.Boolean, mm_handle: ncclMultimemHandle,
 ) -> None: ...
 
-@cute.extern(name="ncclLsaBarrierSessionArrive", source=_BC)
+@cute.extern(name="ncclIrLsaBarrierSessionArrive", source=_BC)
 def nccl_lsa_barrier_session_arrive(
-    session: _LLVMPtrType, coop: ncclCoopAny, order: cutlass.Int32,
+    session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclLsaBarrierSessionWait", source=_BC)
+@cute.extern(name="ncclIrLsaBarrierSessionWait", source=_BC)
 def nccl_lsa_barrier_session_wait(
-    session: _LLVMPtrType, coop: ncclCoopAny, order: cutlass.Int32,
+    session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclLsaBarrierSessionSync", source=_BC)
+@cute.extern(name="ncclIrLsaBarrierSessionSync", source=_BC)
 def nccl_lsa_barrier_session_sync(
-    session: _LLVMPtrType, coop: ncclCoopAny, order: cutlass.Int32,
+    session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclLsaBarrierSessionDestroy", source=_BC)
+@cute.extern(name="ncclIrLsaBarrierSessionDestroy", source=_BC)
 def nccl_lsa_barrier_session_destroy(session: _LLVMPtrType) -> None: ...
 
 
 # === GIN Barrier Session API ===
 
-@cute.extern(name="ncclGinBarrierSessionInit", source=_BC)
+@cute.extern(name="ncclIrGinBarrierSessionInit", source=_BC)
 def nccl_gin_barrier_session_init(
-    session: _LLVMPtrType, coop: ncclCoopAny, gin: _LLVMPtrType,
+    session: _LLVMPtrType, coop: _LLVMPtrType, gin: _LLVMPtrType,
     team: ncclTeam, handle: ncclGinBarrierHandle, index: cutlass.Uint32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinBarrierSessionInitAllContexts", source=_BC)
+@cute.extern(name="ncclIrGinBarrierSessionInitAllContexts", source=_BC)
 def nccl_gin_barrier_session_init_all_contexts(
-    session: _LLVMPtrType, coop: ncclCoopAny, dev_comm: _LLVMPtrType,
+    session: _LLVMPtrType, coop: _LLVMPtrType, dev_comm: _LLVMPtrType,
     team: ncclTeam, handle: ncclGinBarrierHandle, index: cutlass.Uint32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinBarrierSessionSync", source=_BC)
+@cute.extern(name="ncclIrGinBarrierSessionSync", source=_BC)
 def nccl_gin_barrier_session_sync(
-    session: _LLVMPtrType, coop: ncclCoopAny, order: cutlass.Int32,
+    session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
     fence: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinBarrierSessionDestroy", source=_BC)
+@cute.extern(name="ncclIrGinBarrierSessionDestroy", source=_BC)
 def nccl_gin_barrier_session_destroy(session: _LLVMPtrType) -> None: ...
 
 
 # === Hybrid Barrier Session API ===
 
-@cute.extern(name="ncclBarrierSessionInit", source=_BC)
+@cute.extern(name="ncclIrBarrierSessionInit", source=_BC)
 def nccl_barrier_session_init(
-    session: _LLVMPtrType, coop: ncclCoopAny, inner_team: ncclTeam,
+    session: _LLVMPtrType, coop: _LLVMPtrType, inner_team: ncclTeam,
     outer_team: ncclTeam, gin: _LLVMPtrType, inner_handle: ncclLsaBarrierHandle,
     outer_handle: ncclGinBarrierHandle, index: cutlass.Uint32,
     multimem: cutlass.Boolean, inner_mm_handle: ncclMultimemHandle,
 ) -> None: ...
 
-@cute.extern(name="ncclBarrierSessionSync", source=_BC)
+@cute.extern(name="ncclIrBarrierSessionSync", source=_BC)
 def nccl_barrier_session_sync(
-    session: _LLVMPtrType, coop: ncclCoopAny, order: cutlass.Int32,
+    session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
     fence: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclBarrierSessionDestroy", source=_BC)
+@cute.extern(name="ncclIrBarrierSessionDestroy", source=_BC)
 def nccl_barrier_session_destroy(session: _LLVMPtrType) -> None: ...
 
 
 # === Session size getters ===
 
-@cute.extern(name="ncclLsaBarrierSession_C_size", source=_BC)
-def nccl_lsa_barrier_session_c_size() -> cutlass.Int64: ...
+@cute.extern(name="ncclIrLsaBarrierSessionSize", source=_BC)
+def nccl_lsa_barrier_session_size() -> cutlass.Int64: ...
 
-@cute.extern(name="ncclGinBarrierSession_C_size", source=_BC)
-def nccl_gin_barrier_session_c_size() -> cutlass.Int64: ...
+@cute.extern(name="ncclIrGinBarrierSessionSize", source=_BC)
+def nccl_gin_barrier_session_size() -> cutlass.Int64: ...
 
-@cute.extern(name="ncclBarrierSession_C_size", source=_BC)
-def nccl_barrier_session_c_size() -> cutlass.Int64: ...
+@cute.extern(name="ncclIrBarrierSessionSize", source=_BC)
+def nccl_barrier_session_size() -> cutlass.Int64: ...

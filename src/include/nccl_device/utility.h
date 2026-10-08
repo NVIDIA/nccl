@@ -53,12 +53,6 @@
 #define NCCL_EXTERN_C
 #endif
 
-#ifdef __clang_llvm_bitcode_lib__
-#define NCCL_IR_EXTERN_C extern "C"
-#else
-#define NCCL_IR_EXTERN_C
-#endif
-
 #include <stdint.h>
 #include <stdbool.h>
 

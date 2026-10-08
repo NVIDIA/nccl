@@ -139,8 +139,8 @@ ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct 
 // Profiler GPU-clock probe.
 //
 // A 1-thread kernel that samples the GPU globaltimer -- the same
-// clock the device profiler stamps into KernelCh/slab timestamps --
-// into a host-visible location. The profiler thread launches this
+// clock the device profiler stamps into KernelCh timestamps -- into a
+// host-visible location. The profiler thread launches this
 // around CPU clock reads to build a GPU->CPU time mapping, so it can
 // convert GPU-derived event timestamps (KernelCh, KernelPhase) to
 // CLOCK_MONOTONIC/CLOCK_REALTIME. Only used when a plugin asks for

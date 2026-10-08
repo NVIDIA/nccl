@@ -263,17 +263,16 @@ static void inspectorPluginP2pInfoCleanup(struct inspectorP2pInfo *p2pInfo) {
  *   None.
  */
 // Event start/stop time in epoch microseconds. Prefer NCCL's stamped
-// CLOCK_REALTIME (ns) -- it marks the true event instant even in lossy mode,
-// where the callback fires long after the kernel ran -- and fall back to the
+// CLOCK_REALTIME (ns) -- it marks the true event instant even when the
+// callback fires long after the kernel ran -- and fall back to the
 // host wall clock when NCCL did not stamp one (older NCCL, or an event NCCL
 // does not stamp). CLOCK_REALTIME is the same epoch as the prior gettimeofday
 // path, so emitted *_timestamp_us fields and their datetime rendering are
 // unchanged; durations (stop-start) stay correct as both ends use it.
-static inline uint64_t inspectorNcclStartUsec(const ncclProfilerEventDescr_t* eDescr) {
+// Start and stop both arrive in the same descriptor type, so one accessor
+// serves either end.
+static inline uint64_t inspectorNcclTsUsec(const ncclProfilerEventDescr_t* eDescr) {
   return (eDescr != nullptr && eDescr->tsCpuReal != 0) ? (eDescr->tsCpuReal / 1000) : inspectorGetTime();
-}
-static inline uint64_t inspectorNcclStopUsec(const ncclProfilerEventStopDescr_t* eStopDescr) {
-  return (eStopDescr != nullptr && eStopDescr->tsCpuReal != 0) ? (eStopDescr->tsCpuReal / 1000) : inspectorGetTime();
 }
 
 static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
@@ -297,7 +296,7 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
   if (collInfoPtr->nChannels > 0) {
     inspectorPluginCollInfoRef(collInfoPtr); //extra ref for kernel completion
   }
-  collInfoPtr->tsStartUsec = inspectorNcclStartUsec(eDescr);
+  collInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   collInfoPtr->msgSizeBytes =
     ncclTypeSize(inspectorStringToDatatype(eDescr->coll.datatype)) * eDescr->coll.count;
 
@@ -331,7 +330,7 @@ static void inspectorPluginP2pInfoInit(struct inspectorP2pInfo **p2pInfo,
   if (p2pInfoPtr->nChannels > 0) {
     inspectorPluginP2pInfoRef(p2pInfoPtr); // extra ref for kernel completion
   }
-  p2pInfoPtr->tsStartUsec = inspectorNcclStartUsec(eDescr);
+  p2pInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   p2pInfoPtr->msgSizeBytes =
     ncclTypeSize(inspectorStringToDatatype(eDescr->p2p.datatype)) * eDescr->p2p.count;
 
@@ -401,7 +400,7 @@ static void inspectorPluginKernelChInfoInitColl(struct inspectorKernelChInfo **k
   if (kernelChInfoPtr->stopGpuClk == 0) {
     inspectorPluginCollInfoRef(collInfo); //Pairs with Record Kernel Stop event
   }
-  kernelChInfoPtr->tsStartUsec = inspectorNcclStartUsec(eDescr);
+  kernelChInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   if (collInfo->nKernelChStarted == 0) {
     collInfo->tsStartUsec = kernelChInfoPtr->tsStartUsec;
   }
@@ -431,7 +430,7 @@ static void inspectorPluginKernelChInfoInitP2p(struct inspectorKernelChInfo **ke
   if (kernelChInfoPtr->stopGpuClk == 0) {
     inspectorPluginP2pInfoRef(p2pInfo); //Pairs with Record Kernel Stop event
   }
-  kernelChInfoPtr->tsStartUsec = inspectorNcclStartUsec(eDescr);
+  kernelChInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   if (p2pInfo->nKernelChStarted == 0) {
     p2pInfo->tsStartUsec = kernelChInfoPtr->tsStartUsec;
   }
@@ -779,7 +778,7 @@ static ncclResult_t inspectorPluginRecordEventStateKernelCh(struct inspectorKern
  *   ncclResult_t - success or error code.
  *
  */
-__hidden ncclResult_t inspectorPluginStopEvent(void *eHandle, ncclProfilerEventStopDescr_t* eStopDescr) {
+__hidden ncclResult_t inspectorPluginStopEvent(void *eHandle, ncclProfilerEventDescr_t* eStopDescr) {
   if (eHandle == nullptr) {
     INFO(NCCL_INIT,
          "Profiler/Plugin: Event Handle NULL for start event %s", __func__);
@@ -798,7 +797,7 @@ __hidden ncclResult_t inspectorPluginStopEvent(void *eHandle, ncclProfilerEventS
       = (struct inspectorKernelChInfo *)eHandle;
     // KernelCh completion time comes from NCCL's stamped stop timestamp (the
     // GPU stop mapped to CLOCK_REALTIME); fall back to the host clock if absent.
-    return inspectorPluginStopEventKernelCh(kernelChInfo, inspectorNcclStopUsec(eStopDescr));
+    return inspectorPluginStopEventKernelCh(kernelChInfo, inspectorNcclTsUsec(eStopDescr));
   }
   return ncclSuccess;
 }

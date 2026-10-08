@@ -196,7 +196,7 @@ static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEve
   return ncclProfiler_v6->recordEventState(eHandle, (ncclProfilerEventState_v6_t)eState, &eStateArgs_v6);
 }
 
-static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventStopDescr_t* eStopDescr) {
+static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
   // v6 plugins don't take stop timestamps; drop the stop descriptor.
   (void)eStopDescr;
   return ncclProfiler_v6->stopEvent(eHandle);

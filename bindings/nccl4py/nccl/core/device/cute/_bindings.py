@@ -425,15 +425,15 @@ def nccl_local_reduce_sum_copy(
 
 # === GIN API ===
 
-@cute.extern(name="ncclGin_C_initWithResourceSharingMode", source=_BC)
-def nccl_gin_c_init(
-    gin: _LLVMPtrType, backend_mask: cutlass.Int32, dev_comm: _LLVMPtrType,
+@cute.extern(name="ncclIrGinInit", source=_BC)
+def nccl_ir_gin_init(
+    gin: _LLVMPtrType, dev_comm: _LLVMPtrType,
     context_id: cutlass.Int32, resource_sharing_mode: cutlass.Uint8,
 ) -> None: ...
 
-@cute.extern(name="ncclGinPut_v2", source=_BC)
+@cute.extern(name="ncclIrGinPut", source=_BC)
 def nccl_gin_put(
-    gin: _LLVMPtrType,             # ncclGin_C* gin
+    gin: _LLVMPtrType,             # ncclIrGin* gin
     team: ncclTeam,                # team
     peer: cutlass.Int32,           # peer
     dst_win: _LLVMPtrType,         # dst window
@@ -441,8 +441,11 @@ def nccl_gin_put(
     src_win: _LLVMPtrType,         # src window
     src_offset: cutlass.Int64,     # src offset
     size: cutlass.Int64,           # size
-    is_signal: cutlass.Boolean,    # is_signal
+    signal_type: cutlass.Int32,    # indexed, VA, or none
+    signal_win: _LLVMPtrType,
+    signal_offset: cutlass.Int64,
     signal_id: cutlass.Int32,      # signal_id
+    is_strong: cutlass.Boolean,
     signal_op: cutlass.Int32,      # signal_op
     signal_op_arg: cutlass.Int64,  # signal_op_arg
     is_counter: cutlass.Boolean,   # is_counter
@@ -453,19 +456,23 @@ def nccl_gin_put(
     given_release: cutlass.Int32,  # given_release
     required_release: cutlass.Int32,  # required_release
     opt_flags: cutlass.Int32,      # opt_flags
+    segment_type: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinPutValue_v2", source=_BC)
+@cute.extern(name="ncclIrGinPutValue", source=_BC)
 def nccl_gin_put_value(
-    gin: _LLVMPtrType,             # ncclGin_C* gin
+    gin: _LLVMPtrType,             # ncclIrGin* gin
     team: ncclTeam,                # team
     peer: cutlass.Int32,           # peer
     dst_win: _LLVMPtrType,         # dst window
     dst_offset: cutlass.Int64,     # dst offset
     value: cutlass.Int64,          # value
     size: cutlass.Int64,           # size
-    is_signal: cutlass.Boolean,    # is_signal
+    signal_type: cutlass.Int32,    # indexed, VA, or none
+    signal_win: _LLVMPtrType,
+    signal_offset: cutlass.Int64,
     signal_id: cutlass.Int32,      # signal_id
+    is_strong: cutlass.Boolean,
     signal_op: cutlass.Int32,      # signal_op
     signal_op_arg: cutlass.Int64,  # signal_op_arg
     coop: _LLVMPtrType,             # coop
@@ -476,9 +483,9 @@ def nccl_gin_put_value(
     opt_flags: cutlass.Int32,      # opt_flags
 ) -> None: ...
 
-@cute.extern(name="ncclGinGet", source=_BC)
+@cute.extern(name="ncclIrGinGet", source=_BC)
 def nccl_gin_get(
-    gin: _LLVMPtrType,             # ncclGin_C* gin
+    gin: _LLVMPtrType,             # ncclIrGin* gin
     team: ncclTeam,                # team
     peer: cutlass.Int32,           # peer
     remote_win: _LLVMPtrType,      # remote window
@@ -490,20 +497,25 @@ def nccl_gin_get(
     is_descriptor: cutlass.Boolean,  # is_descriptor
     descriptor_ptr: _LLVMPtrType,  # descriptor_ptr
     opt_flags: cutlass.Int32,      # opt_flags
+    segment_type: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinFlush", source=_BC)
+@cute.extern(name="ncclIrGinFlush", source=_BC)
 def nccl_gin_flush(
     gin: _LLVMPtrType, coop: _LLVMPtrType, ord: cutlass.Int32,
+    is_descriptor: cutlass.Boolean, descriptor_ptr: _LLVMPtrType,
 ) -> None: ...
 
-@cute.extern(name="ncclGinSignal_v2", source=_BC)
+@cute.extern(name="ncclIrGinSignal", source=_BC)
 def nccl_gin_signal(
-    gin: _LLVMPtrType,             # ncclGin_C* gin
+    gin: _LLVMPtrType,             # ncclIrGin* gin
     team: ncclTeam,                # team
     peer: cutlass.Int32,           # peer
-    is_signal: cutlass.Boolean,    # is_signal
+    signal_type: cutlass.Int32,    # indexed, VA, or none
+    signal_win: _LLVMPtrType,
+    signal_offset: cutlass.Int64,
     signal_id: cutlass.Int32,      # signal_id
+    is_strong: cutlass.Boolean,
     signal_op: cutlass.Int32,      # signal_op
     signal_op_arg: cutlass.Int64,  # signal_op_arg
     coop: _LLVMPtrType,             # coop
@@ -514,41 +526,41 @@ def nccl_gin_signal(
     opt_flags: cutlass.Int32,      # opt_flags
 ) -> None: ...
 
-@cute.extern(name="ncclGinReadSignal", source=_BC)
+@cute.extern(name="ncclIrGinReadSignal", source=_BC)
 def nccl_gin_read_signal(
     gin: _LLVMPtrType, signal_id: cutlass.Int32, bits: cutlass.Int32,
     ord: cutlass.Int32,
 ) -> cutlass.Int64: ...
 
-@cute.extern(name="ncclGinWaitSignal", source=_BC)
+@cute.extern(name="ncclIrGinWaitSignal", source=_BC)
 def nccl_gin_wait_signal(
     gin: _LLVMPtrType, coop: _LLVMPtrType, signal: cutlass.Int32,
     least: cutlass.Int64, bits: cutlass.Int32, ord: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinReadCounter", source=_BC)
+@cute.extern(name="ncclIrGinReadCounter", source=_BC)
 def nccl_gin_read_counter(
     gin: _LLVMPtrType, counter: cutlass.Int32, bits: cutlass.Int32,
     ord: cutlass.Int32,
 ) -> cutlass.Int64: ...
 
-@cute.extern(name="ncclGinWaitCounter", source=_BC)
+@cute.extern(name="ncclIrGinWaitCounter", source=_BC)
 def nccl_gin_wait_counter(
     gin: _LLVMPtrType, coop: _LLVMPtrType, counter: cutlass.Int32,
     least: cutlass.Int64, bits: cutlass.Int32, ord: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinResetCounter", source=_BC)
+@cute.extern(name="ncclIrGinResetCounter", source=_BC)
 def nccl_gin_reset_counter(
     gin: _LLVMPtrType, counter: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinResetSignal", source=_BC)
+@cute.extern(name="ncclIrGinResetSignal", source=_BC)
 def nccl_gin_reset_signal(
     gin: _LLVMPtrType, signal: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclGinGetSignalShadowPtr", source=_BC)
+@cute.extern(name="ncclIrGinGetSignalShadowPtr", source=_BC)
 def nccl_gin_get_signal_shadow_ptr(
     gin: _LLVMPtrType, signal: cutlass.Int32,
 ) -> _LLVMPtrType: ...

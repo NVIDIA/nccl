@@ -12,10 +12,6 @@ appends a scalar with ``put_value``, then raises a remote signal. Rank 1
 waits on that signal, inspects the signal and its shadow, pulls the
 payload back with ``get``, and resets the slots it used.
 
-``Gin.get`` needs NCCL 2.31.1: older device libraries export
-``ncclGinGet`` C++-mangled only, so the stub has nothing to bind to. That
-phase is skipped below 2.31.1.
-
 Needs exactly 2 ranks with a GIN-capable network. Two nodes give a real
 network path; a single node works when NCCL can set up loopback GIN
 connections::
@@ -53,14 +49,6 @@ import nccl.core.device.cute as nccl_cute
 NAME = os.path.basename(__file__)
 
 
-# Up to 2.31.0 ncclGinGet had no NCCL_IR_EXTERN_C declaration, so the device
-# library exports it C++-mangled only and the stub has nothing to bind to;
-# JIT compilation of the kernel fails.
-# get_version() reports the loaded libnccl, which is what the device
-# bitcode is expected to match.
-NCCL_VERSION = nccl.get_version().libnccl.version
-NCCL_HAS_GIN_GET = NCCL_VERSION.release >= (2, 31, 1)
-
 NUM_ELEMS = 4096
 THREADS = 128
 SRC_RANK = 0
@@ -92,10 +80,10 @@ def gin_ops_kernel(
     coop = nccl_cute.cta()
     world = dev_comm.team_world
 
-    # The backend mask selects which transports may back this context; the
-    # sharing mode says how widely its network resources are shared.
+    # The context uses the backend configured in DevComm; the sharing mode
+    # says how widely its network resources are shared.
     gin = dev_comm.gin(
-        nccl_cute.GinBackendMask.ALL, 0,
+        0,
         resource_sharing_mode=nccl_cute.GinResourceSharingMode.GPU)
 
     payload = cute.make_layout(NUM_ELEMS - 1)
@@ -154,16 +142,15 @@ def gin_ops_kernel(
             shadow[0] = cutlass.Uint64(1)
             cute.printf(f"rank 1: shadow={shadow[0]}")
 
-        if NCCL_HAS_GIN_GET:
-            # A get needs no participation from the peer; flush waits for
-            # it to land.
-            remote = send_win.tensor(cutlass.Int64, payload)
-            local = get_win.tensor(cutlass.Int64, payload)
-            gin.get(world, SRC_RANK, send_win, remote, get_win, local, coop)
-            gin.flush(coop, nccl_cute.MemoryOrder.ACQUIRE)
+        # A get needs no participation from the peer; flush waits for
+        # it to land.
+        remote = send_win.tensor(cutlass.Int64, payload)
+        local = get_win.tensor(cutlass.Int64, payload)
+        gin.get(world, SRC_RANK, send_win, remote, get_win, local, coop)
+        gin.flush(coop, nccl_cute.MemoryOrder.ACQUIRE)
 
-            if 0 == tidx:
-                cute.printf(f"rank 1: get complete, get[0]={local[0]}")
+        if 0 == tidx:
+            cute.printf(f"rank 1: get complete, get[0]={local[0]}")
 
         # Leave the slots reusable. Neither reset may race with an update,
         # hence the single thread and the syncs.
@@ -209,9 +196,6 @@ def main():
 
     if rank == root:
         print(f"\n===== {NAME} =====", flush=True)
-        if not NCCL_HAS_GIN_GET:
-            print(f"WARNING: NCCL {NCCL_VERSION} exports "
-                  "ncclGinGet C++-mangled only; skipping Gin.get", flush=True)
 
     if nranks != 2:
         if rank == root:
@@ -270,11 +254,9 @@ def main():
         expected = cp.arange(NUM_ELEMS - 1, dtype='int64') + 1
         put_mismatches = int(cp.count_nonzero(recv_buf[:NUM_ELEMS - 1] != expected).item())
         tail_matches = int(recv_buf[NUM_ELEMS - 1]) == SCALAR
-        get_mismatches = (int(cp.count_nonzero(get_buf[:NUM_ELEMS - 1] != expected).item())
-                          if NCCL_HAS_GIN_GET else 0)
+        get_mismatches = int(cp.count_nonzero(get_buf[:NUM_ELEMS - 1] != expected).item())
         failures = put_mismatches + get_mismatches + (0 if tail_matches else 1)
-        checked = ("Gin.put, Gin.put_value and Gin.get" if NCCL_HAS_GIN_GET
-                   else "Gin.put and Gin.put_value")
+        checked = "Gin.put, Gin.put_value and Gin.get"
         if failures == 0:
             print(f"[rank {rank}] [SUCCESS] {checked} validated")
         else:

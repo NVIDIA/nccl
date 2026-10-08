@@ -7,29 +7,29 @@ transfer size from each tensor.
 
 Construct via :meth:`DevComm.gin`::
 
-    gin = dev_comm.gin(GinBackendMask.ALL, context_id=0)
+    gin = dev_comm.gin(context_id=0)
 """
 
 import cutlass
 import cutlass.cute as cute
-from cutlass._mlir.dialects import llvm
-from cutlass.cutlass_dsl import dsl_user_op
 
 from . import _bindings
-from ._helpers import _to_ptr, _to_coop_ptr, _to_value
-from ._structs import _LLVMPtrType, ncclGin_C, ncclTeam
 from .coop import Coop
+from ._helpers import _to_ptr, _to_coop_ptr, _to_value
+from ._structs import _LLVMPtrType, ncclTeam
 from .types import MemoryOrder, ThreadScope
 
 
 @cute.native_struct
 class Gin:
-    """Wraps a ``ncclGin_C*`` (pointer to a stack-alloca'd ``ncclGin_C`` struct).
+    """Wraps a ``ncclIrGin*`` (pointer to opaque kernel-local GIN storage).
 
     Instances must be produced through :meth:`DevComm.gin`.
     """
 
     ptr: _LLVMPtrType
+    # Preserve the indexed-signal policy of the Python API; the IR ABI takes it explicitly.
+    _legacy_signal_is_strong: cutlass.Boolean
 
     def put(
         self,
@@ -94,13 +94,14 @@ class Gin:
             dst_win.ptr, cutlass.Int64(dst_offset),
             src_win.ptr, cutlass.Int64(src_offset),
             cutlass.Int64(size),
-            cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
+            cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
+            cutlass.Int32(signal_id), self._legacy_signal_is_strong,
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             cutlass.Boolean(is_counter), cutlass.Int32(counter_id),
             _to_coop_ptr(coop),
             cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
-            cutlass.Int32(opt_flags),
+            cutlass.Int32(opt_flags), cutlass.Int32(0),
         )
 
     def put_value(
@@ -156,7 +157,8 @@ class Gin:
             self.ptr, _to_value(team), cutlass.Int32(peer),
             dst_win.ptr, cutlass.Int64(dst_offset),
             cutlass.Int64(value), cutlass.Int64(size),
-            cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
+            cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
+            cutlass.Int32(signal_id), self._legacy_signal_is_strong,
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
@@ -209,7 +211,7 @@ class Gin:
             local_win.ptr, cutlass.Int64(local_offset),
             cutlass.Int64(size),
             _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
-            cutlass.Int32(opt_flags),
+            cutlass.Int32(opt_flags), cutlass.Int32(0),
         )
 
     def signal(
@@ -248,7 +250,8 @@ class Gin:
         """
         _bindings.nccl_gin_signal(
             self.ptr, _to_value(team), cutlass.Int32(peer),
-            cutlass.Boolean(is_signal), cutlass.Int32(signal_id),
+            cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
+            cutlass.Int32(signal_id), self._legacy_signal_is_strong,
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
@@ -395,21 +398,9 @@ class Gin:
             ord: ``cuda::memory_order``; default ``ACQUIRE``. See
                 :class:`~nccl.core.device.cute.types.MemoryOrder`.
         """
-        _bindings.nccl_gin_flush(self.ptr, _to_coop_ptr(coop), cutlass.Int32(int(ord)))
-
-    @dsl_user_op
-    def value(self, *, loc=None, ip=None) -> ncclGin_C:
-        """Load the underlying ``ncclGin_C`` struct value.
-
-        Used by barrier-session factories whose C signatures take it by
-        value rather than by pointer.
-
-        Returns:
-            ``ncclGin_C`` struct value.
-        """
-        return ncclGin_C(
-            llvm.load(ncclGin_C._struct_type, self.ptr, loc=loc, ip=ip)
-        )
+        _bindings.nccl_gin_flush(
+            self.ptr, _to_coop_ptr(coop), cutlass.Int32(int(ord)),
+            cutlass.Boolean(False), _to_ptr(0))
 
 
 __all__ = [

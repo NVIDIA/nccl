@@ -92,7 +92,7 @@ def test_nccl_put_kernel(
     """
     tidx, _, _ = cute.arch.thread_idx()
     team = dev_comm.team_world
-    gin = dev_comm.gin(nccl_cute.GinBackendMask.ALL, 0)
+    gin = dev_comm.gin(0)
     coop = nccl_cute.cta()
 
     # cute.Tensor views spanning the full 1 MiB of each window.

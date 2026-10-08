@@ -88,20 +88,9 @@ typedef enum ncclGinSegmentType {
   ncclGinSegmentTypeHostNuma = 2,
 } ncclGinSegmentType_t;
 
-struct ncclGin_C {
-  ncclDevComm const& comm;
-  uint32_t nConnections:8, connectionId:8, _ginBackend:8;
-  uint32_t contextId;
-  ncclGinResourceSharingMode resourceSharingMode;
-
-  //////////////////////////////////////////////////////////////////////////////
-  // internal:
-  void* _ginHandle;
-  uint64_t* _signalShadows;
-  unsigned backendMask;
-
-  __device__ ncclGin_C(ncclDevComm const& comm_, unsigned backendMask_, int contextIndex,
-                       ncclGinResourceSharingMode resourceSharingMode_ = NCCL_GIN_RESOURCE_SHARING_GPU);
+struct ncclIrGin {
+  // Opaque storage for a kernel-local ALL-mask ncclGin, initialized through the IR API.
+  uint64_t storage[5];
 };
 
 /************************ Barrier session storage ****************************/
@@ -204,157 +193,111 @@ __device__ void ncclIrCoopSync(ncclIrCoop* coop);
 
 /************************** GIN initialization APIs ***************************/
 
-// Helper init function that wraps placement new
-__device__ void ncclGin_C_init(ncclGin_C* net, unsigned backendMask, ncclDevComm const* comm, int contextIndex);
-
-// Helper init function with explicit resource sharing mode.
-__device__ void ncclGin_C_initWithResourceSharingMode(ncclGin_C* net, unsigned backendMask, ncclDevComm const* comm,
-                                                      int contextIndex, ncclGinResourceSharingMode resourceSharingMode);
+// Construct a kernel-local GIN object in opaque storage; comm must outlive its use.
+__device__ void ncclIrGinInit(ncclIrGin* net, ncclDevComm const* comm, int contextIndex,
+                              ncclGinResourceSharingMode resourceSharingMode = NCCL_GIN_RESOURCE_SHARING_GPU);
 
 /************************** GIN data movement APIs ****************************/
 
-__device__ void ncclGinPut(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
-                           ncclWindow_t srcWin, size_t srcOffset, size_t bytes, bool isSignal, ncclGinSignal_t signalId,
-                           ncclGinSignalOp_t signalOp, uint64_t signalOpArg, bool isCounter, ncclGinCounter_t counterId,
-                           ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                           cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease);
-
-__device__ void ncclGinPut_v2(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
-                              ncclWindow_t srcWin, size_t srcOffset, size_t bytes, bool isSignal,
-                              ncclGinSignal_t signalId, ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
-                              bool isCounter, ncclGinCounter_t counterId, ncclIrCoop const* coop, bool isDescriptor,
-                              ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
-                              cuda::thread_scope requiredRelease, uint32_t optFlags);
-
-// Full C API counterpart of ncclGin::put. Unlike ncclGinPut_v2, this entry point can express VA and strong signals and
-// handles windows containing HOST_NUMA segments.
-__device__ void ncclGinPut_v3(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
-                              ncclWindow_t srcWin, size_t srcOffset, size_t bytes, ncclGinSignalType signalType,
-                              ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
-                              ncclGinSignalOp_t signalOp, uint64_t signalOpArg, bool isCounter,
-                              ncclGinCounter_t counterId, ncclIrCoop const* coop, bool isDescriptor,
-                              ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
-                              cuda::thread_scope requiredRelease, uint32_t optFlags, ncclGinSegmentType_t segmentType);
-
-__device__ void ncclGinPutValue(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
-                                uint64_t value, size_t size, bool isSignal, ncclGinSignal_t signalId,
-                                ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
-                                bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
-                                cuda::thread_scope requiredRelease);
-
-__device__ void ncclGinPutValue_v2(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
-                                   uint64_t value, size_t size, bool isSignal, ncclGinSignal_t signalId,
-                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
-                                   bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                                   cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
-                                   uint32_t optFlags);
+// C API counterpart of ncclGin::put with indexed/VA, strong/weak signals and segment type selection.
+__device__ void ncclIrGinPut(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
+                             ncclWindow_t srcWin, size_t srcOffset, size_t bytes, ncclGinSignalType signalType,
+                             ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                             ncclGinSignalOp_t signalOp, uint64_t signalOpArg, bool isCounter,
+                             ncclGinCounter_t counterId, ncclIrCoop const* coop, bool isDescriptor,
+                             ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                             cuda::thread_scope requiredRelease, uint32_t optFlags, ncclGinSegmentType_t segmentType);
 
 // Full C API counterpart of ncclGin::putValue with explicit indexed/VA and strong/weak signal selection.
-__device__ void ncclGinPutValue_v3(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
-                                   uint64_t value, size_t size, ncclGinSignalType signalType, ncclWindow_t signalWin,
-                                   size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
-                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
-                                   bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                                   cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
-                                   uint32_t optFlags);
-
-__device__ void ncclGinGet(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
-                           ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclIrCoop const* coop,
-                           bool isDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags);
+__device__ void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
+                                  uint64_t value, size_t size, ncclGinSignalType signalType, ncclWindow_t signalWin,
+                                  size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
 
 // Full C API counterpart of ncclGin::get with explicit segment type selection.
-__device__ void ncclGinGet_v2(ncclGin_C* net, ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
-                              ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclIrCoop const* coop,
-                              bool isDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags,
-                              ncclGinSegmentType_t segmentType);
+__device__ void ncclIrGinGet(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
+                             ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclIrCoop const* coop,
+                             bool isDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags,
+                             ncclGinSegmentType_t segmentType);
 
 /***************************** GIN signaling APIs *****************************/
 
-__device__ void ncclGinSignal(ncclGin_C* net, ncclTeam team, int peer, bool isSignal, ncclGinSignal_t signalId,
-                              ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
-                              bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
-                              cuda::thread_scope requiredRelease);
-
-__device__ void ncclGinSignal_v2(ncclGin_C* net, ncclTeam team, int peer, bool isSignal, ncclGinSignal_t signalId,
-                                 ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
-                                 bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
-                                 cuda::thread_scope requiredRelease, uint32_t optFlags);
-
 // Full C API counterpart of ncclGin::signal with explicit indexed/VA and strong/weak signal selection.
-__device__ void ncclGinSignal_v3(ncclGin_C* net, ncclTeam team, int peer, ncclGinSignalType signalType,
-                                 ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
-                                 ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
-                                 bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
-                                 cuda::thread_scope requiredRelease, uint32_t optFlags);
+__device__ void ncclIrGinSignal(ncclIrGin const* net, ncclTeam team, int peer, ncclGinSignalType signalType,
+                                ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                cuda::thread_scope requiredRelease, uint32_t optFlags);
 
-__device__ uint64_t ncclGinReadSignal(ncclGin_C* net, ncclGinSignal_t signal, int bits, cuda::memory_order ord);
+__device__ uint64_t ncclIrGinReadSignal(ncclIrGin const* net, ncclGinSignal_t signal, int bits, cuda::memory_order ord);
 
-__device__ uint64_t ncclGinReadSignalVA(ncclGin_C* net, ncclWindow_t signalWindow, size_t signalOffset, int bits,
-                                        cuda::memory_order ord);
+__device__ uint64_t ncclIrGinReadSignalVA(ncclIrGin const* net, ncclWindow_t signalWindow, size_t signalOffset,
+                                          int bits, cuda::memory_order ord);
 
-__device__ void ncclGinWaitSignal(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal, uint64_t least,
-                                  int bits, cuda::memory_order ord);
+__device__ void ncclIrGinWaitSignal(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
+                                    uint64_t least, int bits, cuda::memory_order ord);
 
-__device__ ncclResult_t ncclGinWaitSignalTimeout(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
-                                                 uint64_t least, int bits, cuda::memory_order ord,
-                                                 uint64_t timeoutCycles);
+__device__ ncclResult_t ncclIrGinWaitSignalTimeout(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
+                                                   uint64_t least, int bits, cuda::memory_order ord,
+                                                   uint64_t timeoutCycles);
 
-__device__ void ncclGinWaitSignalVA(ncclGin_C* net, ncclIrCoop const* coop, ncclWindow_t signalWindow,
-                                    size_t signalOffset, uint64_t least, int bits, cuda::memory_order ord);
+__device__ void ncclIrGinWaitSignalVA(ncclIrGin const* net, ncclIrCoop const* coop, ncclWindow_t signalWindow,
+                                      size_t signalOffset, uint64_t least, int bits, cuda::memory_order ord);
 
-__device__ ncclResult_t ncclGinWaitSignalTimeoutVA(ncclGin_C* net, ncclIrCoop const* coop, ncclWindow_t signalWindow,
-                                                   size_t signalOffset, uint64_t least, int bits,
-                                                   cuda::memory_order ord, uint64_t timeoutCycles);
+__device__ ncclResult_t ncclIrGinWaitSignalTimeoutVA(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                     ncclWindow_t signalWindow, size_t signalOffset, uint64_t least,
+                                                     int bits, cuda::memory_order ord, uint64_t timeoutCycles);
 
-__device__ void ncclGinIncreaseSignalShadow(ncclGin_C* net, ncclGinSignal_t signal, uint64_t delta);
+__device__ void ncclIrGinIncreaseSignalShadow(ncclIrGin const* net, ncclGinSignal_t signal, uint64_t delta);
 
-__device__ void ncclGinWaitSignalMeetShadow(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal, int bits,
-                                            cuda::memory_order ord);
+__device__ void ncclIrGinWaitSignalMeetShadow(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
+                                              int bits, cuda::memory_order ord);
 
-__device__ void ncclGinWaitSignalFollowShadow(ncclGin_C* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
-                                              uint64_t leastDelta, uint64_t* before, uint64_t* delta, int bits,
-                                              cuda::memory_order ord);
+__device__ void ncclIrGinWaitSignalFollowShadow(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
+                                                uint64_t leastDelta, uint64_t* before, uint64_t* delta, int bits,
+                                                cuda::memory_order ord);
 
-__device__ uint64_t* ncclGinGetSignalShadowPtr(ncclGin_C* net, ncclGinSignal_t signal);
+__device__ uint64_t* ncclIrGinGetSignalShadowPtr(ncclIrGin const* net, ncclGinSignal_t signal);
 
-__device__ void ncclGinResetSignal(ncclGin_C* net, ncclGinSignal_t signal);
+__device__ void ncclIrGinResetSignal(ncclIrGin const* net, ncclGinSignal_t signal);
 
-__device__ void ncclGinResetSignalVA(ncclGin_C* net, ncclWindow_t signalWindow, size_t signalOffset);
+__device__ void ncclIrGinResetSignalVA(ncclIrGin const* net, ncclWindow_t signalWindow, size_t signalOffset);
 
 /****************************** GIN counter APIs ******************************/
 
-__device__ uint64_t ncclGinReadCounter(ncclGin_C* net, ncclGinCounter_t counter, int bits, cuda::memory_order ord);
+__device__ uint64_t ncclIrGinReadCounter(ncclIrGin const* net, ncclGinCounter_t counter, int bits,
+                                         cuda::memory_order ord);
 
-__device__ void ncclGinWaitCounter(ncclGin_C* net, ncclIrCoop const* coop, ncclGinCounter_t counter, uint64_t least,
-                                   int bits, cuda::memory_order ord);
+__device__ void ncclIrGinWaitCounter(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinCounter_t counter,
+                                     uint64_t least, int bits, cuda::memory_order ord);
 
-__device__ ncclResult_t ncclGinWaitCounterTimeout(ncclGin_C* net, ncclIrCoop const* coop, ncclGinCounter_t counter,
-                                                  uint64_t least, int bits, cuda::memory_order ord,
-                                                  uint64_t timeoutCycles);
+__device__ ncclResult_t ncclIrGinWaitCounterTimeout(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                    ncclGinCounter_t counter, uint64_t least, int bits,
+                                                    cuda::memory_order ord, uint64_t timeoutCycles);
 
-__device__ void ncclGinResetCounter(ncclGin_C* net, ncclGinCounter_t counter);
+__device__ void ncclIrGinResetCounter(ncclIrGin const* net, ncclGinCounter_t counter);
 
 /************************ GIN flush and request APIs *************************/
 
-__device__ void ncclGinFlush(ncclGin_C* net, ncclIrCoop const* coop, cuda::memory_order ord);
+__device__ void ncclIrGinFlush(ncclIrGin const* net, ncclIrCoop const* coop, cuda::memory_order ord, bool isDescriptor,
+                               ncclGinDescriptorSmem* descriptor);
 
-__device__ void ncclGinFlush_v2(ncclGin_C* net, ncclIrCoop const* coop, cuda::memory_order ord, bool isDescriptor,
-                                ncclGinDescriptorSmem* descriptor);
+__device__ ncclResult_t ncclIrGinFlushTimeout(ncclIrGin const* net, ncclIrCoop const* coop, cuda::memory_order ord,
+                                              bool isDescriptor, ncclGinDescriptorSmem* descriptor,
+                                              uint64_t timeoutCycles);
 
-__device__ ncclResult_t ncclGinFlushTimeout(ncclGin_C* net, ncclIrCoop const* coop, cuda::memory_order ord,
-                                            bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                                            uint64_t timeoutCycles);
+__device__ void ncclIrGinFlushAsync(ncclIrGin const* net, ncclTeam team, uint32_t peer, ncclGinRequest_t* outRequest,
+                                    ncclIrCoop const* coop, uint32_t optFlags, bool isDescriptor,
+                                    ncclGinDescriptorSmem* descriptor);
 
-__device__ void ncclGinFlushAsync(ncclGin_C* net, ncclTeam team, uint32_t peer, ncclGinRequest_t* outRequest,
-                                  ncclIrCoop const* coop, uint32_t optFlags, bool isDescriptor,
-                                  ncclGinDescriptorSmem* descriptor);
+__device__ void ncclIrGinWait(ncclIrGin const* net, ncclGinRequest_t* request, ncclIrCoop const* coop,
+                              bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::memory_order ord);
 
-__device__ void ncclGinWait(ncclGin_C* net, ncclGinRequest_t* request, ncclIrCoop const* coop, bool isDescriptor,
-                            ncclGinDescriptorSmem* descriptor, cuda::memory_order ord);
-
-__device__ ncclResult_t ncclGinWaitTimeout(ncclGin_C* net, ncclGinRequest_t* request, ncclIrCoop const* coop,
-                                           bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
-                                           uint64_t timeoutCycles);
+__device__ ncclResult_t ncclIrGinWaitTimeout(ncclIrGin const* net, ncclGinRequest_t* request, ncclIrCoop const* coop,
+                                             bool isDescriptor, ncclGinDescriptorSmem* descriptor,
+                                             cuda::memory_order ord, uint64_t timeoutCycles);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Barrier APIs
@@ -385,7 +328,7 @@ __device__ void ncclIrLsaBarrierSessionDestroy(ncclIrLsaBarrierSession* session)
 
 /************************* GIN Barrier Session APIs **************************/
 __device__ void ncclIrGinBarrierSessionInit(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
-                                            ncclGin_C const* net, ncclTeam team, ncclGinBarrierHandle handle,
+                                            ncclIrGin const* net, ncclTeam team, ncclGinBarrierHandle handle,
                                             uint32_t index);
 
 // All-contexts variant of session-init: rail/world/etc. signal/wait happens on context 0,
@@ -403,7 +346,7 @@ __device__ void ncclIrGinBarrierSessionDestroy(ncclIrGinBarrierSession* session)
 
 /*************************** Barrier Session APIs ****************************/
 __device__ void ncclIrBarrierSessionInit(ncclIrBarrierSession* session, ncclIrCoop const* coop, ncclTeam innerTeam,
-                                         ncclTeam outerTeam, ncclGin_C const* net,
+                                         ncclTeam outerTeam, ncclIrGin const* net,
                                          ncclLsaBarrierHandle const innerBarHandle,
                                          ncclGinBarrierHandle const outerBarHandle, uint32_t index,
                                          bool multimem = false, ncclMultimemHandle const innerMmHandle = {});

@@ -239,6 +239,9 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu, void *memptr_gpu);
  * GPU external UMEM.
  * @param [in] cq_sq
  * DOCA Verbs CQ SQ CPU object connected to the QP.
+ * @param [in] cq_rq
+ * Receive CQ, or NULL when the QP has no receive queue.
+ *
  * @param [in] send_dbr_mode_ext
  * Send DBR mode.
  * @param [in] cq_type
@@ -256,6 +259,7 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu, void *memptr_gpu);
 doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, struct doca_verbs_qp_t *qp,
                                       enum doca_gpu_dev_verbs_nic_handler nic_handler,
                                       void *gpu_qp_umem_dev_ptr, struct doca_verbs_cq_t *cq_sq,
+                                      struct doca_verbs_cq_t *cq_rq,
                                       enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext,
                                       enum doca_gpu_dev_verbs_cq_type cq_type,
                                       bool enable_data_direct, struct doca_gpu_verbs_qp **qp_out);

@@ -5,6 +5,7 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
+#include <algorithm>
 #include <assert.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -56,6 +57,7 @@
 
 NCCL_PARAM(GinGdakiNicHandler, "GIN_GDAKI_NIC_HANDLER", 0);
 NCCL_PARAM(GinGdakiQpDepth, "GIN_GDAKI_QP_DEPTH", 128);
+NCCL_PARAM(GinGdakiRecvDepth, "GIN_GDAKI_RECV_DEPTH", 0);
 NCCL_PARAM(GinGdakiMaxDestRdAtomic, "GIN_GDAKI_MAX_DEST_RD_ATOMIC", -2);
 NCCL_PARAM(GinGdakiMaxQpRdAtomic, "GIN_GDAKI_MAX_QP_RD_ATOMIC", -2);
 NCCL_PARAM(GinGdakiLAGAwareDisable, "GIN_GDAKI_LAG_AWARE_DISABLE", 0);
@@ -382,6 +384,53 @@ struct gdaki_context {
   doca_verbs_comp_channel_t* docaEvent;
 };
 
+// The receive ring uses one data segment per WQE and is at least one WQEBB.
+static ncclResult_t gdakiRecvDepth(int64_t requested, const struct ibv_device_attr* attr, uint32_t* depth) {
+  *depth = 0;
+  if (requested == 0) return ncclSuccess;
+  const int64_t limit = std::min<int64_t>(UINT16_MAX, std::min(attr->max_qp_wr, attr->max_cqe));
+  if (requested < 0 || requested > limit) {
+    WARN("GIN/GDAKI receive depth %ld must be between 0 and %ld", (long)requested, (long)limit);
+    return ncclInvalidArgument;
+  }
+  uint32_t rounded = 4;
+  while (rounded < requested) rounded <<= 1;
+  if (rounded > limit) {
+    WARN("GIN/GDAKI rounded receive depth %u exceeds device limit %ld", rounded, (long)limit);
+    return ncclInvalidArgument;
+  }
+  *depth = rounded;
+  return ncclSuccess;
+}
+
+// RDMA writes with immediate consume a receive WQE but do not use its data buffer.
+// Reuse the registered sink so receive WQEs can be reposted without rewriting them.
+static ncclResult_t gdakiPostReceives(struct doca_gpu_verbs_qp_hl* gqp, struct ibv_mr* sinkMr) {
+  struct doca_gpu_dev_verbs_qp* qp = gqp->qp_gverbs->qp_cpu;
+  if (qp->rq_wqe_num == 0) return ncclSuccess;
+  ncclResult_t ret = ncclSuccess;
+  const size_t bytes = (size_t)qp->rq_wqe_num * qp->rq_wqe_stride;
+  char* staging = nullptr;
+  NCCLCHECK(ncclCalloc(&staging, bytes));
+  for (uint32_t i = 0; i < qp->rq_wqe_num; i++) {
+    auto* seg = (struct doca_gpunetio_ib_mlx5_wqe_data_seg*)(staging + i * qp->rq_wqe_stride);
+    seg->byte_count = htobe32(sizeof(uint64_t));
+    seg->lkey = htobe32(sinkMr->lkey);
+    seg->addr = htobe64((uintptr_t)sinkMr->addr);
+  }
+  CUDACHECKGOTO(cudaMemcpy(qp->rq_wqe_daddr, staging, bytes, cudaMemcpyHostToDevice), ret, out);
+  {
+    __be32 dbr[2] = {};
+    dbr[DOCA_GPUNETIO_IB_MLX5_RCV_DBR] = htobe32(qp->rq_wqe_num);
+    CUDACHECKGOTO(cudaMemcpy(gqp->qp_umem_dbr_gpu_ptr, dbr, sizeof(dbr), cudaMemcpyHostToDevice), ret, out);
+  }
+  // Exported to the GPU only after initialization of all receive rings has completed.
+  qp->rq_wqe_pi = qp->rq_wqe_num;
+out:
+  free(staging);
+  return ret;
+}
+
 static void gdakiFillExchInfo(struct gdaki_exch_info* exch_info, struct gdaki_context* gdaki_ctx,
                               struct doca_gpu_verbs_qp_hl* gqp) {
   exch_info->lid = gdaki_ctx->port_attr.lid;
@@ -637,6 +686,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   struct gdaki_exch_info* remote_exch_info = nullptr;
 
   struct doca_gpu_verbs_qp_init_attr_hl qp_init_attr;
+  uint16_t* recvDepths = nullptr;
 
   uint64_t* sink_buffer = nullptr;
   struct ibv_mr* sink_buffer_mr = nullptr;
@@ -781,7 +831,15 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
 
   NCCLCHECKGOTO(gdakiCreateVerbsAh(gdaki_ctx, ib_sl, ib_tc, ib_gid_index), status, out);
 
-  gdaki_ctx->qp_rq_size = 0;
+  NCCLCHECKGOTO(gdakiRecvDepth(ncclParamGinGdakiRecvDepth(), &gdaki_ctx->ib_dev_attr, &gdaki_ctx->qp_rq_size),
+                status, out);
+  if (gdaki_ctx->qp_rq_size > 0) {
+    NCCLCHECKGOTO(ncclCalloc(&recvDepths, nqps_for_comm_this_rank), status, out);
+    for (int i = 0; i < nqps_for_comm_this_rank; i++) {
+      const int peer = (rankOff + i * rankStride) % nranks;
+      recvDepths[i] = peer == rank ? 0 : (uint16_t)gdaki_ctx->qp_rq_size;
+    }
+  }
   gdaki_ctx->qp_sq_size = queueDepth > 0 ? queueDepth : ncclParamGinGdakiQpDepth();
 
   memset(&qp_init_attr, 0, sizeof(qp_init_attr));
@@ -802,7 +860,8 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     if (needCompanion) {
     retry_create_qp_group_list_hl:
       doca_error_t docaStatus =
-        doca_gpu_verbs_create_qp_group_list_hl(&qp_init_attr, nqps_for_comm_this_rank, &gdaki_ctx->gqp_group_list);
+        doca_gpu_verbs_create_qp_group_list_hl(&qp_init_attr, nqps_for_comm_this_rank,
+                                               &gdaki_ctx->gqp_group_list, recvDepths);
       if (docaStatus != DOCA_SUCCESS) {
         if (qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW) {
           qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED;
@@ -838,7 +897,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     } else {
     retry_create_qp_list_hl:
       doca_error_t docaStatus =
-        doca_gpu_verbs_create_qp_list_hl(&qp_init_attr, nqps_for_comm_this_rank, &gdaki_ctx->gqp_list);
+        doca_gpu_verbs_create_qp_list_hl(&qp_init_attr, nqps_for_comm_this_rank, &gdaki_ctx->gqp_list, recvDepths);
       if (docaStatus != DOCA_SUCCESS) {
         if (qp_init_attr.send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW) {
           qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED;
@@ -871,8 +930,8 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
 
   qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_VALID_DBR;
   if (nqps > nqps_for_comm) {
-    DOCACHECKGOTO(doca_gpu_verbs_create_qp_list_hl(&qp_init_attr, nqps - nqps_for_comm, &gdaki_ctx->self_gqp_list),
-                  status, out);
+    DOCACHECKGOTO(doca_gpu_verbs_create_qp_list_hl(&qp_init_attr, nqps - nqps_for_comm,
+                                                   &gdaki_ctx->self_gqp_list, nullptr), status, out);
     for (int qp_idx = nqps_for_comm; qp_idx < nqps; qp_idx++) {
       gdaki_ctx->gqps[qp_idx] = &gdaki_ctx->self_gqp_list->qps[qp_idx - nqps_for_comm];
 
@@ -883,7 +942,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
 
   if (ncompanion_qps > nqps_for_comm) {
     DOCACHECKGOTO(doca_gpu_verbs_create_qp_list_hl(&qp_init_attr, nqps_for_comm_this_rank,
-                                                   &gdaki_ctx->self_companion_gqp_list),
+                                                   &gdaki_ctx->self_companion_gqp_list, nullptr),
                   status, out);
     for (int qp_idx = nqps_for_comm + rankOff, list_idx = 0; qp_idx < ncompanion_qps;
          qp_idx += rankStride, list_idx++) {
@@ -974,6 +1033,15 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
                            IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ |
                              IBV_ACCESS_REMOTE_ATOMIC),
                 status, out);
+
+  if (gdaki_ctx->qp_rq_size > 0) {
+    for (int qp_idx = rankOff; qp_idx < nqps_for_comm; qp_idx += rankStride) {
+      NCCLCHECKGOTO(gdakiPostReceives(gdaki_ctx->gqps[qp_idx], sink_buffer_mr), status, out);
+    }
+    CUDACHECKGOTO(cudaDeviceSynchronize(), status, out);
+    INFO(NCCL_NET, "GIN/GDAKI receive depth %u (requested %ld)", gdaki_ctx->qp_rq_size,
+         (long)ncclParamGinGdakiRecvDepth());
+  }
 
   NCCLCHECKGOTO(ncclCudaCalloc(&gdaki_ctx->last_issued_get, ncontexts * nranks, NULL), status, out);
   NCCLCHECKGOTO(ncclCudaCalloc(&gdaki_ctx->last_visible_get, ncontexts * nranks, NULL), status, out);
@@ -1067,6 +1135,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   *outGinCtx = gdaki_ctx;
 
 out:
+  free(recvDepths);
   if (status != ncclSuccess) {
     if (gdaki_ctx) {
       if (gdaki_ctx->docaEvent) {

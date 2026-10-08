@@ -761,6 +761,7 @@ doca_error_t doca_gpu_verbs_unexport_uar(uint64_t *uar_addr_gpu) {
 doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
                                       enum doca_gpu_dev_verbs_nic_handler nic_handler,
                                       void *gpu_qp_umem_dev_ptr, doca_verbs_cq_t *cq_sq,
+                                      doca_verbs_cq_t *cq_rq,
                                       enum doca_gpu_verbs_send_dbr_mode_ext send_dbr_mode_ext,
                                       enum doca_gpu_dev_verbs_cq_type cq_type,
                                       bool enable_data_direct, struct doca_gpu_verbs_qp **qp_out) {
@@ -782,7 +783,8 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
     bool nic_handler_must_be_cpu_proxy = false;
 
     // Will introduce SDK wrapper once done with DOCA Verbs
-    if (gpu_dev->open == nullptr || qp == nullptr || qp == nullptr || cq_sq == nullptr)
+    if (gpu_dev == nullptr || gpu_dev->open == nullptr || qp == nullptr || qp_out == nullptr ||
+        cq_sq == nullptr || gpu_qp_umem_dev_ptr == nullptr)
         return DOCA_ERROR_INVALID_VALUE;
 
     status = normalize_export_cq_type(&cq_type);
@@ -843,16 +845,36 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
 
     // Check QP and CQ same size!!!!
 
-    doca_verbs_qp_get_wq(qp,
+    status = doca_verbs_qp_get_wq(qp,
                          (void **)&(qp_cpu_->sq_wqe_daddr),  // broken for external umem
                          &sq_wqe_num,
                          (void **)&(rq_wqe_daddr),  // broken for external umem
                          &rq_wqe_num, &rcv_wqe_size);
+    if (status != DOCA_SUCCESS) goto out;
 
     status = doca_verbs_qp_get_dbr_addr(qp, (void **)&dbrec);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Can't get QP dbr addr.");
         goto out;
+    }
+
+    // Each external UMEM slice contains the receive ring followed by the send ring.
+    qp_cpu_->sq_wqe_daddr = (uint8_t *)gpu_qp_umem_dev_ptr + (size_t)rq_wqe_num * rcv_wqe_size;
+    if (rq_wqe_num > 0) {
+        if (cq_rq == nullptr || rq_wqe_num > UINT16_MAX || (rq_wqe_num & (rq_wqe_num - 1)) != 0 ||
+            rcv_wqe_size != sizeof(struct doca_gpunetio_ib_mlx5_wqe_data_seg) ||
+            (nic_handler & DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_CPU_PROXY) != 0 ||
+            send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) {
+            DOCA_LOG(LOG_ERR, "Unsupported receive queue geometry or doorbell mode");
+            status = DOCA_ERROR_NOT_SUPPORTED;
+            goto out;
+        }
+        qp_cpu_->rq_wqe_daddr = (uint8_t *)gpu_qp_umem_dev_ptr;
+        qp_cpu_->rq_wqe_num = rq_wqe_num;
+        qp_cpu_->rq_wqe_mask = rq_wqe_num - 1;
+        qp_cpu_->rq_wqe_stride = rcv_wqe_size;
+        qp_cpu_->rq_dbrec = (__be32 *)(dbrec + DOCA_GPUNETIO_IB_MLX5_RCV_DBR);
+        // Receive indices and lock remain zero until the caller posts receives.
     }
 
     qp_cpu_->sq_wqe_num = (uint16_t)sq_wqe_num;
@@ -990,6 +1012,26 @@ doca_error_t doca_gpu_verbs_export_qp(doca_gpu_t *gpu_dev, doca_verbs_qp_t *qp,
     qp_cpu_->cq_sq.cqe_rsvd = 0;
     qp_cpu_->cq_sq.mem_type = DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU;
     qp_cpu_->cq_sq.cq_type = cq_type;
+
+    if (cq_rq != nullptr) {
+        status = doca_verbs_cq_get_wq(cq_rq, (void **)&qp_cpu_->cq_rq.cqe_daddr,
+                                      &qp_cpu_->cq_rq.cqe_num, &qp_cpu_->cq_rq.cqe_size);
+        if (status != DOCA_SUCCESS) goto out;
+        if (rq_wqe_num == 0 || qp_cpu_->cq_rq.cqe_num != rq_wqe_num ||
+            qp_cpu_->cq_rq.cqe_size != DOCA_GPUNETIO_VERBS_CQE_SIZE) {
+            DOCA_LOG(LOG_ERR, "Receive CQ must have one 64-byte CQE per receive WQE");
+            status = DOCA_ERROR_NOT_SUPPORTED;
+            goto out;
+        }
+        status = doca_verbs_cq_get_dbr_db_addr(cq_rq, &uar_db_reg, &cq_dbrec, &arm_dbr);
+        if (status != DOCA_SUCCESS) goto out;
+        qp_cpu_->cq_rq.dbrec = (__be32 *)cq_dbrec;
+        status = doca_verbs_cq_get_cq_num(cq_rq, &qp_cpu_->cq_rq.cq_num);
+        if (status != DOCA_SUCCESS) goto out;
+        qp_cpu_->cq_rq.cqe_mask = rq_wqe_num - 1;
+        qp_cpu_->cq_rq.mem_type = DOCA_GPUNETIO_VERBS_MEM_TYPE_GPU;
+        qp_cpu_->cq_rq.cq_type = DOCA_GPUNETIO_VERBS_CQ_64B;
+    }
 
     qp_gverbs->gpu_dev = gpu_dev;
     qp_gverbs->free_flow_ring_db_threshold = DOCA_GPUNETIO_FREE_FLOW_RING_DB_THRESHOLD_DEFAULT;

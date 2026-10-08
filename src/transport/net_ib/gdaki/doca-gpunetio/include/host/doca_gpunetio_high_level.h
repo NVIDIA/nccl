@@ -101,6 +101,11 @@ struct doca_gpu_verbs_qp_hl {
     void *cq_sq_umem_gpu_ptr;
     doca_verbs_umem_t *cq_sq_umem;
 
+    // Optional receive CQ, owned by this QP (including its embedded doorbell).
+    doca_verbs_cq_t *cq_rq;
+    void *cq_rq_umem_gpu_ptr;
+    doca_verbs_umem_t *cq_rq_umem;
+
     // QP
     doca_verbs_qp_t *qp;
     void *qp_umem_gpu_ptr;
@@ -257,12 +262,16 @@ doca_error_t doca_gpu_verbs_qp_flat_list_destroy_hl(struct doca_gpu_dev_verbs_qp
  * Number of QPs to create.
  * @param [out] qp_list
  * Allocated QP list handle.
+ * @param [in] rq_nwqes
+ * Optional array of receive depths for main QPs; NULL disables receive queues.
+ * Nonzero depths must be powers of two between 4 and 32768. Companion RQs remain disabled.
  *
  * @return DOCA_SUCCESS or a doca_error code.
  */
 doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr_hl *qp_init_attr,
                                               uint32_t num_qps,
-                                              struct doca_gpu_verbs_qp_list_hl **qp_list);
+                                              struct doca_gpu_verbs_qp_list_hl **qp_list,
+                                              const uint16_t *rq_nwqes);
 
 /**
  * Destroy a QP list created by doca_gpu_verbs_create_qp_list_hl.
@@ -285,12 +294,15 @@ doca_error_t doca_gpu_verbs_destroy_qp_list_hl(struct doca_gpu_verbs_qp_list_hl 
  * Number of QP groups to create.
  * @param [out] qpg_list
  * Allocated QP group list handle.
+ * @param [in] rq_nwqes
+ * Optional array of receive depths for main QPs; NULL disables receive queues.
+ * Nonzero depths must be powers of two between 4 and 32768. Companion RQs remain disabled.
  *
  * @return DOCA_SUCCESS or a doca_error code.
  */
 doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
     struct doca_gpu_verbs_qp_init_attr_hl *qp_init_attr, uint32_t num_qp_groups,
-    struct doca_gpu_verbs_qp_group_list_hl **qpg_list);
+    struct doca_gpu_verbs_qp_group_list_hl **qpg_list, const uint16_t *rq_nwqes);
 
 /**
  * Destroy a QP group list created by doca_gpu_verbs_create_qp_group_list_hl.

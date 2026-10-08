@@ -1515,6 +1515,13 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
       }
       NCCLCHECK(ncclTopoGetLocalNet(comm->topo, localRank, channelId, &netId, &netDev));
 
+      // Do not use P2P PXN when GDR reads are disabled
+      if (pxnLevel != 0) {
+        enum ncclTopoGdrMode useGdr;
+        NCCLCHECK(ncclTopoCheckGdr(comm->topo, rank, netId, 1, &useGdr));
+        if (useGdr == ncclTopoGdrModeDisable) pxnLevel = 0;
+      }
+
       // Check that device exists on our node
       if (ncclParamCrossNic() == 0) {
         if (dev) *dev = netDev;

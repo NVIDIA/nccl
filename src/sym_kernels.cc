@@ -291,11 +291,12 @@ static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncc
   case ncclFuncAllGather:
     return true;
   case ncclFuncAllReduce:
+    return red == ncclDevSum && isFloat && ty != ncclFloat64;
   case ncclFuncReduceScatter:
     if (red == ncclDevSum || red == ncclDevSumPostDiv) {
       return isFloat && ty != ncclFloat64;
     }
-    // fall through
+    return false;
   default:
     return false;
   }

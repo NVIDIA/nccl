@@ -93,7 +93,7 @@ struct ncclNvlsUcSegment {
 
 struct ncclNvlsSharedRes {
   int refCount;
-  bool inited;
+  int nChannelsInited;  // channels whose data buffers are wired; may trail nChannels when shared
   CUmemAccessDesc accessDesc;
   int dev;
   // Single MC object per NVLS domain: credit and data are slices of one group.

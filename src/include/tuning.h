@@ -112,4 +112,6 @@ void ncclTuningGetBusMulReduceScatterRailA2A(struct ncclComm* comm, bool ldmc, d
 double ncclTuningGetSmLatReduceScatterRailA2A(struct ncclComm* comm, bool ldmc);
 int ncclTuningCalcSatBlocksReduceScatterRailA2A(struct ncclComm* comm, bool ldmc);
 
+int64_t ncclParamSymNoWinEnable();
+
 #endif

@@ -78,7 +78,6 @@ NCCL_PARAM(LaunchOrderImplicit, "LAUNCH_ORDER_IMPLICIT", NCCL_CONFIG_UNDEF_INT);
 // counter buffers remain null and profiler() skips progress-counter updates.
 NCCL_PARAM(ProgressCountersEnable, "PROGRESS_COUNTERS", 0);
 
-extern int64_t ncclParamSingleProcMemRegEnable();
 extern int64_t ncclParamRasDiagnostics();
 extern int64_t ncclParamDiagnostics();
 extern int64_t ncclParamRasEnable();

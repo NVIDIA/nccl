@@ -1450,7 +1450,16 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
                                             &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
                     result, fail);
 
-      if (comm->memPool) {
+      if (comm->config.workAllocator.alloc) {
+        ncclWorkAllocator_t& allocator = comm->config.workAllocator;
+        NCCLCHECKGOTO(allocator.alloc(allocator.context, &fifoBufDev, workBytes, comm->cudaDev, deviceStream), result, fail);
+        if (fifoBufDev == nullptr) {
+          result = ncclInvalidUsage;
+          goto fail;
+        }
+        plan->workBufExternal = true;
+        INFO_LOC(NCCL_ALLOC, "Persistent external work buf Size %zu pointer %p", workBytes, fifoBufDev);
+      } else if (comm->memPool) {
         CUDACHECKGOTO(cudaMallocAsync(&fifoBufDev, workBytes, comm->memPool, deviceStream), result, fail);
         INFO_LOC(NCCL_ALLOC, "Persistent cudaMallocAsync work buf Size %zu pointer %p", workBytes, fifoBufDev);
       } else {
@@ -1594,7 +1603,12 @@ static ncclResult_t reclaimPlan(struct ncclComm* comm, struct ncclCommCallback* 
     if (plan->workStorageType == ncclDevWorkStorageTypePersistent) {
       cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
       CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
-      CUDACHECK(cudaFree(plan->workBufPersistent));
+      if (plan->workBufExternal) {
+        ncclWorkAllocator_t& allocator = comm->config.workAllocator;
+        NCCLCHECK(allocator.free(allocator.context, plan->workBufPersistent, plan->workBytes, comm->cudaDev));
+      } else {
+        CUDACHECK(cudaFree(plan->workBufPersistent));
+      }
       CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
     }
   }

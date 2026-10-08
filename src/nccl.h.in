@@ -99,6 +99,17 @@ typedef enum {
   ncclNvlsHostModeDisable = INT_MAX,               /* disable all present and future host NVLS components */
 } ncclNvlsHostMode_t;
 
+/* Allocator for local CUDA Graph work descriptors only. NCCL copies this
+ * descriptor at communicator initialization. Both callbacks must be set or null.
+ * alloc must return device-local, at least 16-byte-aligned storage ready on stream.
+ * free runs after graph work completes; context must outlive graphs and the comm.
+ * Callbacks may run on internal threads and must not call NCCL. */
+typedef struct {
+  void* context;
+  ncclResult_t (*alloc)(void* context, void** ptr, size_t bytes, int device, cudaStream_t stream);
+  ncclResult_t (*free)(void* context, void* ptr, size_t bytes, int device);
+} ncclWorkAllocator_t;
+
 /* Communicator configuration. Users can assign value to attributes to specify the
  * behavior of a communicator. */
 typedef struct ncclConfig_v23100 {
@@ -130,6 +141,7 @@ typedef struct ncclConfig_v23100 {
   int rmaEagerInit;
   int hostCftMode;
   int nvlsHostMode;
+  ncclWorkAllocator_t workAllocator;
 } ncclConfig_t;
 
 /* Config initializer must be assigned to initialize config structure when it is created.
@@ -161,6 +173,7 @@ typedef struct ncclConfig_v23100 {
   NCCL_CONFIG_UNDEF_INT,                    /* rmaEagerInit */          \
   NCCL_CONFIG_UNDEF_INT,                    /* hostCftMode */           \
   NCCL_CONFIG_UNDEF_INT,                    /* nvlsHostMode */          \
+  {NULL, NULL, NULL},                       /* workAllocator */         \
 }
 
 /* A single vendor-specific option expressed as a key-value pair. Multiple options can be

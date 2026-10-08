@@ -307,6 +307,8 @@ The flags include:
 expected in the near future. Implementations can reduce overhead by delaying some logic
 until after the batch is complete. For example, `ncclImpl` skips ringing the doorbell when
 this flag is specified (and rings it once for all requests when the flag is no longer specified).
+If a user posts N requests, this flag can be used for (N - 1) requests.
+However, the Nth request must not use this flag to ensure that the doorbell is rung.
 
 ## Types summary
 

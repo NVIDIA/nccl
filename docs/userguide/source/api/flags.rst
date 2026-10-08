@@ -28,6 +28,12 @@ Window Registration Flags
   Register buffer into NCCL window while ensuring strict ordering for window operations using the IB Verbs transport.
   This flag is mostly intended for buffers used for GIN VA Signals (see :ref:`devapi_signals`).
 
+.. c:macro:: NCCL_WIN_CFT_COUNTED
+
+  Register buffer into NCCL window with CFT counted support. Registered buffers must be aligned to 256 bytes and are used
+  in counted operations (see :ref:`CFT counted operations <cft_counted_operations>`). The user cannot exceed the 256GB limit
+  of registered memory for counted windows.
+
 .. _cta_policy_flags:
 
 NCCL Communicator CTA Policy Flags
@@ -67,3 +73,22 @@ These flags modify the behavior of the ``ncclCommShrink`` operation.
    This is used for error recovery scenarios where the parent communicator might be in a hung state.
    Resources of parent comm are still not freed, users should decide whether to call ncclCommAbort on the parent communicator after shrink.
    Value: ``0x01``.
+
+.. _gin_opt_flags:
+
+GIN Optimization Flags
+----------------------
+
+These flags modify the behavior of GIN Device API operations (see :ref:`device_api_gin`).
+Flags may be combined with a bitwise OR.
+
+.. cpp:enumerator:: ncclGinOptFlagsDefault
+
+   Default behavior; no optional flags are given to the backend.
+
+.. cpp:enumerator:: ncclGinOptFlagsAggregateRequests
+
+   A user can specify this flag if more requests are expected in the near future.
+   Implementations can reduce overhead by delaying some logic until after the batch is complete.
+   For example, if a user posts N requests, this flag can be used for (N - 1) requests.
+   However, the Nth request must not use this flag to ensure correctness.

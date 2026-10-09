@@ -125,12 +125,13 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
   Backend& backend = *static_cast<Backend*>(this);
   ncclFlowPartShmem& shmem = *processShmem;
   int const nLines = (int)nccl::utility::divUp(nElts, (size_t)EltPerLine);
-  int const slotLines = (int)(slotSize / sizeof(ncclLLFifoLine));
+  int const sliceSteps = ncclFlowCreditSlots / nSlots;
+  int const slotLines = (int)(stepSize * sliceSteps / sizeof(ncclLLFifoLine));
   bool const isWorker = role == RoleWorker || role == RoleSendWait || role == RoleRecvWait;
   int const processSendPeers = Send ? nSendPeers : 0;
   int const processRecvPeers = Recv ? nRecvPeers : 0;
   bool const isPost = (Send && role == RoleSendPost) || (Recv && role == RoleRecvPost);
-  assert(slotSize % sizeof(ncclLLFifoLine) == 0);
+  assert((stepSize * sliceSteps) % sizeof(ncclLLFifoLine) == 0);
   assert(0 <= nLines && nLines <= slotLines);
   assert(0 <= nSrc && nSrc <= 1);
   assert(0 <= nDst && nDst <= 1);
@@ -187,7 +188,7 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
   if (isPost) {
     if (role == RoleSendPost) {
       size_t const sendBytes = ncclFlowLLNeedsCleanup((uint32_t)backend.stepFlag(), nSlots) ?
-                                 slotSize :
+                                 stepSize * sliceSteps :
                                  (size_t)nLines * sizeof(ncclLLFifoLine);
       backend.postSend(sendBytes);
     } else {

@@ -75,15 +75,17 @@ struct ncclFlowConfig;
 // Provide symmetric, window-backed receive FIFO and connection-state pointers so Flow can resolve both local
 // and peer addresses. devComm resources are one way to allocate them. channelId is a caller-chosen index for
 // independent Flow instances, not necessarily an NCCL channel. For channelId in [0, nChannels), one layout can use:
-//   channelSize = nParts * MaxPeers * nSlots * slotBytes
+//   channelSize = nParts * MaxPeers * ncclFlowCreditSlots * stepSize
 //   recvBuffer: nChannels * channelSize bytes
 //   connStatesPerChannel = nParts * MaxPeers
 //   connState: nChannels * connStatesPerChannel * sizeof(ncclFlowConnState) bytes
 // MaxPeers is the per-part capacity for send and receive peers, not the number active in every call; it must
 // be at least one. The receive FIFO and connection state must be zero-initialized. nSlots must be at least
-// SlotsPerProcess. slotBytes is the FIFO storage per slot, including protocol flags: it must be a multiple of
-// sizeof(T) for Simple, sizeof(ncclLLFifoLine) for LL, or NCCL_LL128_LINESIZE for LL128. LL/LL128 require
-// SlotsPerProcess = 1. Each process() call must fit in SlotsPerProcess slots.
+// SlotsPerProcess and divide ncclFlowCreditSlots. Each slot consumes sliceSteps =
+// ncclFlowCreditSlots/nSlots transport steps and holds stepSize*sliceSteps bytes, including protocol flags.
+// stepSize is the byte size of one credit step. Slot bytes must be a multiple of sizeof(T) for Simple,
+// sizeof(ncclLLFifoLine) for LL, or NCCL_LL128_LINESIZE for LL128. LL/LL128 require SlotsPerProcess = 1.
+// Each process() call must fit in SlotsPerProcess slots.
 //
 // connState holds the connection state between peers (signals, counters, and current steps). Its pointer starts
 // at the first state of this Flow layout, which may be a region of a larger allocation. State is indexed by
@@ -150,7 +152,8 @@ struct ncclFlowProcessor : ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsP
   // Set up a Flow processor for this CTA to exchange data with the specified peers. sendPeers and recvPeers
   // contain world ranks, with each count at most MaxPeers. config supplies the FIFO layout (including nSlots),
   // connection state, and optional GIN resources; channelId selects their instance.
-  // Every CTA thread constructs a processor; shmem resides in CTA shared memory.
+  // Every CTA thread constructs a processor; shmem resides in CTA shared memory. Receive-post roles grant
+  // ncclFlowCreditSlots credit units (nSlots physical slots) to their peers at construction.
   //
   // nParts splits the CTA into independent flows, such as reduce and broadcast. sendPart and recvPart select
   // the connection-state part for each direction. If a peer list is compacted or reordered, sendSlots and

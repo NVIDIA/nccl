@@ -61,10 +61,10 @@ NCCL_DEVICE_INLINE int ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::roleTyp
 
 template <typename Backend, int SlotsPerProcess, int MaxPeers>
 NCCL_DEVICE_INLINE ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::ncclFlowBase(
-  uint32_t* abortFlag_, size_t slotSize_, int nSlots_, int nWorkerWarps_, int nSendPeers_, int nRecvPeers_, int nParts_,
+  uint32_t* abortFlag_, size_t stepSize_, int nSlots_, int nWorkerWarps_, int nSendPeers_, int nRecvPeers_, int nParts_,
   int part_, int const* sendSlots, int const* recvSlots, ncclFlowShmem& shmem, int const* partWorkerWarps)
   : role(RoleIdle), rolePeer(-1), roleSlot(-1), nSendPeers(nSendPeers_), nRecvPeers(nRecvPeers_), abortFlag(abortFlag_),
-    slotSize(slotSize_), nSlots(nSlots_), processShmem(&shmem.parts[part_]),
+    stepSize(stepSize_), nSlots(nSlots_), processShmem(&shmem.parts[part_]),
     workers(/*warp0=*/ncclFlowPartWorkerWarp0(nWorkerWarps_, nParts_, part_, partWorkerWarps,
                                               ncclFlowGetSignalWarpsPerPart(Backend::Protocol)),
             /*nWarps=*/ncclFlowPartWorkerWarps(nWorkerWarps_, nParts_, part_, partWorkerWarps),
@@ -76,6 +76,7 @@ NCCL_DEVICE_INLINE ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::ncclFlowBas
                 /*id=*/nParts_ + part_) {
   assert(0 < nWorkerWarps_);
   assert(0 < nSlots);
+  assert(ncclFlowCreditSlots % nSlots == 0);
   assert(0 < nParts_ && nParts_ <= NCCL_FLOW_MAX_PARTS);
   assert(0 <= part_ && part_ < nParts_);
   assert(2 * nParts_ <= nWorkerWarps_);
@@ -84,7 +85,7 @@ NCCL_DEVICE_INLINE ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::ncclFlowBas
          ncclFlowThreadPart(nWorkerWarps_, nParts_, partWorkerWarps, ncclFlowGetSignalWarpsPerPart(Backend::Protocol)));
   assert(0 <= nSendPeers && nSendPeers <= MaxPeers);
   assert(0 <= nRecvPeers && nRecvPeers <= MaxPeers);
-  assert(0 < slotSize);
+  assert(0 < stepSize);
   role = threadRole(nWorkerWarps_, nSendPeers, nRecvPeers, nParts_, part_, partWorkerWarps, &rolePeer);
   if (role == RoleSendWait || role == RoleSendPost) roleSlot = sendSlots == nullptr ? rolePeer : sendSlots[rolePeer];
   if (role == RoleRecvWait || role == RoleRecvPost) roleSlot = recvSlots == nullptr ? rolePeer : recvSlots[rolePeer];
@@ -129,16 +130,16 @@ NCCL_DEVICE_INLINE void ncclFlowConnection<0, Protocol>::construct(
   ncclDevComm const& comm, ncclFlowConfig<0> const& config, int peer, int peerIndex, int maxPeers, int channelId,
   int nParts, int part, int type, bool /*waitRole*/, bool recvPost) {
   int const nSlots = config.nSlots;
-  assert(config.channelSize % (nSlots * nParts * maxPeers) == 0);
-  size_t const slotSize = config.channelSize / (nSlots * nParts * maxPeers);
+  assert(config.channelSize % (ncclFlowCreditSlots * nParts * maxPeers) == 0);
+  size_t const stepSize = config.channelSize / (ncclFlowCreditSlots * nParts * maxPeers);
   size_t const fifoOffset =
-    (size_t)channelId * config.channelSize + ((size_t)part * maxPeers + peerIndex) * nSlots * slotSize;
+    (size_t)channelId * config.channelSize + ((size_t)part * maxPeers + peerIndex) * ncclFlowCreditSlots * stepSize;
   int const connection = part * maxPeers + peerIndex;
   assert(connection < config.connStatesPerChannel);
   size_t const stateIndex = (size_t)channelId * config.connStatesPerChannel + connection;
   ncclSymPtr<char> recvFifo = config.recvBuffer + fifoOffset;
   ncclSymPtr<ncclFlowConnState> state = config.connState + stateIndex;
-  ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlots, slotSize, type, recvPost);
+  ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlots, stepSize, type, recvPost);
 }
 
 template <ncclFlowProtocol Protocol>
@@ -198,9 +199,9 @@ NCCL_DEVICE_INLINE void ncclFlowConnection<GinBackendMask, Protocol>::construct(
   ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int peer, int peerIndex, int maxPeers,
   int channelId, int nParts, int part, int type, bool waitRole, bool recvPost) {
   int const nSlots = config.nSlots;
-  assert(config.channelSize % (nSlots * nParts * maxPeers) == 0);
-  size_t const slotSize = config.channelSize / (nSlots * nParts * maxPeers);
-  size_t const connectionOffset = ((size_t)part * maxPeers + peerIndex) * nSlots * slotSize;
+  assert(config.channelSize % (ncclFlowCreditSlots * nParts * maxPeers) == 0);
+  size_t const stepSize = config.channelSize / (ncclFlowCreditSlots * nParts * maxPeers);
+  size_t const connectionOffset = ((size_t)part * maxPeers + peerIndex) * ncclFlowCreditSlots * stepSize;
   size_t const fifoOffset = (size_t)channelId * config.channelSize + connectionOffset;
   int const connection = part * maxPeers + peerIndex;
   assert(connection < config.connStatesPerChannel);
@@ -221,9 +222,9 @@ NCCL_DEVICE_INLINE void ncclFlowConnection<GinBackendMask, Protocol>::construct(
     int const contextId = config.ginContextIndex % comm.ginContextCount;
     ::new (&storage.gin) ncclGinFlowConn<GinBackendMask, Protocol>(comm, contextId, config.ginTeam, ginPeer, recvFifo,
                                                                    sendFifo, state, config.ginSignal0, stateIndex,
-                                                                   nSlots, slotSize, type, waitRole, recvPost);
+                                                                   nSlots, stepSize, type, waitRole, recvPost);
   } else {
-    ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlots, slotSize, type, recvPost);
+    ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlots, stepSize, type, recvPost);
   }
 }
 
@@ -294,15 +295,15 @@ NCCL_DEVICE_INLINE ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, 
   ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int const* sendPeers, int nSendPeers,
   int const* recvPeers, int nRecvPeers, int channelId, int nWorkerWarps, ncclFlowShmem& shmem, int nParts, int sendPart,
   int recvPart, int const* sendSlots, int const* recvSlots, int const* partWorkerWarps)
-  : Base(comm.abortFlag, config.channelSize / ((size_t)config.nSlots * nParts * MaxPeers), config.nSlots, nWorkerWarps,
-         nSendPeers, nRecvPeers, nParts,
+  : Base(comm.abortFlag, config.channelSize / ((size_t)ncclFlowCreditSlots * nParts * MaxPeers), config.nSlots,
+         nWorkerWarps, nSendPeers, nRecvPeers, nParts,
          ncclFlowThreadPart(nWorkerWarps, nParts, partWorkerWarps, ncclFlowGetSignalWarpsPerPart(Protocol)), sendSlots,
          recvSlots, shmem, partWorkerWarps),
     conn() {
   assert(0 < config.nSlots);
   assert(SlotsPerProcess <= config.nSlots);
   assert(0 < nParts && nParts <= NCCL_FLOW_MAX_PARTS);
-  assert(config.channelSize % ((size_t)config.nSlots * nParts * MaxPeers) == 0);
+  assert(config.channelSize % ((size_t)ncclFlowCreditSlots * nParts * MaxPeers) == 0);
   assert(0 <= sendPart && sendPart < nParts);
   assert(0 <= recvPart && recvPart < nParts);
   assert(nSendPeers == 0 || sendPeers != nullptr);

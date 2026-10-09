@@ -27,8 +27,9 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
   static_assert(sizeof(T) <= 16 && 16 % sizeof(T) == 0, "T must divide the 16-byte transfer alignment");
   Backend& backend = *static_cast<Backend*>(this);
   ncclFlowPartShmem& shmem = *processShmem;
-  assert(slotSize % sizeof(T) == 0);
-  size_t const slotElts = slotSize / sizeof(T);
+  int const sliceSteps = ncclFlowCreditSlots / nSlots;
+  assert((stepSize * sliceSteps) % sizeof(T) == 0);
+  size_t const slotElts = stepSize * sliceSteps / sizeof(T);
   int const nProcessSlots = (int)nccl::utility::divUp(nElts, slotElts);
   assert(nProcessSlots <= SlotsPerProcess);
   bool const isWorker = role == RoleWorker || role == RoleSendWait || role == RoleRecvWait;

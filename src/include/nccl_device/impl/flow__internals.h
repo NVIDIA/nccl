@@ -26,8 +26,8 @@ struct ncclFlowProtocolTag {};
 //   postSend(bytes)     publish the written slot
 //   postRecv()          make the consumed slot eligible for credit return
 //   stepFlag()          return the current protocol readiness flag
-// Connections select the protocol-specific FIFO sequence internally. LL keeps an independent wrapping sequence;
-// Simple and LL128 derive their slots and readiness values from the shared transport step.
+// Connections count credits in common steps. Simple and LL128 derive FIFO slots from that step; LL keeps an
+// independent wrapping sequence for its FIFO slots and embedded flags.
 // The CTA consists of nWorkerWarps divided between nParts, with protocol-specific signaling warps appended to each
 // part. An optional partWorkerWarps array gives the number of contiguous worker warps assigned to each part and must
 // sum to nWorkerWarps; the default divides workers evenly. Within each part, the first worker warp waits for send
@@ -38,13 +38,12 @@ struct ncclFlowBase {
   static_assert(0 < SlotsPerProcess, "ncclFlowProcessor must process at least one slot");
   static_assert(0 < MaxPeers && MaxPeers <= NCCL_FLOW_MAX_PEERS, "ncclFlowProcessor max peer count is out of range");
 
-  NCCL_DEVICE_INLINE ncclFlowBase(uint32_t* abortFlag, size_t slotSize, int nSlots, int nWorkerWarps, int nSendPeers,
+  NCCL_DEVICE_INLINE ncclFlowBase(uint32_t* abortFlag, size_t stepSize, int nSlots, int nWorkerWarps, int nSendPeers,
                                   int nRecvPeers, int nParts, int part, int const* sendSlots, int const* recvSlots,
                                   ncclFlowShmem& shmem, int const* partWorkerWarps);
 
-  // Save persistent connection state. GIN drains accesses to external source windows, while connection-owned FIFOs
-  // remain protected by their persistent credits. Every thread may call this function; only send-post and
-  // receive-post roles act.
+  // Save persistent connection state and drain GIN accesses to external source windows. Every thread may call
+  // this function; only send-post and receive-post roles act.
   NCCL_DEVICE_INLINE void close();
 
   template <bool Send, bool DirectSend, bool Recv, bool DirectRecv, typename T, typename SrcLambda, typename DstLambda,
@@ -69,7 +68,7 @@ protected:
   const int nSendPeers;
   const int nRecvPeers;
   uint32_t* const abortFlag;
-  const size_t slotSize;
+  const size_t stepSize;
   const int nSlots;
   ncclFlowPartShmem* const processShmem;
   ncclCoopWarpSpan workers;

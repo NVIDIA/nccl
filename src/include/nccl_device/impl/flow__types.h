@@ -22,6 +22,10 @@
 #define NCCL_FLOW_LL128_SIGNAL_WARPS_PER_PART 1
 
 #if __cplusplus
+// Every protocol sharing a connection counts transport credits in these units. A FIFO slot consumes
+// sliceSteps = ncclFlowCreditSlots/nSlots steps, so protocols with different FIFO depths share counters.
+constexpr int ncclFlowCreditSlots = 8;
+
 // Persistent state shared by the protocols and send/receive directions of one Flow topology slot. step tracks the
 // shared transport credits and signals. LL uses a separate 32-bit step for FIFO-slot selection and embedded flags so
 // Simple operations cannot skip an LL cleanup epoch. signalValue tracks the last readiness or credit value published,

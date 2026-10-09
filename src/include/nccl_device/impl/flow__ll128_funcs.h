@@ -154,8 +154,9 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
   bool const isPost = (Send && role == RoleSendPost) || (Recv && role == RoleRecvPost);
   assert((size_t)nDataElts == nElts);
   assert(workers.size() % 32 == 0);
-  assert(slotSize % NCCL_LL128_LINESIZE == 0);
-  assert(wireBytes <= slotSize);
+  int const sliceSteps = ncclFlowCreditSlots / nSlots;
+  assert((stepSize * sliceSteps) % NCCL_LL128_LINESIZE == 0);
+  assert(wireBytes <= stepSize * sliceSteps);
   assert(0 <= nSrc && nSrc <= 1);
   assert(0 <= nDst && nDst <= 1);
   assert(0 < nSrc + processRecvPeers);

@@ -16,7 +16,8 @@
 template <unsigned GinBackendMask = NCCL_GIN_BACKEND_MASK_ALL, ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
 struct ncclGinFlowConn {
   const int nSlots;
-  const size_t slotSize;
+  const int sliceSteps;
+  const size_t stepSize;
   const int type;
   ncclGin_BackendMask<GinBackendMask> gin;
   ncclTeam team;
@@ -26,19 +27,20 @@ struct ncclGinFlowConn {
   ncclSymPtr<char> peerFifo;
   ncclGinSignal_t localSignal;
   ncclGinSignal_t peerSignal;
-  // Transport credits are shared across protocols; LL slots and flags follow their own wrapping sequence.
+  // Transport counters are shared across protocols; LL tracks its FIFO slot and flag sequence separately.
   uint64_t step;
   uint32_t llStep;
   uint64_t signalValue;
-  // Connection-owned FIFOs remain valid across kernels and are protected by
-  // persistent credits. Only sends sourced from an external window need to
-  // be drained before the kernel returns.
+  // Connection-owned FIFOs remain valid across kernels and are reused after
+  // receive credits. Only sends sourced from an external window need to be
+  // drained before the kernel returns.
   bool flushOnClose;
 
+  // nSlots must divide ncclFlowCreditSlots.
   NCCL_DEVICE_INLINE ncclGinFlowConn(ncclDevComm const& comm, int contextId, ncclTeam team, int peer,
                                      ncclSymPtr<char> recvFifo, ncclSymPtr<char> sendFifo,
                                      ncclSymPtr<ncclFlowConnState> state, ncclGinSignal_t signal0, size_t signalIndex,
-                                     int nSlots, size_t slotSize, int type, bool waitRole, bool recvPost);
+                                     int nSlots, size_t stepSize, int type, bool waitRole, bool recvPost);
 
   NCCL_DEVICE_INLINE void close();
   NCCL_DEVICE_INLINE void* waitSend();
@@ -46,9 +48,9 @@ struct ncclGinFlowConn {
   NCCL_DEVICE_INLINE void postSendFrom(size_t bytes, ncclSymPtr<char> source);
   NCCL_DEVICE_INLINE void postSendDirect(size_t bytes, ncclSymPtr<char> peerOutput, ncclSymPtr<char> source);
   NCCL_DEVICE_INLINE void* waitRecv();
-  NCCL_DEVICE_INLINE void postRecv();
+  NCCL_DEVICE_INLINE void postRecv(bool force = false);
 
-  NCCL_DEVICE_INLINE uint64_t advanceStep();
+  NCCL_DEVICE_INLINE void advanceStep();
   NCCL_DEVICE_INLINE void postSendSimple(size_t bytes, ncclSymPtr<char> source, ncclSymPtr<char> destination);
   NCCL_DEVICE_INLINE void signal(uint64_t value);
   NCCL_DEVICE_INLINE void* advanceFifoSlot();

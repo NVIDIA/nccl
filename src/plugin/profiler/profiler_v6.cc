@@ -16,8 +16,8 @@
 // adapter forwards the v8 calls to a v6 plugin by dropping the timestamp
 // fields on startEvent, the stop descriptor argument on stopEvent, the config
 // argument on init, and the v7-only descriptors/fields/states. With no config
-// to write, the plugin leaves ncclSourcedTimings at its default of off and
-// keeps computing its own timestamps internally, exactly as before.
+// to write, the plugin leaves cpuClock at its default of None and keeps
+// computing its own timestamps internally, exactly as before.
 
 static ncclProfiler_v6_t* ncclProfiler_v6;
 static ncclProfiler_t ncclProfiler;
@@ -33,7 +33,7 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
   eDescr_v6.type = eDescr->type;
   eDescr_v6.parentObj = eDescr->parentObj;
   eDescr_v6.rank = eDescr->rank;
-  // v8-only top-level timestamp fields (tsGpu/tsCpuMono/tsCpuReal) are dropped.
+  // The v8-only top-level tsCpu/tsCpuUncertainty fields are dropped.
 
   switch (eDescr->type) {
   case ncclProfileGroup:

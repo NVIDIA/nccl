@@ -71,14 +71,14 @@ __device__ static inline T gpi_atomic_add(T* ptr, T value) {
 template <enum gpi_resource_sharing_mode resource_sharing_mode>
 __device__ static inline uint64_t gpi_gpu_channel_read_ci_shadow(gpi_gpu_channel_t* ch) {
   if (resource_sharing_mode == GPI_RESOURCE_SHARING_MODE_EXCLUSIVE) {
-    return ch->queue_.ci_value_;
+    return ch->queue.ci_value;
   } else if (resource_sharing_mode == GPI_RESOURCE_SHARING_MODE_CTA) {
     uint64_t val;
-    asm volatile("ld.relaxed.cta.u64 %0, [%1];" : "=l"(val) : "l"(&ch->queue_.ci_value_));
+    asm volatile("ld.relaxed.cta.u64 %0, [%1];" : "=l"(val) : "l"(&ch->queue.ci_value));
     return val;
   } else {
     uint64_t val;
-    asm volatile("ld.relaxed.gpu.u64 %0, [%1];" : "=l"(val) : "l"(&ch->queue_.ci_value_));
+    asm volatile("ld.relaxed.gpu.u64 %0, [%1];" : "=l"(val) : "l"(&ch->queue.ci_value));
     return val;
   }
 }
@@ -86,28 +86,28 @@ __device__ static inline uint64_t gpi_gpu_channel_read_ci_shadow(gpi_gpu_channel
 template <enum gpi_resource_sharing_mode resource_sharing_mode>
 __device__ static inline void gpi_gpu_channel_write_ci_shadow(gpi_gpu_channel_t* ch, uint64_t val) {
   if (resource_sharing_mode == GPI_RESOURCE_SHARING_MODE_EXCLUSIVE) {
-    ch->queue_.ci_value_ = val;
+    ch->queue.ci_value = val;
   } else if (resource_sharing_mode == GPI_RESOURCE_SHARING_MODE_CTA) {
-    asm volatile("st.relaxed.cta.u64 [%0], %1;" : : "l"(&ch->queue_.ci_value_), "l"(val));
+    asm volatile("st.relaxed.cta.u64 [%0], %1;" : : "l"(&ch->queue.ci_value), "l"(val));
   } else {
-    asm volatile("st.relaxed.gpu.u64 [%0], %1;" : : "l"(&ch->queue_.ci_value_), "l"(val));
+    asm volatile("st.relaxed.gpu.u64 [%0], %1;" : : "l"(&ch->queue.ci_value), "l"(val));
   }
 }
 
 template <enum gpi_resource_sharing_mode resource_sharing_mode>
 __device__ static inline uint64_t gpi_gpu_channel_get_pi(gpi_gpu_channel_t* ch, uint64_t slots, uint32_t optFlags) {
   using nccl::utility::loadConst;
-  uint64_t pi = gpi_atomic_add<uint64_t, resource_sharing_mode>((uint64_t*)&(ch->queue_.pi_), slots);
+  uint64_t pi = gpi_atomic_add<uint64_t, resource_sharing_mode>((uint64_t*)&(ch->queue.pi), slots);
   if (optFlags & ncclGinOptFlagsMaySkipCreditCheck) {
     return pi;
   }
-  const size_t size = 1UL << loadConst(&ch->queue_.log_depth);
+  const size_t size = 1UL << loadConst(&ch->queue.log_depth);
   uint64_t ci_shadow = gpi_gpu_channel_read_ci_shadow<resource_sharing_mode>(ch);
 
   if ((pi + slots) - ci_shadow > size) {
-    ci_shadow = GPI_READ_ONCE(loadConst(&ch->queue_.ci_)->value);
+    ci_shadow = GPI_READ_ONCE(loadConst(&ch->queue.ci)->value);
     while ((pi + slots) - ci_shadow > size) {
-      ci_shadow = GPI_READ_ONCE(loadConst(&ch->queue_.ci_)->value);
+      ci_shadow = GPI_READ_ONCE(loadConst(&ch->queue.ci)->value);
     }
 
     gpi_gpu_channel_write_ci_shadow<resource_sharing_mode>(ch, ci_shadow);
@@ -116,46 +116,46 @@ __device__ static inline uint64_t gpi_gpu_channel_get_pi(gpi_gpu_channel_t* ch, 
 }
 __device__ static inline uint64_t gpi_gpu_channel_get_idx(gpi_gpu_channel_t* ch, uint64_t pi) {
   using nccl::utility::loadConst;
-  const size_t size = 1UL << loadConst(&ch->queue_.log_depth);
+  const size_t size = 1UL << loadConst(&ch->queue.log_depth);
   return pi & (size - 1);
 }
 __device__ static inline void gpi_gpu_channel_set_gfd_flag(gpi_gpu_channel_t* ch, gpi_gfd_t* gfd, uint64_t pi) {
   using nccl::utility::loadConst;
   NVCC_PRAGMA_UNROLL_AUTO
   for (int i = 0; i < GPI_GFD_SEG_MAX; i += 1) {
-    gfd->segments[i].flag.owner = pi >> loadConst(&ch->queue_.log_depth);
+    gfd->segments[i].flag.owner = pi >> loadConst(&ch->queue.log_depth);
   }
 }
 
-__device__ static inline uint64_t gpi_gpu_channel_get_counter_value(gpi_gpu_channel_t* ch, uint16_t idx) {
-  return GPI_READ_ONCE(ch->gpu_counter_ptr_[idx].value);
+__device__ static inline uint64_t gpi_gpu_channel_get_counter_value(gpi_gpu_channel_t* ch, uint32_t idx) {
+  return GPI_READ_ONCE(ch->counter[idx].value);
 }
 
-__device__ static inline void gpi_gpu_channel_reset_signal(gpi_gpu_channel_t* ch, uint16_t idx) {
+__device__ static inline void gpi_gpu_channel_reset_signal(gpi_gpu_channel_t* ch, uint32_t idx) {
   using nccl::utility::loadConst;
-  gpi_signal_t* ptr = loadConst(&ch->gpu_signal_ptr_) + idx;
+  gpi_signal_t* ptr = loadConst(&ch->signal) + idx;
   GPI_WRITE_ONCE(ptr->value, 0);
 }
-__device__ static inline void gpi_gpu_channel_reset_signal_flag(gpi_gpu_channel_t* ch, uint16_t idx) {
+__device__ static inline void gpi_gpu_channel_reset_signal_flag(gpi_gpu_channel_t* ch, uint32_t idx) {
   using nccl::utility::loadConst;
-  gpi_signal_t* ptr = loadConst(&ch->gpu_signal_ptr_) + idx;
+  gpi_signal_t* ptr = loadConst(&ch->signal) + idx;
   GPI_WRITE_ONCE(ptr->flags, 0);
 }
 
-__device__ static inline void gpi_gpu_channel_reset_counter(gpi_gpu_channel_t* ch, uint16_t idx) {
+__device__ static inline void gpi_gpu_channel_reset_counter(gpi_gpu_channel_t* ch, uint32_t idx) {
   using nccl::utility::loadConst;
-  uint64_t* ptr = (uint64_t*)(loadConst(&ch->gpu_counter_ptr_) + idx);
+  uint64_t* ptr = (uint64_t*)(loadConst(&ch->counter) + idx);
   GPI_WRITE_ONCE(*ptr, 0);
 }
 
-__device__ static inline uint64_t gpi_gpu_channel_get_signal_value(gpi_gpu_channel_t* ch, uint16_t idx) {
+__device__ static inline uint64_t gpi_gpu_channel_get_signal_value(gpi_gpu_channel_t* ch, uint32_t idx) {
   using nccl::utility::loadConst;
-  gpi_signal_t* sig = loadConst(&ch->gpu_signal_ptr_);
+  gpi_signal_t* sig = loadConst(&ch->signal);
   return GPI_READ_ONCE(sig[idx].value);
 }
-__device__ static inline bool gpi_gpu_channel_is_signal_flags(gpi_gpu_channel_t* ch, uint16_t idx) {
+__device__ static inline bool gpi_gpu_channel_is_signal_flags(gpi_gpu_channel_t* ch, uint32_t idx) {
   using nccl::utility::loadConst;
-  gpi_signal_t* sig = loadConst(&ch->gpu_signal_ptr_);
+  gpi_signal_t* sig = loadConst(&ch->signal);
   return (GPI_READ_ONCE(sig[idx].flags) & GPI_SIGNAL_COUNTED_FLAG) == GPI_SIGNAL_COUNTED_FLAG;
 }
 
@@ -171,14 +171,19 @@ __device__ __inline__ uint64_t __as_ptr_gmem(const void* __ptr) {
 }
 
 __device__ __inline__ void TmaCopy(void* dstMem, const void* srcMem, uint32_t& size) {
+  asm volatile("fence.proxy.async.shared::cta;" : : : "memory");
   asm volatile("cp.async.bulk.global.shared::cta.bulk_group [%0], [%1], %2; // 3. "
                :
                : "l"(__as_ptr_gmem(dstMem)), "r"(__as_ptr_smem(srcMem)), "r"(size)
                : "memory");
 }
 
+__device__ __inline__ void TmaCommit() {
+  asm volatile("cp.async.bulk.commit_group;" : : : "memory");
+}
+
 __device__ __inline__ void TmaWait() {
-  asm volatile("cp.async.bulk.wait_group 0;" : : :);
+  asm volatile("cp.async.bulk.wait_group.read 0;" : : : "memory");
 }
 
 template <enum gpi_resource_sharing_mode resource_sharing_mode>
@@ -188,8 +193,9 @@ __device__ static inline void gpi_gpu_channel_post_gfd_tma(gpi_gpu_channel_t* ch
   uint64_t pi = gpi_gpu_channel_get_pi<resource_sharing_mode>(ch, 1, optFlags);
   uint64_t idx = gpi_gpu_channel_get_idx(ch, pi);
   gpi_gpu_channel_set_gfd_flag(ch, gfd, pi);
-  void* dst = (void*)&((uint8_t*)loadConst(&ch->queue_.gpu_memic_ptr))[idx * 64];
+  void* dst = (void*)&loadConst(&ch->queue.queue)[idx];
   TmaCopy(dst, (const void*)gfd, size);
+  TmaCommit();
   TmaWait();
 }
 #else
@@ -208,7 +214,7 @@ __device__ static inline void gpi_gpu_channel_post_gfd_thread(gpi_gpu_channel_t*
   uint64_t pi = gpi_gpu_channel_get_pi<resource_sharing_mode>(ch, 1, optFlags);
   uint64_t idx = gpi_gpu_channel_get_idx(ch, pi);
   gpi_gpu_channel_set_gfd_flag(ch, gfd, pi);
-  void* dst = (void*)&((uint8_t*)loadConst(&ch->queue_.gpu_memic_ptr))[idx * 64];
+  void* dst = (void*)&loadConst(&ch->queue.queue)[idx];
   gpi_gfd_t* queue_entry = (gpi_gfd_t*)dst;
   NVCC_PRAGMA_UNROLL_AUTO
   for (int i = 0; i < GPI_GFD_SEG_MAX; i += 2) {
@@ -233,14 +239,16 @@ __device__ static inline void gpi_gpu_channel_post_gfd_thread(gpi_gpu_channel_t*
 }
 
 __device__ static inline void gpi_gpu_build_data_transfer_gfd(
-  gpi_gfd_t* gfd, uint8_t op, uint8_t op_flags, uint32_t size, uint32_t pe, uint16_t src_handle, uint64_t src_offset,
-  uint16_t dst_handle, uint64_t dst_offset, uint16_t counter, uint16_t signal, int64_t signal_value) {
+  gpi_gfd_t* gfd, uint8_t op, uint8_t op_flags, uint64_t size, uint32_t pe, uint16_t src_handle, uint64_t src_offset,
+  uint16_t dst_handle, uint64_t dst_offset, uint32_t counter, uint32_t signal, int64_t signal_value) {
+  gfd->segments[GPI_GFD_SEG_HEADER].header.single_segment = 0;
   gfd->segments[GPI_GFD_SEG_HEADER].header.op = op;
   gfd->segments[GPI_GFD_SEG_HEADER].header.op_flags = op_flags;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.counter = counter;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.signal = signal;
-  gfd->segments[GPI_GFD_DATA_DST].dst.pe = pe;
-  gfd->segments[GPI_GFD_DATA_DST].dst.size = size;
+  gfd->segments[GPI_GFD_SEG_HEADER].header.pe = pe;
+  gfd->segments[GPI_GFD_DATA_COUNTER].counter.counter = counter;
+  gfd->segments[GPI_GFD_DATA_SIGNAL].signal.signal = signal;
+  gfd->segments[GPI_GFD_SEG_RESOURCES].resources.size = (uint32_t)(size & 0x7fffffffu);
+  gfd->segments[GPI_GFD_SEG_HEADER].header.size_high = (uint16_t)((size >> 31) & 0x3fffu);
   gfd->segments[GPI_GFD_DATA_SRC_MEM_HANDLE].src_handle.handle = src_handle;
   gfd->segments[GPI_GFD_DATA_SRC_MEM_HANDLE].src_handle.signal_value_high = signal_value >> 32;
   gfd->segments[GPI_GFD_DATA_SRC_MEM_HANDLE_OFFSET].handle_offset.offset = src_offset;
@@ -251,36 +259,41 @@ __device__ static inline void gpi_gpu_build_data_transfer_gfd(
 
 __device__ static inline void gpi_gpu_build_inline_data_transfer_gfd(
   gpi_gfd_t* gfd, uint8_t op, uint8_t op_flags, uint32_t size, uint32_t pe, uint64_t src_data, uint16_t dst_handle,
-  uint64_t dst_offset, uint16_t counter, uint16_t signal, int64_t signal_value) {
+  uint64_t dst_offset, uint32_t counter, uint32_t signal, int64_t signal_value) {
+  gfd->segments[GPI_GFD_SEG_HEADER].header.single_segment = 0;
   gfd->segments[GPI_GFD_SEG_HEADER].header.op = op;
   gfd->segments[GPI_GFD_SEG_HEADER].header.op_flags = op_flags;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.counter = counter;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.signal = signal;
-  gfd->segments[GPI_GFD_DATA_DST].dst.pe = pe;
-  gfd->segments[GPI_GFD_DATA_DST].dst.size = size;
+  gfd->segments[GPI_GFD_SEG_HEADER].header.pe = pe;
+  gfd->segments[GPI_GFD_DATA_COUNTER].counter.counter = counter;
+  gfd->segments[GPI_GFD_DATA_SIGNAL].signal.signal = signal;
+  gfd->segments[GPI_GFD_SEG_RESOURCES].resources.size = size;
+  gfd->segments[GPI_GFD_SEG_HEADER].header.size_high = 0;
   gfd->segments[GPI_GFD_DATA_SRC_MEM_HANDLE].src_handle.signal_value_high = signal_value >> 32;
-  gfd->segments[GPI_GFD_DATA_INLINE_DATA_LOW].inline_data.data = src_data;
-  gfd->segments[GPI_GFD_DATA_INLINE_DATA_HIGH].inline_data.data = src_data >> 32;
+  gfd->segments[GPI_GFD_DATA_COUNTER].counter.inline_data_low = src_data;
+  gfd->segments[GPI_GFD_DATA_SIGNAL].signal.inline_data_high = src_data >> 32;
   gfd->segments[GPI_GFD_DATA_DST_MEM_HANDLE].dst_handle.handle = dst_handle;
   gfd->segments[GPI_GFD_DATA_DST_MEM_HANDLE].dst_handle.signal_value_low = signal_value;
   gfd->segments[GPI_GFD_DATA_DST_MEM_HANDLE_OFFSET].handle_offset.offset = dst_offset;
 }
 
-__device__ static inline void gpi_gpu_build_control_gfd(gpi_gfd_t* gfd, uint8_t op, uint8_t op_flags, uint16_t counter,
-                                                        uint16_t signal) {
+__device__ static inline void gpi_gpu_build_control_gfd(gpi_gfd_t* gfd, uint8_t op, uint8_t op_flags, uint32_t counter,
+                                                        uint32_t signal) {
   gfd->segments[GPI_GFD_SEG_HEADER].header.op = op | GPI_GFD_OP_CTRL;
+  gfd->segments[GPI_GFD_SEG_HEADER].header.single_segment = 0;
   gfd->segments[GPI_GFD_SEG_HEADER].header.op_flags = op_flags;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.counter = counter;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.signal = signal;
+  gfd->segments[GPI_GFD_DATA_COUNTER].counter.counter = counter;
+  gfd->segments[GPI_GFD_DATA_SIGNAL].signal.signal = signal;
 }
 __device__ static inline void gpi_gpu_build_pe_flush_gfd(gpi_gfd_t* gfd, uint8_t op_flags, uint32_t pe,
-                                                         uint16_t counter) {
+                                                         uint32_t counter) {
   gfd->segments[GPI_GFD_SEG_HEADER].header.op = GPI_GFD_DATA_OP_PE_FLUSH;
+  gfd->segments[GPI_GFD_SEG_HEADER].header.single_segment = 0;
   gfd->segments[GPI_GFD_SEG_HEADER].header.op_flags = op_flags;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.counter = counter;
-  gfd->segments[GPI_GFD_SEG_HEADER].header.signal = 0;
-  gfd->segments[GPI_GFD_DATA_DST].dst.pe = pe;
-  gfd->segments[GPI_GFD_DATA_DST].dst.size = 0;
+  gfd->segments[GPI_GFD_SEG_HEADER].header.pe = pe;
+  gfd->segments[GPI_GFD_DATA_COUNTER].counter.counter = counter;
+  gfd->segments[GPI_GFD_DATA_SIGNAL].signal.signal = 0;
+  gfd->segments[GPI_GFD_SEG_RESOURCES].resources.size = 0;
+  gfd->segments[GPI_GFD_SEG_HEADER].header.size_high = 0;
 }
 
 template <enum gpi_resource_sharing_mode resource_sharing_mode = GPI_RESOURCE_SHARING_MODE_GPU,
@@ -321,8 +334,8 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
   if (coop.thread_rank() == 0) {
     bool hasSignal = signal.type != NCCL_GIN_SIGNAL_TYPE_NONE;
     gpi_gfd_op_t op = GPI_GFD_DATA_OP_WRITE;
-    uint16_t counterId_ = 0;
-    uint16_t signalId_ = 0;
+    uint32_t counterId_ = 0;
+    uint32_t signalId_ = 0;
     uint64_t signalVal_ = 0;
     uint64_t signalOffset_ = 0;
     uint8_t op_flags = 0;
@@ -343,7 +356,7 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
       } else {
         op_flags_signal = op_flags;
         op_flags = 0;
-        signalId_ = (uint16_t)((uint64_t)signal.vaSignal.signalWindow);
+        signalId_ = (uint32_t)((uint64_t)signal.vaSignal.signalWindow);
         signalOffset_ = signal.vaSignal.signalOffset;
       }
     }
@@ -400,7 +413,7 @@ NCCL_DEVICE_INLINE static void putValueImplMode(ncclGinCtx ctx, Coop coop, int p
   if (coop.thread_rank() == 0) {
     gpi_gfd_op_t op = GPI_GFD_DATA_OP_WRITE_INLINE;
     bool hasSignal = signal.type != NCCL_GIN_SIGNAL_TYPE_NONE;
-    uint16_t signalId_ = 0;
+    uint32_t signalId_ = 0;
     uint64_t signalVal_ = 0;
     uint64_t signalOffset_ = 0;
     if (hasSignal) {
@@ -413,7 +426,7 @@ NCCL_DEVICE_INLINE static void putValueImplMode(ncclGinCtx ctx, Coop coop, int p
         }
         signalId_ = signal.indexedSignal.signalId;
       } else {
-        signalId_ = (uint16_t)((uint64_t)signal.vaSignal.signalWindow);
+        signalId_ = (uint32_t)((uint64_t)signal.vaSignal.signalWindow);
         signalOffset_ = signal.vaSignal.signalOffset;
       }
     }
@@ -467,9 +480,8 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop co
   gpi_gfd_t* gfd = (gpi_gfd_t*)gfd_local;
   gpi_gpu_channel_t* gpi_ctx = gpi_gpu_channel_get_ptr(ctx);
   uint64_t* flush_tickets_ctx = gpi_flush_tickets_get_ptr(gpi_ctx);
-  int16_t flush_counter_idx =
-    (int16_t)(((uint64_t*)loadConst(&gpi_ctx->gpu_signal_ptr_) - (uint64_t*)loadConst(&gpi_ctx->gpu_counter_ptr_)) /
-              sizeof(uint64_t)) -
+  int64_t flush_counter_idx =
+    (((uint64_t*)loadConst(&gpi_ctx->signal) - (uint64_t*)loadConst(&gpi_ctx->counter)) / sizeof(uint64_t)) -
     ctx.nRanks;
   uint32_t steps = 0;
   uint64_t startCycle = 0;
@@ -477,7 +489,7 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop co
   if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
   NVCC_PRAGMA_UNROLL_DISABLED
   for (int peer = coop.thread_rank(); peer < ctx.nRanks; peer += coop.size()) {
-    uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
+    uint32_t flush_counter_peer_idx = (uint32_t)(peer + flush_counter_idx);
     uint64_t* ticket_peer = &flush_tickets_ctx[peer];
     uint64_t ticket_value = gpi_atomic_add<uint64_t, resource_sharing_mode>(ticket_peer, (uint64_t)1);
     gpi_gpu_build_pe_flush_gfd(gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK, peer,
@@ -485,7 +497,7 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop co
     gpi_gpu_channel_post_gfd<resource_sharing_mode, GPI_POST_MODE_THREAD>(gpi_ctx, gfd, 0);
     NVCC_PRAGMA_UNROLL_DISABLED
     while (true) {
-      if (GPI_READ_ONCE((gpi_ctx->gpu_counter_ptr_[flush_counter_peer_idx].value)) > ticket_value) break;
+      if (GPI_READ_ONCE((gpi_ctx->counter[flush_counter_peer_idx].value)) > ticket_value) break;
       if NCCL_IF_CONSTEXPR (HasTimeout) {
         if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
       }
@@ -647,7 +659,7 @@ struct ncclGinApi_ResetSignal<NCCL_NET_DEVICE_GIN_GPI> {
   NCCL_DEVICE_INLINE static void call(ncclGinCtx ctx, ncclGinSignalDescriptor signal) {
     gpi_gpu_channel_t* gpi_ctx = nccl::gin::gpi::gpi_gpu_channel_get_ptr(ctx);
     if (signal.type == NCCL_GIN_SIGNAL_TYPE_INDEXED) {
-      uint16_t signalId = signal.indexedSignal.signalId;
+      uint32_t signalId = signal.indexedSignal.signalId;
       if (nccl::gin::gpi::gpi_gpu_channel_is_signal_flags(gpi_ctx, signalId) == true) {
         gpi_gfd_t gfd;
         nccl::gin::gpi::gpi_gpu_build_control_gfd(&gfd, GPI_GFD_CTRL_OP_SIGNAL_RESET, 0, 0, signalId);
@@ -683,7 +695,7 @@ struct ncclGinApi_GetCounterPtr<NCCL_NET_DEVICE_GIN_GPI> {
   NCCL_DEVICE_INLINE static ncclGinOffsetPtr call(ncclGinCtx ctx, ncclGinCounter_t counterId) {
     using nccl::utility::loadConst;
     gpi_gpu_channel_t* gpi_ctx = nccl::gin::gpi::gpi_gpu_channel_get_ptr(ctx);
-    return {(uint64_t*)(loadConst(&gpi_ctx->gpu_counter_ptr_) + counterId), 0};
+    return {(uint64_t*)(loadConst(&gpi_ctx->counter) + counterId), 0};
   }
 };
 
@@ -692,7 +704,7 @@ struct ncclGinApi_GetSignalPtr<NCCL_NET_DEVICE_GIN_GPI> {
   NCCL_DEVICE_INLINE static ncclGinOffsetPtr call(ncclGinCtx ctx, ncclGinSignal_t signalId) {
     using nccl::utility::loadConst;
     gpi_gpu_channel_t* gpi_ctx = nccl::gin::gpi::gpi_gpu_channel_get_ptr(ctx);
-    return {(uint64_t*)(loadConst(&gpi_ctx->gpu_signal_ptr_) + signalId), 0};
+    return {(uint64_t*)(loadConst(&gpi_ctx->signal) + signalId), 0};
   }
 };
 
@@ -788,15 +800,14 @@ struct ncclGinApi_FlushAsync<NCCL_NET_DEVICE_GIN_GPI> {
     ncclGinGpiRequest* req = reinterpret_cast<ncclGinGpiRequest*>(outRequest);
     gpi_gpu_channel_t* gpi_ctx = nccl::gin::gpi::gpi_gpu_channel_get_ptr(ctx);
     uint64_t* flush_tickets_ctx = nccl::gin::gpi::gpi_flush_tickets_get_ptr(gpi_ctx);
-    int16_t flush_counter_idx =
-      (int16_t)(((uint64_t*)loadConst(&gpi_ctx->gpu_signal_ptr_) - (uint64_t*)loadConst(&gpi_ctx->gpu_counter_ptr_)) /
-                sizeof(uint64_t)) -
+    int64_t flush_counter_idx =
+      (((uint64_t*)loadConst(&gpi_ctx->signal) - (uint64_t*)loadConst(&gpi_ctx->counter)) / sizeof(uint64_t)) -
       ctx.nRanks;
-    uint16_t flush_counter_peer_idx = (uint16_t)(peer + flush_counter_idx);
+    uint32_t flush_counter_peer_idx = (uint32_t)(peer + flush_counter_idx);
     // GPI_READ_ONCE(ticket_peer);
     uint64_t flush_ticket_value =
       nccl::gin::gpi::gpi_atomic_add<uint64_t, GPI_RESOURCE_SHARING_MODE_GPU>(&flush_tickets_ctx[peer], (uint64_t)1);
-    req->flushCounterPtr = (uint64_t*)(loadConst(&gpi_ctx->gpu_counter_ptr_) + flush_counter_peer_idx);
+    req->flushCounterPtr = (uint64_t*)(loadConst(&gpi_ctx->counter) + flush_counter_peer_idx);
     req->waitValue = flush_ticket_value;
     nccl::gin::gpi::gpi_gpu_build_pe_flush_gfd(
       gfd, GPI_GFD_DATA_OP_WITH_COUNTER_COUNTED | GPI_GFD_DATA_OP_WITH_COUNTER_WRITEBACK, peer, flush_counter_peer_idx);

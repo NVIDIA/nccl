@@ -337,7 +337,6 @@ ncclResult_t ncclCollPreconnectFunc(struct ncclAsyncJob* job_) {
   NCCLCHECKGOTO(ncclCollPreconnect(comm, job->algoNeedConnect), ret, fail);
 
 exit:
-  free(job->algoNeedConnect);
   return ret;
 fail:
   goto exit;
@@ -694,6 +693,7 @@ static void ncclMgmtTaskJobFree(void* _job) {
 
 static void ncclPreconnectJobFree(void* _job) {
   struct ncclPreconnectJob* job = (struct ncclPreconnectJob*)_job;
+  free(job->algoNeedConnect);
   delete job;
 }
 
@@ -765,6 +765,8 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
   struct ncclComm* groupCommPreconnectHeadMain = gjob->groupCommPreconnectHead;
   struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next>* asyncJobsMain = &gjob->asyncJobs;
   bool* groupAbortFlag = &gjob->abortFlag;
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncCollJobs;
+  ncclIntruQueueConstruct(&asyncCollJobs);
 
   if (!simInfo && groupCommPreconnectHeadMain != nullptr) {
     struct ncclComm* comm = groupCommPreconnectHeadMain;
@@ -824,9 +826,7 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
   if (groupCommHeadMain[ncclGroupTaskTypeCollective] != nullptr) {
     struct ncclComm* cliqueHead = groupCommHeadMain[ncclGroupTaskTypeCollective];
     struct ncclComm* comm = NULL;
-    struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncCollJobs;
     struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncDebugJobs;
-    ncclIntruQueueConstruct(&asyncCollJobs);
     ncclIntruQueueConstruct(&asyncDebugJobs);
     do {
       // We need to preconnect connections for collectives clique by clique to avoid
@@ -918,6 +918,17 @@ static ncclResult_t groupLaunchLegacy(struct ncclAsyncJob* job_, ncclSimInfo_t* 
 exit:
   return ret;
 fail:
+  // Thread creation may fail after some jobs have started. Abort all jobs
+  // before joining any of them, then release their storage before comm cleanup.
+  for (struct ncclAsyncJob* job = ncclIntruQueueHead(&asyncCollJobs); job != nullptr; job = job->next) {
+    COMPILER_ATOMIC_STORE(job->abortFlag, uint32_t(1), std::memory_order_release);
+    COMPILER_ATOMIC_STORE(job->abortFlagDev, uint32_t(1), std::memory_order_release);
+  }
+  while (!ncclIntruQueueEmpty(&asyncCollJobs)) {
+    struct ncclAsyncJob* job = ncclIntruQueueDequeue(&asyncCollJobs);
+    if (job->thread.joinable()) NCCLCHECKIGNORE(ncclThreadJoin(job->thread), ret);
+    if (job->destructor) job->destructor((void*)job);
+  }
   groupCleanup(gjob->groupCommHead, &gjob->asyncJobs, ret);
   goto exit;
 }

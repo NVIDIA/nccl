@@ -344,6 +344,26 @@ static inline void profilerStopEventGpu(void* eHandle, uint64_t tsGpu) {
   ncclProfiler->stopEvent(eHandle, &sd);
 }
 
+// Record a host-timed state transition, stamping the current CPU clock. The
+// caller fills the union member for eState; this only adds the timestamp.
+static inline void profilerRecordEventStateHost(void* eHandle, ncclProfilerEventState_t eState,
+                                                ncclProfilerEventStateArgs_t* a) {
+  a->tsCpu = profilerCpuNow(profilerTsModeGet());
+  ncclProfiler->recordEventState(eHandle, eState, a);
+}
+
+// Record a GPU-timed state transition (the KernelCh and KernelPhase stops).
+// tsGpu is the raw globaltimer the caller already puts in kernelCh.pTimer;
+// here it additionally lands on the configured CPU clock, so the transition
+// and the stopEvent that follows report the same instant.
+static inline void profilerRecordEventStateGpu(void* eHandle, ncclProfilerEventState_t eState,
+                                               ncclProfilerEventStateArgs_t* a, uint64_t tsGpu) {
+  if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
+    profilerMapGpuToCpu(tsGpu, &a->tsCpu, &a->tsCpuUncertainty);
+  }
+  ncclProfiler->recordEventState(eHandle, eState, a);
+}
+
 extern thread_local int ncclGroupDepth;
 thread_local ncclProfilerApiState_t ncclProfilerApiState;
 
@@ -710,7 +730,8 @@ ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eStat
   }
 
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && groupApiEventHandle && shouldRecord) {
-    ncclProfiler->recordEventState(groupApiEventHandle, eState, NULL);
+    ncclProfilerEventStateArgs_t a = {};
+    profilerRecordEventStateHost(groupApiEventHandle, eState, &a);
   }
   return ncclSuccess;
 }
@@ -1122,10 +1143,10 @@ ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint6
 ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t stop) {
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
     if (op->kernelEventHandle) {
+      // KernelCh stop is GPU-timed: carry 'stop' (globaltimer) + mapped CPU.
       ncclProfilerEventStateArgs_t a = {};
       a.kernelCh.pTimer = stop;
-      ncclProfiler->recordEventState(op->kernelEventHandle, ncclProfilerKernelChStop, &a);
-      // KernelCh stop is GPU-timed: carry 'stop' (globaltimer) + mapped CPU.
+      profilerRecordEventStateGpu(op->kernelEventHandle, ncclProfilerKernelChStop, &a, stop);
       profilerStopEventGpu(op->kernelEventHandle, stop);
     }
   }
@@ -1137,7 +1158,7 @@ ncclResult_t ncclProfilerRecordProxyOpEventState(int s, struct ncclProxyArgs* ar
   struct ncclProxySubArgs* sub = &args->subs[s];
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && sub->opEventHandle) {
     ncclProfilerEventStateArgs_t a = {};
-    ncclProfiler->recordEventState(sub->opEventHandle, eState, &a);
+    profilerRecordEventStateHost(sub->opEventHandle, eState, &a);
   }
   TIME_STOP_EVENT(proxyOpRecord);
   return ncclSuccess;
@@ -1152,7 +1173,7 @@ ncclResult_t ncclProfilerRecordProxyStepEventState(int s, struct ncclProxyArgs* 
     if (sub->pHandles[step_ % NCCL_STEPS].stepEventHandle) {
       ncclProfilerEventStateArgs_t a = {};
       a.proxyStep.transSize = sub->transSize;
-      ncclProfiler->recordEventState(sub->pHandles[step_ % NCCL_STEPS].stepEventHandle, eState, &a);
+      profilerRecordEventStateHost(sub->pHandles[step_ % NCCL_STEPS].stepEventHandle, eState, &a);
     }
   }
   TIME_STOP_EVENT(proxyStepRecord);
@@ -1165,7 +1186,7 @@ ncclResult_t ncclProfilerRecordProxyCtrlEventState(void* eHandle, int appended, 
       COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed) & ncclProfileProxyCtrl) {
     ncclProfilerEventStateArgs_t args = {};
     args.proxyCtrl.appendedProxyOps = appended;
-    ncclProfiler->recordEventState(eHandle, eState, &args);
+    profilerRecordEventStateHost(eHandle, eState, &args);
   }
   TIME_STOP_EVENT(proxyCtrlRecord);
   return ncclSuccess;
@@ -1234,7 +1255,7 @@ static void profilerFireKernelPhaseEvents(struct ncclProfilerWorkOp* op) {
       ncclProfilerEventStateArgs_t a = {};
       // Phase stop reuses kernelCh.pTimer (same single-timestamp shape); see profiler_v8.h.
       a.kernelCh.pTimer = ts[i + 1];
-      ncclProfiler->recordEventState(phaseHandle, ncclProfilerKernelPhaseStop, &a);
+      profilerRecordEventStateGpu(phaseHandle, ncclProfilerKernelPhaseStop, &a, ts[i + 1]);
       profilerStopEventGpu(phaseHandle, ts[i + 1]);
     }
   }
@@ -1722,11 +1743,11 @@ ncclResult_t ncclProfilerCallback(void** eHandle, int type, void* pHandle, int64
     } else if (type == ncclProfilerNetEventUpdate) { // update
       ncclProfilerEventStateArgs_t args = {};
       args.netPlugin.data = extData;
-      ncclProfiler->recordEventState(*eHandle, ncclProfilerNetPluginUpdate, &args);
+      profilerRecordEventStateHost(*eHandle, ncclProfilerNetPluginUpdate, &args);
     } else { // update and stop
       ncclProfilerEventStateArgs_t args = {};
       args.netPlugin.data = extData;
-      ncclProfiler->recordEventState(*eHandle, ncclProfilerNetPluginUpdate, &args);
+      profilerRecordEventStateHost(*eHandle, ncclProfilerNetPluginUpdate, &args);
       profilerStopEventHost(*eHandle);
     }
   }

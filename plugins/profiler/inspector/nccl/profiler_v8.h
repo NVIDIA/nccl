@@ -15,7 +15,8 @@
 // events NCCL reconstructs after the fact, where a host clock read at emission
 // time would describe when the plugin was called rather than when the work
 // ran. The same descriptor type carries the start timestamp to startEvent and
-// the stop timestamp to stopEvent.
+// the stop timestamp to stopEvent, and ncclProfilerEventStateArgs_v8_t carries
+// one for every state transition in between.
 //
 // GPU-timed events are unaffected: KernelCh and KernelPhase continue to carry
 // the raw GPU globaltimer in their existing pTimer fields -- in the descriptor
@@ -185,8 +186,47 @@ typedef struct {
   };
 } ncclProfilerEventDescr_v8_t;
 
-// v8 uses the same state args structure as v7.
-typedef ncclProfilerEventStateArgs_v7_t ncclProfilerEventStateArgs_v8_t;
+// State transitions are timestamped on the same terms as start and stop: an
+// event that lives through several updates (a proxy step moving through its
+// wait states, a net plugin reporting progress) would otherwise have NCCL
+// timing only at its two ends, leaving the plugin to time the middle from its
+// own clock on a thread that may be running well after the transition.
+//
+// Laid out like ncclProfilerEventDescr_v8_t, with the timestamp ahead of the
+// union, so the two read the same way. This is what makes v8 state args
+// layout-incompatible with v7; adapters field-copy rather than cast.
+typedef struct {
+  // NCCL-stamped CPU timestamp of the transition, on the clock cpuClock
+  // selected, and its symmetric +/- bound. Same rules as the descriptor's:
+  // NCCL_PROFILER_TS_NONE when the plugin did not opt in or the clock is
+  // unavailable, and uncertainty 0 for host-side transitions. The
+  // KernelCh/KernelPhase stop transitions are the GPU-timed ones, so they
+  // carry a non-zero bound when gpuClockSync is on, matching the tsCpu on the
+  // stopEvent that follows.
+  uint64_t tsCpu;
+  uint64_t tsCpuUncertainty;
+
+  union {
+    struct {
+      size_t transSize;
+    } proxyStep;
+
+    struct {
+      int appendedProxyOps;
+    } proxyCtrl;
+
+    struct {
+      void* data;
+    } netPlugin;
+
+    // Shared by ncclProfileKernelCh and the ncclProfileKernelPhase sub-event:
+    // both record a single stop timestamp (GPU globaltimer) of identical
+    // shape, so the phase stop reuses this member rather than a dedicated one.
+    struct {
+      uint64_t pTimer;
+    } kernelCh;
+  };
+} ncclProfilerEventStateArgs_v8_t;
 
 // New in v8: the configuration handshake between NCCL and the plugin.
 //
@@ -254,7 +294,10 @@ typedef struct {
   // by eHandle alone. eDescr may be NULL when no timestamp is available.
   ncclResult_t (*stopEvent)(void* eHandle, ncclProfilerEventDescr_v8_t* eDescr);
 
-  // recordEventState - record event state transitions and updates
+  // recordEventState - record event state transitions and updates. eStateArgs
+  // carries the NCCL-stamped timestamp of the transition (see
+  // ncclProfilerEventStateArgs_v8_t) alongside the per-state payload, and is
+  // never NULL in v8.
   ncclResult_t (*recordEventState)(void* eHandle, ncclProfilerEventState_v8_t eState,
                                    ncclProfilerEventStateArgs_v8_t* eStateArgs);
 

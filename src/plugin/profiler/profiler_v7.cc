@@ -152,9 +152,40 @@ static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr
 
 static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEventState_t eState,
                                                   ncclProfilerEventStateArgs_t* eStateArgs) {
-  // v8 state args are identical to v7 -- forward unchanged.
-  return ncclProfiler_v7->recordEventState(eHandle, (ncclProfilerEventState_v7_t)eState,
-                                           (ncclProfilerEventStateArgs_v7_t*)eStateArgs);
+  // v8 put the timestamp ahead of the union, so the two are no longer
+  // layout-compatible; field-copy the payload and drop the timestamp, which
+  // v7 plugins have no field for.
+  ncclProfilerEventStateArgs_v7_t eStateArgs_v7 = {};
+  if (eStateArgs) {
+    switch (eState) {
+    case ncclProfilerProxyStepSendGPUWait:
+    case ncclProfilerProxyStepSendPeerWait_v4:
+    case ncclProfilerProxyStepSendWait:
+    case ncclProfilerProxyStepRecvWait:
+    case ncclProfilerProxyStepRecvFlushWait:
+    case ncclProfilerProxyStepRecvGPUWait:
+      eStateArgs_v7.proxyStep.transSize = eStateArgs->proxyStep.transSize;
+      break;
+    case ncclProfilerProxyCtrlIdle:
+    case ncclProfilerProxyCtrlActive:
+    case ncclProfilerProxyCtrlSleep:
+    case ncclProfilerProxyCtrlWakeup:
+    case ncclProfilerProxyCtrlAppend:
+    case ncclProfilerProxyCtrlAppendEnd:
+      eStateArgs_v7.proxyCtrl.appendedProxyOps = eStateArgs->proxyCtrl.appendedProxyOps;
+      break;
+    case ncclProfilerNetPluginUpdate:
+      eStateArgs_v7.netPlugin.data = eStateArgs->netPlugin.data;
+      break;
+    case ncclProfilerKernelChStop:
+    case ncclProfilerKernelPhaseStop:
+      eStateArgs_v7.kernelCh.pTimer = eStateArgs->kernelCh.pTimer;
+      break;
+    default:
+      break;
+    }
+  }
+  return ncclProfiler_v7->recordEventState(eHandle, (ncclProfilerEventState_v7_t)eState, &eStateArgs_v7);
 }
 
 static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,

@@ -2,13 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.32.3. Do not modify it directly.
+# This code was automatically generated with version 2.32.4. Do not modify it directly.
 
 
 # <<<< PREAMBLE CONTENT >>>>
 
 cimport cpython as _cyb_cpython
 cimport cpython.buffer as _cyb_cpython_buffer
+from cpython.buffer cimport (
+    PyBUF_SIMPLE as _cyb_PyBUF_SIMPLE,
+    PyBuffer_Release as _cyb_PyBuffer_Release,
+    PyObject_GetBuffer as _cyb_PyObject_GetBuffer,
+    Py_buffer as _cyb_Py_buffer,
+)
 from cython cimport view as _cyb_view
 from libc.stdint cimport (
     intptr_t,
@@ -24,6 +30,7 @@ from libc.stdlib cimport (
 from libc.string cimport (
     memcmp as _cyb_memcmp,
     memcpy as _cyb_memcpy,
+    memmove as _cyb_memmove,
 )
 from libcpp cimport bool as _cyb_bool
 
@@ -53,7 +60,7 @@ cdef _cyb_from_buffer(buffer, size, lowpp_type):
             raise ValueError("buffer itemsize must be 1 byte")
         if view.len != size:
             raise ValueError(f"buffer length must be {size} bytes")
-        return lowpp_type.from_ptr(<intptr_t><void *>view.buf, not view.readonly, buffer)
+        return lowpp_type.from_ptr(<intptr_t><void *>view.buf, view.readonly != 0, buffer)
     finally:
         _cyb_cpython.PyBuffer_Release(&view)
 
@@ -109,7 +116,7 @@ from libcpp.vector cimport vector
 from ._internal.utils cimport (nested_resource, nullable_unique_ptr,
                               get_resource_ptr, get_nested_resource_ptr)
 
-_version_span = "with version 2.32.3"
+_version_span = "with version 2.32.4"
 __version__ = _version_span.split()[-1]
 
 # NCCL_VERSION(X,Y,Z) = X*10000 + Y*100 + Z (NCCL >= 2.9).
@@ -143,25 +150,15 @@ cdef class UniqueId:
     .. seealso:: `ncclUniqueId`
     """
     cdef:
+        ncclUniqueId _data
         ncclUniqueId *_ptr
         object _owner
-        bint _owned
         bint _readonly
 
     def __init__(self):
-        self._ptr = <ncclUniqueId *>_cyb_calloc(1, sizeof(ncclUniqueId))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating UniqueId")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
-
-    def __dealloc__(self):
-        cdef ncclUniqueId *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.UniqueId object at {hex(id(self))}>"
@@ -191,14 +188,22 @@ cdef class UniqueId:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclUniqueId *>_cyb_malloc(sizeof(ncclUniqueId))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating UniqueId")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclUniqueId))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This UniqueId instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclUniqueId):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclUniqueId), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclUniqueId))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -229,16 +234,12 @@ cdef class UniqueId:
             raise ValueError("ptr must not be null (0)")
         cdef UniqueId obj = UniqueId.__new__(UniqueId)
         if owner is None:
-            obj._ptr = <ncclUniqueId *>_cyb_malloc(sizeof(ncclUniqueId))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating UniqueId")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclUniqueId))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclUniqueId))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclUniqueId *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -288,18 +289,15 @@ cdef class Config:
     .. seealso:: `ncclConfig_t`
     """
     cdef:
+        ncclConfig_t _data
         ncclConfig_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
         dict _refs
 
     def __init__(self):
-        self._ptr = <ncclConfig_t *>_cyb_calloc(1, sizeof(ncclConfig_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating Config")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
 
@@ -330,13 +328,6 @@ cdef class Config:
         self._ptr[0].hostCftMode = -2147483648
         self._ptr[0].nvlsHostMode = -2147483648
 
-    def __dealloc__(self):
-        cdef ncclConfig_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
-
     def __repr__(self):
         return f"<{__name__}.Config object at {hex(id(self))}>"
 
@@ -365,14 +356,22 @@ cdef class Config:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclConfig_t *>_cyb_malloc(sizeof(ncclConfig_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating Config")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclConfig_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This Config instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclConfig_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclConfig_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclConfig_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -701,16 +700,12 @@ cdef class Config:
             raise ValueError("ptr must not be null (0)")
         cdef Config obj = Config.__new__(Config)
         if owner is None:
-            obj._ptr = <ncclConfig_t *>_cyb_malloc(sizeof(ncclConfig_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating Config")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclConfig_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclConfig_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclConfig_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -739,20 +734,20 @@ cdef class _py_anon_pod0:
     cdef:
         nccl_bindings_nccl__anon_pod0 *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
 
     def __init__(self):
         self._ptr = <nccl_bindings_nccl__anon_pod0 *>_cyb_calloc(1, sizeof(nccl_bindings_nccl__anon_pod0))
         if self._ptr == NULL:
             raise MemoryError("Error allocating _py_anon_pod0")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
 
     def __dealloc__(self):
         cdef nccl_bindings_nccl__anon_pod0 *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -785,14 +780,20 @@ cdef class _py_anon_pod0:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <nccl_bindings_nccl__anon_pod0 *>_cyb_malloc(sizeof(nccl_bindings_nccl__anon_pod0))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating _py_anon_pod0")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(nccl_bindings_nccl__anon_pod0))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This _py_anon_pod0 instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(nccl_bindings_nccl__anon_pod0):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(nccl_bindings_nccl__anon_pod0), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(nccl_bindings_nccl__anon_pod0))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -849,12 +850,12 @@ cdef class _py_anon_pod0:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating _py_anon_pod0")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(nccl_bindings_nccl__anon_pod0))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <nccl_bindings_nccl__anon_pod0 *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -883,7 +884,7 @@ cdef class _py_anon_pod1:
     cdef:
         nccl_bindings_nccl__anon_pod1 *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
         dict _refs
 
@@ -891,14 +892,14 @@ cdef class _py_anon_pod1:
         self._ptr = <nccl_bindings_nccl__anon_pod1 *>_cyb_calloc(1, sizeof(nccl_bindings_nccl__anon_pod1))
         if self._ptr == NULL:
             raise MemoryError("Error allocating _py_anon_pod1")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
 
     def __dealloc__(self):
         cdef nccl_bindings_nccl__anon_pod1 *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -931,14 +932,20 @@ cdef class _py_anon_pod1:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <nccl_bindings_nccl__anon_pod1 *>_cyb_malloc(sizeof(nccl_bindings_nccl__anon_pod1))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating _py_anon_pod1")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(nccl_bindings_nccl__anon_pod1))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This _py_anon_pod1 instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(nccl_bindings_nccl__anon_pod1):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(nccl_bindings_nccl__anon_pod1), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(nccl_bindings_nccl__anon_pod1))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -1012,12 +1019,12 @@ cdef class _py_anon_pod1:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating _py_anon_pod1")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(nccl_bindings_nccl__anon_pod1))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <nccl_bindings_nccl__anon_pod1 *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -1046,30 +1053,20 @@ cdef class SimInfo:
     .. seealso:: `ncclSimInfo_t`
     """
     cdef:
+        ncclSimInfo_t _data
         ncclSimInfo_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
 
     def __init__(self):
-        self._ptr = <ncclSimInfo_t *>_cyb_calloc(1, sizeof(ncclSimInfo_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating SimInfo")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
 
         self._ptr[0].size = sizeof(ncclSimInfo_t)
         self._ptr[0].magic = 0x74685283
         self._ptr[0].version = __version_code__
         self._ptr[0].estimatedTime = -1.0
-
-    def __dealloc__(self):
-        cdef ncclSimInfo_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.SimInfo object at {hex(id(self))}>"
@@ -1099,14 +1096,22 @@ cdef class SimInfo:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclSimInfo_t *>_cyb_malloc(sizeof(ncclSimInfo_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating SimInfo")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclSimInfo_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This SimInfo instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclSimInfo_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclSimInfo_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclSimInfo_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -1181,16 +1186,12 @@ cdef class SimInfo:
             raise ValueError("ptr must not be null (0)")
         cdef SimInfo obj = SimInfo.__new__(SimInfo)
         if owner is None:
-            obj._ptr = <ncclSimInfo_t *>_cyb_malloc(sizeof(ncclSimInfo_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating SimInfo")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclSimInfo_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclSimInfo_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclSimInfo_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -1218,25 +1219,15 @@ cdef class WaitSignalDesc:
     .. seealso:: `ncclWaitSignalDesc_t`
     """
     cdef:
+        ncclWaitSignalDesc_t _data
         ncclWaitSignalDesc_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
 
     def __init__(self):
-        self._ptr = <ncclWaitSignalDesc_t *>_cyb_calloc(1, sizeof(ncclWaitSignalDesc_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating WaitSignalDesc")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
-
-    def __dealloc__(self):
-        cdef ncclWaitSignalDesc_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.WaitSignalDesc object at {hex(id(self))}>"
@@ -1266,14 +1257,22 @@ cdef class WaitSignalDesc:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclWaitSignalDesc_t *>_cyb_malloc(sizeof(ncclWaitSignalDesc_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating WaitSignalDesc")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclWaitSignalDesc_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This WaitSignalDesc instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclWaitSignalDesc_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclWaitSignalDesc_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclWaitSignalDesc_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -1348,16 +1347,12 @@ cdef class WaitSignalDesc:
             raise ValueError("ptr must not be null (0)")
         cdef WaitSignalDesc obj = WaitSignalDesc.__new__(WaitSignalDesc)
         if owner is None:
-            obj._ptr = <ncclWaitSignalDesc_t *>_cyb_malloc(sizeof(ncclWaitSignalDesc_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating WaitSignalDesc")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclWaitSignalDesc_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclWaitSignalDesc_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclWaitSignalDesc_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -1386,18 +1381,15 @@ cdef class EncryptionConfig:
     .. seealso:: `ncclEncryptionConfig_t`
     """
     cdef:
+        ncclEncryptionConfig_t _data
         ncclEncryptionConfig_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
         dict _refs
 
     def __init__(self):
-        self._ptr = <ncclEncryptionConfig_t *>_cyb_calloc(1, sizeof(ncclEncryptionConfig_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating EncryptionConfig")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
 
@@ -1406,13 +1398,6 @@ cdef class EncryptionConfig:
         self._ptr[0].version = __version_code__
         self._ptr[0].mode = NCCL_ENCRYPTION_MODE_NONE
         self._ptr[0].psk = NULL
-
-    def __dealloc__(self):
-        cdef ncclEncryptionConfig_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.EncryptionConfig object at {hex(id(self))}>"
@@ -1442,14 +1427,22 @@ cdef class EncryptionConfig:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclEncryptionConfig_t *>_cyb_malloc(sizeof(ncclEncryptionConfig_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating EncryptionConfig")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclEncryptionConfig_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This EncryptionConfig instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclEncryptionConfig_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclEncryptionConfig_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclEncryptionConfig_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -1541,16 +1534,12 @@ cdef class EncryptionConfig:
             raise ValueError("ptr must not be null (0)")
         cdef EncryptionConfig obj = EncryptionConfig.__new__(EncryptionConfig)
         if owner is None:
-            obj._ptr = <ncclEncryptionConfig_t *>_cyb_malloc(sizeof(ncclEncryptionConfig_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating EncryptionConfig")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclEncryptionConfig_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclEncryptionConfig_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclEncryptionConfig_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -1580,7 +1569,7 @@ cdef class ResourceWindowVidmem:
     cdef:
         ncclResourceWindow_vidmem_t *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
         dict _refs
 
@@ -1588,14 +1577,14 @@ cdef class ResourceWindowVidmem:
         self._ptr = <ncclResourceWindow_vidmem_t *>_cyb_calloc(1, sizeof(ncclResourceWindow_vidmem_t))
         if self._ptr == NULL:
             raise MemoryError("Error allocating ResourceWindowVidmem")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
 
     def __dealloc__(self):
         cdef ncclResourceWindow_vidmem_t *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -1628,14 +1617,20 @@ cdef class ResourceWindowVidmem:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclResourceWindow_vidmem_t *>_cyb_malloc(sizeof(ncclResourceWindow_vidmem_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating ResourceWindowVidmem")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclResourceWindow_vidmem_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This ResourceWindowVidmem instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclResourceWindow_vidmem_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclResourceWindow_vidmem_t), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(ncclResourceWindow_vidmem_t))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -1709,12 +1704,12 @@ cdef class ResourceWindowVidmem:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating ResourceWindowVidmem")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclResourceWindow_vidmem_t))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclResourceWindow_vidmem_t *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -1743,20 +1738,20 @@ cdef class GinBarrierHandle:
     cdef:
         ncclGinBarrierHandle_t *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
 
     def __init__(self):
         self._ptr = <ncclGinBarrierHandle_t *>_cyb_calloc(1, sizeof(ncclGinBarrierHandle_t))
         if self._ptr == NULL:
             raise MemoryError("Error allocating GinBarrierHandle")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
 
     def __dealloc__(self):
         cdef ncclGinBarrierHandle_t *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -1789,14 +1784,20 @@ cdef class GinBarrierHandle:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclGinBarrierHandle_t *>_cyb_malloc(sizeof(ncclGinBarrierHandle_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating GinBarrierHandle")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclGinBarrierHandle_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This GinBarrierHandle instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclGinBarrierHandle_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclGinBarrierHandle_t), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(ncclGinBarrierHandle_t))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -1842,12 +1843,12 @@ cdef class GinBarrierHandle:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating GinBarrierHandle")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclGinBarrierHandle_t))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclGinBarrierHandle_t *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -1874,20 +1875,20 @@ cdef class MultimemHandle:
     cdef:
         ncclMultimemHandle_t *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
 
     def __init__(self):
         self._ptr = <ncclMultimemHandle_t *>_cyb_calloc(1, sizeof(ncclMultimemHandle_t))
         if self._ptr == NULL:
             raise MemoryError("Error allocating MultimemHandle")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
 
     def __dealloc__(self):
         cdef ncclMultimemHandle_t *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -1920,14 +1921,20 @@ cdef class MultimemHandle:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclMultimemHandle_t *>_cyb_malloc(sizeof(ncclMultimemHandle_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating MultimemHandle")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclMultimemHandle_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This MultimemHandle instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclMultimemHandle_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclMultimemHandle_t), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(ncclMultimemHandle_t))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -1973,12 +1980,12 @@ cdef class MultimemHandle:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating MultimemHandle")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclMultimemHandle_t))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclMultimemHandle_t *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -2006,20 +2013,20 @@ cdef class LsaBarrierHandle:
     cdef:
         ncclLsaBarrierHandle_t *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
 
     def __init__(self):
         self._ptr = <ncclLsaBarrierHandle_t *>_cyb_calloc(1, sizeof(ncclLsaBarrierHandle_t))
         if self._ptr == NULL:
             raise MemoryError("Error allocating LsaBarrierHandle")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
 
     def __dealloc__(self):
         cdef ncclLsaBarrierHandle_t *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -2052,14 +2059,20 @@ cdef class LsaBarrierHandle:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclLsaBarrierHandle_t *>_cyb_malloc(sizeof(ncclLsaBarrierHandle_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating LsaBarrierHandle")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclLsaBarrierHandle_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This LsaBarrierHandle instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclLsaBarrierHandle_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclLsaBarrierHandle_t), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(ncclLsaBarrierHandle_t))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -2116,12 +2129,12 @@ cdef class LsaBarrierHandle:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating LsaBarrierHandle")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclLsaBarrierHandle_t))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclLsaBarrierHandle_t *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -2149,20 +2162,20 @@ cdef class CftBarrierHandle:
     cdef:
         ncclCftBarrierHandle_t *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
 
     def __init__(self):
         self._ptr = <ncclCftBarrierHandle_t *>_cyb_calloc(1, sizeof(ncclCftBarrierHandle_t))
         if self._ptr == NULL:
             raise MemoryError("Error allocating CftBarrierHandle")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
 
     def __dealloc__(self):
         cdef ncclCftBarrierHandle_t *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -2195,14 +2208,20 @@ cdef class CftBarrierHandle:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclCftBarrierHandle_t *>_cyb_malloc(sizeof(ncclCftBarrierHandle_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating CftBarrierHandle")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclCftBarrierHandle_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This CftBarrierHandle instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclCftBarrierHandle_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclCftBarrierHandle_t), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(ncclCftBarrierHandle_t))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -2259,12 +2278,12 @@ cdef class CftBarrierHandle:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating CftBarrierHandle")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclCftBarrierHandle_t))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclCftBarrierHandle_t *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -2293,20 +2312,20 @@ cdef class Team:
     cdef:
         ncclTeam_t *_ptr
         object _owner
-        bint _owned
+        bint _owns_ptr
         bint _readonly
 
     def __init__(self):
         self._ptr = <ncclTeam_t *>_cyb_calloc(1, sizeof(ncclTeam_t))
         if self._ptr == NULL:
             raise MemoryError("Error allocating Team")
+        self._owns_ptr = True
         self._owner = None
-        self._owned = True
         self._readonly = False
 
     def __dealloc__(self):
         cdef ncclTeam_t *ptr
-        if self._owned and self._ptr != NULL:
+        if self._owns_ptr and self._ptr != NULL:
             ptr = self._ptr
             self._ptr = NULL
             _cyb_free(ptr)
@@ -2339,14 +2358,20 @@ cdef class Team:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclTeam_t *>_cyb_malloc(sizeof(ncclTeam_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating Team")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclTeam_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This Team instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclTeam_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclTeam_t), view.len)
+                    )
+                _cyb_memmove(<void*>self._ptr, view.buf, sizeof(ncclTeam_t))
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -2414,12 +2439,12 @@ cdef class Team:
             if obj._ptr == NULL:
                 raise MemoryError("Error allocating Team")
             _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclTeam_t))
+            obj._owns_ptr = True
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclTeam_t *>ptr
+            obj._owns_ptr = False
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -2445,25 +2470,15 @@ cdef class LLA2AHandle:
     .. seealso:: `ncclLLA2AHandle_t`
     """
     cdef:
+        ncclLLA2AHandle_t _data
         ncclLLA2AHandle_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
 
     def __init__(self):
-        self._ptr = <ncclLLA2AHandle_t *>_cyb_calloc(1, sizeof(ncclLLA2AHandle_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating LLA2AHandle")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
-
-    def __dealloc__(self):
-        cdef ncclLLA2AHandle_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.LLA2AHandle object at {hex(id(self))}>"
@@ -2493,14 +2508,22 @@ cdef class LLA2AHandle:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclLLA2AHandle_t *>_cyb_malloc(sizeof(ncclLLA2AHandle_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating LLA2AHandle")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclLLA2AHandle_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This LLA2AHandle instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclLLA2AHandle_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclLLA2AHandle_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclLLA2AHandle_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -2553,16 +2576,12 @@ cdef class LLA2AHandle:
             raise ValueError("ptr must not be null (0)")
         cdef LLA2AHandle obj = LLA2AHandle.__new__(LLA2AHandle)
         if owner is None:
-            obj._ptr = <ncclLLA2AHandle_t *>_cyb_malloc(sizeof(ncclLLA2AHandle_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating LLA2AHandle")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclLLA2AHandle_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclLLA2AHandle_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclLLA2AHandle_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -2594,27 +2613,17 @@ cdef class DevResourceRequirements:
     .. seealso:: `ncclDevResourceRequirements_t`
     """
     cdef:
+        ncclDevResourceRequirements_t _data
         ncclDevResourceRequirements_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
         dict _refs
 
     def __init__(self):
-        self._ptr = <ncclDevResourceRequirements_t *>_cyb_calloc(1, sizeof(ncclDevResourceRequirements_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating DevResourceRequirements")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
-
-    def __dealloc__(self):
-        cdef ncclDevResourceRequirements_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.DevResourceRequirements object at {hex(id(self))}>"
@@ -2644,14 +2653,22 @@ cdef class DevResourceRequirements:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclDevResourceRequirements_t *>_cyb_malloc(sizeof(ncclDevResourceRequirements_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating DevResourceRequirements")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclDevResourceRequirements_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This DevResourceRequirements instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclDevResourceRequirements_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclDevResourceRequirements_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclDevResourceRequirements_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -2789,16 +2806,12 @@ cdef class DevResourceRequirements:
             raise ValueError("ptr must not be null (0)")
         cdef DevResourceRequirements obj = DevResourceRequirements.__new__(DevResourceRequirements)
         if owner is None:
-            obj._ptr = <ncclDevResourceRequirements_t *>_cyb_malloc(sizeof(ncclDevResourceRequirements_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating DevResourceRequirements")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclDevResourceRequirements_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclDevResourceRequirements_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclDevResourceRequirements_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -2844,29 +2857,19 @@ cdef class CommProperties:
     .. seealso:: `ncclCommProperties_t`
     """
     cdef:
+        ncclCommProperties_t _data
         ncclCommProperties_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
 
     def __init__(self):
-        self._ptr = <ncclCommProperties_t *>_cyb_calloc(1, sizeof(ncclCommProperties_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating CommProperties")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
 
         self._ptr[0].size = sizeof(ncclCommProperties_t)
         self._ptr[0].magic = 0xcafebeef
         self._ptr[0].version = __version_code__
-
-    def __dealloc__(self):
-        cdef ncclCommProperties_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.CommProperties object at {hex(id(self))}>"
@@ -2896,14 +2899,22 @@ cdef class CommProperties:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclCommProperties_t *>_cyb_malloc(sizeof(ncclCommProperties_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating CommProperties")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclCommProperties_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This CommProperties instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclCommProperties_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclCommProperties_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclCommProperties_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -3171,16 +3182,12 @@ cdef class CommProperties:
             raise ValueError("ptr must not be null (0)")
         cdef CommProperties obj = CommProperties.__new__(CommProperties)
         if owner is None:
-            obj._ptr = <ncclCommProperties_t *>_cyb_malloc(sizeof(ncclCommProperties_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating CommProperties")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclCommProperties_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclCommProperties_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclCommProperties_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -3207,27 +3214,17 @@ cdef class ConfigExt:
     .. seealso:: `ncclConfigExt_t`
     """
     cdef:
+        ncclConfigExt_t _data
         ncclConfigExt_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
         dict _refs
 
     def __init__(self):
-        self._ptr = <ncclConfigExt_t *>_cyb_calloc(1, sizeof(ncclConfigExt_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating ConfigExt")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
-
-    def __dealloc__(self):
-        cdef ncclConfigExt_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.ConfigExt object at {hex(id(self))}>"
@@ -3257,14 +3254,22 @@ cdef class ConfigExt:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclConfigExt_t *>_cyb_malloc(sizeof(ncclConfigExt_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating ConfigExt")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclConfigExt_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This ConfigExt instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclConfigExt_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclConfigExt_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclConfigExt_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -3357,16 +3362,12 @@ cdef class ConfigExt:
             raise ValueError("ptr must not be null (0)")
         cdef ConfigExt obj = ConfigExt.__new__(ConfigExt)
         if owner is None:
-            obj._ptr = <ncclConfigExt_t *>_cyb_malloc(sizeof(ncclConfigExt_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating ConfigExt")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclConfigExt_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclConfigExt_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclConfigExt_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -3431,25 +3432,15 @@ cdef class DevComm:
     .. seealso:: `ncclDevComm_t`
     """
     cdef:
+        ncclDevComm_t _data
         ncclDevComm_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
 
     def __init__(self):
-        self._ptr = <ncclDevComm_t *>_cyb_calloc(1, sizeof(ncclDevComm_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating DevComm")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
-
-    def __dealloc__(self):
-        cdef ncclDevComm_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.DevComm object at {hex(id(self))}>"
@@ -3479,14 +3470,22 @@ cdef class DevComm:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclDevComm_t *>_cyb_malloc(sizeof(ncclDevComm_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating DevComm")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclDevComm_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This DevComm instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclDevComm_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclDevComm_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclDevComm_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -4019,16 +4018,12 @@ cdef class DevComm:
             raise ValueError("ptr must not be null (0)")
         cdef DevComm obj = DevComm.__new__(DevComm)
         if owner is None:
-            obj._ptr = <ncclDevComm_t *>_cyb_malloc(sizeof(ncclDevComm_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating DevComm")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclDevComm_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclDevComm_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclDevComm_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -4056,27 +4051,17 @@ cdef class TeamRequirements:
     .. seealso:: `ncclTeamRequirements_t`
     """
     cdef:
+        ncclTeamRequirements_t _data
         ncclTeamRequirements_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
         dict _refs
 
     def __init__(self):
-        self._ptr = <ncclTeamRequirements_t *>_cyb_calloc(1, sizeof(ncclTeamRequirements_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating TeamRequirements")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
-
-    def __dealloc__(self):
-        cdef ncclTeamRequirements_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.TeamRequirements object at {hex(id(self))}>"
@@ -4106,14 +4091,22 @@ cdef class TeamRequirements:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclTeamRequirements_t *>_cyb_malloc(sizeof(ncclTeamRequirements_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating TeamRequirements")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclTeamRequirements_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This TeamRequirements instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclTeamRequirements_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclTeamRequirements_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclTeamRequirements_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -4212,16 +4205,12 @@ cdef class TeamRequirements:
             raise ValueError("ptr must not be null (0)")
         cdef TeamRequirements obj = TeamRequirements.__new__(TeamRequirements)
         if owner is None:
-            obj._ptr = <ncclTeamRequirements_t *>_cyb_malloc(sizeof(ncclTeamRequirements_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating TeamRequirements")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclTeamRequirements_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclTeamRequirements_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclTeamRequirements_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -4259,18 +4248,15 @@ cdef class CollConfig:
     .. seealso:: `ncclCollConfig_t`
     """
     cdef:
+        ncclCollConfig_t _data
         ncclCollConfig_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
         dict _refs
 
     def __init__(self):
-        self._ptr = <ncclCollConfig_t *>_cyb_calloc(1, sizeof(ncclCollConfig_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating CollConfig")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
         self._refs = {}
 
@@ -4287,13 +4273,6 @@ cdef class CollConfig:
         self._ptr[0].CTAPolicy = -2147483648
         self._ptr[0].userProfilerTag = 0
         self._ptr[0].launchCompletionEvent = NULL
-
-    def __dealloc__(self):
-        cdef ncclCollConfig_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
 
     def __repr__(self):
         return f"<{__name__}.CollConfig object at {hex(id(self))}>"
@@ -4323,14 +4302,22 @@ cdef class CollConfig:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclCollConfig_t *>_cyb_malloc(sizeof(ncclCollConfig_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating CollConfig")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclCollConfig_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This CollConfig instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclCollConfig_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclCollConfig_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclCollConfig_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -4510,16 +4497,12 @@ cdef class CollConfig:
             raise ValueError("ptr must not be null (0)")
         cdef CollConfig obj = CollConfig.__new__(CollConfig)
         if owner is None:
-            obj._ptr = <ncclCollConfig_t *>_cyb_malloc(sizeof(ncclCollConfig_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating CollConfig")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclCollConfig_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclCollConfig_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclCollConfig_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         obj._refs = {}
         return obj
@@ -4528,8 +4511,8 @@ cdef class CollConfig:
 cdef _get_dev_comm_requirements_dtype_offsets():
     cdef ncclDevCommRequirements_t pod
     return _numpy.dtype({
-        'names': ['size_', 'magic', 'version', 'resource_requirements_list', 'team_requirements_list', 'lsa_multimem', 'barrier_count', 'lsa_barrier_count', 'rail_gin_barrier_count', 'lsa_ll_a2a_block_count', 'lsa_ll_a2a_slot_count', 'gin_force_enable', 'gin_context_count', 'gin_signal_count', 'gin_counter_count', 'gin_connection_type', 'gin_exclusive_contexts', 'gin_queue_depth', 'gin_traffic_class', 'world_gin_barrier_count', 'gin_strong_signals_required', 'gin_va_signals_required', 'gin_custom_stride', 'gin_type', 'use_runtime_version', 'cft_caps', 'cft_barrier_count'],
-        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32],
+        'names': ['size_', 'magic', 'version', 'resource_requirements_list', 'team_requirements_list', 'lsa_multimem', 'barrier_count', 'lsa_barrier_count', 'rail_gin_barrier_count', 'lsa_ll_a2a_block_count', 'lsa_ll_a2a_slot_count', 'gin_force_enable', 'gin_context_count', 'gin_signal_count', 'gin_counter_count', 'gin_connection_type', 'gin_exclusive_contexts', 'gin_queue_depth', 'gin_traffic_class', 'world_gin_barrier_count', 'gin_strong_signals_required', 'gin_va_signals_required', 'gin_custom_stride', 'gin_type', 'use_runtime_version', 'cft_caps', 'cft_barrier_count', 'gin_custom_array', 'gin_custom_array_count'],
+        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
@@ -4558,6 +4541,8 @@ cdef _get_dev_comm_requirements_dtype_offsets():
             (<intptr_t>&(pod.useRuntimeVersion)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.cftCaps)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.cftBarrierCount)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.ginCustomArray)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.ginCustomArrayCount)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclDevCommRequirements_t),
     })
@@ -4571,17 +4556,14 @@ cdef class DevCommRequirements:
     .. seealso:: `ncclDevCommRequirements_t`
     """
     cdef:
+        ncclDevCommRequirements_t _data
         ncclDevCommRequirements_t *_ptr
         object _owner
-        bint _owned
         bint _readonly
 
     def __init__(self):
-        self._ptr = <ncclDevCommRequirements_t *>_cyb_calloc(1, sizeof(ncclDevCommRequirements_t))
-        if self._ptr == NULL:
-            raise MemoryError("Error allocating DevCommRequirements")
+        self._ptr = &self._data
         self._owner = None
-        self._owned = True
         self._readonly = False
 
         self._ptr[0].size = sizeof(ncclDevCommRequirements_t)
@@ -4612,13 +4594,6 @@ cdef class DevCommRequirements:
         self._ptr[0].cftCaps = 0
         self._ptr[0].cftBarrierCount = 0
 
-    def __dealloc__(self):
-        cdef ncclDevCommRequirements_t *ptr
-        if self._owned and self._ptr != NULL:
-            ptr = self._ptr
-            self._ptr = NULL
-            _cyb_free(ptr)
-
     def __repr__(self):
         return f"<{__name__}.DevCommRequirements object at {hex(id(self))}>"
 
@@ -4647,14 +4622,22 @@ cdef class DevCommRequirements:
         pass
 
     def __setitem__(self, key, val):
-        if key == 0 and isinstance(val, _numpy.ndarray):
-            self._ptr = <ncclDevCommRequirements_t *>_cyb_malloc(sizeof(ncclDevCommRequirements_t))
-            if self._ptr == NULL:
-                raise MemoryError("Error allocating DevCommRequirements")
-            _cyb_memcpy(<void*>self._ptr, <void*><intptr_t>val.ctypes.data, sizeof(ncclDevCommRequirements_t))
-            self._owner = None
-            self._owned = True
-            self._readonly = not val.flags.writeable
+        cdef _cyb_Py_buffer view
+        if key == 0:
+            if self._readonly:
+                raise ValueError("This DevCommRequirements instance is read-only")
+            _cyb_PyObject_GetBuffer(val, &view, _cyb_PyBUF_SIMPLE)
+            try:
+                if <size_t>view.len < sizeof(ncclDevCommRequirements_t):
+                    raise ValueError(
+                        "source buffer too small: expected at least %d bytes, got %d" % (sizeof(ncclDevCommRequirements_t), view.len)
+                    )
+                _cyb_memmove(<void*>&self._data, view.buf, sizeof(ncclDevCommRequirements_t))
+                self._ptr = &self._data
+                self._owner = None
+                self._readonly = view.readonly != 0
+            finally:
+                _cyb_PyBuffer_Release(&view)
         else:
             setattr(self, key, val)
 
@@ -4955,6 +4938,28 @@ cdef class DevCommRequirements:
             raise ValueError("This DevCommRequirements instance is read-only")
         self._ptr[0].cftBarrierCount = val
 
+    @property
+    def gin_custom_array(self):
+        """int: """
+        return <intptr_t>(self._ptr[0].ginCustomArray)
+
+    @gin_custom_array.setter
+    def gin_custom_array(self, val):
+        if self._readonly:
+            raise ValueError("This DevCommRequirements instance is read-only")
+        self._ptr[0].ginCustomArray = <int*><intptr_t>val
+
+    @property
+    def gin_custom_array_count(self):
+        """int: """
+        return self._ptr[0].ginCustomArrayCount
+
+    @gin_custom_array_count.setter
+    def gin_custom_array_count(self, val):
+        if self._readonly:
+            raise ValueError("This DevCommRequirements instance is read-only")
+        self._ptr[0].ginCustomArrayCount = val
+
     @staticmethod
     def from_buffer(buffer):
         """Create an DevCommRequirements instance with the memory from the given buffer."""
@@ -4982,16 +4987,12 @@ cdef class DevCommRequirements:
             raise ValueError("ptr must not be null (0)")
         cdef DevCommRequirements obj = DevCommRequirements.__new__(DevCommRequirements)
         if owner is None:
-            obj._ptr = <ncclDevCommRequirements_t *>_cyb_malloc(sizeof(ncclDevCommRequirements_t))
-            if obj._ptr == NULL:
-                raise MemoryError("Error allocating DevCommRequirements")
-            _cyb_memcpy(<void*>(obj._ptr), <void*>ptr, sizeof(ncclDevCommRequirements_t))
+            _cyb_memcpy(<void*>&obj._data, <void*>ptr, sizeof(ncclDevCommRequirements_t))
+            obj._ptr = &obj._data
             obj._owner = None
-            obj._owned = True
         else:
             obj._ptr = <ncclDevCommRequirements_t *>ptr
             obj._owner = owner
-            obj._owned = False
         obj._readonly = readonly
         return obj
 
@@ -5204,6 +5205,7 @@ class GinConnectionType(_cyb_IntEnum):
     FULL = NCCL_GIN_CONNECTION_FULL
     RAIL = NCCL_GIN_CONNECTION_RAIL
     CUSTOM_STRIDE = NCCL_GIN_CONNECTION_CUSTOM_STRIDE
+    CUSTOM_ARRAY = NCCL_GIN_CONNECTION_CUSTOM_ARRAY
 
 class GinType(_cyb_IntEnum):
     """
@@ -5231,6 +5233,13 @@ class CftCap(_cyb_IntEnum):
     NONE = NCCL_CFT_NONE
     CFT = NCCL_CFT
     MULTIMEM = NCCL_CFT_MULTIMEM
+
+class GinBarrierOptions(_cyb_IntEnum):
+    """
+    See `ncclGinBarrierOptions_t`.
+    """
+    GIN_BARRIER_DEFAULT = NCCL_GIN_BARRIER_DEFAULT
+    GIN_BARRIER_SIGNAL_EFFICIENT = NCCL_GIN_BARRIER_SIGNAL_EFFICIENT
 
 class GinSignalOp(_cyb_IntEnum):
     """
@@ -5321,9 +5330,7 @@ cpdef object comm_init_rank(int nranks, comm_id, int rank):
 cpdef object comm_init_all(int ndev, devlist):
     cdef nullable_unique_ptr[ vector[int] ] _devlist_
     get_resource_ptr[int](_devlist_, devlist, <int*>NULL)
-    if ndev == 0:
-        return []
-    cdef _cyb_view.array comm = _cyb_view.array(shape=(ndev,), itemsize=sizeof(intptr_t), format="q", mode="c")
+    cdef _cyb_view.array comm = _cyb_view.array(shape=(max(ndev, 1),), itemsize=sizeof(intptr_t), format="q", mode="c")
     cdef intptr_t *comm_ptr = <intptr_t *>(comm.data)
     cdef list comm_wrappers = []
     cdef Py_ssize_t comm_index
@@ -5977,6 +5984,4 @@ cpdef list param_get_all_keys():
         __status__ = ncclParamGetAllParameterKeys(&table, &table_len)
     check_status(__status__)
     return [table[i].decode() for i in range(table_len)]
-
-
 del _cyb_IntEnum

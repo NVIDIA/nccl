@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.32.3. Do not modify it directly.
+# This code was automatically generated with version 2.32.4. Do not modify it directly.
 
 
 ###############################################################################
@@ -105,6 +105,7 @@ ctypedef enum ncclGinConnectionType_t "ncclGinConnectionType_t":
     NCCL_GIN_CONNECTION_FULL "NCCL_GIN_CONNECTION_FULL"
     NCCL_GIN_CONNECTION_RAIL "NCCL_GIN_CONNECTION_RAIL"
     NCCL_GIN_CONNECTION_CUSTOM_STRIDE "NCCL_GIN_CONNECTION_CUSTOM_STRIDE"
+    NCCL_GIN_CONNECTION_CUSTOM_ARRAY "NCCL_GIN_CONNECTION_CUSTOM_ARRAY"
 
 ctypedef enum ncclGinType_t "ncclGinType_t":
     NCCL_GIN_TYPE_NONE "NCCL_GIN_TYPE_NONE" = 0
@@ -123,6 +124,10 @@ ctypedef enum ncclCftCap_t "ncclCftCap_t":
     NCCL_CFT_NONE "NCCL_CFT_NONE" = 0x0
     NCCL_CFT "NCCL_CFT" = 0x1
     NCCL_CFT_MULTIMEM "NCCL_CFT_MULTIMEM" = 0x2
+
+ctypedef enum ncclGinBarrierOptions_t "ncclGinBarrierOptions_t":
+    NCCL_GIN_BARRIER_DEFAULT "NCCL_GIN_BARRIER_DEFAULT" = 0
+    NCCL_GIN_BARRIER_SIGNAL_EFFICIENT "NCCL_GIN_BARRIER_SIGNAL_EFFICIENT" = 1
 
 ctypedef enum ncclGinSignalOp_t "ncclGinSignalOp_t":
     ncclGinSignalInc "ncclGinSignalInc" = 0
@@ -380,6 +385,8 @@ ctypedef struct ncclDevCommRequirements_t 'ncclDevCommRequirements_t':
     _cyb_bool useRuntimeVersion
     int cftCaps
     int cftBarrierCount
+    int* ginCustomArray
+    int ginCustomArrayCount
 
 
 ###############################################################################

@@ -1062,6 +1062,11 @@ ib_connect:
 
   memcpy(&remMeta, stage->buffer, sizeof(ncclIbConnectionMetadata));
 
+  if (remMeta.ndevs <= 0 || remMeta.ndevs > NCCL_IB_MAX_DEVS_PER_NIC) {
+    WARN("NET/IB : remote peer reported an invalid device count %d (max %d)", remMeta.ndevs, NCCL_IB_MAX_DEVS_PER_NIC);
+    return ncclInternalError;
+  }
+
   // ensure that the remote devices have the same link layer than the local devices used in the connection.
   if (comm->base.vProps.ndevs > 0) {
     int ibDev0 = comm->devs[0].base.ibDevN;
@@ -1519,6 +1524,11 @@ ib_recv:
 
   /* copy back the received info */
   memcpy(&remMeta, stage->buffer, sizeof(struct ncclIbConnectionMetadata));
+
+  if (remMeta.ndevs <= 0 || remMeta.ndevs > NCCL_IB_MAX_DEVS_PER_NIC) {
+    WARN("NET/IB : remote peer reported an invalid device count %d (max %d)", remMeta.ndevs, NCCL_IB_MAX_DEVS_PER_NIC);
+    return ncclInternalError;
+  }
 
   // Subnet-aware device selection: use the remote sender's GIDs to find a local
   // NIC on the same subnet. Override lComm->dev and update vProps if a

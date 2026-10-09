@@ -26,15 +26,15 @@
  * Must precede the NCCL and cooperative_groups includes below so all call sites
  * expand. Device pass only: CUDA declares __activemask in the host pass.
  */
-#if defined(__clang__) && defined(__CUDA_ARCH__)
-#undef __activemask
-#define __activemask() \
-  (__extension__({ \
-    unsigned _nccl_activemask_ret; \
-    asm volatile("activemask.b32 %0;" : "=r"(_nccl_activemask_ret)); \
-    _nccl_activemask_ret; \
-  }))
-#endif
+ #if defined(__clang__) && defined(__CUDA_ARCH__)
+ __attribute__((device)) __attribute__((always_inline)) static unsigned ncclIrActivemask() {
+   unsigned _nccl_activemask_ret;
+   asm volatile("activemask.b32 %0;" : "=r"(_nccl_activemask_ret));
+   return _nccl_activemask_ret;
+ }
+ #undef __activemask
+ #define __activemask ncclIrActivemask
+ #endif 
 
 /*
  * Production's __forceinline__ (__inline__ __attribute__((always_inline))) is

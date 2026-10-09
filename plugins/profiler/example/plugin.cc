@@ -152,6 +152,17 @@ static struct context* contextFromEventHandle(void* eHandle) {
   }
 }
 
+// Proxy events can be started on behalf of a rank in another process (PXN). Their context is then
+// that process's pointer and must not be dereferenced, so they check the context of their parent
+// event instead.
+static inline bool isProxyEvent(uint64_t type) {
+  return type == ncclProfileProxyOp || type == ncclProfileProxyStep || type == ncclProfileNetPlugin;
+}
+
+static inline bool contextFinalizing(struct context* ctx) {
+  return ctx && __atomic_load_n(&ctx->finalizing, __ATOMIC_RELAXED);
+}
+
 // Initialize pool sizes from environment variables
 static void initPoolSizes(void) {
   const char* str;
@@ -495,7 +506,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
   if (ctx == NULL) {
     return ncclSuccess;
   }
-  if (__atomic_load_n(&ctx->finalizing, __ATOMIC_RELAXED)) {
+  if (!isProxyEvent(eDescr->type) && contextFinalizing(ctx)) {
     return ncclSuccess;
   }
   if (eDescr->type == ncclProfileGroupApi) {
@@ -757,6 +768,8 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       debugEvent(event, "PxnProxyOpStart");
       return ncclSuccess;
     }
+    // Local proxyOp: the context belongs to this process.
+    if (contextFinalizing(ctx)) return ncclSuccess;
 
     if (eventBase->type == ncclProfileColl) {
       struct collective* parent = (struct collective *)eDescr->parentObj;
@@ -802,6 +815,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
     // the parent might be null if we run out of events
     struct proxyOp* parent = (struct proxyOp *)eDescr->parentObj;
     if (parent == NULL) return ncclSuccess;
+    if (contextFinalizing(contextFromEventHandle(parent))) return ncclSuccess;
 
     int s = parent->stepCount++ % MAX_STEPS;
     struct proxyStep* event = &parent->step[s];
@@ -846,6 +860,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
   } else if (eDescr->type == ncclProfileNetPlugin) {
     struct proxyStep* parent = (struct proxyStep *)eDescr->parentObj;
     if (parent == NULL) return ncclSuccess;
+    if (contextFinalizing(contextFromEventHandle(parent))) return ncclSuccess;
 
     int64_t pluginId = eDescr->netPlugin.id;
     int64_t type = pluginId & NCCL_PROFILER_NET_TYPE_MASK;

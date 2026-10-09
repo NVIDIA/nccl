@@ -100,8 +100,8 @@ typedef ncclProfilerEventState_t ncclProfilerEventState_v8_t;
 #include "profiler/profiler_v2.h"
 #include "profiler/profiler_v1.h"
 
-// Use v8 as default: NCCL can stamp authoritative timestamps on every event,
-// which a plugin opts into through ncclProfilerConfig_t::ncclSourcedTimings.
+// Use v8 as default: NCCL can stamp an authoritative CPU timestamp on every
+// event, which a plugin opts into through ncclProfilerConfig_t::cpuClock.
 // v7 and earlier versions are still supported for backward compatibility
 // (older plugins are adapted by dropping the new timestamp fields/argument,
 // and never see the config, so they leave the opt-in at its default of off).

@@ -135,11 +135,14 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
     *eActivationMask |= ncclProfileP2p;
   }
 
-  // Ask NCCL to stamp event timestamps (v8). Without this the descriptors
-  // carry NCCL_PROFILER_TS_NONE and the helpers below fall back to the host
-  // clock, which is what the inspector has always used.
-  if (config && config->magic == NCCL_PROFILER_CONFIG_MAGIC && useNcclSourcedTimings) {
-    config->ncclSourcedTimings = 1;
+  // Ask NCCL to stamp event timestamps (v8). The inspector reports epoch
+  // microseconds, so it asks for CLOCK_REALTIME, and gpuClockSync puts kernel
+  // events on that same clock. Without this the descriptors carry
+  // NCCL_PROFILER_TS_NONE and the helpers below fall back to the host clock,
+  // which is what the inspector has always used.
+  if (config && useNcclSourcedTimings) {
+    config->cpuClock = ncclProfilerCpuClockRealtime;
+    config->gpuClockSync = 1;
   }
 
   INFO(NCCL_INIT, "PROFILER/Plugin: init commName: %s commHash: %lu nranks: %d rank: %d",
@@ -275,7 +278,7 @@ static void inspectorPluginP2pInfoCleanup(struct inspectorP2pInfo *p2pInfo) {
  */
 static inline uint64_t inspectorNcclTsUsec(const ncclProfilerEventDescr_t* eDescr) {
   return (eDescr != nullptr
-          && eDescr->tsCpuReal != 0) ? (eDescr->tsCpuReal / 1000) : inspectorGetTime();
+          && eDescr->tsCpu != 0) ? (eDescr->tsCpu / 1000) : inspectorGetTime();
 }
 
 

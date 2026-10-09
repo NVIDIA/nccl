@@ -1264,8 +1264,7 @@ ncclProfiler_v7_t ncclProfiler_v7 = {
 // This example forwards to the v7 handlers above. v8 inserts timestamp fields
 // ahead of the descriptor union, so it is NOT layout-compatible with v7 -- we
 // field-copy v8 -> v7 here rather than reinterpret-cast. (A real plugin would
-// consume eDescr->tsGpu / tsCpuMono / tsCpuReal and the stop descriptor; the
-// inspector plugin does.)
+// consume eDescr->tsCpu and the stop descriptor; the inspector plugin does.)
 // ============================================================================
 
 #include "nccl/profiler_v8.h"
@@ -1402,10 +1401,13 @@ __hidden ncclResult_t exampleProfilerInit_v8(void** context, uint64_t commId, in
                                              const char* commName, int nNodes, int nranks, int rank,
                                              ncclDebugLogger_t logfn, ncclProfilerConfig_v8_t* config) {
   // The feature handshake. This example derives its own timings and discards
-  // the NCCL-stamped ones, so it leaves config->ncclSourcedTimings at 0 and
-  // NCCL reads no clocks on its behalf. A plugin that wants them sets it here:
+  // the NCCL-stamped ones, so it leaves config->cpuClock at None and NCCL reads
+  // no clocks on its behalf. A plugin that wants them sets it here:
   //
-  //   if (config && config->magic == NCCL_PROFILER_CONFIG_MAGIC) config->ncclSourcedTimings = 1;
+  //   if (config) {
+  //     config->cpuClock = ncclProfilerCpuClockMonotonic;
+  //     config->gpuClockSync = 1;  // also map KernelCh/KernelPhase onto it
+  //   }
   //
   (void)config;
   return exampleProfilerInit(context, commId, eActivationMask, commName, nNodes, nranks, rank, logfn);

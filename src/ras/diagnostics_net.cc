@@ -304,7 +304,7 @@ ncclResult_t rasDiagnosticsNetDeviceSummarize(
     int nCommRecords;
     int deviceStart = 0;
     int nCommRanks = 0;
-    int nCommNodes = 0;     // nodes reporting at least one device
+    int nCommNodes = 0; // nodes reporting at least one device
     int nExpectedNodes = 0; // plus nodes whose NICs went uninspected
     int nUninspectedRanks = 0;
     int nSkippedRanks = 0;

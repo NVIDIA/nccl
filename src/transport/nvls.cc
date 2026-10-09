@@ -873,6 +873,12 @@ ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, ncclFunc_t func, i
     } else if (func == ncclFuncAllReduce) {
       if (comm->compCap >= 100 && comm->minNetBw >= 96.0f) {
         factor = 10 * 8;
+      } else if (comm->compCap >= 100 && comm->minNetBw >= 48.0f) {
+        if (comm->nNodes == 2) {
+          factor = 14 * 8;
+        } else {
+          factor = 8 * 8;
+        }
       } else if (comm->compCap >= 100) {
         factor = 7 * 8;
       } else {

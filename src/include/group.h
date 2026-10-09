@@ -131,7 +131,14 @@ inline void ncclGroupCommPreconnect(struct ncclComm* comm) {
 // Comm has left group
 inline ncclResult_t ncclGroupCommLeave(struct ncclComm* comm, int type) {
   comm->groupNext[type] = reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID);
-  if (type == ncclGroupTaskTypeCollective || type == ncclGroupTaskTypeRawTask) ncclMemoryStackPop(&comm->memScoped);
+  // The scoped stack is shared by collective and raw-task joins. Pop it only
+  // after the last of those two leaves.
+  bool taskCommLastLeave =
+    comm->groupNext[ncclGroupTaskTypeCollective] == reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID) &&
+    comm->groupNext[ncclGroupTaskTypeRawTask] == reinterpret_cast<struct ncclComm*>(NCCL_COMM_GROUP_INVALID);
+  if ((type == ncclGroupTaskTypeCollective || type == ncclGroupTaskTypeRawTask) && taskCommLastLeave) {
+    ncclMemoryStackPop(&comm->memScoped);
+  }
   return ncclSuccess;
 }
 

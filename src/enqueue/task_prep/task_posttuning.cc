@@ -613,11 +613,11 @@ static void accumulateTime(struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncc
 static ncclResult_t taskSimulate(struct ncclClassifiedTaskQueues* ctq, ncclSimInfo_t* simInfo) {
   float totalTimeUs = 0.0f;
 
-  accumulateTime(&ctq->symTaskQueue, &totalTimeUs);
-  accumulateTime(&ctq->legacyTaskQueue, &totalTimeUs);
-  accumulateTime(&ctq->p2pTaskQueue, &totalTimeUs);
-  accumulateTime(&ctq->rmaTaskQueue, &totalTimeUs);
-  accumulateTime(&ctq->ceTaskQueue, &totalTimeUs);
+  accumulateTime(&ctq->queues[ncclTaskQueueSym], &totalTimeUs);
+  accumulateTime(&ctq->queues[ncclTaskQueueLegacy], &totalTimeUs);
+  accumulateTime(&ctq->queues[ncclTaskQueueP2p], &totalTimeUs);
+  accumulateTime(&ctq->queues[ncclTaskQueueRma], &totalTimeUs);
+  accumulateTime(&ctq->queues[ncclTaskQueueCe], &totalTimeUs);
 
   simInfo->estimatedTime = totalTimeUs;
   return ncclSuccess;
@@ -633,11 +633,11 @@ ncclResult_t ncclTaskPostTuning(struct ncclComm* comm, struct ncclClassifiedTask
   }
 
   // Traverse all task families in the order expected by launch preparation.
-  NCCLCHECK(preSchedSymTasks(comm, &ctq->symTaskQueue));
-  NCCLCHECK(preSchedCeTasks(comm, &ctq->ceTaskQueue));
-  NCCLCHECK(preSchedLegacyTasks(comm, &ctq->legacyTaskQueue));
-  NCCLCHECK(preSchedAllGatherVTasks(comm, &ctq->allgathervTaskQueue));
-  NCCLCHECK(preSchedP2pTasks(comm, &ctq->p2pTaskQueue));
+  NCCLCHECK(preSchedSymTasks(comm, &ctq->queues[ncclTaskQueueSym]));
+  NCCLCHECK(preSchedCeTasks(comm, &ctq->queues[ncclTaskQueueCe]));
+  NCCLCHECK(preSchedLegacyTasks(comm, &ctq->queues[ncclTaskQueueLegacy]));
+  NCCLCHECK(preSchedAllGatherVTasks(comm, &ctq->queues[ncclTaskQueueAllGatherV]));
+  NCCLCHECK(preSchedP2pTasks(comm, &ctq->queues[ncclTaskQueueP2p]));
 
   return ncclSuccess;
 }

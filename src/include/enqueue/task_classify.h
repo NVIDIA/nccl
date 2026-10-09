@@ -11,14 +11,26 @@
 #include "task_pretuning.h"
 #include "nccl_tuner.h"
 
-struct ncclClassifiedTaskQueues {
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> symTaskQueue;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> legacyTaskQueue;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> allgathervTaskQueue;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> p2pTaskQueue;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> rmaTaskQueue;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> ceTaskQueue;
+// Index of ncclClassifiedTaskQueues::queues.
+enum ncclTaskQueueType {
+  ncclTaskQueueSym = 0,
+  ncclTaskQueueRma,
+  ncclTaskQueueCe,
+  ncclTaskQueueLegacy,
+  ncclTaskQueueP2p,
+  ncclTaskQueueAllGatherV,
+  ncclTaskQueueNum
 };
+
+struct ncclClassifiedTaskQueues {
+  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> queues[ncclTaskQueueNum];
+};
+
+inline void ncclClassifiedTaskQueuesConstruct(struct ncclClassifiedTaskQueues* ctq) {
+  for (int type = 0; type < ncclTaskQueueNum; type++) {
+    ncclIntruQueueConstruct(&ctq->queues[type]);
+  }
+}
 
 ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuningInfoQueue* tiq,
                                     struct ncclClassifiedTaskQueues* ctq);

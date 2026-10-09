@@ -109,10 +109,8 @@ struct ncclRmaProxyDesc {
 };
 
 // Pointer identity groups the descriptors created by one captured launch.
-// next links the token on a scheduler callback queue. The CUDA graph
-// destructor only enqueues; the scheduler reclaims on its own thread.
+// The CUDA graph destructor enqueues a callback with this token as its argument.
 struct ncclRmaProxyReclaimToken {
-  struct ncclRmaProxyReclaimToken* next;
   struct ncclComm* comm;
 };
 
@@ -223,6 +221,8 @@ ncclResult_t ncclRmaProxyReclaimPlan(struct ncclComm* comm, struct ncclKernelPla
 // Same cleanup as ncclRmaProxyReclaimPlan for descriptors tagged with token
 // instead of an ncclKernelPlan.
 ncclResult_t ncclRmaProxyReclaimDesc(struct ncclComm* comm, struct ncclRmaProxyReclaimToken* token);
+// Scheduler callback. args is the reclaim token, which this frees.
+ncclResult_t ncclRmaProxyReclaimDescCallback(struct ncclComm* comm, void* args);
 
 // RMA Proxy lifecycle functions
 ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm);

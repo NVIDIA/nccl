@@ -42,8 +42,7 @@ struct ncclCeSchedStreamPlan {
 };
 
 struct ncclCeSchedPlan {
-  struct ncclCeSchedStreamPlan* noncapturedStreamPlans;
-  struct ncclCeSchedStreamPlan* capturedStreamPlans;
+  struct ncclIntruQueue<struct ncclCeSchedStreamPlan, &ncclCeSchedStreamPlan::next> streamPlans;
 };
 
 struct ceSchedHierChunkPlan {
@@ -71,29 +70,33 @@ static ncclResult_t ceSchedStreamCaptured(struct ncclComm* comm, cudaStream_t st
   return ncclSuccess;
 }
 
-static struct ncclCeSchedStreamPlan* ceSchedFindStreamPlan(struct ncclCeSchedStreamPlan* head, cudaStream_t stream) {
-  for (struct ncclCeSchedStreamPlan* plan = head; plan != nullptr; plan = plan->next) {
-    if (plan->stream == stream) return plan;
+// Captured stream plans stay ahead of non-captured ones.
+static void ceSchedEnqueueStreamPlan(struct ncclCeSchedPlan* cePlan, struct ncclCeSchedStreamPlan* streamPlan) {
+  if (streamPlan->captured) {
+    ncclIntruQueueEnqueueFront(&cePlan->streamPlans, streamPlan);
+  } else {
+    ncclIntruQueueEnqueue(&cePlan->streamPlans, streamPlan);
   }
-  return nullptr;
 }
 
-static ncclResult_t ceSchedGetStreamPlan(struct ncclComm* comm, struct ncclCeSchedStreamPlan** head,
-                                         cudaStream_t stream, bool captured, const struct ncclCudaGraph& graph,
+static ncclResult_t ceSchedGetStreamPlan(struct ncclComm* comm, struct ncclCeSchedPlan* cePlan, cudaStream_t stream,
+                                         bool captured, const struct ncclCudaGraph& graph,
                                          struct ncclCeSchedStreamPlan** streamPlanOut) {
-  struct ncclCeSchedStreamPlan* streamPlan = ceSchedFindStreamPlan(*head, stream);
-  if (streamPlan != nullptr) {
-    *streamPlanOut = streamPlan;
-    return ncclSuccess;
+  for (struct ncclCeSchedStreamPlan* plan = ncclIntruQueueHead(&cePlan->streamPlans); plan != nullptr;
+       plan = plan->next) {
+    if (plan->stream == stream) {
+      *streamPlanOut = plan;
+      return ncclSuccess;
+    }
   }
 
-  streamPlan = ncclMemoryStackAlloc<struct ncclCeSchedStreamPlan>(&comm->memScoped);
+  struct ncclCeSchedStreamPlan* streamPlan = ncclMemoryStackAlloc<struct ncclCeSchedStreamPlan>(&comm->memScoped);
   streamPlan->stream = stream;
   streamPlan->captured = captured;
   streamPlan->graph = graph;
   streamPlan->reclaimToken = nullptr;
-  streamPlan->next = *head;
-  *head = streamPlan;
+  streamPlan->next = nullptr;
+  ceSchedEnqueueStreamPlan(cePlan, streamPlan);
   ncclIntruQueueConstruct(&streamPlan->taskQueue);
   *streamPlanOut = streamPlan;
   return ncclSuccess;
@@ -122,7 +125,7 @@ static ncclResult_t ceSchedCollArgsFromTuningInfo(struct ncclComm* comm, struct 
   args->recvBuff = (uint8_t*)raw->recvbuff;
   args->apiEventHandle = tInfo->raw->profiler.apiEventHandle;
   args->userTag = tInfo->raw->profiler.userTag;
-  args->ceCollProfHandle = {};
+  args->ceCollProfHandle = nullptr;
   return ncclSuccess;
 }
 
@@ -1682,34 +1685,79 @@ fail:
 }
 
 // CUDA user-object destructors run on an internal thread and cannot call CUDA.
-// Enqueue the token; ncclScheduleCeTasks reclaims it on an NCCL thread.
-static void CUDART_CB ceSchedStreamPlanDestructor(void* token_) {
-  struct ncclRmaProxyReclaimToken* token = (struct ncclRmaProxyReclaimToken*)token_;
-  if (token == nullptr || token->comm == nullptr) return;
-  ncclIntruQueueMpscEnqueue(&token->comm->ceSchedCallbackQueue, token);
+// Enqueue the callback; ncclSchedPollCallbacks runs it on an NCCL thread.
+static void CUDART_CB ceSchedStreamPlanDestructor(void* cb_) {
+  struct ncclSchedCallback* cb = (struct ncclSchedCallback*)cb_;
+  struct ncclRmaProxyReclaimToken* token = nullptr;
+  if (cb == nullptr || cb->args == nullptr) return;
+  token = (struct ncclRmaProxyReclaimToken*)cb->args;
+  if (token->comm == nullptr) return;
+  ncclIntruQueueMpscEnqueue(&token->comm->schedCallbackQueue, cb);
 }
 
-ncclResult_t ncclCeSchedPollCallbacks(struct ncclComm* comm) {
-  ncclResult_t result = ncclSuccess;
-  struct ncclRmaProxyReclaimToken* token =
-    ncclIntruQueueMpscDequeueAll(&comm->ceSchedCallbackQueue, /*waitSome=*/false);
-  while (token != nullptr) {
-    struct ncclRmaProxyReclaimToken* next = token->next;
-    ncclResult_t ret = ncclRmaProxyReclaimDesc(token->comm, token);
-    free(token);
-    if (ret != ncclSuccess) result = ret;
-    token = next;
+static ncclResult_t launchCeStreamPlan(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlan) {
+  ncclResult_t ret = ncclSuccess;
+
+  while (!ncclIntruQueueEmpty(&streamPlan->taskQueue)) {
+    struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(&streamPlan->taskQueue);
+    struct ncclCeCollArgs args = {};
+
+    NCCLCHECKGOTO(ceSchedCollArgsFromTuningInfo(comm, taskInfo, &args), ret, fail);
+    NCCLCHECKGOTO(ceSchedLaunchColl(comm, streamPlan, &args), ret, fail);
+    ceSchedFreeTuningInfoRaw(comm, taskInfo);
   }
-  NCCLCHECK(result);
+
+exit:
+  return ret;
+fail:
+  goto exit;
+}
+
+// Group copy-engine tasks by user stream. Tasks on one stream share a plan, including
+// a mix of eager and captured work.
+static ncclResult_t scheduleCeTasks(struct ncclComm* comm,
+                                    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                    struct ncclCeSchedPlan* cePlanOut) {
+  ncclIntruQueueConstruct(&cePlanOut->streamPlans);
+
+  while (!ncclIntruQueueEmpty(queue)) {
+    struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
+    cudaStream_t stream = ceSchedTuningInfoStream(taskInfo);
+    struct ncclCeSchedStreamPlan* streamPlan = nullptr;
+    bool captured = false;
+    struct ncclCudaGraph graph = {};
+
+    NCCLCHECK(ceSchedStreamCaptured(comm, stream, &captured, &graph));
+    NCCLCHECK(ceSchedGetStreamPlan(comm, cePlanOut, stream, captured, graph, &streamPlan));
+    ncclIntruQueueEnqueue(&streamPlan->taskQueue, taskInfo);
+  }
+
   return ncclSuccess;
 }
 
-static ncclResult_t launchCeStreamPlan(struct ncclComm* comm, struct ncclCeSchedStreamPlan* streamPlans,
-                                       struct ncclStrongStream* depStream) {
-  ncclResult_t ret = ncclSuccess;
-  struct ncclCeSchedStreamPlan* streamPlan = nullptr;
+// Launch each stream plan on its user stream, after the dependency stream. A captured
+// plan registers a graph destructor that reclaims proxy descriptors later. captureRef
+// keeps the communicator alive until that callback runs.
+ncclResult_t ncclSchedLaunchCeTasks(struct ncclComm* comm,
+                                    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                    struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream) {
+  (void)launchOrderStream;
+  if (ncclIntruQueueEmpty(queue)) return ncclSuccess;
 
-  for (streamPlan = streamPlans; streamPlan != nullptr; streamPlan = streamPlan->next) {
+  if (!comm->ceColl.initialized) {
+    WARN("CE collective is not initialized");
+    return ncclInternalError;
+  }
+
+  struct ncclCeSchedPlan cePlan = {};
+  struct ncclCeSchedStreamPlan* streamPlan = nullptr;
+  struct ncclRmaProxyReclaimToken* token = nullptr;
+  struct ncclSchedCallback* cb = nullptr;
+  ncclResult_t ret = ncclSuccess;
+
+  NCCLCHECKGOTO(scheduleCeTasks(comm, queue, &cePlan), ret, fail);
+
+  for (streamPlan = ncclIntruQueueHead(&cePlan.streamPlans); streamPlan != nullptr; streamPlan = streamPlan->next) {
     cudaStream_t launchStream = streamPlan->stream;
     cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
     cudaStream_t acqDepStream;
@@ -1719,34 +1767,35 @@ static ncclResult_t launchCeStreamPlan(struct ncclComm* comm, struct ncclCeSched
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, acqDepStream, finishedEvent), ret, fail);
     }
 
-    while (!ncclIntruQueueEmpty(&streamPlan->taskQueue)) {
-      struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(&streamPlan->taskQueue);
-      struct ncclCeCollArgs args = {};
-
-      NCCLCHECKGOTO(ceSchedCollArgsFromTuningInfo(comm, taskInfo, &args), ret, fail);
-      NCCLCHECKGOTO(ceSchedLaunchColl(comm, streamPlan, &args), ret, fail);
-      ceSchedFreeTuningInfoRaw(comm, taskInfo);
-    }
+    NCCLCHECKGOTO(launchCeStreamPlan(comm, streamPlan), ret, fail);
 
     if (depStream) {
       CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, acqDepStream, finishedEvent), ret, fail);
       NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, depStream, false), ret, fail);
     }
+
     if (streamPlan->captured && streamPlan->reclaimToken != nullptr) {
-      struct ncclRmaProxyReclaimToken* token = streamPlan->reclaimToken;
+      token = streamPlan->reclaimToken;
       streamPlan->reclaimToken = nullptr;
-      ret = ncclCudaGraphAddDestructor(streamPlan->graph, ceSchedStreamPlanDestructor, token);
-      if (ret != ncclSuccess) {
-        (void)ncclRmaProxyReclaimDesc(comm, token);
-        free(token);
-        goto fail;
-      }
+      NCCLCHECKGOTO(ncclCalloc(&cb, 1), ret, ce_reclaim_token);
+      cb->fn = ncclRmaProxyReclaimDescCallback;
+      cb->args = token;
+      NCCLCHECKGOTO(ncclCudaGraphAddDestructor(streamPlan->graph, ceSchedStreamPlanDestructor, cb), ret,
+                    ce_reclaim_token);
+      comm->captureRef += 1;
+      token = nullptr;
+      cb = nullptr;
     }
   }
 
 exit:
   return ret;
+ce_reclaim_token:
+  (void)ncclRmaProxyReclaimDesc(comm, token);
+  free(token);
+  free(cb);
+  goto fail;
 fail:
   if (streamPlan != nullptr && streamPlan->reclaimToken != nullptr) {
     (void)ncclRmaProxyReclaimDesc(comm, streamPlan->reclaimToken);
@@ -1754,57 +1803,4 @@ fail:
     streamPlan->reclaimToken = nullptr;
   }
   goto exit;
-}
-
-static ncclResult_t launchCeTasks(struct ncclComm* comm, struct ncclCeSchedPlan* cePlan,
-                                  struct ncclStrongStream* depStream) {
-  ncclResult_t ret = ncclSuccess;
-
-  NCCLCHECKGOTO(launchCeStreamPlan(comm, cePlan->noncapturedStreamPlans, depStream), ret, fail);
-  NCCLCHECKGOTO(launchCeStreamPlan(comm, cePlan->capturedStreamPlans, depStream), ret, fail);
-
-exit:
-  return ret;
-fail:
-  goto exit;
-}
-
-static ncclResult_t scheduleCeTasks(struct ncclComm* comm,
-                                    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                    struct ncclCeSchedPlan* cePlanOut) {
-  cePlanOut->noncapturedStreamPlans = nullptr;
-  cePlanOut->capturedStreamPlans = nullptr;
-
-  while (!ncclIntruQueueEmpty(queue)) {
-    struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
-    cudaStream_t stream = ceSchedTuningInfoStream(taskInfo);
-    struct ncclCeSchedStreamPlan* streamPlan = nullptr;
-    struct ncclCeSchedStreamPlan** streamListHead = nullptr;
-    bool captured = false;
-    struct ncclCudaGraph graph = {};
-
-    NCCLCHECK(ceSchedStreamCaptured(comm, stream, &captured, &graph));
-    streamListHead = captured ? &cePlanOut->capturedStreamPlans : &cePlanOut->noncapturedStreamPlans;
-    NCCLCHECK(ceSchedGetStreamPlan(comm, streamListHead, stream, captured, graph, &streamPlan));
-    ncclIntruQueueEnqueue(&streamPlan->taskQueue, taskInfo);
-  }
-
-  return ncclSuccess;
-}
-
-ncclResult_t ncclScheduleCeTasks(struct ncclComm* comm,
-                                 struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                 struct ncclStrongStream* depStream) {
-  NCCLCHECK(ncclCeSchedPollCallbacks(comm));
-  if (ncclIntruQueueEmpty(queue)) return ncclSuccess;
-
-  if (!comm->ceColl.initialized) {
-    WARN("CE collective is not initialized");
-    return ncclInternalError;
-  }
-
-  struct ncclCeSchedPlan cePlan = {};
-  NCCLCHECK(scheduleCeTasks(comm, queue, &cePlan));
-  NCCLCHECK(launchCeTasks(comm, &cePlan, depStream));
-  return ncclSuccess;
 }

@@ -642,20 +642,14 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   }
 
   ncclIntruQueueMpscConstruct(&comm->callbackQueue);
-  ncclIntruQueueMpscConstruct(&comm->rmaSchedCallbackQueue);
-  ncclIntruQueueMpscConstruct(&comm->ceSchedCallbackQueue);
+  ncclIntruQueueMpscConstruct(&comm->schedCallbackQueue);
   ncclIntruQueueConstruct(&comm->legacyRegCleanupQueue);
   ncclIntruQueueConstruct(&comm->ceInitTaskQueue);
   ncclIntruQueueConstruct(&comm->suspendTaskQueue);
   ncclIntruQueueConstruct(&comm->resumeTaskQueue);
   ncclIntruQueueConstruct(&comm->rawTaskQueue.genericQueue);
   NEW_NOTHROW(comm->rawTaskQueue.bcastQueue, ncclRawTaskBcastQueueMap);
-  ncclIntruQueueConstruct(&comm->classifiedTaskQueues.symTaskQueue);
-  ncclIntruQueueConstruct(&comm->classifiedTaskQueues.legacyTaskQueue);
-  ncclIntruQueueConstruct(&comm->classifiedTaskQueues.allgathervTaskQueue);
-  ncclIntruQueueConstruct(&comm->classifiedTaskQueues.p2pTaskQueue);
-  ncclIntruQueueConstruct(&comm->classifiedTaskQueues.rmaTaskQueue);
-  ncclIntruQueueConstruct(&comm->classifiedTaskQueues.ceTaskQueue);
+  ncclClassifiedTaskQueuesConstruct(&comm->classifiedTaskQueues);
   ncclIntruQueueConstruct(&comm->mgmtTaskQueue);
 
   comm->regCache.pageSize = ncclOsGetPageSize();
@@ -3257,11 +3251,13 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
 
     NCCLCHECKGOTO(ncclCommPollEventCallbacks(comm, true), ret, fail);
     NCCLCHECKGOTO(ncclCommPollCallbacks(comm, false), ret, fail);
-    NCCLCHECKGOTO(ncclRmaSchedPollCallbacks(comm), ret, fail);
-    NCCLCHECKGOTO(ncclCeSchedPollCallbacks(comm), ret, fail);
+    NCCLCHECKGOTO(ncclSchedPollCallbacks(comm), ret, fail);
     // And keep polling until all graphs referencing us die.
     while (comm->localPersistentRefs != 0) {
       NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/true), ret, fail);
+    }
+    while (comm->captureRef != 0) {
+      NCCLCHECKGOTO(ncclSchedPollCallbacks(comm), ret, fail);
     }
     while (!ncclIntruQueueEmpty(&comm->legacyRegCleanupQueue)) {
       struct ncclCommCallback* cb = ncclIntruQueueDequeue(&comm->legacyRegCleanupQueue);
@@ -3518,8 +3514,7 @@ static ncclResult_t commRevokeAsync(struct ncclAsyncJob* job_) {
   NCCLCHECKGOTO(ncclStrongStreamSynchronize(&comm->sharedRes->deviceStream), res, exit);
   NCCLCHECKGOTO(ncclCommPollEventCallbacks(comm, /*waitSome=*/true), res, exit);
   NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/false), res, exit);
-  NCCLCHECKGOTO(ncclRmaSchedPollCallbacks(comm), res, exit);
-  NCCLCHECKGOTO(ncclCeSchedPollCallbacks(comm), res, exit);
+  NCCLCHECKGOTO(ncclSchedPollCallbacks(comm), res, exit);
   {
     ncclResult_t _tmpret = ncclSuccess;
     if ((_tmpret = ncclProxyStop(comm)) != ncclSuccess) {

@@ -299,7 +299,7 @@ static ncclResult_t ncclTaskPrepareSchedJobFunc(struct ncclAsyncJob* job_) {
   if (!job_->isThreadMain && ncclOsCpuCount(comm->cpuAffinity)) ncclOsSetAffinity(comm->cpuAffinity);
   NCCLCHECK(ncclTaskPrepare(comm, job->simInfo));
   // A simulation only estimates tuner cost, so nothing is scheduled or launched.
-  if (job->simInfo == nullptr) NCCLCHECK(ncclTaskSchedule(comm, &comm->classifiedTaskQueues));
+  if (job->simInfo == nullptr) NCCLCHECK(ncclTaskSchedLaunch(comm, &comm->classifiedTaskQueues));
   return ncclSuccess;
 }
 
@@ -583,12 +583,7 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr,
             }
             comm->rawTaskQueue.bcastQueue->clear();
           }
-          ncclIntruQueueConstruct(&comm->classifiedTaskQueues.symTaskQueue);
-          ncclIntruQueueConstruct(&comm->classifiedTaskQueues.legacyTaskQueue);
-          ncclIntruQueueConstruct(&comm->classifiedTaskQueues.allgathervTaskQueue);
-          ncclIntruQueueConstruct(&comm->classifiedTaskQueues.p2pTaskQueue);
-          ncclIntruQueueConstruct(&comm->classifiedTaskQueues.rmaTaskQueue);
-          ncclIntruQueueConstruct(&comm->classifiedTaskQueues.ceTaskQueue);
+          ncclClassifiedTaskQueuesConstruct(&comm->classifiedTaskQueues);
         }
       } else if (type == ncclGroupTaskTypeMgmtTask) {
         while (!ncclIntruQueueEmpty(&comm->mgmtTaskQueue)) {

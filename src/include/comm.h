@@ -117,6 +117,13 @@ struct ncclCommCallback {
   struct ncclCommCallback* next;
   ncclResult_t (*fn)(struct ncclComm* comm, struct ncclCommCallback* cb);
 };
+// Host callback queued for the scheduler thread. fn may free args.
+// ncclSchedPollCallbacks frees the callback after fn returns.
+struct ncclSchedCallback {
+  struct ncclSchedCallback* next;
+  ncclResult_t (*fn)(struct ncclComm* comm, void* args);
+  void* args;
+};
 struct ncclCommEventCallback {
   struct ncclCommEventCallback* next;
   cudaEvent_t event;
@@ -787,6 +794,7 @@ struct ncclComm {
   // Subset of those in groupNext list. Holds 0x1 if not needing preconnect.
   struct ncclComm* preconnectNext;
   int localPersistentRefs; // number of persistent plan-lists capturing this comm
+  int captureRef; // number of captured CE and RMA launches referencing this comm
   struct P2pSchedulePair {
     int sendRank;
     int recvRank;
@@ -815,10 +823,9 @@ struct ncclComm {
   // Queue of things for the main thread to do
   int reclaimSteps;
   struct ncclIntruQueueMpsc<struct ncclCommCallback, &ncclCommCallback::next> callbackQueue;
-  // Captured descriptors reclaimed when the matching scheduler is entered.
-  // The CUDA graph destructor only enqueues the token.
-  struct ncclIntruQueueMpsc<struct ncclRmaProxyReclaimToken, &ncclRmaProxyReclaimToken::next> rmaSchedCallbackQueue;
-  struct ncclIntruQueueMpsc<struct ncclRmaProxyReclaimToken, &ncclRmaProxyReclaimToken::next> ceSchedCallbackQueue;
+  // Captured descriptors reclaimed by ncclSchedPollCallbacks.
+  // The CUDA graph destructor only enqueues the callback.
+  struct ncclIntruQueueMpsc<struct ncclSchedCallback, &ncclSchedCallback::next> schedCallbackQueue;
 
   ncclConfig_t config;
   // initState is to more conveniently reclaim resources when errors happen.

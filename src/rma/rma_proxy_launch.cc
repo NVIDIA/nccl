@@ -873,3 +873,12 @@ ncclResult_t ncclRmaProxyReclaimDesc(struct ncclComm* comm, struct ncclRmaProxyR
   }
   return ret;
 }
+
+// Scheduler callback. args is the reclaim token, which this frees.
+ncclResult_t ncclRmaProxyReclaimDescCallback(struct ncclComm* comm, void* args) {
+  struct ncclRmaProxyReclaimToken* token = (struct ncclRmaProxyReclaimToken*)args;
+  ncclResult_t ret = ncclRmaProxyReclaimDesc(comm, token);
+  if (token != nullptr) token->comm->captureRef -= 1;
+  free(token);
+  return ret;
+}

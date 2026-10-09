@@ -11,21 +11,29 @@
 #include "task_classify.h"
 #include "strongstream.h"
 
-ncclResult_t ncclScheduleSymTasks(struct ncclComm* comm,
-                                  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                  struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
+ncclResult_t ncclSchedPollCallbacks(struct ncclComm* comm);
 
-ncclResult_t ncclRmaSchedPollCallbacks(struct ncclComm* comm);
-ncclResult_t ncclCeSchedPollCallbacks(struct ncclComm* comm);
+typedef ncclResult_t (*ncclTaskSchedLaunchFn)(
+  struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+  struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
 
-ncclResult_t ncclScheduleRmaTasks(struct ncclComm* comm,
-                                  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                  struct ncclStrongStream* depStream);
+// One scheduler for a classified queue. ncclTaskSchedLaunches in task_sched.cc is indexed by ncclTaskQueueType.
+struct ncclTaskSchedLaunch {
+  ncclTaskSchedLaunchFn schedLaunch;
+};
 
-ncclResult_t ncclScheduleCeTasks(struct ncclComm* comm,
-                                 struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
-                                 struct ncclStrongStream* depStream);
+ncclResult_t ncclSchedLaunchSymTasks(struct ncclComm* comm,
+                                     struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                     struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
 
-ncclResult_t ncclTaskSchedule(struct ncclComm* comm, struct ncclClassifiedTaskQueues* ctq);
+ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
+                                     struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                     struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
+
+ncclResult_t ncclSchedLaunchCeTasks(struct ncclComm* comm,
+                                    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
+                                    struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream);
+
+ncclResult_t ncclTaskSchedLaunch(struct ncclComm* comm, struct ncclClassifiedTaskQueues* ctq);
 
 #endif // NCCL_ENQUEUE_TASK_SCHED_H_

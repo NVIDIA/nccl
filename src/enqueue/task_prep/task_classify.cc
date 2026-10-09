@@ -119,12 +119,7 @@ ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuning
 
   if (comm == nullptr || tiq == nullptr || ctq == nullptr) return ncclInvalidArgument;
 
-  ncclIntruQueueConstruct(&ctq->symTaskQueue);
-  ncclIntruQueueConstruct(&ctq->legacyTaskQueue);
-  ncclIntruQueueConstruct(&ctq->allgathervTaskQueue);
-  ncclIntruQueueConstruct(&ctq->p2pTaskQueue);
-  ncclIntruQueueConstruct(&ctq->rmaTaskQueue);
-  ncclIntruQueueConstruct(&ctq->ceTaskQueue);
+  ncclClassifiedTaskQueuesConstruct(ctq);
 
   while (!ncclIntruQueueEmpty(&tiq->queue)) {
     tInfo = ncclIntruQueueDequeue(&tiq->queue);
@@ -133,23 +128,23 @@ ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuning
     if (tInfo->raw->kind == ncclTaskKindColl &&
         (tInfo->raw->coll.func == ncclFuncAlltoAll || tInfo->raw->coll.func == ncclFuncScatter ||
          tInfo->raw->coll.func == ncclFuncGather) &&
-        !taskUsesCe(tInfo) && !taskUsesSymKernel(tInfo)) {
-      NCCLCHECK(collToP2pTasks(comm, tInfo, &ctq->p2pTaskQueue));
+        !isCeKernel(tInfo) && !isSymKernel(tInfo)) {
+      NCCLCHECK(collToP2pTasks(comm, tInfo, &ctq->queues[ncclTaskQueueP2p]));
       continue;
     }
 
     if (tInfo->raw->kind == ncclTaskKindSendRecv) {
-      outQueue = &ctq->p2pTaskQueue;
+      outQueue = &ctq->queues[ncclTaskQueueP2p];
     } else if (tInfo->raw->kind == ncclTaskKindRma) {
-      outQueue = &ctq->rmaTaskQueue;
+      outQueue = &ctq->queues[ncclTaskQueueRma];
     } else if (isCeKernel(tInfo)) {
-      outQueue = &ctq->ceTaskQueue;
+      outQueue = &ctq->queues[ncclTaskQueueCe];
     } else if (isSymKernel(tInfo)) {
-      outQueue = &ctq->symTaskQueue;
+      outQueue = &ctq->queues[ncclTaskQueueSym];
     } else if (isTaskAllGatherV(tInfo)) {
-      outQueue = &ctq->allgathervTaskQueue;
+      outQueue = &ctq->queues[ncclTaskQueueAllGatherV];
     } else {
-      outQueue = &ctq->legacyTaskQueue;
+      outQueue = &ctq->queues[ncclTaskQueueLegacy];
     }
     ncclIntruQueueEnqueue(outQueue, tInfo);
   }

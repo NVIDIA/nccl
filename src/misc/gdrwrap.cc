@@ -661,7 +661,7 @@ bool ncclGdrPinV2Available(void) {
   static std::once_flag onceFlag;
   static bool available = false;
   std::call_once(onceFlag, []() {
-    if (wrap_gdr_symbols() != ncclSuccess) return;
+    if (ncclGdrHandle() == nullptr) return;
     if (gdrOps == NULL || gdrOps->pinBufferV2 == NULL) return;
     if (ncclGdrIsInternalDmaBufBackend()) {
       available = true;
@@ -806,4 +806,9 @@ ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void* h_ptr, const void
     return ncclSystemError;
   }
   return ncclSuccess;
+}
+
+gdr_t ncclGdrHandle() {
+  static gdr_t handle = ncclGdrInit();
+  return handle;
 }

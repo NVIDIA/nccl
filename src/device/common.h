@@ -351,6 +351,14 @@ __device__ __forceinline__ uint32_t progressCounterScanBatch() {
     // Batched Broadcast completion is owned by channel 0.
     return ncclShmem.channelId == 0 ? (uint32_t)ncclShmem.nWorks : 0;
   }
+  if (ncclShmem.nWorks == 1) {
+    if (ncclShmem.workType == ncclDevWorkTypeP2p) {
+      const ncclDevWorkP2p* work = (const ncclDevWorkP2p*)ncclShmem.workStorage;
+      return (int)ncclShmem.channelId == (int)work->channelBase;
+    }
+    const ncclDevWorkColl* work = (const ncclDevWorkColl*)ncclShmem.workStorage;
+    return (int)ncclShmem.channelId == (int)work->channelLo;
+  }
   if (ncclShmem.workType == ncclDevWorkTypeP2p) {
     for (int w = 0; w < ncclShmem.nWorks; w++) {
       struct ncclDevWorkP2p* work = (struct ncclDevWorkP2p*)(ncclShmem.workStorage + w * ncclShmem.workSize);
@@ -365,17 +373,22 @@ __device__ __forceinline__ uint32_t progressCounterScanBatch() {
   return count;
 }
 
-__device__ __forceinline__ void progressCounterPublishCompletedSlot(int slot, uint32_t count) {
-  struct ncclProgressCountersBlock* counters = ncclShmem.comm.progressCounters;
-  if (count == 0 || counters == nullptr) return;
-  counters->completedTimeNs[slot] = globaltimer();
-  // Publish the count after the timestamp. Future consumers that require
-  // stronger snapshot ordering may need a device fence here.
-  asm volatile("red.global.add.u64 [%0], %1;" : : "l"(&counters->completedWorkCount[slot]), "l"((uint64_t)count));
+__device__ __forceinline__ void progressCounterPublishCompletedSlot(uint64_t* counter, uint32_t count) {
+  if (count == 0 || counter == nullptr) return;
+#if __CUDA_ARCH__ >= 700
+  // System-scope relaxed update; no cross-field ordering is required.
+  asm volatile("red.relaxed.sys.global.add.u64 [%0], %1;"
+               :
+               : "l"(cvta_to_global(counter)), "l"((uint64_t)count)
+               : "memory");
+#else
+  asm volatile("red.global.add.u64 [%0], %1;" : : "l"(cvta_to_global(counter)), "l"((uint64_t)count) : "memory");
+#endif
 }
 
 __device__ __forceinline__ void profiler(int action) {
   if (threadIdx.x == 0) {
+    const bool profileBatch = ncclShmem.args.hasProfilerWork;
     int idx = 0;
     uint64_t wc = ncclShmem.channel.workCounter + 1;
     if (action == START) {
@@ -384,9 +397,10 @@ __device__ __forceinline__ void profiler(int action) {
       // Resolve this batch's progress-counter slot and mark the channel active.
       if (ncclShmem.comm.progressCounters != nullptr) {
         int slot = progressCounterBatchSlot();
-        if (slot >= 0) ncclShmem.comm.progressCounters->collOpActive[ncclShmem.channelId] = 1ull << slot;
+        if (slot >= 0)
+          st_relaxed_sys_global(&ncclShmem.comm.progressCounters->collOpActive[ncclShmem.channelId], 1ull << slot);
       }
-      for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
+      for (; profileBatch && wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
         if (!profilerEnabled(idx++)) continue;
         uint64_t ts = globaltimer();
         int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
@@ -394,7 +408,7 @@ __device__ __forceinline__ void profiler(int action) {
         ncclShmem.comm.workStarted[ncclShmem.channelId].data[slot].counter = wc;
       }
     } else {
-      for (; wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
+      for (; profileBatch && wc <= ncclShmem.channel.workCounter + ncclShmem.nWorks; wc++) {
         if (!profilerEnabled(idx++)) continue;
         uint64_t ts = globaltimer();
         int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
@@ -403,10 +417,14 @@ __device__ __forceinline__ void profiler(int action) {
       }
       ncclShmem.channel.workCounter += ncclShmem.nWorks;
       // Do not report aborted work as completed; leave its active mask set.
-      if (ncclShmem.aborted == 0 && ncclShmem.comm.progressCounters != nullptr) {
+      struct ncclProgressCountersBlock* counters = ncclShmem.comm.progressCounters;
+      if (ncclShmem.aborted == 0 && counters != nullptr) {
         int slot = progressCounterBatchSlot();
-        if (slot >= 0) ncclShmem.comm.progressCounters->collOpActive[ncclShmem.channelId] = 0;
-        progressCounterPublishCompletedSlot(slot, progressCounterScanBatch());
+        uint32_t completed = progressCounterScanBatch();
+        if (slot >= 0) {
+          st_relaxed_sys_global(&counters->collOpActive[ncclShmem.channelId], 0);
+          progressCounterPublishCompletedSlot(counters->completedWorkCount + slot, completed);
+        }
         // No system fence; counter-monitor snapshots are diagnostic and may be stale.
       }
       if (action == FINI)

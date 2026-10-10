@@ -441,11 +441,10 @@ struct ncclDevProfilerPhases {
   } data[MAX_PROFILER_EVENTS_PER_CHANNEL];
 };
 
-// Shared layout for device progress counters and their pinned host mirror.
+// Shared layout for device progress counters and their host mirror.
 // Each channel owns one active-slot bitmask to avoid inter-channel atomics.
 struct ncclProgressCountersBlock {
   uint64_t completedWorkCount[NCCL_NUM_PROGRESS_COUNTERS];
-  uint64_t completedTimeNs[NCCL_NUM_PROGRESS_COUNTERS];
   uint64_t collOpActive[MAXCHANNELS];
 };
 
@@ -491,6 +490,7 @@ struct alignas(16) ncclDevKernelArgs {
   struct ncclKernelComm* comm;
   uint64_t channelMask;
   enum ncclDevWorkStorageType workStorageType;
+  bool hasProfilerWork;
   uint32_t workMask;
   void* workBuf;
   // A channel's first batch is at `blockIdx.x`. Use `nextJump` to follow rest of list.

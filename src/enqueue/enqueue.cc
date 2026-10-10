@@ -315,6 +315,9 @@ static void finishPlan(struct ncclComm* comm, struct ncclKernelPlan* plan) {
       }
     }
   }
+  // Reuse the conservative profiler gate derived from this plan's tasks.
+  // Keep it per plan: profiling settings can change between submissions.
+  plan->kernelArgs->hasProfilerWork = plan->hasProfilerOps;
   // Phase 2: Dequeue from planner->channels[c], enqueue in merged order to plan
   while (nHeads != 0) {
     int c = -1;

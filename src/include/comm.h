@@ -831,12 +831,10 @@ struct ncclComm {
   struct ncclProfilerCommState profiler;
 
   // RAS GPU-resident counters support
-  // Pinned host mirror of the NCCL progress counters.
+  // Host mirror updated after a successful, within-budget sample.
   struct ncclProgressCountersBlock* hostCountersBlock;
-  // Device counters written by kernels.
-  struct ncclProgressCountersBlock* deviceCountersBlock;
-  // CPU/GPU timer offset cached per device.
-  int64_t gpuTimerOffsetNs;
+  struct ncclGpuProgressCounterMonitor* progressCounterMonitor;
+  struct ncclProgressCountersBlock* mappedCountersBlock;
   // Intrusive link in the per-device progress-counter registration list.
   struct ncclComm* nextProgressRegistration;
 

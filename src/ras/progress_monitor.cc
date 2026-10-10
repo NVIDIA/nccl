@@ -11,13 +11,12 @@
 #include "debug.h"
 #include "param.h"
 #include "checks.h"
-#include "compiler.h"
 #include "utils.h"
 #include "alloc.h"
+#include "gdrwrap.h"
 
 #include <algorithm>
 #include <chrono>
-#include <cinttypes>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -29,376 +28,165 @@ NCCL_PARAM(ProgressCounterMonitorStaleWarnSec, "PROGRESS_COUNTER_MONITOR_STALE_W
 static constexpr int kProgressCounterMonitorMinPollMs = 50;
 static constexpr int kProgressCounterMonitorMinStaleMs = 1000;
 
-// One worker per CUDA device, shared by all registered communicators.
-// mutex protects mutable worker state and the registration list;
-// warningMutex protects the per-GPU warning timestamps.
+// One CPU sampler per used device, sharing the process-wide GDR handle. Empty
+// workers sleep until another communicator registers. Control objects live until exit.
 struct ncclGpuProgressCounterMonitor {
   int cudaDev;
   std::thread thread;
   std::mutex mutex;
   std::condition_variable cv;
-  bool running;
   bool shouldStop;
-  bool copyInFlight;
-  bool copyStallWarned;
-  uint64_t copyStartNs;
-  cudaStream_t sideStream;
-  cudaEvent_t copyDone;
-  std::mutex warningMutex;
-  uint64_t lastStaleWarnNs;
   uint64_t lastErrorWarnNs;
-  int destroyRefs; // Pins the worker during unregister cleanup.
   struct ncclIntruQueue<struct ncclComm, &ncclComm::nextProgressRegistration> registrations;
 };
 
-// Lock order: gpuProgressCounterMonitorsMu before ncclGpuProgressCounterMonitor::mutex.
+// The registry mutex protects installation and termination state.
+// The per-device mutex protects registrations and GDR mapping lifetimes.
 static std::mutex gpuProgressCounterMonitorsMu;
 static struct ncclGpuProgressCounterMonitor* gpuProgressCounterMonitors[kRasMaxCudaDevices] = {};
+static bool progressCounterMonitorTerminationRegistered;
+static bool progressCounterMonitorTerminating;
 
-// Return the configured polling interval, clamped to the supported minimum.
 static int progressCounterMonitorPollIntervalMs() {
-  int pollMs = (int)ncclParamProgressCounterMonitorPollMs();
-  return std::max(pollMs, kProgressCounterMonitorMinPollMs);
+  return std::max((int)ncclParamProgressCounterMonitorPollMs(), kProgressCounterMonitorMinPollMs);
 }
 
-// Return the stale-copy threshold, clamped to the supported minimum.
 static int progressCounterMonitorStaleThresholdMs() {
-  int staleMs = (int)ncclParamProgressCounterMonitorStaleMs();
-  return std::max(staleMs, kProgressCounterMonitorMinStaleMs);
+  return std::max((int)ncclParamProgressCounterMonitorStaleMs(), kProgressCounterMonitorMinStaleMs);
 }
 
-// Return the warning rate-limit interval, or zero when warnings are disabled.
-static uint64_t progressCounterMonitorWarnIntervalNs() {
+// Rate-limit sampler errors; caller holds the per-device mutex.
+static bool progressCounterMonitorErrorLogAllowed(struct ncclGpuProgressCounterMonitor* g, uint64_t nowNs) {
   int64_t warnSec = ncclParamProgressCounterMonitorStaleWarnSec();
-  if (warnSec <= 0) return 0;
-  return warnSec * 1000000000ULL;
+  if (warnSec <= 0) return false;
+  uint64_t intervalNs = (uint64_t)warnSec * 1000000000ULL;
+  if (g->lastErrorWarnNs != 0 && nowNs - g->lastErrorWarnNs < intervalNs) return false;
+  g->lastErrorWarnNs = nowNs;
+  return true;
 }
 
-// Reserve a per-GPU warning slot when the category's rate-limit interval has elapsed.
-static bool progressCounterMonitorShouldWarn(struct ncclGpuProgressCounterMonitor* g, uint64_t* lastWarnNs,
-                                             uint64_t nowNs, uint64_t warnIntervalNs) {
-  if (warnIntervalNs == 0) return false;
-  std::lock_guard<std::mutex> lock(g->warningMutex);
-  if (*lastWarnNs == 0 || nowNs - *lastWarnNs >= warnIntervalNs) {
-    *lastWarnNs = nowNs;
-    return true;
-  }
-  return false;
-}
-
-// Return whether the per-GPU rate limiter permits another monitor error log.
-static bool progressCounterMonitorErrorLogAllowed(struct ncclGpuProgressCounterMonitor* g) {
-  return progressCounterMonitorShouldWarn(g, &g->lastErrorWarnNs, clockNano(), progressCounterMonitorWarnIntervalNs());
-}
-
-// Periodically copy device progress counters for all communicators registered on one CUDA device.
-static void progressCounterMonitorLoop(struct ncclGpuProgressCounterMonitor* g) {
-  // Bind the shared worker to its CUDA device for its lifetime.
-  if (cudaSetDevice(g->cudaDev) != cudaSuccess) {
-    WARN("NCCL progress counter monitor: cudaSetDevice(%d) failed; progress-counter mirrors will "
-         "remain stale; Init will surface the failure.",
-         g->cudaDev);
-    {
-      std::lock_guard<std::mutex> lock(g->mutex);
-      g->shouldStop = true;
-    }
-    g->cv.notify_one();
-    return;
-  }
-
-  // Keep counter-monitor CUDA calls independent of application graph capture.
-  cudaStreamCaptureMode captureMode = cudaStreamCaptureModeRelaxed;
-  cudaError_t captureErr = cudaThreadExchangeStreamCaptureMode(&captureMode);
-  if (captureErr != cudaSuccess) {
-    WARN("NCCL progress counter monitor: failed to set relaxed CUDA stream capture mode (%s)",
-         cudaGetErrorString(captureErr));
-    {
-      std::lock_guard<std::mutex> lock(g->mutex);
-      g->shouldStop = true;
-    }
-    g->cv.notify_one();
-    return;
-  }
-
+// Stop host readers at exit.
+static void progressCounterMonitorTerminate() {
+  struct ncclGpuProgressCounterMonitor* monitors[kRasMaxCudaDevices];
   {
-    std::lock_guard<std::mutex> lock(g->mutex);
-    g->running = true;
+    std::lock_guard<std::mutex> globalLock(gpuProgressCounterMonitorsMu);
+    if (progressCounterMonitorTerminating) return;
+    progressCounterMonitorTerminating = true;
+    std::copy_n(gpuProgressCounterMonitors, kRasMaxCudaDevices, monitors);
   }
-  g->cv.notify_one();
+  // Stop and join without holding the registry mutex.
+  for (auto* g : monitors) {
+    if (g == nullptr) continue;
+    std::lock_guard<std::mutex> lock(g->mutex);
+    g->shouldStop = true;
+    g->cv.notify_one();
+  }
+  for (auto* g : monitors) {
+    if (g == nullptr) continue;
+    if (g->thread.joinable()) g->thread.join();
+  }
+}
 
-  while (true) {
-    // Protect registration lifetimes while copies are queued.
-    std::unique_lock<std::mutex> lock(g->mutex);
-    auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::milliseconds(progressCounterMonitorPollIntervalMs());
+// Hold the registration mutex while sampling.
+// Update the host mirror only after a successful, within-budget read.
+static void progressCounterMonitorLoop(struct ncclGpuProgressCounterMonitor* g) {
+  std::unique_lock<std::mutex> lock(g->mutex);
+  while (!g->shouldStop) {
+    while (!g->shouldStop && ncclIntruQueueEmpty(&g->registrations)) {
+      g->cv.wait(lock);
+    }
+    if (g->shouldStop) break;
+    int pollMs = progressCounterMonitorPollIntervalMs();
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(pollMs);
     while (!g->shouldStop) {
       if (g->cv.wait_until(lock, deadline) == std::cv_status::timeout) break;
     }
     if (g->shouldStop) break;
 
-    if (g->copyInFlight) {
-      cudaError_t e = cudaEventQuery(g->copyDone);
-      if (e == cudaErrorNotReady) {
-        uint64_t nowNs = clockNano();
-        uint64_t staleNs = (g->copyStartNs != 0 && nowNs >= g->copyStartNs) ? nowNs - g->copyStartNs : 0;
-        if (!g->copyStallWarned && staleNs >= (uint64_t)progressCounterMonitorStaleThresholdMs() * 1000000ULL) {
-          g->copyStallWarned = true;
-          uint64_t warnIntervalNs = progressCounterMonitorWarnIntervalNs();
-          if (progressCounterMonitorShouldWarn(g, &g->lastStaleWarnNs, nowNs, warnIntervalNs)) {
-            INFO(NCCL_RAS,
-                 "NCCL progress counter monitor: counter DMA still pending after %.1fs (cudaDev %d, %zu comms); "
-                 "progress-counter mirrors may be stale",
-                 staleNs / 1e9, g->cudaDev, (size_t)g->registrations.nElems);
-          }
-        }
-        continue;
-      }
-      if (e != cudaSuccess && progressCounterMonitorErrorLogAllowed(g)) {
-        INFO(NCCL_RAS, "NCCL progress counter monitor: counter DMA completion check failed on cudaDev %d (%s)",
-             g->cudaDev, cudaGetErrorString(e));
-      }
-      g->copyInFlight = false;
-      g->copyStartNs = 0;
-      g->copyStallWarned = false;
-    }
-
-    bool copiedAny = false;
-    int copyLaunchFailures = 0;
-    int firstFailRank = -1;
-    uint64_t firstFailCommHash = 0;
-    cudaError_t firstFail = cudaSuccess;
+    uint64_t staleNs = (uint64_t)progressCounterMonitorStaleThresholdMs() * 1000000ULL;
+    uint64_t readBudgetNs = std::min<uint64_t>((uint64_t)pollMs * 1000000ULL, staleNs);
     for (struct ncclComm* comm = ncclIntruQueueHead(&g->registrations); comm != nullptr;
          comm = comm->nextProgressRegistration) {
-      if (comm->deviceCountersBlock == nullptr || comm->hostCountersBlock == nullptr) continue;
-      cudaError_t e = cudaMemcpyAsync(comm->hostCountersBlock, comm->deviceCountersBlock,
-                                      sizeof(struct ncclProgressCountersBlock), cudaMemcpyDeviceToHost, g->sideStream);
-      if (e != cudaSuccess) {
-        if (copyLaunchFailures == 0) {
-          firstFailRank = comm->rank;
-          firstFailCommHash = comm->commHash;
-          firstFail = e;
-        }
-        copyLaunchFailures++;
-      } else {
-        copiedAny = true;
+      struct ncclProgressCountersBlock sample;
+      uint64_t beginNs = clockNano();
+      // Read aligned fields separately, not as an atomic block snapshot. This
+      // relies on the platform's CPU/GPU single-field visibility guarantees.
+      static_assert(sizeof(sample) % sizeof(uint64_t) == 0, "Counter block must contain whole 64-bit fields");
+      const uint64_t* mapped = (const uint64_t*)comm->mappedCountersBlock;
+      for (size_t i = 0; i < sizeof(sample) / sizeof(uint64_t); i++) {
+        uint64_t value = COMPILER_ATOMIC_LOAD(mapped + i, std::memory_order_relaxed);
+        memcpy((char*)&sample + i * sizeof(value), &value, sizeof(value));
       }
-    }
-    if (copyLaunchFailures != 0 && progressCounterMonitorErrorLogAllowed(g)) {
-      INFO(NCCL_RAS,
-           "NCCL progress counter monitor: counter DMA launch failed for %d/%zu comms on cudaDev %d; "
-           "first failure rank %d comm %016" PRIx64 " (%s)",
-           copyLaunchFailures, (size_t)g->registrations.nElems, g->cudaDev, firstFailRank, firstFailCommHash,
-           cudaGetErrorString(firstFail));
-    }
-
-    if (copiedAny) {
-      cudaError_t e = cudaEventRecord(g->copyDone, g->sideStream);
-      if (e == cudaSuccess) {
-        g->copyInFlight = true;
-        g->copyStartNs = clockNano();
-      } else if (progressCounterMonitorErrorLogAllowed(g)) {
-        INFO(NCCL_RAS, "NCCL progress counter monitor: counter DMA event record failed on cudaDev %d (%s)", g->cudaDev,
-             cudaGetErrorString(e));
+      uint64_t nowNs = clockNano();
+      if (nowNs - beginNs >= readBudgetNs) {
+        if (progressCounterMonitorErrorLogAllowed(g, nowNs))
+          INFO(NCCL_RAS,
+               "RAS progress counter sample unavailable on cudaDev %d rank %d "
+               "(read %.3fs, limit %.3fs)",
+               g->cudaDev, comm->rank, (nowNs - beginNs) / 1e9, readBudgetNs / 1e9);
+        continue;
       }
+      memcpy(comm->hostCountersBlock, &sample, sizeof(sample));
     }
   }
 }
 
-// Restore the caller's CUDA device after monitor setup or teardown.
-static void restoreCudaDevice(struct ncclGpuProgressCounterMonitor* g, int savedDev, bool restore) {
-  if (restore) {
-    cudaError_t e = cudaSetDevice(savedDev);
-    if (e != cudaSuccess && progressCounterMonitorErrorLogAllowed(g)) {
-      INFO(NCCL_RAS, "NCCL progress counter monitor: failed to restore cudaDev %d (%s)", savedDev,
-           cudaGetErrorString(e));
-    }
-  }
-}
-
-// Release a teardown reference and destroy the unused per-device worker when safe.
-static void releaseGpuProgressCounterMonitorDestroyRef(struct ncclGpuProgressCounterMonitor* g) {
-  bool doDelete = false;
-  {
-    std::lock_guard<std::mutex> globalLock(gpuProgressCounterMonitorsMu);
-    std::lock_guard<std::mutex> lock(g->mutex);
-    g->destroyRefs--;
-    if (ncclIntruQueueEmpty(&g->registrations) && g->destroyRefs == 0) doDelete = true;
-  }
-
-  if (!doDelete) return;
-
-  // An empty registration list removes g from gpuProgressCounterMonitors before the final destroy reference is
-  // released, so new registrations cannot find it while it is joined and deleted below.
-  g->cv.notify_one();
-  if (g->thread.joinable()) g->thread.join();
-
-  int savedDev = -1;
-  bool restore = (cudaGetDevice(&savedDev) == cudaSuccess);
-  cudaError_t setErr = cudaSetDevice(g->cudaDev);
-  if (setErr != cudaSuccess && progressCounterMonitorErrorLogAllowed(g)) {
-    INFO(NCCL_RAS, "NCCL progress counter monitor: cudaSetDevice(%d) during destroy failed (%s)", g->cudaDev,
-         cudaGetErrorString(setErr));
-  }
-  if (g->copyDone != nullptr) cudaEventDestroy(g->copyDone);
-  if (g->sideStream != nullptr) cudaStreamDestroy(g->sideStream);
-  restoreCudaDevice(g, savedDev, restore);
-  delete g;
-}
-
-// Create and start the shared progress-counter worker for one CUDA device.
-static ncclResult_t createGpuProgressCounterMonitor(int cudaDev, struct ncclGpuProgressCounterMonitor** out) {
-  ncclResult_t ret = ncclSuccess;
-  int savedDev = -1;
-  bool restore = (cudaGetDevice(&savedDev) == cudaSuccess);
-  struct ncclGpuProgressCounterMonitor* g = new (std::nothrow) ncclGpuProgressCounterMonitor{};
-  if (g == nullptr) return ncclSystemError;
-
-  g->cudaDev = cudaDev;
-  g->shouldStop = false;
-  g->running = false;
-  g->copyInFlight = false;
-  g->copyStallWarned = false;
-  g->copyStartNs = 0;
-  g->sideStream = nullptr;
-  g->copyDone = nullptr;
-  g->lastStaleWarnNs = 0;
-  g->lastErrorWarnNs = 0;
-  g->destroyRefs = 0;
-  ncclIntruQueueConstruct(&g->registrations);
-
-  int param = (int)ncclParamProgressCounterMonitorPollMs();
-  if (param < kProgressCounterMonitorMinPollMs) {
-    TRACE(NCCL_RAS, "NCCL progress counter monitor: NCCL_PROGRESS_COUNTER_MONITOR_POLL_MS=%d clamped to %d", param,
-          kProgressCounterMonitorMinPollMs);
-  }
-  int staleParam = (int)ncclParamProgressCounterMonitorStaleMs();
-  if (staleParam < kProgressCounterMonitorMinStaleMs) {
-    TRACE(NCCL_RAS, "NCCL progress counter monitor: NCCL_PROGRESS_COUNTER_MONITOR_STALE_MS=%d clamped to %d",
-          staleParam, kProgressCounterMonitorMinStaleMs);
-  }
-
-  CUDACHECKGOTO(cudaSetDevice(cudaDev), ret, fail);
-  CUDACHECKGOTO(cudaStreamCreateWithFlags(&g->sideStream, cudaStreamNonBlocking), ret, fail);
-  CUDACHECKGOTO(cudaEventCreateWithFlags(&g->copyDone, cudaEventDisableTiming), ret, fail);
-
-  g->thread = std::thread(progressCounterMonitorLoop, g);
-  ncclSetThreadName(g->thread, "NCCL CtrMon %d", cudaDev);
-
-  {
-    std::unique_lock<std::mutex> lock(g->mutex);
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
-    while (!g->running && !g->shouldStop) {
-      if (g->cv.wait_until(lock, deadline) == std::cv_status::timeout) break;
-    }
-    if (!g->running) {
-      g->shouldStop = true;
-      lock.unlock();
-      g->cv.notify_one();
-      WARN("NCCL progress counter monitor: cudaDev %d thread failed to come up within 2000 ms (worker initialization "
-           "may have failed)",
-           cudaDev);
-      if (g->thread.joinable()) g->thread.join();
-      ret = ncclSystemError;
-      goto fail;
-    }
-  }
-
-  *out = g;
-  restoreCudaDevice(g, savedDev, restore);
-  return ncclSuccess;
-
-fail:
-  if (g->copyDone != nullptr) cudaEventDestroy(g->copyDone);
-  if (g->sideStream != nullptr) cudaStreamDestroy(g->sideStream);
-  restoreCudaDevice(g, savedDev, restore);
-  delete g;
-  return ret;
-}
-
-// Register a communicator with its CUDA device's shared progress-counter worker.
+// Register only mapped counter allocations. The sampler does not enable the
+// normal work FIFO/RMA GDRCopy paths.
 ncclResult_t ncclProgressCounterMonitorInit(struct ncclComm* comm) {
-  ncclResult_t ret = ncclSuccess;
-  comm->nextProgressRegistration = nullptr;
-  // No device counter storage means counter-monitor registration is disabled.
-  if (comm->deviceCountersBlock == nullptr) return ncclSuccess;
+  if (comm->mappedCountersBlock == nullptr) return ncclSuccess;
   if (comm->cudaDev < 0 || comm->cudaDev >= kRasMaxCudaDevices) return ncclInvalidArgument;
-
-  struct ncclGpuProgressCounterMonitor* g = nullptr;
+  if (comm->progressCounterMonitor != nullptr) return ncclInvalidUsage;
+  struct ncclGpuProgressCounterMonitor* g;
   {
     std::lock_guard<std::mutex> globalLock(gpuProgressCounterMonitorsMu);
+    if (progressCounterMonitorTerminating) return ncclSystemError;
+    if (!progressCounterMonitorTerminationRegistered) {
+      if (atexit(progressCounterMonitorTerminate) != 0) return ncclSystemError;
+      progressCounterMonitorTerminationRegistered = true;
+    }
     g = gpuProgressCounterMonitors[comm->cudaDev];
     if (g == nullptr) {
-      NCCLCHECKGOTO(createGpuProgressCounterMonitor(comm->cudaDev, &g), ret, fail);
+      g = new (std::nothrow) ncclGpuProgressCounterMonitor{};
+      if (g == nullptr) return ncclSystemError;
+      g->cudaDev = comm->cudaDev;
+      ncclIntruQueueConstruct(&g->registrations);
       gpuProgressCounterMonitors[comm->cudaDev] = g;
-      TRACE(NCCL_RAS, "NCCL progress counter monitor started for cudaDev %d: pollIntervalMs=%d", g->cudaDev,
-            progressCounterMonitorPollIntervalMs());
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(g->mutex);
-      ncclIntruQueueEnqueue(&g->registrations, comm);
     }
   }
+
+  std::unique_lock<std::mutex> lock(g->mutex);
+  if (g->shouldStop) return ncclSystemError;
+  if (!g->thread.joinable()) {
+    try {
+      g->thread = std::thread(progressCounterMonitorLoop, g);
+    } catch (const std::exception& e) {
+      INFO(NCCL_RAS, "RAS progress counter sampler thread creation failed (%s)", e.what());
+      return ncclSystemError;
+    }
+    ncclSetThreadName(g->thread, "NCCL CtrMon %d", g->cudaDev);
+  }
+  comm->progressCounterMonitor = g;
+  ncclIntruQueueEnqueue(&g->registrations, comm);
   g->cv.notify_one();
-
-  TRACE(NCCL_RAS, "NCCL progress counter monitor registered comm %016lx rank %d cudaDev %d",
-        (unsigned long)comm->commHash, comm->rank, comm->cudaDev);
+  INFO(NCCL_RAS,
+       "RAS progress counter sampler registered rank %d cudaDev %d "
+       "(NCCL_RAS_DEVICE_ENABLE=1)",
+       comm->rank, comm->cudaDev);
   return ncclSuccess;
-
-fail:
-  return ret;
 }
 
 static bool progressCounterRegistrationMatches(struct ncclComm* registered, struct ncclComm* target) {
   return registered == target;
 }
 
-// Unregister a communicator and drain copies before releasing its counter storage.
+// Unregister before the shared GDR destructor releases counter storage.
 ncclResult_t ncclProgressCounterMonitorDestroy(struct ncclComm* comm) {
-  if (comm->cudaDev < 0 || comm->cudaDev >= kRasMaxCudaDevices) return ncclSuccess;
-
-  struct ncclGpuProgressCounterMonitor* g = nullptr;
-  bool haveDestroyRef = false;
-
-  {
-    std::lock_guard<std::mutex> globalLock(gpuProgressCounterMonitorsMu);
-    g = gpuProgressCounterMonitors[comm->cudaDev];
-    if (g != nullptr) {
-      std::lock_guard<std::mutex> lock(g->mutex);
-      if (ncclIntruQueueDelete(&g->registrations, comm, progressCounterRegistrationMatches) != nullptr) {
-        comm->nextProgressRegistration = nullptr;
-        // Keep g alive while unregister synchronizes its stream.
-        g->destroyRefs++;
-        haveDestroyRef = true;
-        if (ncclIntruQueueEmpty(&g->registrations)) {
-          gpuProgressCounterMonitors[g->cudaDev] = nullptr;
-          g->shouldStop = true;
-        }
-      }
-    }
-  }
-
-  if (haveDestroyRef) {
-    g->cv.notify_one();
-    // Drain copies that may still reference this communicator's buffers.
-    int savedDev = -1;
-    bool restore = (cudaGetDevice(&savedDev) == cudaSuccess);
-    cudaError_t setErr = cudaSetDevice(g->cudaDev);
-    if (setErr != cudaSuccess) {
-      if (progressCounterMonitorErrorLogAllowed(g)) {
-        INFO(NCCL_RAS, "NCCL progress counter monitor: cudaSetDevice(%d) during unregister failed (%s)", g->cudaDev,
-             cudaGetErrorString(setErr));
-      }
-    } else if (g->sideStream != nullptr) {
-      cudaError_t e = cudaStreamSynchronize(g->sideStream);
-      if (e != cudaSuccess && progressCounterMonitorErrorLogAllowed(g)) {
-        INFO(NCCL_RAS, "NCCL progress counter monitor: side-stream sync during unregister failed on cudaDev %d (%s)",
-             g->cudaDev, cudaGetErrorString(e));
-      }
-    }
-    restoreCudaDevice(g, savedDev, restore);
-  }
-
-  if (haveDestroyRef) releaseGpuProgressCounterMonitorDestroyRef(g);
+  auto* g = comm->progressCounterMonitor;
+  if (g == nullptr) return ncclSuccess;
+  std::lock_guard<std::mutex> lock(g->mutex);
+  ncclIntruQueueDelete(&g->registrations, comm, progressCounterRegistrationMatches);
+  comm->nextProgressRegistration = nullptr;
+  comm->progressCounterMonitor = nullptr;
   return ncclSuccess;
 }

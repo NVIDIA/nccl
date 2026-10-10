@@ -115,8 +115,11 @@ ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void
 bool ncclGdrIsInternalDmaBufBackend(void);
 bool ncclGdrInternalDmaBufRequired(void);
 
-// Global GDR driver handle; set once during NCCL init.
+// Alias of the shared GDR handle for FIFO/transport paths;
+// null when NCCL_GDRCOPY_ENABLE is disabled.
 extern gdr_t ncclGdrCopy;
+// Open once per process, independently of the enable flag. The backend stays fixed.
+gdr_t ncclGdrHandle();
 
 #include "alloc.h"
 
@@ -173,35 +176,40 @@ error:
   return NULL;
 }
 
+// Attempt both cleanup steps and return the first error.
 static ncclResult_t ncclGdrCudaUnmapPointer(gdr_mh_t mh, void* map, size_t mapSize) {
   ncclResult_t ret = ncclSuccess;
-  NCCLCHECKIGNORE(wrap_gdr_unmap(ncclGdrCopy, mh, map, mapSize), ret);
-  NCCLCHECKIGNORE(wrap_gdr_unpin_buffer(ncclGdrCopy, mh), ret);
+  gdr_t handle = ncclGdrHandle();
+  if (map != nullptr) NCCLCHECKIGNORE(wrap_gdr_unmap(handle, mh, map, mapSize), ret);
+  if (mh.h != 0) NCCLCHECKIGNORE(wrap_gdr_unpin_buffer(handle, mh), ret);
   return ret;
 }
 
 static ncclResult_t ncclGdrCudaMapAligned(uint64_t alignedAddr, size_t alignedSize, gdr_mh_t* mh, void** map,
-                                          gdr_info_t* info, uint32_t pinFlags = 0) {
+                                          gdr_info_t* info, uint32_t pinFlags = 0,
+                                          bool* needsBufferCleanup = nullptr) {
   ncclResult_t ret = ncclSuccess;
+  gdr_t handle = ncclGdrHandle();
+  *mh = {};
+  *map = nullptr;
+  if (needsBufferCleanup != nullptr) *needsBufferCleanup = true;
+  if (handle == nullptr) return ncclSystemError;
 
   if (ncclGdrPinV2Available() || pinFlags == GDR_PIN_FLAG_FORCE_PCIE) {
     // If pinFlags is set to FORCE_PCIE, error out if it cannot be honored.
-    NCCLCHECKGOTO(wrap_gdr_pin_buffer_v2(ncclGdrCopy, (unsigned long)alignedAddr, alignedSize, pinFlags, mh), ret,
-                  exit);
+    NCCLCHECKGOTO(wrap_gdr_pin_buffer_v2(handle, (unsigned long)alignedAddr, alignedSize, pinFlags, mh), ret, fail);
   } else {
-    NCCLCHECKGOTO(wrap_gdr_pin_buffer(ncclGdrCopy, (unsigned long)alignedAddr, alignedSize, 0, 0, mh), ret, exit);
+    NCCLCHECKGOTO(wrap_gdr_pin_buffer(handle, (unsigned long)alignedAddr, alignedSize, 0, 0, mh), ret, fail);
   }
-
-  NCCLCHECKGOTO(wrap_gdr_map(ncclGdrCopy, *mh, map, alignedSize), ret, fail_unpin);
-  NCCLCHECKGOTO(wrap_gdr_get_info(ncclGdrCopy, *mh, info), ret, fail_unmap);
-
-exit:
+  NCCLCHECKGOTO(wrap_gdr_map(handle, *mh, map, alignedSize), ret, fail);
+  NCCLCHECKGOTO(wrap_gdr_get_info(handle, *mh, info), ret, fail);
+  return ncclSuccess;
+fail:
+  ncclResult_t cleanup = ncclGdrCudaUnmapPointer(*mh, *map, alignedSize);
+  if (needsBufferCleanup != nullptr) *needsBufferCleanup = (cleanup == ncclSuccess);
+  if (cleanup != ncclSuccess)
+    ATTN("GDRCOPY mapping cleanup failed; retaining device allocation and mapping resources");
   return ret;
-fail_unmap:
-  (void)wrap_gdr_unmap(ncclGdrCopy, *mh, *map, alignedSize);
-fail_unpin:
-  (void)wrap_gdr_unpin_buffer(ncclGdrCopy, *mh);
-  goto exit;
 }
 
 static ncclResult_t ncclGdrCudaMapPointer(void* data, size_t size, gdr_mh_t* mh, void** map, size_t* mapSize,
@@ -225,25 +233,33 @@ static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** 
   ncclGdrInfo_t info = {};
   size_t mapSize;
   gdr_mh_t mh;
-  char *devMem;
+  char *devMem = nullptr;
   void *gdrMap;
+  uint64_t alignedAddr;
+  size_t align;
+  ssize_t off;
+  ncclResult_t ret = ncclSuccess;
+  bool needsBufferCleanup = true;
+  gdr_mem_desc_t* md;
+  *ptr = nullptr;
+  if (devPtr) *devPtr = nullptr;
+  *gdrHandle = nullptr;
+  if (ncclGdrHandle() == nullptr) return ncclSystemError;
+  NCCLCHECK(ncclCalloc(&md, 1));
 
   mapSize = ncclSizeOfT<T>()*nelem;
 
   // GDRCOPY Pinned buffer has to be a minimum of a GPU_PAGE_SIZE
   ALIGN_SIZE(mapSize, GPU_PAGE_SIZE);
   // GDRCOPY Pinned buffer has to be GPU_PAGE_SIZE aligned too
-  NCCLCHECK(ncclCudaCalloc(&devMem, mapSize+GPU_PAGE_SIZE-1, manager));
-  uint64_t alignedAddr = (((uint64_t) devMem) + GPU_PAGE_OFFSET) & GPU_PAGE_MASK;
-  size_t align = alignedAddr - (uint64_t)devMem;
+  NCCLCHECKGOTO(ncclCudaCalloc(&devMem, mapSize+GPU_PAGE_SIZE-1, manager), ret, fail);
+  alignedAddr = (((uint64_t) devMem) + GPU_PAGE_OFFSET) & GPU_PAGE_MASK;
+  align = alignedAddr - (uint64_t)devMem;
 
-  NCCLCHECK(ncclGdrCudaMapAligned(alignedAddr, mapSize, &mh, &gdrMap, &info, pinFlags));
-
+  NCCLCHECKGOTO(ncclGdrCudaMapAligned(alignedAddr, mapSize, &mh, &gdrMap, &info, pinFlags, &needsBufferCleanup), ret, fail);
   // Will offset ever be non zero ?
-  ssize_t off = info.va - alignedAddr;
+  off = info.va - alignedAddr;
 
-  gdr_mem_desc_t* md;
-  NCCLCHECK(ncclCalloc(&md, 1));
   md->gdrDevMem = devMem;
   md->gdrMap = gdrMap;
   md->gdrMapSize = mapSize;
@@ -258,6 +274,13 @@ static ncclResult_t ncclGdrCudaCalloc(T** ptr, T** devPtr, size_t nelem, void** 
        md->gdrDevMem, md->gdrMap, md->gdrOffset, md->gdrMh.h, md->gdrMapSize, *ptr);
 
   return ncclSuccess;
+fail:
+  // MapAligned already attempted cleanup. Never retry a possibly consumed handle.
+  if (needsBufferCleanup) {
+    if (devMem != nullptr) (void)ncclCudaFree(devMem, manager);
+  }
+  free(md);
+  return ret;
 }
 
 template <typename T>
@@ -274,6 +297,7 @@ static ncclResult_t ncclGdrCudaRead(void* gdrHandle, void* dst, const void* src,
 
 static ncclResult_t ncclGdrCudaFree(void* gdrHandle, struct ncclMemManager* manager) {
   gdr_mem_desc_t *md = (gdr_mem_desc_t*)gdrHandle;
+  if (md == nullptr) return ncclSuccess;
   NCCLCHECK(ncclGdrCudaUnmapPointer(md->gdrMh, md->gdrMap, md->gdrMapSize));
   NCCLCHECK(ncclCudaFree(md->gdrDevMem, manager));
   free(md);

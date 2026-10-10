@@ -34,7 +34,6 @@
 #include "param.h"
 #include "nvtx_payload_schemas.h"
 #include "utils.h"
-#include <mutex>
 #include "ce_coll.h"
 #include "nvtx.h"
 #include "os.h"
@@ -76,7 +75,7 @@ NCCL_PARAM(MultiRankGpuEnable, "MULTI_RANK_GPU_ENABLE", 0);
 NCCL_PARAM(LaunchOrderImplicit, "LAUNCH_ORDER_IMPLICIT", NCCL_CONFIG_UNDEF_INT);
 // Opt-in: enables GPU-resident NCCL progress counters when RAS is enabled. When disabled,
 // counter buffers remain null and profiler() skips progress-counter updates.
-NCCL_PARAM(ProgressCountersEnable, "PROGRESS_COUNTERS", 0);
+NCCL_PARAM(RasDeviceEnable, "RAS_DEVICE_ENABLE", 0);
 
 extern int64_t ncclParamRasDiagnostics();
 extern int64_t ncclParamDiagnostics();
@@ -159,7 +158,7 @@ gdr_t ncclGdrCopy = NULL;
 
 ncclResult_t initGdrCopy() {
   if (ncclParamGdrCopyEnable() == 1) {
-    ncclGdrCopy = ncclGdrInit();
+    ncclGdrCopy = ncclGdrHandle();
     if (ncclGdrCopy == NULL && ncclGdrInternalDmaBufRequired()) {
       WARN("NCCL_GDRCOPY_USE_INTERNAL_DMABUF=1 but NCCL internal DMA-BUF mmap backend could not initialize");
       return ncclSystemError;
@@ -291,10 +290,31 @@ void ncclCommPushCudaGdrFree(struct ncclComm* comm, void* handle) {
   comm->destructorHead = dtor;
 }
 
+static ncclResult_t ncclDestructorFnRasCounterFree(struct ncclDestructor* dtor) {
+  ncclResult_t ret = ncclGdrCudaFree(dtor->obj, dtor->comm->memManager);
+  // Diagnostic cleanup must not stop unrelated destructors. Do not retry a failed unpin.
+  dtor->comm->mappedCountersBlock = nullptr;
+  dtor->obj = nullptr;
+  if (ret != ncclSuccess)
+    ATTN("RAS progress counter cleanup failed on cudaDev %d; retaining allocation and mapping resources",
+         dtor->comm->cudaDev);
+  return ncclSuccess;
+}
+
+static void ncclCommPushRasCounterFree(struct ncclComm* comm, void* handle) {
+  struct ncclDestructor* dtor = ncclMemoryStackAlloc<struct ncclDestructor>(&comm->memPermanent);
+  dtor->fn = ncclDestructorFnRasCounterFree;
+  dtor->obj = handle;
+  dtor->comm = comm;
+  dtor->next = comm->destructorHead;
+  comm->destructorHead = dtor;
+}
+
 static ncclResult_t commFree(ncclComm_t comm) {
   int abort = 0;
   /* commFree() should not involve any sync among ranks. */
   if (comm == NULL) return ncclSuccess;
+  NCCLCHECK(ncclProgressCounterMonitorDestroy(comm));
 
   NCCLCHECK(ncclCeFinalize(comm));
   NCCLCHECK(ncclRmaCeFinalize(comm));
@@ -657,59 +677,6 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   return ncclSuccess;
 }
 
-static int64_t progressCounterCalibrateGpuTimer(struct ncclComm* comm, cudaStream_t deviceStream) {
-  if (comm->cudaDev < 0 || comm->cudaDev >= kRasMaxCudaDevices) return 0;
-
-  // Cache the CPU/GPU timer offset per device. Failed calibrations are retried.
-  static std::mutex mutex;
-  static int64_t offsets[kRasMaxCudaDevices] = {};
-  int64_t offsetNs;
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    offsetNs = offsets[comm->cudaDev];
-  }
-  if (offsetNs != 0) return offsetNs;
-
-  // The kernel records %globaltimer between two clockNano() reads.
-  extern __global__ void ncclProgressCounterCaptureGpuTime(uint64_t* out);
-  bool measured = false;
-  uint64_t* dGpuNs = nullptr;
-  uint64_t hGpuNs = 0;
-  if (ncclCudaCalloc(&dGpuNs, 1, comm->memManager) == ncclSuccess) {
-    // Drain earlier initialization work before starting the CPU/GPU clock
-    // bracket. Otherwise its queueing delay would bias the midpoint estimate.
-    if (cudaStreamSynchronize(deviceStream) == cudaSuccess) {
-      int64_t cpu0 = (int64_t)clockNano();
-      void* kArgs[] = {&dGpuNs};
-      cudaError_t kerr =
-        cudaLaunchKernel((void*)ncclProgressCounterCaptureGpuTime, dim3(1), dim3(1), kArgs, 0, deviceStream);
-      if (kerr == cudaSuccess &&
-          cudaMemcpyAsync(&hGpuNs, dGpuNs, sizeof(uint64_t), cudaMemcpyDeviceToHost, deviceStream) == cudaSuccess &&
-          cudaStreamSynchronize(deviceStream) == cudaSuccess) {
-        int64_t cpu1 = (int64_t)clockNano();
-        offsetNs = ((cpu0 + cpu1) / 2) - (int64_t)hGpuNs;
-        measured = true;
-      }
-    }
-    ncclCudaFree(dGpuNs, comm->memManager);
-  }
-  if (measured) {
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      if (offsets[comm->cudaDev] == 0) offsets[comm->cudaDev] = offsetNs;
-      offsetNs = offsets[comm->cudaDev];
-    }
-    TRACE(NCCL_RAS, "NCCL progress-counter clock calibration: cudaDev %d gpuTimerOffsetNs=%ld", comm->cudaDev,
-          (long)offsetNs);
-  } else {
-    INFO(NCCL_RAS,
-         "NCCL progress-counter clock calibration failed on cudaDev %d; progress-counter age tracking disabled for "
-         "this communicator",
-         comm->cudaDev);
-  }
-  return offsetNs;
-}
-
 static ncclResult_t devCommSetup(ncclComm_t comm) {
   ncclResult_t ret = ncclSuccess;
   int nRanks = comm->nRanks;
@@ -801,21 +768,27 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   ncclCommPushCudaHostFree(comm, comm->profiler.symWorkCompleted);
   ncclCommPushCudaHostFree(comm, comm->profiler.symWorkPhases);
 
-  // Allocate device counters and their pinned host mirror when enabled.
-  comm->gpuTimerOffsetNs = 0;
-  if (ncclParamRasEnable() == 1 && ncclParamProgressCountersEnable() != 0) {
-    // Allocate this communicator's pinned host counter mirror.
-    NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->hostCountersBlock, 1), ret, fail);
-    ncclCommPushCudaHostFree(comm, comm->hostCountersBlock);
-    // Allocate this communicator's device counter block.
-    NCCLCHECKGOTO(ncclCudaCallocAsync(&comm->deviceCountersBlock, 1, deviceStream, comm->memManager), ret, fail);
-    ncclCommPushCudaFree(comm, comm->deviceCountersBlock);
-    tmpCommAndChans.comm.progressCounters = comm->deviceCountersBlock;
-    // Capture a CPU/GPU clock offset for optional timestamp consumers,
-    // calibrated once per device per process.
-    comm->gpuTimerOffsetNs = progressCounterCalibrateGpuTimer(comm, deviceStream);
+  // Allocate device counters and their CPU mirror when enabled.
+  if (ncclParamRasEnable() == 1 && ncclParamRasDeviceEnable() == 1) {
+    NCCLCHECKGOTO(ncclCalloc(&comm->hostCountersBlock, 1), ret, fail);
+    ncclCommPushFree(comm, comm->hostCountersBlock);
+    // Use the shared handle without enabling GDRCopy for FIFO/RMA paths.
+    struct ncclProgressCountersBlock* deviceCountersBlock = nullptr;
+    void* countersGdrHandle = nullptr;
+    ncclResult_t counterResult;
+    NOWARN(counterResult = ncclGdrCudaCalloc(&comm->mappedCountersBlock, &deviceCountersBlock, 1, &countersGdrHandle,
+                                             comm->memManager),
+           NCCL_RAS);
+    if (counterResult == ncclSuccess) {
+      ncclCommPushRasCounterFree(comm, countersGdrHandle);
+      tmpCommAndChans.comm.progressCounters = deviceCountersBlock;
+    } else {
+      INFO(NCCL_RAS,
+           "RAS progress counter mapping unavailable on cudaDev %d; continuing without GPU progress snapshots",
+           comm->cudaDev);
+    }
   } else {
-    TRACE(NCCL_RAS, "NCCL progress counters disabled (NCCL_RAS_ENABLE != 1 or NCCL_PROGRESS_COUNTERS != 1)");
+    TRACE(NCCL_RAS, "NCCL progress counters disabled (NCCL_RAS_ENABLE != 1 or NCCL_RAS_DEVICE_ENABLE != 1)");
   }
 
   if (comm->denseToUserRank != nullptr) {
@@ -3297,8 +3270,6 @@ fail:
 
 static ncclResult_t commCleanup(ncclComm_t comm) {
   CUDACHECK(cudaSetDevice(comm->cudaDev));
-  // Stop the counter monitor before freeing counter buffers.
-  NCCLCHECK(ncclProgressCounterMonitorDestroy(comm));
   NCCLCHECK(ncclTuningFinalize(comm));
   NCCLCHECK(commFree(comm));
   return ncclSuccess;

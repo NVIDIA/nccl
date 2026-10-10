@@ -61,6 +61,7 @@ struct ncclPeerInfo {
   nvmlGpuFabricInfoV_t fabricInfo;
   int fabricHandleSupport;
   int cuMemSupport;
+  int cuMemHostSupport;
   int version;
   uint64_t supportedGinTypeBitMask;
   bool crossNicSupport;

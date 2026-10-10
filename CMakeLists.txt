@@ -324,6 +324,7 @@ if(NCCL_OS_LINUX)
   add_subdirectory(plugins/rma/example)
   add_subdirectory(plugins/tuner/example)
   add_subdirectory(plugins/env/example)
+  add_subdirectory(plugins/log/example)
 endif()
 
 add_subdirectory(src)

@@ -391,7 +391,7 @@ static ncclResult_t ncclIbCreateQpMlx5(struct ncclIbQpCreateAttr* createQpAttrs,
   qpInitAttr.cap.max_send_wr = createQpAttrs->maxSendWorkRequest;
   qpInitAttr.cap.max_send_sge = 1;
   qpInitAttr.cap.max_recv_sge = 1;
-  qpInitAttr.cap.max_inline_data = ncclParamIbUseInline() ? sizeof(struct ncclIbSendFifo) : 0;
+  qpInitAttr.cap.max_inline_data = createQpAttrs->maxInlineData;
 
   qpInitAttr.comp_mask = IBV_QP_INIT_ATTR_PD;
   qpInitAttr.pd = createQpAttrs->pd;
@@ -405,6 +405,7 @@ static ncclResult_t ncclIbCreateQpMlx5(struct ncclIbQpCreateAttr* createQpAttrs,
     WARN("NET/IB: mlx5dv_create_qp failed to create QP: %m");
     return ncclInternalError;
   }
+  qp->maxInlineData = qpInitAttr.cap.max_inline_data;
   return ncclSuccess;
 }
 
@@ -412,20 +413,50 @@ ncclResult_t ncclIbQpCreate(struct ncclIbQp* qp, struct ncclIbQpCreateAttr* crea
   ncclIbWqeLatMonInit(&qp->latMon);
   if (createQpAttrs->oooRq) {
     NCCLCHECK(ncclIbCreateQpMlx5(createQpAttrs, qp));
-    return ncclSuccess;
+  } else {
+    struct ibv_qp_init_attr qpInitAttr;
+    memset(&qpInitAttr, 0, sizeof(struct ibv_qp_init_attr));
+    qpInitAttr.qp_context = createQpAttrs->qpContext;
+    qpInitAttr.send_cq = createQpAttrs->cq;
+    qpInitAttr.recv_cq = createQpAttrs->cq;
+    qpInitAttr.qp_type = createQpAttrs->type;
+    qpInitAttr.cap.max_recv_wr = createQpAttrs->maxRecvWorkRequest;
+    qpInitAttr.cap.max_send_wr = createQpAttrs->maxSendWorkRequest;
+    qpInitAttr.cap.max_send_sge = 1;
+    qpInitAttr.cap.max_recv_sge = 1;
+    qpInitAttr.cap.max_inline_data = createQpAttrs->maxInlineData;
+    NCCLCHECK(wrap_ibv_create_qp(&qp->qp, createQpAttrs->pd, &qpInitAttr));
+    qp->maxInlineData = qpInitAttr.cap.max_inline_data;
   }
-  struct ibv_qp_init_attr qpInitAttr;
-  memset(&qpInitAttr, 0, sizeof(struct ibv_qp_init_attr));
-  qpInitAttr.qp_context = createQpAttrs->qpContext;
-  qpInitAttr.send_cq = createQpAttrs->cq;
-  qpInitAttr.recv_cq = createQpAttrs->cq;
-  qpInitAttr.qp_type = createQpAttrs->type;
-  qpInitAttr.cap.max_recv_wr = createQpAttrs->maxRecvWorkRequest;
-  qpInitAttr.cap.max_send_wr = createQpAttrs->maxSendWorkRequest;
-  qpInitAttr.cap.max_send_sge = 1;
-  qpInitAttr.cap.max_recv_sge = 1;
-  qpInitAttr.cap.max_inline_data = ncclParamIbUseInline() ? sizeof(struct ncclIbSendFifo) : 0;
-  NCCLCHECK(wrap_ibv_create_qp(&qp->qp, createQpAttrs->pd, &qpInitAttr));
+  if (qp->maxInlineData < createQpAttrs->maxInlineData) {
+    INFO(NCCL_NET, "NET/IB: QP granted %u of %u requested inline bytes, larger CTS will not be inline",
+         qp->maxInlineData, createQpAttrs->maxInlineData);
+  }
+  return ncclSuccess;
+}
+
+// Receiver data QPs post the CTS inline: ask for a full group of fifo elements, and if the provider
+// refuses that size fall back to one element (the pre-existing request) for every later QP on the device.
+static ncclResult_t ncclIbReceiverQpCreate(struct ncclIbDev* ibDev, struct ncclIbQp* qp,
+                                           struct ncclIbQpCreateAttr* createQpAttrs) {
+  if (!ncclParamIbUseInline()) return ncclIbQpCreate(qp, createQpAttrs);
+  bool reduced;
+  {
+    std::lock_guard<std::mutex> lock(ibDev->mutex);
+    reduced = ibDev->ctsInlineReduced;
+  }
+  if (!reduced) {
+    createQpAttrs->maxInlineData = NCCL_NET_IB_MAX_RECVS * sizeof(struct ncclIbSendFifo);
+    ncclResult_t res;
+    NOWARN(res = ncclIbQpCreate(qp, createQpAttrs), NCCL_NET);
+    if (res == ncclSuccess) return ncclSuccess;
+    INFO(NCCL_NET, "NET/IB: %s refused %u bytes of inline data, grouped CTS will not be inline on this device",
+         ibDev->devName, createQpAttrs->maxInlineData);
+    std::lock_guard<std::mutex> lock(ibDev->mutex);
+    ibDev->ctsInlineReduced = true;
+  }
+  createQpAttrs->maxInlineData = sizeof(struct ncclIbSendFifo);
+  NCCLCHECK(ncclIbQpCreate(qp, createQpAttrs));
   return ncclSuccess;
 }
 
@@ -1249,12 +1280,13 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
         return ncclInternalError;
       }
     }
-    NCCLCHECK(ncclIbQpCreate(localQp, &qpCreateAttrs));
+    NCCLCHECK(ncclIbReceiverQpCreate(ibDev, localQp, &qpCreateAttrs));
     INFO(NCCL_NET,
-         "NET/IB: %s: QP created: port=%d dev=%d devName=%s ndevs=%d nmdevs=%d qp_num=%u pkey=%u pd=%p oooRq=%d",
+         "NET/IB: %s: QP created: port=%d dev=%d devName=%s ndevs=%d nmdevs=%d qp_num=%u pkey=%u pd=%p oooRq=%d "
+         "inline=%u",
          __func__, ibDev->portNum, rCommDev->base.ibDevN, ncclIbDevs[rCommDev->base.ibDevN].devName, ncclNIbDevs,
          ncclNMergedIbDevs, localQp->qp->qp_num, (uint16_t)rCommDev->base.pkeyIndex, rCommDev->base.pd,
-         qpCreateAttrs.oooRq);
+         qpCreateAttrs.oooRq, localQp->maxInlineData);
 
     localQpInfo->qpn = localQp->qp->qp_num;
     localQpInfo->devIndex = localQp->devIndex;

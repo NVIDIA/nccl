@@ -3019,8 +3019,15 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   for (int i = 0; i < ndev; i++) {
     // Ignore return codes .. we need to call ncclGroupEnd to clean up anyway
     int dev = devlist ? devlist[i] : i;
-    CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);
+    CUDACHECKGOTO(cudaSetDevice(dev), ret, groupEnd);
     ncclCommInitRankDev(comms + i, ndev, 1, &uniqueId, i, dev, &config, __func__);
+  }
+groupEnd:
+  (void)ncclGroupErrCheck(ret);
+  if (ret != ncclSuccess) {
+    // Close the group but keep our own error: inside a user group the group end returns success.
+    (void)ncclGroupEndInternal();
+    goto fail;
   }
   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);
 
@@ -3056,10 +3063,9 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t* newcomm, int nranks, ncclUniqueI
   NCCLCHECK(ncclInitEnv());
   NVTX3_RANGE(NcclNvtxParamsCommInitRankConfig);
 
-  NCCLCHECK(ncclGroupStartInternal());
-
   (void)ncclCudaLibraryInit();
   CUDACHECK(cudaGetDevice(&cudaDev));
+  NCCLCHECK(ncclGroupStartInternal());
 
   if (config == NULL) internalConfigPtr = &internalConfig;
   else internalConfigPtr = config;
@@ -3093,10 +3099,9 @@ ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myran
   ncclResult_t ret = ncclSuccess;
   ncclConfig_t internalConfig = NCCL_CONFIG_INITIALIZER;
   ncclConfig_t* internalConfigPtr = NULL;
-  NCCLCHECK(ncclGroupStartInternal());
-
   (void)ncclCudaLibraryInit();
   CUDACHECK(cudaGetDevice(&cudaDev));
+  NCCLCHECK(ncclGroupStartInternal());
 
   if (config == NULL) internalConfigPtr = &internalConfig;
   else internalConfigPtr = config;
@@ -3346,12 +3351,13 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   // Try and prevent a double free of the comm struct (user error)
   if (comm->rank == -1 || comm->nRanks == -1 || comm->cudaDev == -1 || comm->busId == -1) {
     WARN("comm %p has already been destroyed", comm);
-    return ncclInvalidArgument;
+    res = ncclInvalidArgument;
+    goto fail;
   }
 
   comm->destroyFlag = 1;
   /* init thread must be joined before we destroy the comm. */
-  NCCLCHECK(ncclCommEnsureReady(comm));
+  NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, fail);
   NEW_NOTHROW_GOTO(job, ncclCommFinalizeAsyncJob, res, fail);
   job->comm = comm;
   if (ncclParamEnqueueRearchEnable()) {

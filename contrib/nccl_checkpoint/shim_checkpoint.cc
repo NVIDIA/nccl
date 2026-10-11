@@ -9,7 +9,7 @@ using namespace nccl_checkpoint;
 static int g_CommCheckpointCount = 0;
 
 static ncclResult_t replayRegistration(ncclComm_t synthComm, void* synthMR, RegConfig* config) {
-  using real_t = ncclResult_t (*)(const ncclComm_t, void*, size_t, void**);
+  using real_t = ncclResult_t (*)(ncclComm_t, void*, size_t, void**);
   static real_t real_ncclCommRegister = nullptr;
   NCCLCHECK(resolveRealFunction("ncclCommRegister", &real_ncclCommRegister));
 

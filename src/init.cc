@@ -3925,7 +3925,7 @@ const char* ncclGetErrorString(ncclResult_t code) {
 /* Returns a human-readable message of the last error that occurred.
  * comm is currently unused and can be set to NULL
  */
-NCCL_API(const char*, ncclGetLastError, const ncclComm_t comm);
+NCCL_API(const char*, ncclGetLastError, ncclComm_t comm);
 const char* ncclGetLastError(ncclComm_t comm) {
   return ncclLastError;
 }
@@ -3966,8 +3966,8 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* asyncError) {
   return ncclSuccess;
 }
 
-NCCL_API(ncclResult_t, ncclCommCount, const ncclComm_t comm, int* count);
-ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
+NCCL_API(ncclResult_t, ncclCommCount, ncclComm_t comm, int* count);
+ncclResult_t ncclCommCount(ncclComm_t comm, int* count) {
   NCCL_NVTX3_FUNC_RANGE;
 
   NCCLCHECK(CommCheck(comm, "CommCount", "comm"));
@@ -3980,8 +3980,8 @@ ncclResult_t ncclCommCount(const ncclComm_t comm, int* count) {
   return ncclSuccess;
 }
 
-NCCL_API(ncclResult_t, ncclCommCuDevice, const ncclComm_t comm, int* devid);
-ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* devid) {
+NCCL_API(ncclResult_t, ncclCommCuDevice, ncclComm_t comm, int* devid);
+ncclResult_t ncclCommCuDevice(ncclComm_t comm, int* devid) {
   NCCL_NVTX3_FUNC_RANGE;
 
   NCCLCHECK(CommCheck(comm, "CommCuDevice", "comm"));
@@ -3993,8 +3993,8 @@ ncclResult_t ncclCommCuDevice(const ncclComm_t comm, int* devid) {
   return ncclSuccess;
 }
 
-NCCL_API(ncclResult_t, ncclCommUserRank, const ncclComm_t comm, int* rank);
-ncclResult_t ncclCommUserRank(const ncclComm_t comm, int* rank) {
+NCCL_API(ncclResult_t, ncclCommUserRank, ncclComm_t comm, int* rank);
+ncclResult_t ncclCommUserRank(ncclComm_t comm, int* rank) {
   NCCL_NVTX3_FUNC_RANGE;
 
   NCCLCHECK(CommCheck(comm, "CommUserRank", "comm"));

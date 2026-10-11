@@ -55,7 +55,7 @@ static inline void printCudaDriverErrorHint(CUresult err) {
     if (err != CUDA_SUCCESS) { \
       const char* errStr; \
       (void)pfn_cuGetErrorString(err, &errStr); \
-      WARN("Cuda failure %d '%s'", err, errStr); \
+      ERR(ncclUnhandledCudaError, "Cuda failure %d '%s'", err, errStr); \
       printCudaDriverErrorHint(err); \
       return ncclUnhandledCudaError; \
     } \
@@ -72,7 +72,7 @@ static inline void printCudaDriverErrorHint(CUresult err) {
     if (err != CUDA_SUCCESS) { \
       const char* errStr; \
       (void)pfn_cuGetErrorString(err, &errStr); \
-      WARN("Cuda failure %d '%s'", err, errStr); \
+      ERR(ncclUnhandledCudaError, "Cuda failure %d '%s'", err, errStr); \
       printCudaDriverErrorHint(err); \
       res = ncclUnhandledCudaError; \
       goto label; \

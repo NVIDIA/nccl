@@ -142,6 +142,11 @@ Buffer Registration, GPU Direct RDMA, and MPS with MLOPart
 To ensure optimal performance for scale-out communications, we recommend the usage of `ncclMemAlloc`, or alternatively `cuMemCreate` with the attribute `gpuDirectRDMACapable`.
 Failing to do so might force NCCL to use an internal staging buffer and therefore offset the gain provided by the user-buffer registration.
 
+NCCL's handling of localized buffers during registration is supported only when
+NCCL is built with CUDA Toolkit 13.4 or later and runs with a driver supporting
+CUDA 13.4. With earlier versions, NCCL may not identify a localized buffer
+before registration is attempted.
+
 Further, mixing buffers allocated with different allocators maybe result in undefined behavior.
 
 Buffer Registration and PXN

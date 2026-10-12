@@ -15,6 +15,53 @@
 
 NCCL_PARAM(LocalRegister, "LOCAL_REGISTER", 1);
 
+static bool ncclCommLocalIsMloPart(const struct ncclComm* comm) {
+  return comm->peerInfo[comm->rank].mloPart != -1;
+}
+
+// The location of the first allocation determines the buffer's locality.
+// A VA range mixing localized and non-localized allocations is not supported.
+// Localization support begins with CUDA 13.4.
+ncclResult_t ncclRegBufferIsLocalized(struct ncclComm* comm, const void* ptr, size_t size, bool* isLocalized) {
+  *isLocalized = false;
+  CUmemGenericAllocationHandle handle;
+  CUmemAllocationProp prop = {};
+  CUmemorytype memType;
+
+  // Non-device memory cannot be localized. Pointer-query failure defaults to non-localized.
+  if (CUPFN(cuPointerGetAttribute(&memType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, (CUdeviceptr)ptr)) != CUDA_SUCCESS ||
+      memType != CU_MEMORYTYPE_DEVICE) {
+    return ncclSuccess;
+  }
+
+  if (CUPFN(cuMemRetainAllocationHandle(&handle, const_cast<void*>(ptr))) != CUDA_SUCCESS) {
+    // Legacy device allocations (e.g. cudaMalloc) are localized under MLOPart.
+    *isLocalized = ncclCommLocalIsMloPart(comm);
+    return ncclSuccess;
+  }
+
+  CUresult propResult = CUPFN(cuMemGetAllocationPropertiesFromHandle(&prop, handle));
+  CUCHECK(cuMemRelease(handle));
+  if (propResult != CUDA_SUCCESS) {
+    WARN("cuMemGetAllocationPropertiesFromHandle failed: %d", static_cast<int>(propResult));
+    return ncclUnhandledCudaError;
+  }
+
+  if (ncclCommLocalIsMloPart(comm)) {
+    // Under MLOPart mode, gpuDirectRDMACapable implies non-localized buffer.
+    *isLocalized = !prop.allocFlags.gpuDirectRDMACapable;
+  } else {
+#if CUDART_VERSION >= 13040
+    // Detecting localized buffers requires CUDA 13.4+.
+    if (prop.location.type == CU_MEM_LOCATION_TYPE_DEVICE_LOCALITY_DOMAIN) {
+      *isLocalized = true;
+    }
+#endif
+  }
+
+  return ncclSuccess;
+}
+
 ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid) {
   if (reg && isValid) {
     if (reg->localRefs) *isValid = true;
@@ -36,6 +83,14 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool i
   uintptr_t endAddr = ((uintptr_t)data + size + pageSize - 1) & -pageSize;
 
   if (comm->checkMode != ncclCheckModeDefault) NCCLCHECK(CudaPtrCheck(data, comm, "buff", "ncclCommRegister"));
+
+  bool isLocalized = false;
+  NCCLCHECK(ncclRegBufferIsLocalized(comm, data, size, &isLocalized));
+  if (isLocalized) {
+    *handle = NULL;
+    INFO(NCCL_REG, "Skipping registration for localized buffer %p size %zi", data, size);
+    return ncclSuccess;
+  }
 
   bool hasSysmemSegment = false;
   if (ncclCuMemEnable()) {

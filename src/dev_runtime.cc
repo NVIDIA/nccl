@@ -14,6 +14,7 @@
 #include "rma/rma.h"
 #include "rma/rma_ce.h"
 #include "device.h"
+#include "register.h"
 #include "sym_kernels.h"
 #include "transport.h"
 #include "group.h"
@@ -1939,6 +1940,7 @@ ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, nc
   struct ncclDevrRegTask* task = nullptr;
   struct ncclRmaCeInitTask* ceTask = nullptr;
   struct ncclDevrRegAsyncJob* regJob = nullptr;
+  bool isLocalized = false;
 
   CUDACHECK(cudaGetDevice(&saveDev));
   NCCLCHECK(ncclGroupStartInternal());
@@ -1947,6 +1949,13 @@ ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, nc
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), ret, fail);
 
   NCCLCHECKGOTO(ncclDevrInitOnce(comm), ret, fail);
+
+  NCCLCHECKGOTO(ncclRegBufferIsLocalized(comm, buff, size, &isLocalized), ret, fail);
+  if (isLocalized) {
+    WARN("Localized memory is not supported with NCCL window registration.");
+    ret = ncclInvalidUsage;
+    goto fail;
+  }
 
   if (ncclParamEnqueueRearchEnable()) {
     NEW_NOTHROW_GOTO(regJob, ncclDevrRegAsyncJob, ret, fail);

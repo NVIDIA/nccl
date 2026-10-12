@@ -71,5 +71,6 @@ ncclResult_t ncclRegCleanup(struct ncclComm* comm);
 ncclResult_t ncclCommGraphRegister(const ncclComm_t comm, void* buff, size_t size, void** handle);
 ncclResult_t ncclCommGraphDeregister(const ncclComm_t comm, struct ncclReg* handle);
 ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid);
+ncclResult_t ncclRegBufferIsLocalized(struct ncclComm* comm, const void* ptr, size_t size, bool* isLocalized);
 
 #endif

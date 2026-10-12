@@ -25,6 +25,10 @@ ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid) {
 
 ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool isGraph, void** handle) {
   NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
+  if (data == nullptr || size == 0 || handle == nullptr) {
+    WARN("invalid internal registration: data %p size %zu handle %p", data, size, handle);
+    return ncclInternalError;
+  }
 
   struct ncclRegCache* cache = &comm->regCache;
   uintptr_t pageSize = cache->pageSize;
@@ -148,6 +152,13 @@ ncclResult_t ncclRegCleanup(struct ncclComm* comm) {
 
 NCCL_API(ncclResult_t, ncclCommRegister, const ncclComm_t comm, void* buff, size_t size, void** handle);
 ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, void** handle) {
+  NCCLCHECK(CommCheck(comm, __func__, "comm"));
+  NCCLCHECK(PtrCheck(buff, __func__, "buff"));
+  NCCLCHECK(PtrCheck(handle, __func__, "handle"));
+  if (size == 0) {
+    WARN("%s : size argument is zero", __func__);
+    return ncclInvalidArgument;
+  }
   if (!ncclParamLocalRegister() || ncclP2pUsesMemcpy()) {
     *handle = NULL;
     INFO(NCCL_REG, "Skipping registration for buffer %p size %zi (LocalRegister=%ld, P2pUsesMemcpy=%d)", buff, size,

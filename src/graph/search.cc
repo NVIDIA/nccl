@@ -1086,9 +1086,9 @@ ncclResult_t ncclTopoGetGraphFromXmlSub(struct ncclXmlNode* xmlGraph, struct ncc
   NCCLCHECK(xmlGetAttr(xmlGraph, "latencyinter", &str));
   if (!str) INFO(NCCL_GRAPH, "latencyinter not found in graph, using 0.0");
   graph->latencyInter = str ? strtof(str, NULL) : 0.0;
-  NCCLCHECK(xmlGetAttr(xmlGraph, "typeintra", &str));
+  NCCLCHECK(xmlGetAttrStr(xmlGraph, "typeintra", &str));
   NCCLCHECK(kvConvertToInt(str, &graph->typeIntra, kvDictLinkType));
-  NCCLCHECK(xmlGetAttr(xmlGraph, "typeinter", &str));
+  NCCLCHECK(xmlGetAttrStr(xmlGraph, "typeinter", &str));
   NCCLCHECK(kvConvertToInt(str, &graph->typeInter, kvDictLinkType));
   NCCLCHECK(xmlGetAttrInt(xmlGraph, "samechannels", &graph->sameChannels));
   for (int s = 0; s < xmlGraph->nSubs; s++) {

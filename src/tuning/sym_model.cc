@@ -49,15 +49,18 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
     return ncclSuccess;
   }
 
-  if (!ncclSymkAvailable(inputs->comm, inputs->func, inputs->devRedOp, inputs->datatype, inputs->count)) {
+  // Symmetric kernels implement Avg as a sum followed by a division; the input carries the
+  // general-kernel operator, which for a floating-point Avg is a pre-multiplied sum.
+  ncclDevRedOp_t devRedOp = inputs->redOp == ncclAvg ? ncclDevSumPostDiv : inputs->devRedOp;
+  if (!ncclSymkAvailable(inputs->comm, inputs->func, devRedOp, inputs->datatype, inputs->count)) {
     tuning->valid = 0;
     tuning->timeUs = -1.0;
     return ncclSuccess;
   }
 
   ncclSymkKernelMask tuning_kmask = 1ull << tuning->symKernelId;
-  ncclSymkKernelMask valid_kmask = ncclSymkMask(inputs->comm, inputs->func, inputs->devRedOp, inputs->datatype,
-                                                inputs->countMax, inputs->symAligned16B);
+  ncclSymkKernelMask valid_kmask =
+    ncclSymkMask(inputs->comm, inputs->func, devRedOp, inputs->datatype, inputs->countMax, inputs->symAligned16B);
   ncclSymkKernelMask window_optional_kmask = ncclSymkLLKernelMask() | ncclGenkKernelMask();
   // Kernels that don't support grouping -- these are symmetric LL kernels.
   ncclSymkKernelMask ungrouped_kmask = ncclSymkLLKernelMask() & ~ncclGenkKernelMask();

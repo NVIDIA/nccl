@@ -2181,7 +2181,7 @@ ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, i
   size_t nBytes = elementSize * ncclFuncMaxSendRecvCount(info->func, comm->nRanks, info->count);
   info->algorithm = NCCL_ALGO_UNDEF;
   info->protocol = NCCL_PROTO_UNDEF;
-  struct ncclTuningInput_t input;
+  struct ncclTuningInput_t input = {};
   input.comm = comm;
   input.tuningMask = NCCL_TUNING_MASK_GENERAL_KERNELS;
   // Env (NCCL_ALGO/PROTO/SYM_KERNEL) is a global override that wins over per-call

@@ -184,7 +184,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         }
         task = task->next;
       }
-      struct ncclTuningInput_t input;
+      struct ncclTuningInput_t input = {};
       input.comm = comm;
       input.tuningMask = NCCL_TUNING_MASK_SYM_KERNELS;
       // Env (NCCL_ALGO/PROTO/SYM_KERNEL) is a global override that wins over per-call

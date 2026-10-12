@@ -190,11 +190,12 @@ static int ncclTuningCollapseId(const struct ncclTuningResult_t* tuning) {
 }
 
 /*
-  Get the best tuning for the given input.
+  Get the best tuning for the given input and tuning mask.
   Simulates the all tunings for the given input and engages the tuner plugin if defined.
   Then selects the best tuning from all the tuning results and returns that to the caller.
 */
-ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
+static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
+                                         struct ncclTuningResult_t* const result) {
   ncclResult_t ret = ncclSuccess;
   TRACE(NCCL_TUNING,
         "Input: { .comm = %p, .tuningMask = 0x%lx, .func = %s, .redOp = %d, .devRedop = %d, .dataType = %d, .nBytes = "
@@ -224,7 +225,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
     bestTuning.forced = 0;
   } else {
     if (input->func == ncclFuncAlltoAll || input->func == ncclFuncScatter || input->func == ncclFuncGather) {
-      if ((input->CTAPolicy & NCCL_CTA_POLICY_ZERO) && (input->ceAvailable || input->hierCeAvailable)) {
+      if ((input->CTAPolicy & NCCL_CTA_POLICY_ZERO) && (input->tuningMask & NCCL_TUNING_MASK_CE)) {
         bestTuning.ceMethodId = ncclCeMethodId_Coll_P2P_UC;
         bestTuning.id = NCCL_TUNING_CE_METHOD_ID_OFFSET + bestTuning.ceMethodId;
         bestTuning.valid = 1;
@@ -327,6 +328,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
         // (because they were not requested).  We need to check the legacy ones.
         struct ncclTuningInput_t bestNonSymkInput = *input;
         bestNonSymkInput.tuningMask = NCCL_TUNING_MASK_GENERAL_KERNELS;
+        bestNonSymkInput.algSelection = 0;
         bestNonSymkInput.forceAlgSelection = 0;
 
         NOWARN(ncclTuningCompute(&bestNonSymkInput, &bestNonSymkTuning), NCCL_TUNING);
@@ -374,7 +376,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
   // With forceAlgSelection the mask is a hard constraint, so reject a selection that falls
   // outside it: the fallbacks above (symmetric -> general kernels, EFFICIENCY -> NVLS) can
   // land on an algorithm the caller excluded. The single-rank and AllToAll/Scatter/Gather
-  // paths pick without consulting the mask at all, so they are not constrained here.
+  // paths pick without consulting the mask beyond the copy-engine bits, so they are not constrained here.
   if (input->forceAlgSelection && input->comm->nRanks > 1 && input->func != ncclFuncAlltoAll &&
       input->func != ncclFuncScatter && input->func != ncclFuncGather) {
     int tuningId = ncclTuningCollapseId(&bestTuning);
@@ -389,6 +391,38 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
 exit:
   ncclTuningResultListFree(&tunings);
   return ret;
+}
+
+/*
+  Get the best tuning for the given input, honoring a per-call algorithm selection.
+  NCCL_ALGO, NCCL_PROTO and NCCL_SYM_KERNEL win over the selection for the functions they force.
+  Otherwise tune within the selection first. A selection that nothing can satisfy is a possible
+  outcome, not necessarily an error: retune the automatic menu so a hard failure still surfaces,
+  then fail only when the caller forced the selection, and fall back otherwise.
+*/
+ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
+  uint64_t selection = input->comm->tuningContext.forced[input->func] ? 0 : input->algSelection;
+  if (selection == 0) return tuningComputeForMask(input, result);
+
+  // A selection disjoint from the automatic menu goes straight to the automatic retune.
+  if ((input->tuningMask & selection) != 0) {
+    struct ncclTuningInput_t narrowed = *input;
+    narrowed.tuningMask &= selection;
+    ncclResult_t ret;
+    NOWARN(ret = tuningComputeForMask(&narrowed, result), NCCL_TUNING);
+    if (ret == ncclSuccess) return ncclSuccess;
+  }
+
+  struct ncclTuningInput_t automatic = *input;
+  automatic.forceAlgSelection = 0;
+  NCCLCHECK(tuningComputeForMask(&automatic, result));
+  if (input->forceAlgSelection) {
+    WARN("algSelection: no algorithm in the selected set is available for %s", ncclFuncToString(input->func));
+    return ncclInvalidArgument;
+  }
+  INFO(NCCL_TUNING, "algSelection: selected set unavailable for %s; falling back to automatic selection",
+       ncclFuncToString(input->func));
+  return ncclSuccess;
 }
 
 /*

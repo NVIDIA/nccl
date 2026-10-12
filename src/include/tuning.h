@@ -84,6 +84,11 @@ struct ncclTuningResult_t {
 struct ncclTuningInput_t {
   struct ncclComm* comm;
   uint64_t tuningMask;
+  // Per-call algorithm selection, 0 when the call made none. The tuner narrows tuningMask to it
+  // unless the environment forced this function, and resolves an unmet selection itself: it
+  // retunes with the full tuningMask, then fails when forceAlgSelection is set and falls back
+  // otherwise. Callers that resolve the selection themselves leave this at 0.
+  uint64_t algSelection;
   // 1 == tuningMask is a hard constraint: error out instead of returning a selection outside it.
   // Callers that implement their own fallback policy on an unmet mask must leave this at 0.
   int forceAlgSelection;
@@ -101,8 +106,6 @@ struct ncclTuningInput_t {
   int collNetSupport;
   int nvlsSupport;
   bool symAligned16B; // Check for TMA eligibility in sym scheduler
-  bool ceAvailable;
-  bool hierCeAvailable;
   int captured;
   int inPlace;
   int minCTAs;  // resolved lower CTA bound (env > per-call > comm)

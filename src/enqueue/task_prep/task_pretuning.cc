@@ -34,7 +34,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   bool isRecvValid;
 
   in->comm = comm;
-  in->tuningMask = raw->algMask != 0 ? raw->algMask & ncclCommDefaultAlgoMask(comm) : ncclCommDefaultAlgoMask(comm);
+  in->tuningMask = ncclCommDefaultAlgoMask(comm);
+  in->algSelection = raw->algMask;
   in->forceAlgSelection = raw->algMask != 0 ? collConfig->forceAlgSelection : 0;
   // AllGather and Broadcast are counted in bytes from here on, matching the legacy enqueue
   // path: their device kernels are type agnostic and read the work count as a byte count.
@@ -72,9 +73,16 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   if (sendWin != nullptr || recvWin != nullptr) {
     NCCLCHECK(ncclGetSymRegType(sendWin, recvWin, &in->winRegType));
   }
-  in->ceAvailable = ncclCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
-  in->hierCeAvailable =
-    ncclHierCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
+  // Symmetric kernels do not support windows that contain host-backed segments.
+  if (ncclDevrWindowHasSysmemSegment(sendWin) || ncclDevrWindowHasSysmemSegment(recvWin)) {
+    in->tuningMask &= ~NCCL_TUNING_MASK_SYM_KERNELS;
+  }
+  // The copy-engine models do not check availability themselves, so keep their entries out of the
+  // selection when no copy-engine route can run this collective.
+  if (!ncclCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin) &&
+      !ncclHierCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin)) {
+    in->tuningMask &= ~NCCL_TUNING_MASK_CE;
+  }
   in->nvlsSupport = ncclNvlsTransportEnabled(comm) &&
                     (ncclNvlsSupported(raw->opDev.op, raw->datatype) || raw->func == ncclFuncAllGather);
   {
@@ -91,8 +99,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   NCCLCHECK(ncclRegFind(comm, raw->recvbuff, recvbuffSize, &regRecvBuf));
   NCCLCHECK(ncclRegLocalIsValid(regSendBuf, &isSendValid));
   NCCLCHECK(ncclRegLocalIsValid(regRecvBuf, &isRecvValid));
-  in->regBuff = (regSendBuf && regRecvBuf && isSendValid && isRecvValid) ||
-                (ncclCudaGraphValid(comm->planner.capturingGraph) && ncclParamGraphRegister());
+  in->captured = ncclCudaGraphValid(comm->planner.capturingGraph);
+  in->regBuff = (regSendBuf && regRecvBuf && isSendValid && isRecvValid) || (in->captured && ncclParamGraphRegister());
   {
     bool ctaPolicyEnvOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
     NCCL_CONFIG_SET(in, minCTAs, ncclParamMinCTAs(), collConfig->minCTAs, comm->config.minCTAs, 1, MAXCHANNELS);
@@ -120,8 +128,6 @@ static ncclResult_t fillSendRecvTuningInput(struct ncclComm* comm, struct ncclRa
   in->nWorks = 1;
   in->numPipeOps = 1;
   in->nBytes = raw->bytes;
-  in->ceAvailable = false;
-  in->hierCeAvailable = false;
 
   NCCLCHECK(ncclRegFind(comm, raw->buff, raw->bytes, &regBuf));
   NCCLCHECK(ncclRegLocalIsValid(regBuf, &isValid));
@@ -148,15 +154,15 @@ static ncclResult_t fillRmaTuningInput(struct ncclComm* comm, struct ncclRawTask
     in->countMax = 0;
     in->nBytes = 0;
   }
-  in->ceAvailable = false;
-  in->hierCeAvailable = false;
   return ncclSuccess;
 }
 
 static ncclResult_t fillAllGatherVTuningInput(struct ncclComm* comm, struct ncclRawTaskAllGatherV* raw,
                                               const ncclCollConfig_t* collConfig, ncclTuningInput_t* in) {
   in->comm = comm;
-  in->tuningMask = raw->algMask != 0 ? raw->algMask & ncclCommDefaultAlgoMask(comm) : ncclCommDefaultAlgoMask(comm);
+  // Only general kernels run an AllGatherV.
+  in->tuningMask = ncclCommDefaultAlgoMask(comm) & NCCL_TUNING_MASK_GENERAL_KERNELS;
+  in->algSelection = raw->algMask;
   in->forceAlgSelection = raw->algMask != 0 ? collConfig->forceAlgSelection : 0;
   // AllGatherV uses same tuning as AllGather
   in->func = ncclFuncAllGather;
@@ -166,8 +172,8 @@ static ncclResult_t fillAllGatherVTuningInput(struct ncclComm* comm, struct nccl
   in->count = raw->maxCount;
   in->countMax = raw->maxCount;
   in->nBytes = raw->maxCount;
-  in->ceAvailable = false;
-  in->hierCeAvailable = false;
+  // The AllGatherV scheduler sizes its chunks from a single step.
+  in->chunkSteps = in->sliceSteps = 1;
   {
     bool ctaPolicyEnvOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
     NCCL_CONFIG_SET(in, minCTAs, ncclParamMinCTAs(), collConfig->minCTAs, comm->config.minCTAs, 1, MAXCHANNELS);

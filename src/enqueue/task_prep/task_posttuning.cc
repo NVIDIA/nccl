@@ -87,6 +87,11 @@ static ncclResult_t fillCollTaskFromRaw(struct ncclComm* comm, struct ncclTaskTu
 
 static ncclResult_t freeRaw(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
   if (tInfo->raw != nullptr) {
+    // An AllGatherV owns the table of broadcasts it was merged from.
+    if (tInfo->raw->kind == ncclTaskKindAllGatherV) {
+      delete tInfo->raw->allGatherV.bcastTasks;
+      tInfo->raw->allGatherV.bcastTasks = nullptr;
+    }
     ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
     tInfo->raw = nullptr;
   }
@@ -549,12 +554,7 @@ static ncclResult_t preSchedAllGatherVTasks(
     }
 
   cleanup:
-    if (tInfo->raw != nullptr) {
-      delete tInfo->raw->allGatherV.bcastTasks;
-      tInfo->raw->allGatherV.bcastTasks = nullptr;
-      ncclMemoryPoolFree(&comm->memPool_ncclRawTask, tInfo->raw);
-      tInfo->raw = nullptr;
-    }
+    NCCLCHECK(freeRaw(comm, tInfo));
   }
   return ncclSuccess;
 }
@@ -610,6 +610,9 @@ static void accumulateTime(struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncc
   }
 }
 
+// The group estimate is the sum of the per-task estimates, assuming the tasks run one after
+// another, so it covers every operation in the group, as the ncclSimInfo_t documentation
+// describes.
 static ncclResult_t taskSimulate(struct ncclClassifiedTaskQueues* ctq, ncclSimInfo_t* simInfo) {
   float totalTimeUs = 0.0f;
 
@@ -623,12 +626,23 @@ static ncclResult_t taskSimulate(struct ncclClassifiedTaskQueues* ctq, ncclSimIn
   return ncclSuccess;
 }
 
+// A simulation stops before pre-scheduling, which is where raw tasks are normally released.
+static ncclResult_t releaseSimulatedTasks(struct ncclComm* comm, struct ncclClassifiedTaskQueues* ctq) {
+  for (int type = 0; type < ncclTaskQueueNum; type++) {
+    while (!ncclIntruQueueEmpty(&ctq->queues[type])) {
+      NCCLCHECK(freeRaw(comm, ncclIntruQueueDequeue(&ctq->queues[type])));
+    }
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTaskPostTuning(struct ncclComm* comm, struct ncclClassifiedTaskQueues* ctq, ncclSimInfo_t* simInfo) {
   if (comm == nullptr || ctq == nullptr) return ncclInvalidArgument;
   if (simInfo != nullptr) {
     if (simInfo != reinterpret_cast<ncclSimInfo_t*>(NCCL_COMM_SIMULATION_SKIP)) {
       NCCLCHECK(taskSimulate(ctq, simInfo));
     }
+    NCCLCHECK(releaseSimulatedTasks(comm, ctq));
     return ncclSuccess;
   }
 

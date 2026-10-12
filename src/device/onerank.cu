@@ -160,10 +160,8 @@ ncclResult_t ncclProfilerProbeGpuClock(unsigned long long* devOut, cudaStream_t 
   // NVLink/hardware fault). A WARN here would wrongly implicate the
   // profiler during triage, so fail quietly, clear the sticky error,
   // and let the caller skip this calibration anchor.
-  cudaError_t err = cudaLaunchKernel((void const*)&ncclProfClockProbeKernel,
-                                     dim3(1, 1, 1),
-                                     dim3(1, 1, 1),
-                                     args, 0, stream);
+  cudaError_t err =
+    cudaLaunchKernel((void const*)&ncclProfClockProbeKernel, dim3(1, 1, 1), dim3(1, 1, 1), args, 0, stream);
   if (err != cudaSuccess) {
     (void)cudaGetLastError();
     return ncclUnhandledCudaError;

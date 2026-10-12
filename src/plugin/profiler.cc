@@ -128,8 +128,8 @@ static ncclProfiler_t* ncclProfiler;
 // 0->mode, done once via compare-exchange by whichever comm opts in first; the
 // reset to 0 happens under profilerMutex when the last comm has gone.
 #define PROF_TS_MODE(clock, gpuSync) (((uint32_t)(clock) & 0xffu) | ((gpuSync) ? 0x100u : 0u))
-#define PROF_TS_MODE_CLOCK(mode)     ((mode) & 0xffu)
-#define PROF_TS_MODE_GPUSYNC(mode)   (((mode) & 0x100u) != 0u)
+#define PROF_TS_MODE_CLOCK(mode) ((mode) & 0xffu)
+#define PROF_TS_MODE_GPUSYNC(mode) (((mode) & 0x100u) != 0u)
 
 static uint32_t profilerTsMode = 0;
 
@@ -142,9 +142,14 @@ static inline uint32_t profilerTsModeGet(void) {
 static inline uint64_t profilerCpuNow(uint32_t mode) {
   clockid_t id;
   switch (PROF_TS_MODE_CLOCK(mode)) {
-    case ncclProfilerCpuClockMonotonic: id = CLOCK_MONOTONIC; break;
-    case ncclProfilerCpuClockRealtime:  id = CLOCK_REALTIME;  break;
-    default: return NCCL_PROFILER_TS_NONE;
+  case ncclProfilerCpuClockMonotonic:
+    id = CLOCK_MONOTONIC;
+    break;
+  case ncclProfilerCpuClockRealtime:
+    id = CLOCK_REALTIME;
+    break;
+  default:
+    return NCCL_PROFILER_TS_NONE;
   }
   struct timespec t;
   clock_gettime(id, &t);
@@ -166,7 +171,7 @@ static inline uint64_t profilerMonoNow(void) {
 // carry meaning; everything else is zeroed and the event is identified by
 // eHandle. Host-sampled stops are exact, so the uncertainty stays 0.
 static inline void profilerStopEventHost(void* eHandle) {
-  ncclProfilerEventDescr_t sd = { };
+  ncclProfilerEventDescr_t sd = {};
   sd.tsCpu = profilerCpuNow(profilerTsModeGet());
   ncclProfiler->stopEvent(eHandle, &sd);
 }
@@ -175,15 +180,15 @@ static inline void profilerStopEventHost(void* eHandle) {
 // whose completion is tracked by the plugin's own CUDA events rather than by a
 // host clock at the API boundary, so NCCL deliberately does not stamp them.
 static inline void profilerStopEventNone(void* eHandle) {
-  ncclProfilerEventDescr_t sd = { };
+  ncclProfilerEventDescr_t sd = {};
   ncclProfiler->stopEvent(eHandle, &sd);
 }
 
 // ---------------------------------------------------------------------------
 // GPU->CPU time calibration (profiler-thread local).
 // ---------------------------------------------------------------------------
-#define NCCL_PROF_CLOCK_PROBES        8                    // best-of-N per anchor
-#define NCCL_PROF_CLOCK_RECALIB_NS    (1000000000ull)      // re-anchor every ~1s
+#define NCCL_PROF_CLOCK_PROBES 8                    // best-of-N per anchor
+#define NCCL_PROF_CLOCK_RECALIB_NS (1000000000ull)      // re-anchor every ~1s
 
 // The active thread's calibration, set at thread start. Only ever
 // read/written by the owning profiler thread.
@@ -192,13 +197,11 @@ static thread_local struct ncclProfilerClockCalib* profilerTlCalib = nullptr;
 static void profilerClockCalibInit(struct ncclProfilerClockCalib* c) {
   memset(c, 0, sizeof(*c));
   c->slope = 1.0;
-  if (cudaStreamCreateWithFlags(&c->stream, cudaStreamNonBlocking)
-      != cudaSuccess) {
+  if (cudaStreamCreateWithFlags(&c->stream, cudaStreamNonBlocking) != cudaSuccess) {
     c->stream = nullptr;
     return;
   }
-  if (cudaMallocHost((void**)&c->pinned, sizeof(*c->pinned))
-      != cudaSuccess) {
+  if (cudaMallocHost((void**)&c->pinned, sizeof(*c->pinned)) != cudaSuccess) {
     cudaStreamDestroy(c->stream);
     c->stream = nullptr;
     c->pinned = nullptr;
@@ -208,8 +211,14 @@ static void profilerClockCalibInit(struct ncclProfilerClockCalib* c) {
 }
 
 static void profilerClockCalibFree(struct ncclProfilerClockCalib* c) {
-  if (c->pinned) { cudaFreeHost(c->pinned); c->pinned = nullptr; }
-  if (c->stream) { cudaStreamDestroy(c->stream); c->stream = nullptr; }
+  if (c->pinned) {
+    cudaFreeHost(c->pinned);
+    c->pinned = nullptr;
+  }
+  if (c->stream) {
+    cudaStreamDestroy(c->stream);
+    c->stream = nullptr;
+  }
   c->ready = false;
   c->valid = false;
 }
@@ -218,11 +227,10 @@ static void profilerClockCalibFree(struct ncclProfilerClockCalib* c) {
 // unrelated GPU work (e.g. a driver-contained NVLink/hardware
 // fault). That is not a profiler bug, so report it as INFO log.
 static inline void profilerClockProbeReport() {
-  INFO(NCCL_INIT | NCCL_PROFILE,
-       "[Profiler Thread] GPU clock probe failed "
-       "(likely a CUDA context error from unrelated GPU work); "
-       "GPU->CPU timestamp calibration paused. "
-       "Informational -- not itself a profiler fault.");
+  INFO(NCCL_INIT | NCCL_PROFILE, "[Profiler Thread] GPU clock probe failed "
+                                 "(likely a CUDA context error from unrelated GPU work); "
+                                 "GPU->CPU timestamp calibration paused. "
+                                 "Informational -- not itself a profiler fault.");
 }
 
 // Fold one completed probe round-trip into the best-so-far
@@ -230,11 +238,8 @@ static inline void profilerClockProbeReport() {
 // the CPU interval [t0, t1], so the round-trip midpoint is the
 // least-biased CPU estimate of that instant; we keep the sample with
 // the shortest round-trip, whose midpoint is tightest.
-static inline void profilerClockKeepBest(struct ncclProfilerClockCalib* c,
-                                         uint64_t t0, uint64_t t1,
-                                         uint64_t* bestLat,
-                                         uint64_t* gpuOut, uint64_t* cpuOut,
-                                         bool* got) {
+static inline void profilerClockKeepBest(struct ncclProfilerClockCalib* c, uint64_t t0, uint64_t t1, uint64_t* bestLat,
+                                         uint64_t* gpuOut, uint64_t* cpuOut, bool* got) {
   uint64_t lat = (t1 > t0) ? (t1 - t0) : 0;
   if (lat >= *bestLat) return;
   *bestLat = lat;
@@ -246,18 +251,14 @@ static inline void profilerClockKeepBest(struct ncclProfilerClockCalib* c,
 // One lowest-latency (gpu, cpu) anchor: launch the probe N times and keep the
 // sample whose CPU round-trip was shortest (its midpoint best approximates the
 // instant the GPU read its clock).
-static bool profilerClockProbe(struct ncclProfilerClockCalib* c,
-                               uint32_t mode,
-                               uint64_t* gpuOut,
-                               uint64_t* cpuOut,
+static bool profilerClockProbe(struct ncclProfilerClockCalib* c, uint32_t mode, uint64_t* gpuOut, uint64_t* cpuOut,
                                uint64_t* uncOut) {
   if (!c->ready) return false;
   uint64_t bestLat = ~0ull;
   bool got = false;
   for (int i = 0; i < NCCL_PROF_CLOCK_PROBES; i++) {
     uint64_t t0 = profilerCpuNow(mode);
-    if (ncclProfilerProbeGpuClock(c->pinned, c->stream)
-        != ncclSuccess) {
+    if (ncclProfilerProbeGpuClock(c->pinned, c->stream) != ncclSuccess) {
       profilerClockProbeReport();
       break;
     }
@@ -285,8 +286,11 @@ static void profilerClockCalibUpdate(struct ncclProfilerClockCalib* c, uint32_t 
     double s = (double)(cpu - c->prevCpu) / (double)(gpu - c->prevGpu);
     if (s > 0.95 && s < 1.05) c->slope = s;
   }
-  c->prevGpu = gpu; c->prevCpu = cpu; c->havePrev = true;
-  c->gpuRef = gpu;  c->cpuRef = cpu;
+  c->prevGpu = gpu;
+  c->prevCpu = cpu;
+  c->havePrev = true;
+  c->gpuRef = gpu;
+  c->cpuRef = cpu;
   c->uncertainty = unc;
   c->valid = true;
 }
@@ -304,9 +308,7 @@ static void profilerClockCalibMaybe(struct ncclProfilerClockCalib* c, uint32_t m
 // Map a GPU globaltimer ns onto the configured CPU clock using this thread's
 // calibration, along with the anchor's +/- error bound. Yields 0
 // (NCCL_PROFILER_TS_NONE) when uncalibrated or tsGpu==0.
-static inline void profilerMapGpuToCpu(uint64_t tsGpu,
-                                       uint64_t* tsCpu,
-                                       uint64_t* tsCpuUncertainty) {
+static inline void profilerMapGpuToCpu(uint64_t tsGpu, uint64_t* tsCpu, uint64_t* tsCpuUncertainty) {
   *tsCpu = NCCL_PROFILER_TS_NONE;
   *tsCpuUncertainty = 0;
   struct ncclProfilerClockCalib* c = profilerTlCalib;
@@ -337,7 +339,7 @@ static inline void profilerStartEventGpu(void* ctx, void** eHandle, ncclProfiler
 // Stop a GPU-timed event. The raw globaltimer stop value reaches the plugin
 // through recordEventState's pTimer; this adds the mapped CPU clock.
 static inline void profilerStopEventGpu(void* eHandle, uint64_t tsGpu) {
-  ncclProfilerEventDescr_t sd = { };
+  ncclProfilerEventDescr_t sd = {};
   if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
     profilerMapGpuToCpu(tsGpu, &sd.tsCpu, &sd.tsCpuUncertainty);
   }
@@ -629,7 +631,7 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
     // Feature handshake: NCCL supplies the defaults (all zero), the plugin
     // writes back the toggles it wants. A pre-v8 plugin never sees this (its
     // adapter drops the argument), so it keeps every default.
-    ncclProfilerConfig_t config = { };
+    ncclProfilerConfig_t config = {};
     int err = ncclProfiler->init(&comm->profilerContext, comm->commHash, &ncclProfilerEventMask, comm->config.commName,
                                  comm->nNodes, comm->nRanks, comm->rank, ncclDebugLog, &config);
     if (err) {
@@ -646,11 +648,9 @@ ncclResult_t ncclProfilerPluginInit(struct ncclComm* comm) {
       uint32_t mode = PROF_TS_MODE(clock, gpuSync);
       // Test-and-set: only the comm that wins the 0->mode transition logs.
       uint32_t expected = 0;
-      if (mode
-          && COMPILER_ATOMIC_COMPARE_EXCHANGE(&profilerTsMode, &expected, mode, std::memory_order_release,
-                                              std::memory_order_relaxed)) {
-        INFO(NCCL_INIT | NCCL_PROFILE,
-             "Profiler: plugin requested NCCL-sourced timings on %s%s",
+      if (mode && COMPILER_ATOMIC_COMPARE_EXCHANGE(&profilerTsMode, &expected, mode, std::memory_order_release,
+                                                   std::memory_order_relaxed)) {
+        INFO(NCCL_INIT | NCCL_PROFILE, "Profiler: plugin requested NCCL-sourced timings on %s%s",
              clock == ncclProfilerCpuClockRealtime ? "CLOCK_REALTIME" : "CLOCK_MONOTONIC",
              gpuSync ? "; enabling GPU->CPU clock calibration" : "");
       }
@@ -1383,8 +1383,8 @@ static void* ncclProfilerThreadFunc(void* arg) {
          cudaGetErrorString(setDevErr));
     (void)cudaGetLastError();
   }
-  INFO(NCCL_INIT, "[Profiler Thread] started (cudaDev=%d, maxInflight=%zu, tsMode=0x%x)", pt->cudaDev,
-       pt->maxInflight, profilerTsModeGet());
+  INFO(NCCL_INIT, "[Profiler Thread] started (cudaDev=%d, maxInflight=%zu, tsMode=0x%x)", pt->cudaDev, pt->maxInflight,
+       profilerTsModeGet());
 
   // Clock calibration is set up on first use below rather than here: a comm
   // created after this thread started can be the one that opts into

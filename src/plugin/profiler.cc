@@ -604,10 +604,6 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
         eDescr.coll.root = ct->root;
         eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
         eDescr.coll.nChannels = ct->nChannels;
-        // Sym plans use plan->channelMask while ct->nChannels stays 0.
-        // Advertise the real count on the head task.
-        if (plan->isSymColl && ct == ncclIntruQueueHead(&plan->collTaskQueue))
-          eDescr.coll.nChannels = (uint8_t)countOneBits(plan->channelMask);
         eDescr.coll.nWarps = ct->nWarps;
         eDescr.coll.isSymColl = plan->isSymColl;
         if (plan->isSymColl) {
@@ -909,16 +905,16 @@ static void profilerFireKernelPhaseEvents(struct ncclProfilerWorkOp* op) {
   int ch = op->channelId;
   uint64_t wc = op->workCounter;
   int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
-  uint64_t* ts = op->workPhases[ch].data[slot].timestamps;
+  // Several tasks in a sym plan can share this channel's device record. Fold
+  // boundaries in a local copy so every task can report the same phase interval.
+  uint64_t ts[MAX_PROFILER_PHASES];
+  memcpy(ts, op->workPhases[ch].data[slot].timestamps, sizeof(ts));
 
   // Fold a missing intermediate boundary onto the adjacent outer one; if both are
   // missing the kernel didn't instrument phases, so skip rather than mislabel.
   bool haveAfterOpen = ts[NCCL_KERNEL_PHASE_AFTER_OPEN] != 0;
   bool haveBeforeClose = ts[NCCL_KERNEL_PHASE_BEFORE_CLOSE] != 0;
-  if (!haveAfterOpen && !haveBeforeClose) {
-    memset(ts, 0, sizeof(uint64_t) * MAX_PROFILER_PHASES);
-    return;
-  }
+  if (!haveAfterOpen && !haveBeforeClose) return;
   if (!haveAfterOpen && ts[NCCL_KERNEL_PHASE_BEGIN] != 0)
     ts[NCCL_KERNEL_PHASE_AFTER_OPEN] = ts[NCCL_KERNEL_PHASE_BEGIN];
   if (!haveBeforeClose && ts[NCCL_KERNEL_PHASE_END] != 0)
@@ -944,7 +940,6 @@ static void profilerFireKernelPhaseEvents(struct ncclProfilerWorkOp* op) {
       ncclProfiler->stopEvent(phaseHandle);
     }
   }
-  memset(ts, 0, sizeof(uint64_t) * MAX_PROFILER_PHASES);
 }
 
 // Runs without pt->mutex held: plugin callbacks may block, so we mustn't
@@ -1293,9 +1288,14 @@ static void profilerPostPlanWorkSym(struct ncclComm* comm, struct ncclKernelPlan
   struct ncclSymkDevWorkArgs* argsBuf = (struct ncclSymkDevWorkArgs*)plan->kernelSymArgs;
   if (!argsBuf->profilerMode) return;
   uint64_t* counters = argsBuf->getProfilerCounters();
-  int nChannels = countOneBits(plan->channelMask);
-  for (int c = 0; c < nChannels; c++) {
-    profilerEnqueueOp(pt, comm, c, counters[c], sct->eActivationMask, sct->eventHandle, /*sym=*/true);
+  for (struct ncclTaskColl* ct = sct; ct != nullptr; ct = ct->next) {
+    if (ct->eActivationMask & ncclProfileKernelCh) {
+      for (int c = ct->channelLo; c <= ct->channelHi; c++) {
+        // A shared channel still publishes only one record for the entire plan.
+        // Reuse its counter for each task; these are shared, not per-task timings.
+        profilerEnqueueOp(pt, comm, c, counters[c], ct->eActivationMask, ct->eventHandle, /*sym=*/true);
+      }
+    }
   }
 }
 

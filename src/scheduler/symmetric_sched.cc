@@ -343,7 +343,13 @@ ncclResult_t ncclSymmetricTaskScheduler(struct ncclComm* comm,
     NCCLCHECKGOTO(ncclSymkMakeDevWork(comm, task, &devWork), ret, fail);
 
     cellLeft = taskCell = DIVUP(task->count, cellCount);
+    // Track every channel that executes this task, including fractured boundary
+    // channels outside devWork's fused [sChannelId, sChannelId + nChannels) range.
+    task->channelLo = curChannel;
+    task->nChannels = 0;
     for (; curChannel < nMaxChannels;) {
+      task->channelHi = curChannel;
+      task->nChannels++;
       workRangePtr[curChannel].workHi = workIndex;
       if (curChannelWork == 0) {
         if (devWork.nChannels == 0) {

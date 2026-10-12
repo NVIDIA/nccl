@@ -247,9 +247,9 @@ typedef struct {
 // Clock backing ncclProfilerEventDescr_v8_t::tsCpu. Stored as uint32_t in the
 // config so the ABI does not depend on the compiler's enum width.
 typedef enum {
-  ncclProfilerCpuClockNone      = 0,  // no CPU timestamps (default)
+  ncclProfilerCpuClockNone = 0,  // no CPU timestamps (default)
   ncclProfilerCpuClockMonotonic = 1,  // CLOCK_MONOTONIC
-  ncclProfilerCpuClockRealtime  = 2,  // CLOCK_REALTIME
+  ncclProfilerCpuClockRealtime = 2,  // CLOCK_REALTIME
 } ncclProfilerCpuClock_v8_t;
 
 typedef struct {

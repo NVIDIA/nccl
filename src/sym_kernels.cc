@@ -8,6 +8,7 @@
 #include "sym_kernels.h"
 #include "alloc.h"
 #include "comm.h"
+#include "checks.h"
 #include "device.h"
 #include "nccl_device/core.h"
 #include "transport.h"
@@ -39,7 +40,7 @@ constexpr ncclSymkKernelMask kernelMask_LL =
   1ull << ncclSymkKernelId_ReduceScatter_LL | 1ull << ncclSymkKernelId_AllReduce_Ring_LL |
   1ull << ncclSymkKernelId_AllReduce_Tree_LL | 1ull << ncclSymkKernelId_AllGather_Ring_LL |
   1ull << ncclSymkKernelId_ReduceScatter_Ring_LL | 1ull << ncclSymkKernelId_Broadcast_Ring_LL |
-  1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128;
+  1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128 | 1ull << ncclSymkKernelId_AlltoAll_LL;
 
 constexpr ncclSymkKernelMask kernelMask_Bcast = 1ull << ncclSymkKernelId_Broadcast_Ring_Simple |
                                                 1ull << ncclSymkKernelId_Broadcast_Ring_LL |
@@ -47,6 +48,8 @@ constexpr ncclSymkKernelMask kernelMask_Bcast = 1ull << ncclSymkKernelId_Broadca
 constexpr ncclSymkKernelMask kernelMask_Reduce = 1ull << ncclSymkKernelId_Reduce_Ring_Simple |
                                                  1ull << ncclSymkKernelId_Reduce_Ring_LL |
                                                  1ull << ncclSymkKernelId_Reduce_Ring_LL128;
+
+constexpr ncclSymkKernelMask kernelMask_A2A = 1ull << ncclSymkKernelId_AlltoAll_LL;
 
 constexpr ncclSymkKernelMask kernelMask_AG =
   1ull << ncclSymkKernelId_AllGather_LL | 1ull << ncclSymkKernelId_AllGather_LLMC |
@@ -84,7 +87,7 @@ constexpr ncclSymkKernelMask kernelMask_LSA =
   1ull << ncclSymkKernelId_Reduce_Ring_Simple | 1ull << ncclSymkKernelId_AllReduce_Ring_LL |
   1ull << ncclSymkKernelId_AllReduce_Tree_LL | 1ull << ncclSymkKernelId_AllGather_Ring_LL |
   1ull << ncclSymkKernelId_ReduceScatter_Ring_LL | 1ull << ncclSymkKernelId_Broadcast_Ring_LL |
-  1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128;
+  1ull << ncclSymkKernelId_Reduce_Ring_LL | kernelMask_GenkLL128 | 1ull << ncclSymkKernelId_AlltoAll_LL;
 
 constexpr ncclSymkKernelMask kernelMask_GinOnly = 1ull << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD |
                                                   1ull << ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC |
@@ -123,7 +126,7 @@ ncclSymkKernelMask ncclSymkTmaKernelMask() {
 }
 
 ncclSymkKernelMask ncclSymkGinKernelMask() {
-  return kernelMask_GinOnly;
+  return kernelMask_GinOnly | kernelMask_A2A;
 }
 
 ncclSymkKernelMask ncclGenkKernelMask() {
@@ -144,6 +147,46 @@ ncclSymkKernelMask ncclSymkRSKernelMask() {
 
 ncclSymkKernelMask ncclSymkNonGenkKernelMask() {
   return kernelMask_Symk;
+}
+
+int ncclSymkKernelMaxWarps(ncclSymkKernelId kernelId, int red, ncclDataType_t ty) {
+  int kernelIndex = ncclSymkGetKernelIndex(kernelId, red, ty);
+  int maxThreads = kernelIndex < 0 ? 0 : ncclSymkKernelMaxThreads[kernelIndex];
+  if (maxThreads <= 0) maxThreads = ncclSymkMaxThreads;
+  return std::max(1, maxThreads / WARP_SIZE);
+}
+
+// Return a device-specific grid limit at which every CTA of this exact kernel
+// can be resident. Use the lower occupancy of the normal and instrumented
+// variants because either may be selected after tuning.
+static ncclResult_t ncclSymkKernelMaxResidentCtas(ncclSymkKernelId kernelId, int red, ncclDataType_t ty,
+                                                  int* maxResidentCtas) {
+  *maxResidentCtas = 1;
+#if !defined(NCCL_OS_WINDOWS)
+  int kernelIndex = ncclSymkGetKernelIndex(kernelId, red, ty);
+  if (kernelIndex < 0 || ncclSymkKernelList[kernelIndex] == nullptr) return ncclSuccess;
+
+  int threads = ncclSymkKernelMaxThreads[kernelIndex];
+  if (threads <= 0) threads = ncclSymkMaxThreads;
+
+  int blocksPerSmLimit = 0;
+  void* variants[2] = {ncclSymkKernelList[kernelIndex], ncclSymkKernelListProfile[kernelIndex]};
+  for (void* fn : variants) {
+    if (fn == nullptr) continue;
+    int blocksPerSm;
+    CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocksPerSm, fn, threads, /*dynamicSMemSize=*/0));
+    if (blocksPerSmLimit == 0 || blocksPerSm < blocksPerSmLimit) {
+      blocksPerSmLimit = blocksPerSm;
+    }
+  }
+
+  int cudaDev;
+  int multiprocessorCount;
+  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECK(cudaDeviceGetAttribute(&multiprocessorCount, cudaDevAttrMultiProcessorCount, cudaDev));
+  *maxResidentCtas = std::max(1, std::min(ncclSymkMaxBlocks, blocksPerSmLimit * multiprocessorCount));
+#endif
+  return ncclSuccess;
 }
 
 // Host picker: true when nBytes is large enough for this kernel's TMA deep loop at nBlocks.
@@ -179,6 +222,8 @@ static ncclSymkKernelMask kernelMask_coll(ncclFunc_t coll) {
     return kernelMask_Bcast;
   case ncclFuncReduce:
     return kernelMask_Reduce;
+  case ncclFuncAlltoAll:
+    return kernelMask_A2A;
   case ncclFuncAllGather:
     return kernelMask_AG;
   case ncclFuncAllReduce:
@@ -191,6 +236,7 @@ static ncclSymkKernelMask kernelMask_coll(ncclFunc_t coll) {
 }
 
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
+NCCL_PARAM(SymkLLScratchSize, "SYMK_LL_SCRATCH_SIZE", 256 << 10)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 1)
 NCCL_PARAM(SymGenkEnable, "SYM_GENK_ENABLE", 0)
@@ -209,6 +255,8 @@ static bool ncclGenkGinAvailable(struct ncclComm* comm) {
   return false;
 }
 
+extern int64_t ncclParamSymCTAs();
+
 bool ncclSymkTmaAvailable(struct ncclComm* comm) {
   // TMA requires up to (8KB data + 8B mbarrier + alignment) x 16 warps SMEM.
   // SMEM is partitioned across the 16 warps such that each warp gets ncclTmaShmemScratchWarpSize() bytes.
@@ -216,6 +264,34 @@ bool ncclSymkTmaAvailable(struct ncclComm* comm) {
     return false;
   }
   return comm->minCompCap >= 100 && ncclParamSymTmaEnable();
+}
+
+bool ncclSymkAlltoAllLLForced(struct ncclComm* comm) {
+  constexpr int tuningId = NCCL_TUNING_SYM_KERNEL_ID_OFFSET + ncclSymkKernelId_AlltoAll_LL;
+  int tuningFunc = ncclTuningFuncIndex(ncclFuncAlltoAll);
+  return comm->tuningContext.forced[tuningFunc] && comm->tuningContext.enabled[tuningId][tuningFunc];
+}
+
+static size_t ncclSymkAlltoAllLLScratchBudget() {
+  int64_t param = ncclParamSymkLLScratchSize();
+  if (param <= (int64_t)sizeof(ncclSymkAlltoAllLLScratchState)) return 0;
+  size_t budget = std::min<size_t>((size_t)param, UINT32_MAX);
+  return budget & ~(ncclSymkAlltoAllLLScratchAlignment - 1);
+}
+
+static size_t ncclSymkAlltoAllLLProvisionBytes(struct ncclComm* comm) {
+  if (comm->symkState.initialized) return comm->symkState.alltoAllLLProvisionBytes;
+  if (!ncclSymkAlltoAllLLForced(comm)) return 0;
+  size_t scratchBudget = ncclSymkAlltoAllLLScratchBudget();
+  if (scratchBudget <= sizeof(ncclSymkAlltoAllLLScratchState)) return 0;
+  if (comm->nRanks <= 1) return ncclSymkAlltoAllLLMaxPayloadBytes;
+
+  // Derive a topology-independent provision from four all-peer plane capacities.
+  // Initialization compacts the actual GIN send planes after this limit is known.
+  size_t planeBytes = ncclSymkAlltoAllLLPlaneCapacityForBudget(scratchBudget);
+  size_t linesPerPeer = planeBytes / ncclSymkAlltoAllLLWireBytesPerLine / (comm->nRanks - 1);
+  size_t scratchLimit = linesPerPeer * ncclSymkAlltoAllLLPayloadBytesPerLine;
+  return std::min(ncclSymkAlltoAllLLMaxPayloadBytes, scratchLimit);
 }
 
 static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 128 << 10;
@@ -257,84 +333,135 @@ static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t*
   }
 }
 
-extern int64_t ncclParamSymCTAs();
-
 ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
   // ncclTeamLsa() below calls this internally but drops the error code so we do it here.
   NCCLCHECK(ncclDevrInitOnce(comm));
 
   struct ncclSymkState* symk = &comm->symkState;
   if (!symk->initialized) {
-    symk->initialized = true;
+    bool alltoAllLLForced = ncclSymkAlltoAllLLForced(comm);
+    if (alltoAllLLForced) {
+      NCCLCHECK(ncclSymkKernelMaxResidentCtas(ncclSymkKernelId_AlltoAll_LL, /*red=*/0, ncclUint8,
+                                              &symk->alltoAllLLMaxResidentCtas));
+    }
+
     struct ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-    // Disable LSA multicast for cross-clique since NVLS isn't available across cliques
-    symk->hasLsaMultimem =
-      ncclNvlsSymmetricMultimemEnabled(comm) && ncclTeamLsa(comm).nRanks > 2 && !comm->p2pCrossClique;
+    int lsaRanks = ncclTeamLsa(comm).nRanks;
+
+    // Disable LSA multicast for cross-clique since NVLS isn't available across cliques.
+    symk->hasLsaMultimem = ncclNvlsSymmetricMultimemEnabled(comm) && lsaRanks > 2 && !comm->p2pCrossClique;
     reqs.lsaMultimem = symk->hasLsaMultimem;
     reqs.lsaBarrierCount = ncclSymkMaxBlocks;
     reqs.ginStrongSignalsRequired = false;
     reqs.ginVaSignalsRequired = false;
 
+    // Preserve the existing LSA LL resource used by AllGather and
+    // ReduceScatter. AlltoAll_LL uses the separate scratch resource below.
     struct ncclDevResourceRequirements lla2aReq;
     ncclLLA2ACreateRequirement(ncclSymkMaxBlocks,
-                               ncclLLA2ACalcSlots(ncclTeamLsa(comm).nRanks * ncclSymkMaxThreads, ncclSymkLLMaxEltSize),
+                               ncclLLA2ACalcSlots(lsaRanks * ncclSymkMaxThreads, ncclSymkLLMaxEltSize),
                                &symk->kcomm.lsaLLA2A, &lla2aReq);
     lla2aReq.next = reqs.resourceRequirementsList;
     reqs.resourceRequirementsList = &lla2aReq;
+
+    size_t alltoAllLLScratchBudget = alltoAllLLForced ? ncclSymkAlltoAllLLScratchBudget() : 0;
+    symk->alltoAllLLProvisionBytes = (uint32_t)ncclSymkAlltoAllLLProvisionBytes(comm);
+    size_t alltoAllLLReceivePlaneBytes =
+      ncclSymkAlltoAllLLRequiredReceivePlaneBytes(comm->nRanks, symk->alltoAllLLProvisionBytes);
+    size_t alltoAllLLSendPlaneBytes =
+      ncclSymkAlltoAllLLRequiredSendPlaneBytes(comm->nRanks, lsaRanks, symk->alltoAllLLProvisionBytes);
+    symk->kcomm.alltoAllLLScratch.receivePlaneBytes = (uint32_t)alltoAllLLReceivePlaneBytes;
+    symk->kcomm.alltoAllLLScratch.sendPlaneBytes = (uint32_t)alltoAllLLSendPlaneBytes;
+
+    if (comm->rank == 0 && alltoAllLLForced && symk->alltoAllLLProvisionBytes < ncclSymkAlltoAllLLMaxPayloadBytes) {
+      INFO(NCCL_INIT,
+           "AlltoAll_LL: NCCL_SYMK_LL_SCRATCH_SIZE=%zu supports %u bytes per peer at %d ranks; "
+           "increase it to at least %zu bytes to support the %zu-byte kernel maximum",
+           alltoAllLLScratchBudget, symk->alltoAllLLProvisionBytes, comm->nRanks,
+           ncclSymkAlltoAllLLRequiredScratchBudgetBytes(comm->nRanks, ncclSymkAlltoAllLLMaxPayloadBytes),
+           ncclSymkAlltoAllLLMaxPayloadBytes);
+    }
+
+    struct ncclDevResourceRequirements alltoAllLLScratchReq = {};
+    if (symk->alltoAllLLProvisionBytes != 0) {
+      alltoAllLLScratchReq.bufferSize =
+        ncclSymkAlltoAllLLRequiredScratchBytes(comm->nRanks, lsaRanks, symk->alltoAllLLProvisionBytes);
+      alltoAllLLScratchReq.bufferAlign = ncclSymkAlltoAllLLScratchAlignment;
+      alltoAllLLScratchReq.outBufferHandle = &symk->kcomm.alltoAllLLScratch.bufHandle;
+      alltoAllLLScratchReq.next = reqs.resourceRequirementsList;
+      reqs.resourceRequirementsList = &alltoAllLLScratchReq;
+    }
 
     struct ncclDevResourceRequirements ginInboxRailReq = {};
     struct ncclDevResourceRequirements ginOutboxReq = {};
     struct ncclDevResourceRequirements rsGinAccumReq = {};
     struct ncclDevResourceRequirements railSignalReq = {};
-    if (ncclParamSymGinKernelsEnable() && ncclTeamLsa(comm).nRanks < comm->nRanks) {
-      int maxBlocks;
-      size_t bufSize;
-      getRequirements_gin(comm, &maxBlocks, &bufSize);
+    if (ncclParamSymGinKernelsEnable() && lsaRanks < comm->nRanks) {
+      ncclSymkKernelMask enabledGinKernels = kernelMask_GinOnly | kernelMask_A2A;
+      bool needAlltoAllGin = (enabledGinKernels & kernelMask_A2A) != 0 &&
+                             comm->globalGinSupport == NCCL_GIN_CONNECTION_FULL && symk->alltoAllLLProvisionBytes != 0;
+      bool needRailGin = (enabledGinKernels & ~kernelMask_A2A) != 0;
 
-      maxBlocks = std::max(maxBlocks, comm->config.minCTAs);
-      maxBlocks = std::min(maxBlocks, comm->config.maxCTAs);
-      if (ncclParamSymCTAs() >= 1) maxBlocks = ncclParamSymCTAs();
-      maxBlocks = std::min(maxBlocks, ncclSymkMaxBlocks);
-      symk->maxGinInboxBlocks = maxBlocks;
-      symk->kcomm.rsGinAccumBytesPerBlock = ncclSymkRsGinAccumBytesPerBlock();
+      // AlltoAll LL reuses this devComm's FULL GIN contexts and the unified
+      // signal-free scratch resource created above. Rail inbox state remains
+      // separate because it carries credits and signals that AlltoAll does not use.
 
-      rsGinAccumReq.bufferSize = (size_t)maxBlocks * symk->kcomm.rsGinAccumBytesPerBlock;
-      rsGinAccumReq.bufferAlign = 128;
-      rsGinAccumReq.outBufferHandle = &symk->kcomm.rsGinAccumBuf;
-      rsGinAccumReq.next = reqs.resourceRequirementsList;
-      reqs.resourceRequirementsList = &rsGinAccumReq;
+      if (needRailGin) {
+        int maxBlocks;
+        size_t bufSize;
+        getRequirements_gin(comm, &maxBlocks, &bufSize);
 
-      ncclGinInboxA2ACreateRequirement(ncclTeamRail(comm), maxBlocks, log2Up(bufSize), &symk->kcomm.ginInboxRail,
-                                       &ginInboxRailReq);
-      ginInboxRailReq.next = reqs.resourceRequirementsList;
-      reqs.resourceRequirementsList = &ginInboxRailReq;
+        maxBlocks = std::max(maxBlocks, comm->config.minCTAs);
+        maxBlocks = std::min(maxBlocks, comm->config.maxCTAs);
+        if (ncclParamSymCTAs() >= 1) maxBlocks = ncclParamSymCTAs();
+        maxBlocks = std::min(maxBlocks, ncclSymkMaxBlocks);
+        symk->maxGinInboxBlocks = maxBlocks;
+        symk->kcomm.rsGinAccumBytesPerBlock = ncclSymkRsGinAccumBytesPerBlock();
 
-      ncclGinOutboxCreateRequirement(maxBlocks, log2Up(bufSize), &symk->kcomm.ginOutbox, &ginOutboxReq);
-      ginOutboxReq.next = reqs.resourceRequirementsList;
-      reqs.resourceRequirementsList = &ginOutboxReq;
+        rsGinAccumReq.bufferSize = (size_t)maxBlocks * symk->kcomm.rsGinAccumBytesPerBlock;
+        rsGinAccumReq.bufferAlign = 128;
+        rsGinAccumReq.outBufferHandle = &symk->kcomm.rsGinAccumBuf;
+        rsGinAccumReq.next = reqs.resourceRequirementsList;
+        reqs.resourceRequirementsList = &rsGinAccumReq;
 
-      uint32_t railSignalCount = ncclTeamRail(comm).nRanks * ncclSymkMaxBlocks;
+        ncclGinInboxA2ACreateRequirement(ncclTeamRail(comm), maxBlocks, log2Up(bufSize), &symk->kcomm.ginInboxRail,
+                                         &ginInboxRailReq);
+        ginInboxRailReq.next = reqs.resourceRequirementsList;
+        reqs.resourceRequirementsList = &ginInboxRailReq;
 
-      railSignalReq.bufferSize = 0;
-      railSignalReq.bufferAlign = 0;
-      railSignalReq.outBufferHandle = nullptr;
-      railSignalReq.ginSignalCount = railSignalCount;
-      railSignalReq.outGinSignalStart = &symk->kcomm.ginSyncHandle.railSignals;
-      railSignalReq.next = reqs.resourceRequirementsList;
-      reqs.resourceRequirementsList = &railSignalReq;
-      reqs.barrierCount = ncclSymkMaxBlocks;
-      reqs.ginConnectionType = NCCL_GIN_CONNECTION_RAIL;
-      reqs.ginStrongSignalsRequired = true;
-      reqs.ginVaSignalsRequired = true;
+        ncclGinOutboxCreateRequirement(maxBlocks, log2Up(bufSize), &symk->kcomm.ginOutbox, &ginOutboxReq);
+        ginOutboxReq.next = reqs.resourceRequirementsList;
+        reqs.resourceRequirementsList = &ginOutboxReq;
+
+        uint32_t railSignalCount = ncclTeamRail(comm).nRanks * ncclSymkMaxBlocks;
+        railSignalReq.bufferSize = 0;
+        railSignalReq.bufferAlign = 0;
+        railSignalReq.outBufferHandle = nullptr;
+        railSignalReq.ginSignalCount = railSignalCount;
+        railSignalReq.outGinSignalStart = &symk->kcomm.ginSyncHandle.railSignals;
+        railSignalReq.next = reqs.resourceRequirementsList;
+        reqs.resourceRequirementsList = &railSignalReq;
+
+        reqs.barrierCount = ncclSymkMaxBlocks;
+      }
+
+      // AlltoAll_LL only enters its world barrier while clearing receive
+      // scratch at LL-flag rollover, so one hybrid barrier slot is sufficient.
+      if (needAlltoAllGin) reqs.barrierCount = std::max(reqs.barrierCount, 1);
+
+      if (needAlltoAllGin || needRailGin) {
+        reqs.ginConnectionType = needAlltoAllGin ? NCCL_GIN_CONNECTION_FULL : NCCL_GIN_CONNECTION_RAIL;
+        reqs.ginStrongSignalsRequired = needAlltoAllGin || needRailGin;
+        reqs.ginVaSignalsRequired = needRailGin;
+      }
     }
 
     NCCLCHECK(ncclDevrCommCreateInternal(comm, &reqs, &symk->kcomm.devComm, /*isInternal=*/true,
                                          /*deviceCodeVersion=*/NCCL_VERSION_CODE));
-    // Dedicated sym profiler buffers, kept separate from the regular kernels' so the
-    // sym workCounter never interleaves with device channels[].workCounter.
     symk->kcomm.workStarted = comm->profiler.symWorkStarted;
     symk->kcomm.workCompleted = comm->profiler.symWorkCompleted;
     symk->kcomm.workPhases = comm->profiler.symWorkPhases;
+    symk->initialized = true;
   }
   return ncclSuccess;
 }
@@ -378,6 +505,13 @@ static bool ncclSymkOtherReduceImplemented(int /*ncclDevRedOp_t*/ red, ncclDataT
 
 static bool ncclSymkImplemented(ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty) {
   switch (coll) {
+  case ncclFuncAlltoAll:
+#if defined(NCCL_OS_WINDOWS)
+    // generate.py excludes this GIN-capable kernel from the Windows table.
+    return false;
+#else
+    return true;
+#endif
   case ncclFuncBroadcast:
   case ncclFuncAllGather:
     return true;
@@ -428,8 +562,11 @@ ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   if (!hasSTMC) kmask &= ~kernelMask_STMC;
   if (!hasLDMC) kmask &= ~kernelMask_LDMC;
 
-  size_t nBytes = alignUp(nElts * ncclTypeSize(ty), NCCL_SYM_KERNEL_CELL_SIZE);
-  size_t nBusBytes = (coll == ncclFuncAllGather || coll == ncclFuncReduceScatter ? comm->nRanks : 1) * nBytes;
+  size_t rawBytes = nElts * ncclTypeSize(ty);
+  size_t nBytes = coll == ncclFuncAlltoAll ? rawBytes : alignUp(rawBytes, NCCL_SYM_KERNEL_CELL_SIZE);
+  size_t nBusBytes =
+    (coll == ncclFuncAllGather || coll == ncclFuncReduceScatter || coll == ncclFuncAlltoAll ? comm->nRanks : 1) *
+    nBytes;
   // LL kernels use 32-bit ints to track element counts and indices.
   if (nBusBytes >= (size_t(2) << 30)) kmask &= ~kernelMask_LL;
   // Any kernel might use 32-bit int to track unrolled loop chunks (which are going
@@ -445,12 +582,18 @@ ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   bool const hasGin = ncclParamSymGinKernelsEnable() != 0;
   bool const hasMultipleLsaTeams = ncclTeamLsa(comm).nRanks < comm->nRanks;
   if (hasMultipleLsaTeams) {
-    kmask &= kernelMask_GinCapable;
-    if (!hasGin) kmask &= ~kernelMask_GinOnly;
+    kmask &= kernelMask_GinCapable | kernelMask_A2A;
+    if (!hasGin) kmask &= ~(kernelMask_GinOnly | kernelMask_A2A);
+    if (comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL) kmask &= ~kernelMask_A2A;
   } else {
     kmask &= ~kernelMask_GinOnly;
   }
   if (comm->nNodes > 1 && (!hasGin || !ncclGenkGinAvailable(comm))) kmask &= ~kernelMask_Genk;
+  // Remove AlltoAll from kmask when it is unsupported.
+  if (!comm->symkState.initialized || comm->p2pCrossClique || nBytes == 0 ||
+      nBytes > comm->symkState.alltoAllLLProvisionBytes) {
+    kmask &= ~kernelMask_A2A;
+  }
   return kmask;
 }
 

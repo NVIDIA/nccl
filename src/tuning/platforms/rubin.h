@@ -75,6 +75,7 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   {nullptr, nullptr, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_LL128
   {nullptr, nullptr, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_LL128
   {nullptr, nullptr, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_LL128
+  {nullptr, nullptr, nullptr, {0}, {}}, // AlltoAll_LL
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Unicast
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
 };

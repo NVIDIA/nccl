@@ -140,8 +140,8 @@ ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuning
     if (tInfo->raw == nullptr) return ncclInternalError;
 
     if (tInfo->raw->kind == ncclTaskKindColl &&
-        (tInfo->raw->coll.func == ncclFuncAlltoAll || tInfo->raw->coll.func == ncclFuncScatter ||
-         tInfo->raw->coll.func == ncclFuncGather)) {
+        ((tInfo->raw->coll.func == ncclFuncAlltoAll && !taskUsesSymKernel(tInfo)) ||
+         tInfo->raw->coll.func == ncclFuncScatter || tInfo->raw->coll.func == ncclFuncGather)) {
       NCCLCHECK(classifyCollToP2pTasks(comm, tInfo, &ctq->p2pTaskQueue));
       continue;
     }

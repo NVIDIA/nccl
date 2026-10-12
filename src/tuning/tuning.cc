@@ -199,9 +199,14 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
     bestTuning.maxChannels = 0;
     bestTuning.nWarps = 0;
     bestTuning.forced = 0;
+  } else if (input->func == ncclFuncAlltoAll && !ncclSymkAlltoAllLLForced(input->comm)) {
+    *result = NCCL_TUNING_RESULT_INIT;
+    result->valid = 0;
+    goto exit;
   } else {
     NCCLCHECKGOTO(ncclTuningComputeAllTunings(input, &tunings), ret, exit);
-    if (input->comm->tuner != NULL) {
+    // The tuner plugin API covers the five standard collectives only.
+    if (input->comm->tuner != NULL && (unsigned)input->func < NCCL_NUM_FUNCTIONS) {
       float generalTable[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
       for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
         for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {

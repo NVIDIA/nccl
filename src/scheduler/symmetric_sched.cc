@@ -63,6 +63,11 @@ void convertSymTaskDevOp(struct ncclComm* comm, struct ncclTaskColl* task) {
   }
 }
 
+static bool symTaskHasForcedTuning(struct ncclComm* comm, ncclFunc_t func) {
+  int tuningFunc = ncclTuningFuncIndex(func);
+  return tuningFunc >= 0 && comm->tuningContext.forced[tuningFunc];
+}
+
 // Match device deep-tier gate: uint32_t(input.offset - output.offset) % 16 == 0.
 static ncclResult_t symBatchAlignment(struct ncclTaskColl* headTask, bool* relativeAligned16B) {
   *relativeAligned16B = true;
@@ -107,9 +112,10 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     struct ncclTaskColl* next = task->next;
     ncclDevRedOp_t symkOp = symkRedOp(task->opHost, task->opDev.op);
     bool symAvailable = ncclSymkAvailable(comm, task->func, symkOp, task->datatype, task->count);
+    if (task->func == ncclFuncAlltoAll && !ncclSymkAlltoAllLLForced(comm)) symAvailable = false;
     // Env (NCCL_ALGO/PROTO/SYM_KERNEL) is a global override that wins over per-call
     // algSelection for any function it forced.
-    uint64_t effAlgMask = comm->tuningContext.forced[task->func] ? 0 : task->algMask;
+    uint64_t effAlgMask = symTaskHasForcedTuning(comm, task->func) ? 0 : task->algMask;
     bool cfgAllowsSymk = (effAlgMask == 0) || ((effAlgMask & NCCL_TUNING_MASK_SYM_KERNELS) != 0);
 
     if (symAvailable && cfgAllowsSymk) {
@@ -161,7 +167,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       while (task != nullptr) {
         size_t count;
         nWorks++;
-        count = alignUp(task->count, cellCount);
+        count = headTask->func == ncclFuncAlltoAll ? task->count : alignUp(task->count, cellCount);
         countTotal += count;
         // Keep countMax as the true largest work count; TMA eligibility is per work, not per aligned batch.
         if (task->count > countMax) countMax = task->count;
@@ -170,7 +176,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         // its own batch). This realizes the per-call caps exactly and never ignores a
         // non-head configured task.
         bool configBoundary = task->aggIsolate || (task->next != nullptr && task->next->aggIsolate);
-        if (symkMaxDevWorkArgsSize(MAXCHANNELS, nWorks + 1, ncclProfilerPluginLoaded()) > comm->workArgsBytes ||
+        if (headTask->func == ncclFuncAlltoAll ||
+            symkMaxDevWorkArgsSize(MAXCHANNELS, nWorks + 1, ncclProfilerPluginLoaded()) > comm->workArgsBytes ||
             task->next == nullptr || configBoundary) {
           task->isSymLast = 1;
           break;
@@ -182,7 +189,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       input.tuningMask = NCCL_TUNING_MASK_SYM_KERNELS;
       // Env (NCCL_ALGO/PROTO/SYM_KERNEL) is a global override that wins over per-call
       // algSelection for any function it forced.
-      uint64_t effAlgMask = comm->tuningContext.forced[headTask->func] ? 0 : headTask->algMask;
+      uint64_t effAlgMask = symTaskHasForcedTuning(comm, headTask->func) ? 0 : headTask->algMask;
       if (effAlgMask != 0) {
         uint64_t symkMask = effAlgMask & NCCL_TUNING_MASK_SYM_KERNELS;
         if (symkMask != 0) input.tuningMask = symkMask;
@@ -191,7 +198,9 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       input.redOp = headTask->opHost;
       input.devRedOp = symkOp;
       input.datatype = headTask->datatype;
-      input.nBytes = countTotal * ncclTypeSize(headTask->datatype);
+      // AlltoAll count is per peer; tuning nBytes is the total send/receive span.
+      input.nBytes =
+        (headTask->func == ncclFuncAlltoAll ? comm->nRanks : 1) * countTotal * ncclTypeSize(headTask->datatype);
       input.numPipeOps = divUp(nWorks, comm->nChannels);
       input.count = headTask->count;
       input.countMax = countMax;
@@ -287,7 +296,7 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
   struct ncclTaskColl* headTask = ncclIntruQueueHead(symTaskQueue);
   int devFuncId = headTask->devFuncId;
   struct ncclTaskColl* task = NULL;
-  ssize_t totalCount = 0;  // aligned bytes
+  ssize_t totalCount = 0;
   ssize_t logCount = 0;
   ssize_t remainCell = 0;
   ssize_t cellPerChannel = 0;
@@ -308,6 +317,7 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
   plan->launchCompletionEvent = headTask->launchCompletionEvent;
   plan->hasProxyOps = false;
   ncclSymkKernelId kernelId = (ncclSymkKernelId)headTask->devFuncId;
+  bool isAlltoAllLLKernel = kernelId == ncclSymkKernelId_AlltoAll_LL;
   int kernelIndex = Genk ? ncclGenkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype) :
                            ncclSymkGetKernelIndex(kernelId, headTask->opDev.op, headTask->datatype);
   if (kernelIndex < 0) {
@@ -333,12 +343,16 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
   task = headTask;
   while (task != nullptr && task->devFuncId == devFuncId) {
     workCount++;
-    totalCount += alignUp(task->count, cellCount);
+    totalCount += isAlltoAllLLKernel ? task->count : alignUp(task->count, cellCount);
     logCount += task->count;
     // per-coll cgaClusterSize is applied to the plan. User should use consistent cgaClusterSize in a Group.
     if (task->cgaClusterSize != NCCL_CONFIG_UNDEF_INT) plan->cgaClusterSize = task->cgaClusterSize;
     if (task->isSymLast == 1) break;
     task = task->next;
+  }
+  if (isAlltoAllLLKernel && workCount != 1) {
+    WARN("AlltoAll_LL expects one work descriptor, got %d", workCount);
+    return ncclInternalError;
   }
 
   plan->kernelArgsSize = ncclSymkDevWorkArgsSize<Args>(nMaxChannels, workCount, profilerEnabled);
@@ -352,7 +366,9 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
     profilerEnabled ? ncclProfilerDeviceMode(headTask->eActivationMask) : (uint8_t)ncclDevProfilerModeNone;
   setMinChunkPayloadBytes(argsBuf, headTask->minChunkPayloadBytes);
 
-  remainCell = cellPerChannel = DIVUP(DIVUP(totalCount, nMaxChannels), cellCount);
+  if (!isAlltoAllLLKernel) {
+    remainCell = cellPerChannel = DIVUP(DIVUP(totalCount, nMaxChannels), cellCount);
+  }
   workRangePtr = ncclSymkGetWorkRange(argsBuf);
   workBufPtr = ncclSymkGetWorks(argsBuf, nMaxChannels);
 
@@ -368,53 +384,66 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
 
     NCCLCHECKGOTO(ncclSymkMakeDevWork(comm, task, &devWork), ret, fail);
 
-    cellLeft = taskCell = DIVUP(task->count, cellCount);
-    for (; curChannel < nMaxChannels;) {
-      workRangePtr[curChannel].workHi = workIndex;
-      if (curChannelWork == 0) {
-        if (devWork.nChannels == 0) {
-          devWork.sChannelId = curChannel;
-          devWork.nChannels = 1;
-        } else if (cellLeft <= remainCell) {
-          // the last segment of the task
-          // if the remaining cell is less than 1024 bytes, we can fuse the last channel
-          if ((remainCell - cellLeft) * NCCL_SYM_KERNEL_CELL_SIZE <= (1 << 10) || ncclIntruQueueEmpty(symTaskQueue)) {
+    if (isAlltoAllLLKernel) {
+      // One descriptor is shared by the complete CTA/warp grid. AlltoAll does
+      // not use the generic scheduler's linear byte-range partition.
+      devWork.sChannelId = 0;
+      devWork.nChannels = nMaxChannels;
+      for (int channel = 0; channel < nMaxChannels; channel++) {
+        workRangePtr[channel].workHi = workIndex;
+        workRangePtr[channel].fracHi = uint16_t(0x10000UL - 1);
+      }
+      curChannel = nMaxChannels;
+    } else {
+      taskCell = DIVUP(task->count, cellCount);
+      cellLeft = taskCell;
+      for (; curChannel < nMaxChannels;) {
+        workRangePtr[curChannel].workHi = workIndex;
+        if (curChannelWork == 0) {
+          if (devWork.nChannels == 0) {
+            devWork.sChannelId = curChannel;
+            devWork.nChannels = 1;
+          } else if (cellLeft <= remainCell) {
+            // the last segment of the task
+            // if the remaining cell is less than 1024 bytes, we can fuse the last channel
+            if ((remainCell - cellLeft) * NCCL_SYM_KERNEL_CELL_SIZE <= (1 << 10) || ncclIntruQueueEmpty(symTaskQueue)) {
+              devWork.nChannels++;
+            }
+          } else {
+            // middle segment of the task
             devWork.nChannels++;
           }
         } else {
-          // middle segment of the task
-          devWork.nChannels++;
+          if (cellLeft != taskCell) {
+            WARN("Symmetric task cell count %zu does not match remaining cell count %zu", taskCell, cellLeft);
+            ret = ncclInternalError;
+            goto fail;
+          }
+          if (taskCell <= remainCell) {
+            // the first segment of the task is fully scheduled onto the channel
+            devWork.sChannelId = curChannel;
+            devWork.nChannels = 1;
+          }
         }
-      } else {
-        if (cellLeft != taskCell) {
-          WARN("Symmetric task cell count %zu does not match remaining cell count %zu", taskCell, cellLeft);
-          ret = ncclInternalError;
-          goto fail;
+        if (cellLeft < remainCell) {
+          workRangePtr[curChannel].fracHi = uint16_t(0x10000UL - 1);
+          remainCell -= cellLeft;
+          curChannelWork++;
+          break;
+        } else if (cellLeft == remainCell) {
+          workRangePtr[curChannel].fracHi = uint16_t(0x10000UL - 1);
+          remainCell = cellPerChannel;
+          curChannel++;
+          curChannelWork = 0;
+          break;
+        } else {
+          // cellLeft > remainCell; the task is partially scheduled onto the channel
+          cellLeft -= remainCell;
+          workRangePtr[curChannel].fracHi = uint16_t(DIVUP(0x10000L * (taskCell - cellLeft), taskCell) - 1);
+          remainCell = cellPerChannel;
+          curChannel++;
+          curChannelWork = 0;
         }
-        if (taskCell <= remainCell) {
-          // the first segment of the task is fully scheduled onto the channel
-          devWork.sChannelId = curChannel;
-          devWork.nChannels = 1;
-        }
-      }
-      if (cellLeft < remainCell) {
-        workRangePtr[curChannel].fracHi = uint16_t(0x10000UL - 1);
-        remainCell -= cellLeft;
-        curChannelWork++;
-        break;
-      } else if (cellLeft == remainCell) {
-        workRangePtr[curChannel].fracHi = uint16_t(0x10000UL - 1);
-        remainCell = cellPerChannel;
-        curChannel++;
-        curChannelWork = 0;
-        break;
-      } else {
-        // cellLeft > remainCell; the task is partially scheduled onto the channel
-        cellLeft -= remainCell;
-        workRangePtr[curChannel].fracHi = uint16_t(DIVUP(0x10000L * (taskCell - cellLeft), taskCell) - 1);
-        remainCell = cellPerChannel;
-        curChannel++;
-        curChannelWork = 0;
       }
     }
     memcpy(workBufPtr + workIndex, &devWork, sizeof(struct ncclSymkDevWork));
@@ -431,7 +460,7 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
       goto fail;
     }
   }
-  if (remainCell < cellPerChannel) curChannel++;
+  if (!isAlltoAllLLKernel && remainCell < cellPerChannel) curChannel++;
   // At this point, curChannel indexes the first _empty_ channel.
 
   memcpy(&argsBuf->kcomm, &kcomm, sizeof(kcomm));

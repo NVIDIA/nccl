@@ -19,6 +19,7 @@ int ncclFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
   case ncclFuncAllReduce:
     return 2;
   case ncclFuncAllGather:
+  case ncclFuncAlltoAll:
   case ncclFuncReduceScatter:
     return nRanks;
   default:

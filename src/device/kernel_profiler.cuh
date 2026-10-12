@@ -27,8 +27,14 @@ __device__ __forceinline__ void ncclSymkProfilerStart(Args const* args) {
     int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
     uint64_t ts = ncclSymkGlobaltimer();
     // The BEGIN stamp lands on another line and is ordered by ncclSymkProfilerStop's fence.
-    if (args->profilerMode & ncclDevProfilerModeKernelPhase)
-      args->kcomm.workPhases[ch].data[slot].timestamps[NCCL_KERNEL_PHASE_BEGIN] = ts;
+    if (args->profilerMode & ncclDevProfilerModeKernelPhase) {
+      uint64_t* phases = args->kcomm.workPhases[ch].data[slot].timestamps;
+      phases[NCCL_KERNEL_PHASE_BEGIN] = ts;
+      // Clear optional boundaries on slot reuse. The host must leave this record
+      // intact because multiple task events can consume the same channel's phases.
+      phases[NCCL_KERNEL_PHASE_AFTER_OPEN] = 0;
+      phases[NCCL_KERNEL_PHASE_BEFORE_CLOSE] = 0;
+    }
     // workStarted timestamp+counter share one 16B slot, so publishing them needs no fence.
     args->kcomm.workStarted[ch].data[slot].timestamp = ts;
     args->kcomm.workStarted[ch].data[slot].counter = wc;

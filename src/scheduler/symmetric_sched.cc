@@ -389,6 +389,9 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
       // not use the generic scheduler's linear byte-range partition.
       devWork.sChannelId = 0;
       devWork.nChannels = nMaxChannels;
+      task->channelLo = 0;
+      task->channelHi = nMaxChannels - 1;
+      task->nChannels = nMaxChannels;
       for (int channel = 0; channel < nMaxChannels; channel++) {
         workRangePtr[channel].workHi = workIndex;
         workRangePtr[channel].fracHi = uint16_t(0x10000UL - 1);
@@ -397,7 +400,13 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
     } else {
       taskCell = DIVUP(task->count, cellCount);
       cellLeft = taskCell;
+      // Track every channel that executes this task, including fractured boundary
+      // channels outside devWork's fused [sChannelId, sChannelId + nChannels) range.
+      task->channelLo = curChannel;
+      task->nChannels = 0;
       for (; curChannel < nMaxChannels;) {
+        task->channelHi = curChannel;
+        task->nChannels++;
         workRangePtr[curChannel].workHi = workIndex;
         if (curChannelWork == 0) {
           if (devWork.nChannels == 0) {

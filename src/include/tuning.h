@@ -18,6 +18,16 @@
 #define NCCL_TUNING_CE_METHOD_ID_OFFSET (NCCL_TUNING_SYM_KERNEL_ID_OFFSET + ncclSymkKernelId_Count)
 #define NCCL_TUNING_COUNT (NCCL_TUNING_CE_METHOD_ID_OFFSET + ncclCeMethodId_Count)
 
+// The general collective tables cover the five functions in NCCL_NUM_FUNCTIONS.
+// Symmetric tuning additionally supports AlltoAll without changing that global
+// count, which is also used by unrelated operation counters and plugin tables.
+#define NCCL_NUM_TUNING_FUNCTIONS (NCCL_NUM_FUNCTIONS + 1)
+
+static inline int ncclTuningFuncIndex(ncclFunc_t func) {
+  if ((unsigned)func < NCCL_NUM_FUNCTIONS) return (int)func;
+  return func == ncclFuncAlltoAll ? NCCL_NUM_FUNCTIONS : -1;
+}
+
 #define NCCL_TUNING_MASK_GENERAL_KERNELS ((1ULL << NCCL_TUNING_SYM_KERNEL_ID_OFFSET) - 1ULL)
 #define NCCL_TUNING_MASK_SYM_KERNELS \
   ((1ULL << NCCL_TUNING_CE_METHOD_ID_OFFSET) - 1ULL - NCCL_TUNING_MASK_GENERAL_KERNELS)
@@ -88,9 +98,9 @@ struct ncclTuningContext_t {
   ncclTunerConstants_t tuningConstants;
   // State of the tuning models
   // Forced function is set via env var
-  int forced[NCCL_NUM_FUNCTIONS];
+  int forced[NCCL_NUM_TUNING_FUNCTIONS];
   // Disabled tuning models are not execute and excluded from implemetation selection.
-  int enabled[NCCL_TUNING_COUNT][NCCL_NUM_FUNCTIONS];
+  int enabled[NCCL_TUNING_COUNT][NCCL_NUM_TUNING_FUNCTIONS];
   // Store of model contexts per communicator.
   float generalLatencies[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
   float generalBandwidths[NCCL_NUM_FUNCTIONS][NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];

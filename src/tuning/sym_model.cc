@@ -120,6 +120,8 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
   tuning->timeUs = kTime;
   tuning->selectionTimeUs = kSelectionTime;
   tuning->nChannels = kBlocks;
-  tuning->nWarps = ncclSymkMaxThreads / WARP_SIZE;
+  tuning->nWarps = tuning->symKernelId == ncclSymkKernelId_AlltoAll_LL ?
+                     ncclSymkKernelMaxWarps(ncclSymkKernelId_AlltoAll_LL, inputs->devRedOp, inputs->datatype) :
+                     ncclSymkMaxThreads / WARP_SIZE;
   return ret;
 }

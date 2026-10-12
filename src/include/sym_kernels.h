@@ -60,6 +60,187 @@ constexpr size_t ncclGenkTreeLL128ChannelWireBytes =
 // General kernels use a dedicated device communicator whose selected GIN backend matches this mask.
 constexpr unsigned ncclGenkGinBackendMask = 1u << (unsigned)NCCL_NET_DEVICE_GIN_PROXY;
 
+// AlltoAll LL work is expressed as canonical 8B payload lines. Warps own
+// domain-specific peer-local chunks and chunks are assigned round-robin over the
+// complete grid, so CTA boundaries do not constrain peer or domain ownership.
+constexpr size_t ncclSymkAlltoAllLLPayloadBytesPerLine = 8;
+constexpr size_t ncclSymkAlltoAllLLWireBytesPerLine = 16;
+constexpr size_t ncclSymkAlltoAllLLScratchAlignment = 128;
+constexpr size_t ncclSymkAlltoAllLLMaxPayloadBytes = 1 << 20;
+constexpr int ncclSymkAlltoAllLLReceivePlaneCount = 2;
+constexpr int ncclSymkAlltoAllLLSendPlaneCount = 2;
+constexpr int ncclSymkAlltoAllLLProvisionPlaneCount =
+  ncclSymkAlltoAllLLReceivePlaneCount + ncclSymkAlltoAllLLSendPlaneCount;
+constexpr int ncclSymkAlltoAllLLLsaLinesPerWarp = WARP_SIZE;
+constexpr size_t ncclSymkAlltoAllLLGinSingleChunkMaxPayloadBytes = 2 << 10;
+constexpr int ncclSymkAlltoAllLLGinMaxLinesPerWarp = 512;
+
+// The fixed scratch allocation contains one global state followed by two
+// receive planes and two GIN send-staging planes. Receive planes cover every
+// non-self peer, while send planes only cover GIN peers because LSA publishes
+// directly to remote receive scratch. Both alternate by epoch, so operation k
+// can leave its GIN reads in flight while operation k+1 uses the other send
+// plane.
+struct ncclSymkAlltoAllLLScratchHandle {
+  ncclDevResourceHandle bufHandle;
+  uint32_t receivePlaneBytes;
+  uint32_t sendPlaneBytes;
+};
+
+struct alignas(128) ncclSymkAlltoAllLLScratchState {
+  // One epoch advances per AlltoAll_LL invocation and is shared by every CTA.
+  // publishedEpoch is zero while idle, one while a CTA is publishing, and the
+  // active LL flag otherwise. Epochs zero and one are never used as LL flags.
+  uint32_t epoch;
+  uint32_t publishedEpoch;
+  uint32_t completedCtas;
+  // Rollover-only local grid rendezvous. CTA 0 publishes resetReady after the
+  // pre-reset world barrier; resetCompletedCtas lets it wait for every CTA's
+  // disjoint clear before entering the post-reset world barrier.
+  uint32_t resetReady;
+  uint32_t resetCompletedCtas;
+};
+static_assert(sizeof(ncclSymkAlltoAllLLScratchState) == ncclSymkAlltoAllLLScratchAlignment,
+              "Keep the global scratch state 128B aligned");
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLReceivePlaneOffset(uint32_t epoch, size_t receivePlaneBytes) {
+  return (epoch & 1) * receivePlaneBytes;
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLSendPlaneOffset(uint32_t epoch, size_t receivePlaneBytes,
+                                                                       size_t sendPlaneBytes) {
+  return ncclSymkAlltoAllLLReceivePlaneCount * receivePlaneBytes + (epoch & 1) * sendPlaneBytes;
+}
+
+constexpr __host__ __device__ int ncclSymkAlltoAllLLLineCount(size_t payloadBytes) {
+  return (int)(((payloadBytes > 0 ? payloadBytes : 1) + ncclSymkAlltoAllLLPayloadBytesPerLine - 1) /
+               ncclSymkAlltoAllLLPayloadBytesPerLine);
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLWireBytes(size_t payloadBytes) {
+  return (size_t)ncclSymkAlltoAllLLLineCount(payloadBytes) * ncclSymkAlltoAllLLWireBytesPerLine;
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLTotalLineCount(int worldRanks, size_t payloadBytes) {
+  return worldRanks > 1 ? (size_t)(worldRanks - 1) * ncclSymkAlltoAllLLLineCount(payloadBytes) : 0;
+}
+
+// For small payloads, one chunk covers the exact LL-rounded peer payload. At
+// larger sizes, grow power-of-two, whole-warp chunks while retaining at least
+// two chunks per peer.
+// The 512-line automatic cap preserves enough independent GPU packing and GIN
+// posting work as payloads grow.
+constexpr __host__ __device__ int ncclSymkAlltoAllLLGinLinesPerWarp(size_t payloadBytes) {
+  int linesPerPeer = ncclSymkAlltoAllLLLineCount(payloadBytes);
+  if (payloadBytes <= ncclSymkAlltoAllLLGinSingleChunkMaxPayloadBytes) return linesPerPeer;
+
+  int linesPerWarp = WARP_SIZE;
+  while (linesPerWarp < ncclSymkAlltoAllLLGinMaxLinesPerWarp && 2 * linesPerWarp < linesPerPeer) {
+    linesPerWarp *= 2;
+  }
+  return linesPerWarp;
+}
+
+constexpr __host__ __device__ int ncclSymkAlltoAllLLChunksPerPeer(size_t payloadBytes, int linesPerWarp) {
+  return (ncclSymkAlltoAllLLLineCount(payloadBytes) + linesPerWarp - 1) / linesPerWarp;
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLChunkCount(int peerCount, size_t payloadBytes,
+                                                                  int linesPerWarp) {
+  return peerCount > 0 ? (size_t)peerCount * ncclSymkAlltoAllLLChunksPerPeer(payloadBytes, linesPerWarp) : 0;
+}
+
+// LSA keeps small chunks for NVLink store parallelism while GIN uses larger
+// chunks to reduce put posting. Their chunk counts share one global warp pool.
+constexpr __host__ __device__ int ncclSymkAlltoAllLLUsefulWarpCount(int lsaPeerCount, int ginPeerCount,
+                                                                    size_t payloadBytes, int lsaLinesPerWarp,
+                                                                    int ginLinesPerWarp, int warpsPerBlock) {
+  size_t chunks = ncclSymkAlltoAllLLChunkCount(lsaPeerCount, payloadBytes, lsaLinesPerWarp) +
+                  ncclSymkAlltoAllLLChunkCount(ginPeerCount, payloadBytes, ginLinesPerWarp);
+  size_t maxWarps = (size_t)ncclSymkMaxBlocks * warpsPerBlock;
+  return (int)(chunks == 0 ? 1 : chunks < maxWarps ? chunks : maxWarps);
+}
+
+constexpr __host__ __device__ int ncclSymkAlltoAllLLBlockCount(int lsaPeerCount, int ginPeerCount, size_t payloadBytes,
+                                                               int lsaLinesPerWarp, int ginLinesPerWarp,
+                                                               int warpsPerBlock) {
+  int warps = ncclSymkAlltoAllLLUsefulWarpCount(lsaPeerCount, ginPeerCount, payloadBytes, lsaLinesPerWarp,
+                                                ginLinesPerWarp, warpsPerBlock);
+  return (warps + warpsPerBlock - 1) / warpsPerBlock;
+}
+
+constexpr __host__ __device__ int ncclSymkAlltoAllLLSelectedBlockCount(
+  int lsaPeerCount, int ginPeerCount, size_t payloadBytes, int lsaLinesPerWarp, int ginLinesPerWarp, int warpsPerBlock,
+  int residentBlockLimit, int resolvedBlockLimit, int userBlockLimit) {
+  int limit = residentBlockLimit > 0 ? residentBlockLimit : 1;
+  if (resolvedBlockLimit > 0 && resolvedBlockLimit < limit) limit = resolvedBlockLimit;
+  if (userBlockLimit > 0 && userBlockLimit < limit) limit = userBlockLimit;
+  int automaticBlocks = ncclSymkAlltoAllLLBlockCount(lsaPeerCount, ginPeerCount, payloadBytes, lsaLinesPerWarp,
+                                                     ginLinesPerWarp, warpsPerBlock);
+  return automaticBlocks < limit ? automaticBlocks : limit;
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLRequiredPeerPlaneBytes(int peerCount, size_t payloadBytes) {
+  size_t bytes = peerCount > 0 ? (size_t)peerCount * ncclSymkAlltoAllLLWireBytes(payloadBytes) : 0;
+  return (bytes + ncclSymkAlltoAllLLScratchAlignment - 1) & ~(ncclSymkAlltoAllLLScratchAlignment - 1);
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLRequiredReceivePlaneBytes(int worldRanks, size_t payloadBytes) {
+  return ncclSymkAlltoAllLLRequiredPeerPlaneBytes(worldRanks > 1 ? worldRanks - 1 : 0, payloadBytes);
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLRequiredSendPlaneBytes(int worldRanks, int lsaRanks,
+                                                                              size_t payloadBytes) {
+  return ncclSymkAlltoAllLLRequiredPeerPlaneBytes(worldRanks > lsaRanks ? worldRanks - lsaRanks : 0, payloadBytes);
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLRequiredScratchBytes(int worldRanks, int lsaRanks,
+                                                                            size_t payloadBytes) {
+  return sizeof(ncclSymkAlltoAllLLScratchState) +
+         ncclSymkAlltoAllLLReceivePlaneCount * ncclSymkAlltoAllLLRequiredReceivePlaneBytes(worldRanks, payloadBytes) +
+         ncclSymkAlltoAllLLSendPlaneCount *
+           ncclSymkAlltoAllLLRequiredSendPlaneBytes(worldRanks, lsaRanks, payloadBytes);
+}
+
+// Preserve a topology-independent payload provision by treating the configured
+// budget as four worst-case planes. The actual allocation compacts GIN send
+// planes according to the topology and can therefore be smaller than the budget.
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLPlaneCapacityForBudget(size_t scratchBytes) {
+  if (scratchBytes <= sizeof(ncclSymkAlltoAllLLScratchState)) return 0;
+  size_t planeBytes = (scratchBytes - sizeof(ncclSymkAlltoAllLLScratchState)) / ncclSymkAlltoAllLLProvisionPlaneCount;
+  return planeBytes & ~(ncclSymkAlltoAllLLScratchAlignment - 1);
+}
+
+constexpr __host__ __device__ size_t ncclSymkAlltoAllLLRequiredScratchBudgetBytes(int worldRanks, size_t payloadBytes) {
+  return sizeof(ncclSymkAlltoAllLLScratchState) +
+         ncclSymkAlltoAllLLProvisionPlaneCount * ncclSymkAlltoAllLLRequiredReceivePlaneBytes(worldRanks, payloadBytes);
+}
+
+constexpr __host__ __device__ bool ncclSymkAlltoAllLLScratchFits(int worldRanks, size_t payloadBytes,
+                                                                 size_t scratchBytes) {
+  return payloadBytes != 0 && ncclSymkAlltoAllLLRequiredReceivePlaneBytes(worldRanks, payloadBytes) <=
+                                ncclSymkAlltoAllLLPlaneCapacityForBudget(scratchBytes);
+}
+
+// Map a compact remote-peer offset to its direct world peer. LSA is the
+// inner factor of world, so (worldRank / lsaRanks, lsaRank) are the group/lane
+// coordinates. Applying opposite deltas at the receiver makes the mapping its
+// own inverse for a given offset.
+constexpr __host__ __device__ int ncclSymkAlltoAllLLRemotePeer(int worldRank, int worldRanks, int lsaRank, int lsaRanks,
+                                                               int remotePeerOffset, bool sendNotRecv) {
+  int sign = sendNotRecv ? 1 : -1;
+  int lsaGroupCount = worldRanks / lsaRanks;
+  int groupDelta = 1 + remotePeerOffset / lsaRanks;
+  int laneDelta = remotePeerOffset % lsaRanks;
+  int peerGroup = worldRank / lsaRanks + sign * groupDelta;
+  int peerLane = lsaRank + sign * laneDelta;
+  if (peerGroup < 0) peerGroup += lsaGroupCount;
+  if (peerGroup >= lsaGroupCount) peerGroup -= lsaGroupCount;
+  if (peerLane < 0) peerLane += lsaRanks;
+  if (peerLane >= lsaRanks) peerLane -= lsaRanks;
+  return peerGroup * lsaRanks + peerLane;
+}
+
 constexpr __host__ __device__ int ncclSymkLLMaxSlots(int eltSize = ncclSymkLLMaxEltSize) {
   return ncclSymkMaxThreads * ncclSymkLLMaxEltSize / eltSize;
 }
@@ -109,6 +290,9 @@ enum ncclSymkKernelId {
   ncclSymkKernelId_Broadcast_Ring_LL128,
   ncclSymkKernelId_Reduce_Ring_LL128,
 
+  // Append new kernels so existing tuning IDs remain stable.
+  ncclSymkKernelId_AlltoAll_LL,
+
   ncclSymkKernelId_Count
 };
 
@@ -125,7 +309,7 @@ constexpr char const* ncclSymKernelStr[] = {
   "AllReduce_Ring_Simple", "AllReduce_Tree_Simple", "AllGather_Ring_Simple", "ReduceScatter_Ring_Simple",
   "Broadcast_Ring_Simple", "Reduce_Ring_Simple", "AllReduce_Ring_LL", "AllReduce_Tree_LL", "AllGather_Ring_LL",
   "ReduceScatter_Ring_LL", "Broadcast_Ring_LL", "Reduce_Ring_LL", "AllReduce_Ring_LL128", "AllReduce_Tree_LL128",
-  "AllGather_Ring_LL128", "ReduceScatter_Ring_LL128", "Broadcast_Ring_LL128", "Reduce_Ring_LL128"
+  "AllGather_Ring_LL128", "ReduceScatter_Ring_LL128", "Broadcast_Ring_LL128", "Reduce_Ring_LL128", "AlltoAll_LL"
 };
 
 // Per-channel view of the finalized topology ring for this rank. index is this rank's position in the ring when rank
@@ -191,6 +375,7 @@ struct ncclSymkDevComm {
   struct ncclLLA2AHandle lsaLLA2A;
   struct ncclGinOutboxHandle ginOutbox;
   struct ncclGinInboxA2AHandle ginInboxRail;
+  struct ncclSymkAlltoAllLLScratchHandle alltoAllLLScratch;
   struct ncclGinSyncHandle ginSyncHandle;
   ncclDevResourceHandle rsGinAccumBuf;
   uint32_t rsGinAccumBytesPerBlock;
@@ -207,6 +392,7 @@ struct ncclSymkState {
   bool genkInitialized;
   bool hasLsaMultimem;
   int maxGinInboxBlocks;
+  int alltoAllLLMaxResidentCtas;
 #if !defined(NCCL_OS_WINDOWS)
   struct {
     ncclDevResourceHandle bufHandle;
@@ -215,6 +401,7 @@ struct ncclSymkState {
 #endif
   struct ncclSymkDevComm kcomm;
   struct ncclGenkDevComm genkComm;
+  uint32_t alltoAllLLProvisionBytes;
 };
 
 struct ncclSymkChannelWorkRange {
@@ -309,6 +496,7 @@ ncclResult_t ncclSymkFinalize(struct ncclComm* comm);
 
 bool ncclSymkAvailable(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                        size_t nElts);
+bool ncclSymkAlltoAllLLForced(struct ncclComm* comm);
 ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty,
                                 size_t nElts, bool symAligned16B = true);
 
@@ -324,7 +512,9 @@ extern void* ncclSymkKernelList[/*ncclSymkKernelCount*/];
 extern void* ncclSymkKernelListProfile[/*ncclSymkKernelCount*/];
 extern int ncclSymkKernelRequirements[/*ncclSymkKernelCount*/];
 extern int ncclSymkKernelMaxDynamicSmem[/*ncclSymkKernelCount*/]; // initialized by ncclInitKernelsForDevice()
+extern int ncclSymkKernelMaxThreads[/*ncclSymkKernelCount*/]; // initialized by ncclInitKernelsForDevice()
 int ncclSymkGetKernelIndex(ncclSymkKernelId kernelId, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty);
+int ncclSymkKernelMaxWarps(ncclSymkKernelId kernelId, int /*ncclDevRedOp_t*/ red, ncclDataType_t ty);
 
 // Generated by src/device/general/generate.py
 extern int const ncclGenkKernelCount;

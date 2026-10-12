@@ -58,6 +58,10 @@ reductions = ["AllReduce","ReduceScatter"]
 all_reds = ["sum", "avg"]
 all_tys = ["f32","f16","bf16","f8e4m3","f8e5m2"]
 gin_algos = ["RailA2A_LsaLD", "RailA2A_LsaLDMC", "RailRing_LsaSTMC"]
+alltoall_gin_algos = ["LL"]
+
+def is_gin_kernel(k):
+  return k.algo in gin_algos or (k.coll == "AlltoAll" and k.algo in alltoall_gin_algos)
 tma_algos = ["TmaST", "TmaSTMC", "TmaLD", "RSxTmaLD_AGxTmaST"]
 
 nvls_algos_by_coll = {
@@ -69,6 +73,7 @@ ldmc_algos = ["RSxLDMC_AGxSTMC", "LDMC", "RailA2A_LsaLDMC"]
 coll_to_lower = {
   "AllGather": "all_gather",
   "AllReduce": "all_reduce",
+  "AlltoAll": "alltoall",
   "ReduceScatter": "reduce_scatter"
 }
 
@@ -99,6 +104,8 @@ ty_to_cxxtype = {
 def enumerate_kernels():
   for algo in ["LL","LLMC","ST","STMC","TmaST","TmaSTMC","RailRing_LsaSTMC"]:
     yield Rec(coll="AllGather", algo=algo)
+  for algo in ["LL"]:
+    yield Rec(coll="AlltoAll", algo=algo)
   for red in all_reds:
     for ty in all_tys:
       for algo in ["AGxLL_R","AGxLLMC_R","RSxLD_AGxST","RSxLDMC_AGxSTMC","RSxTmaLD_AGxTmaST"]:
@@ -132,12 +139,20 @@ def required_cuda(k):
 
 ################################################################################
 
+def alltoall_gin_fbase(k):
+  if k.coll == "AlltoAll" and k.algo == "LL": return "alltoall_LL"
+  return None
+
 def kernel_fbase(k):
-  return coll_to_lower[k.coll] + ("_gin" if k.algo in gin_algos else "")
+  fbase = alltoall_gin_fbase(k)
+  if fbase is not None: return fbase
+  return coll_to_lower[k.coll] + ("_gin" if is_gin_kernel(k) else "")
 
 def kernel_fname(k):
+  fbase = alltoall_gin_fbase(k)
+  if fbase is not None: return fbase + '.cu'
   parts = [coll_to_lower[k.coll]]
-  if k.algo in gin_algos: parts += ['gin']
+  if is_gin_kernel(k): parts += ['gin']
   if k.coll in reductions:
     if k.algo in ldmc_algos and k.ty.startswith('f8'):
       parts += [k.red, k.ty, k.algo]
@@ -253,7 +268,7 @@ def partition(vals, keyfn):
 
 
 # When exclude_gin (Windows), do not generate or reference any GIN kernels.
-kernels_to_build = [k for k in enumerate_kernels() if not (exclude_gin and k.algo in gin_algos)]
+kernels_to_build = [k for k in enumerate_kernels() if not (exclude_gin and is_gin_kernel(k))]
 kernels_by_file = partition(kernels_to_build, lambda k: (kernel_fname(k), kernel_fbase(k)))
 
 # Add dependency only files (e.g. allreduce.cu)
@@ -319,6 +334,7 @@ with open(os.path.join(gensrc, "sym_kernels_host.cc"), "w") as f:
   emitln(f, '')
 
   emitln(f, 'int ncclSymkKernelMaxDynamicSmem[%d];' % len(kernel_list))
+  emitln(f, 'int ncclSymkKernelMaxThreads[%d];' % len(kernel_list))
   emitln(f, '')
 
   emitln(f, 'int ncclSymkGetKernelIndex(ncclSymkKernelId id, int red, ncclDataType_t ty) {')

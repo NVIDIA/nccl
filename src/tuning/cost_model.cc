@@ -245,7 +245,7 @@ static struct ncclTuningModelEntry_t modelMap[] = {
     /*
 Initialize default, static models here
 {mod_init, mod_sim, mod_final, enabled}
-Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
+Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce, AlltoAll
 */
   {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL
   {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL128
@@ -304,6 +304,7 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_LL128
   {nullptr, ncclTuningSymkModelSim, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_LL128
   {nullptr, ncclTuningSymkModelSim, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_LL128
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 0, 1}, {}}, // AlltoAll_LL
   {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Unicast
   {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
 };
@@ -340,11 +341,14 @@ ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm) {
 */
 ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
+  const char* tuningFuncStr[NCCL_NUM_TUNING_FUNCTIONS] = {"Broadcast",     "Reduce",    "AllGather",
+                                                          "ReduceScatter", "AllReduce", "AlltoAll"};
   // Protocols/Algorithms enable/disable, and user overrides.
   // All are enabled except ll128 which is enabled by default only in certain cases.
   int protoEnable[NCCL_NUM_FUNCTIONS * NCCL_NUM_PROTOCOLS];
   int algoEnable[NCCL_NUM_FUNCTIONS * NCCL_NUM_ALGORITHMS];
-  int symKernelIdEnable[NCCL_NUM_FUNCTIONS * ncclSymkKernelId_Count];
+  int symKernelIdEnable[NCCL_NUM_TUNING_FUNCTIONS * ncclSymkKernelId_Count];
+  int symKernelForced[NCCL_NUM_TUNING_FUNCTIONS] = {};
   for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
     for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
       protoEnable[f * NCCL_NUM_PROTOCOLS + p] = p == NCCL_PROTO_LL128 ? 2 : 1;
@@ -352,6 +356,8 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
     for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
       algoEnable[f * NCCL_NUM_ALGORITHMS + a] = 1;
     }
+  }
+  for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
     for (int k = 0; k < ncclSymkKernelId_Count; k++) {
       symKernelIdEnable[f * ncclSymkKernelId_Count + k] = 1;
     }
@@ -361,7 +367,7 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   const char* symKernelIdStr = ncclGetEnv("NCCL_SYM_KERNEL");
   if ((algoStr && strlen(algoStr) > 0) || (symKernelIdStr && strlen(symKernelIdStr) > 0)) {
     std::fill_n(algoEnable, NCCL_NUM_FUNCTIONS * NCCL_NUM_ALGORITHMS, 0);
-    std::fill_n(symKernelIdEnable, NCCL_NUM_FUNCTIONS * ncclSymkKernelId_Count, 0);
+    std::fill_n(symKernelIdEnable, NCCL_NUM_TUNING_FUNCTIONS * ncclSymkKernelId_Count, 0);
   }
   if (protoStr) {
     INFO(NCCL_ENV, "NCCL_PROTO set by environment to %s", protoStr);
@@ -375,8 +381,11 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   }
   if (symKernelIdStr) {
     INFO(NCCL_ENV, "NCCL_SYM_KERNEL set by environment to %s", symKernelIdStr);
-    NCCLCHECK(parseList(symKernelIdStr, ncclFuncStr, NCCL_NUM_FUNCTIONS, ncclSymKernelStr, ncclSymkKernelId_Count,
-                        symKernelIdEnable, comm->tuningContext.forced));
+    NCCLCHECK(parseList(symKernelIdStr, tuningFuncStr, NCCL_NUM_TUNING_FUNCTIONS, ncclSymKernelStr,
+                        ncclSymkKernelId_Count, symKernelIdEnable, symKernelForced));
+  }
+  for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
+    comm->tuningContext.forced[f] |= symKernelForced[f];
   }
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningModelEntry_t* model = nullptr;
@@ -385,7 +394,7 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
       ret = ncclInternalError;
       goto fail;
     }
-    for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
+    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
       comm->tuningContext.enabled[i][f] = model->enabled[f];
     }
     if (model->init != nullptr) {
@@ -395,10 +404,10 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
     if (i >= NCCL_TUNING_CE_METHOD_ID_OFFSET) continue;
     int algo, proto, symKernelId;
     NCCLCHECK(ncclTuningExpandId(i, &algo, &proto, &symKernelId, nullptr));
-    for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
+    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
       // Disable LL128 when 1) it is not supported on the platform, and 2) user did not explicitly request it.
       // protoEnable[..] == 2 indicates that user did not set NCCL_PROTO=LL128 explicitly.
-      if (proto == NCCL_PROTO_LL128 && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 2 &&
+      if (f < NCCL_NUM_FUNCTIONS && proto == NCCL_PROTO_LL128 && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 2 &&
           !isLL128Enabled(comm->minCompCap, comm->maxCompCap, comm->graphs[algo].typeInter,
                           comm->graphs[algo].typeIntra, comm->nRanks, f, algo, comm->minDriverVersion)) {
         comm->tuningContext.enabled[i][f] = 0;
@@ -408,10 +417,10 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
       comm->tuningContext.enabled[i][f] = 0;
       TRACE(NCCL_TUNING, "a/p/s %s/%s/%s enabled %d/%d/%d", ncclAlgoToString(algo), ncclProtoToString(proto),
             ncclSymkKernelIdToString(symKernelId),
-            algo != NCCL_ALGO_UNDEF ? algoEnable[f * NCCL_NUM_ALGORITHMS + algo] : -1,
-            proto != NCCL_PROTO_UNDEF ? protoEnable[f * NCCL_NUM_PROTOCOLS + proto] : -1,
+            f < NCCL_NUM_FUNCTIONS && algo != NCCL_ALGO_UNDEF ? algoEnable[f * NCCL_NUM_ALGORITHMS + algo] : -1,
+            f < NCCL_NUM_FUNCTIONS && proto != NCCL_PROTO_UNDEF ? protoEnable[f * NCCL_NUM_PROTOCOLS + proto] : -1,
             symKernelId != ncclSymkKernelId_Count ? symKernelIdEnable[f * ncclSymkKernelId_Count + symKernelId] : -1);
-      if (((algo != NCCL_ALGO_UNDEF && algoEnable[f * NCCL_NUM_ALGORITHMS + algo] != 0) &&
+      if ((f < NCCL_NUM_FUNCTIONS && (algo != NCCL_ALGO_UNDEF && algoEnable[f * NCCL_NUM_ALGORITHMS + algo] != 0) &&
            (proto != NCCL_PROTO_UNDEF && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] != 0)) ||
           (symKernelId != ncclSymkKernelId_Count && symKernelIdEnable[f * ncclSymkKernelId_Count + symKernelId] != 0)) {
         comm->tuningContext.enabled[i][f] = 1;
@@ -441,17 +450,17 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
     }
     offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n");
 
-    for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
+    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
       offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s | ",
-                         ncclFuncStr[f]);
+                         tuningFuncStr[f]);
       for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
         offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%8d  ",
-                           protoEnable[f * NCCL_NUM_PROTOCOLS + p]);
+                           f < NCCL_NUM_FUNCTIONS ? protoEnable[f * NCCL_NUM_PROTOCOLS + p] : -1);
       }
       offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
       for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
         offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13d  ",
-                           algoEnable[f * NCCL_NUM_ALGORITHMS + a]);
+                           f < NCCL_NUM_FUNCTIONS ? algoEnable[f * NCCL_NUM_ALGORITHMS + a] : -1);
       }
       offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
       for (int k = 0; k < ncclSymkKernelId_Count; k++) {
@@ -506,13 +515,15 @@ ncclResult_t ncclTuningCostModelSimModel(int id, struct ncclTuningInput_t* const
                                          struct ncclTuningResult_t* const result) {
   struct ncclTuningModelEntry_t* model = nullptr;
   ncclResult_t ret = ncclSuccess;
-  result->forced = input->comm->tuningContext.forced[input->func];
+  int tuningFunc = ncclTuningFuncIndex(input->func);
+  if (tuningFunc < 0) goto not_valid;
+  result->forced = input->comm->tuningContext.forced[tuningFunc];
   NCCLCHECKGOTO(getModelEntry(input->comm->minCompCap, id, &model), ret, not_valid);
   if (model == nullptr) {
     ret = ncclInternalError;
     goto not_valid;
   }
-  if (input->comm->tuningContext.enabled[id][input->func] == 0) {
+  if (input->comm->tuningContext.enabled[id][tuningFunc] == 0) {
     goto not_valid;
   }
   if (model->model != nullptr) {

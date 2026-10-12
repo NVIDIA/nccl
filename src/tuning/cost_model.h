@@ -29,7 +29,7 @@ struct ncclTuningModelEntry_t {
   ncclTuningModelInitFn_t init; // Initilize Model
   ncclTuningModelSimFn_t model; // Simulate Model
   ncclTuningModelFinalizeFn_t finalize; // Finalize Model, useful for memory de-allocations
-  int enabled[NCCL_NUM_FUNCTIONS]; // Hard disable of the model/capability.
+  int enabled[NCCL_NUM_TUNING_FUNCTIONS]; // Hard disable of the model/capability.
   struct ncclTuningModelState internal;
 };
 

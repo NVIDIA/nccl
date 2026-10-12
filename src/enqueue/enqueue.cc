@@ -104,6 +104,12 @@ ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* ma
 
         if (!CUDASUCCESS(cudaFuncGetAttributes(&attr, fn))) continue; // Silently ignore failures
 
+        if (set == kernelSetSymk && v == 0) {
+          // AlltoAll LL derives its warp and CTA layout from this exact
+          // kernel's device-specific thread limit.
+          ncclSymkKernelMaxThreads[k] = attr.maxThreadsPerBlock;
+        }
+
         if (maxStackSize) {
           if (attr.localSizeBytes > *maxStackSize) *maxStackSize = attr.localSizeBytes;
         }
@@ -2172,7 +2178,8 @@ ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, i
   input.tuningMask = NCCL_TUNING_MASK_GENERAL_KERNELS;
   // Env (NCCL_ALGO/PROTO/SYM_KERNEL) is a global override that wins over per-call
   // algSelection for any function it forced.
-  uint64_t effAlgMask = comm->tuningContext.forced[info->func] ? 0 : info->algMask;
+  int tuningFunc = ncclTuningFuncIndex(info->func);
+  uint64_t effAlgMask = (tuningFunc >= 0 && comm->tuningContext.forced[tuningFunc]) ? 0 : info->algMask;
   if (effAlgMask != 0) {
     input.tuningMask = effAlgMask & NCCL_TUNING_MASK_GENERAL_KERNELS;
   }
@@ -2814,7 +2821,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->root = info->root;
     t->datatype = info->datatype;
     size_t elementSize = ncclTypeSize(t->datatype);
-    if (t->func == ncclFuncAllGather || t->func == ncclFuncBroadcast) {
+    if (t->func == ncclFuncAllGather || t->func == ncclFuncBroadcast || t->func == ncclFuncAlltoAll) {
       t->count *= elementSize;
       t->datatype = ncclInt8;
       elementSize = 1;
@@ -3420,7 +3427,14 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
         // For cuda graph checking
         NCCLCHECK(ncclCudaGetCapturingGraph(&graph, info->stream, comm->config.graphUsageMode));
         captured = ncclCudaGraphValid(graph);
-        if (info->coll == ncclFuncAlltoAll) {
+        bool useSymmetricAlltoAll = info->coll == ncclFuncAlltoAll && ncclSymkAlltoAllLLForced(comm);
+        if (useSymmetricAlltoAll && !ncclSymkAvailable(comm, info->coll, opDev.op, info->datatype, info->count)) {
+          WARN("NCCL_SYM_KERNEL requests AlltoAll_LL, but the kernel is unavailable for this operation");
+          return ncclInvalidUsage;
+        }
+        if (useSymmetricAlltoAll) {
+          NCCLCHECK(collTaskAppend(comm, info, opDev));
+        } else if (info->coll == ncclFuncAlltoAll) {
           bool sendLocalValid = false;
           bool recvLocalValid = false;
           NCCLCHECK(ncclRegFind(comm, info->sendbuff, comm->nRanks * info->count * ncclTypeSize(info->datatype),

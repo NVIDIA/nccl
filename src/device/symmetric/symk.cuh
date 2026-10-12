@@ -97,6 +97,7 @@ struct ncclSymkArgsHandler : ncclSymkWorkArgsHandler {
   ncclLLA2AHandle const& lsaLLA2A;
   ncclGinOutboxHandle const& ginOutbox;
   ncclGinInboxA2AHandle const& ginInboxRail;
+  ncclSymkAlltoAllLLScratchHandle const& alltoAllLLScratch;
   ncclGinSyncHandle const& ginSyncHandle;
   ncclDevResourceHandle rsGinAccumBuf;
   uint32_t rsGinAccumBytesPerBlock;
@@ -105,8 +106,8 @@ struct ncclSymkArgsHandler : ncclSymkWorkArgsHandler {
     : ncclSymkWorkArgsHandler(args->kcomm.devComm, ncclSymkGetWorkRange(args),
                               ncclSymkGetWorks(args, args->nMaxChannels)),
       lsaLLA2A(args->kcomm.lsaLLA2A), ginOutbox(args->kcomm.ginOutbox), ginInboxRail(args->kcomm.ginInboxRail),
-      ginSyncHandle(args->kcomm.ginSyncHandle), rsGinAccumBuf(args->kcomm.rsGinAccumBuf),
-      rsGinAccumBytesPerBlock(args->kcomm.rsGinAccumBytesPerBlock) {}
+      alltoAllLLScratch(args->kcomm.alltoAllLLScratch), ginSyncHandle(args->kcomm.ginSyncHandle),
+      rsGinAccumBuf(args->kcomm.rsGinAccumBuf), rsGinAccumBytesPerBlock(args->kcomm.rsGinAccumBytesPerBlock) {}
 };
 } // namespace
 

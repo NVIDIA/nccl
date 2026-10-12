@@ -1515,6 +1515,15 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
       }
       NCCLCHECK(ncclTopoGetLocalNet(comm->topo, localRank, channelId, &netId, &netDev));
 
+      // PXN sends require GDR reads, as does proxy preconnection in ncclTopoGetPxnRanks.
+      // Keep the local proxy when this NIC cannot read GPU memory; a remote proxy
+      // cannot share host data buffers or attach its ops pool after initialization.
+      if (pxnLevel != 0) {
+        enum ncclTopoGdrMode useGdr;
+        NCCLCHECK(ncclTopoCheckGdr(comm->topo, rank, netId, 1, &useGdr));
+        if (useGdr == ncclTopoGdrModeDisable) pxnLevel = 0;
+      }
+
       // Check that device exists on our node
       if (ncclParamCrossNic() == 0) {
         if (dev) *dev = netDev;

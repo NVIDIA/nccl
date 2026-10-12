@@ -13,11 +13,6 @@
 #include <cassert>
 
 #ifdef __CUDACC__
-// Implemented by the symmetric kernels using their internal reduceCopy primitive.
-template <typename T, typename RedOp, int MaxSrcs, int MaxDsts, typename SrcFn, typename DstFn>
-NCCL_DEVICE_INLINE void ncclFlowReduceCopy(int thread, int nThreads, int nSrcs, SrcFn const& srcFn, int nDsts,
-                                           DstFn const& dstFn, RedOp const& redOp, int nElts);
-
 template <typename Backend, int SlotsPerProcess, int MaxPeers>
 template <bool Send, bool DirectSend, bool Recv, bool DirectRecv, typename T, typename SrcLambda, typename DstLambda,
           typename RedOp>
@@ -85,7 +80,7 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
       int const nProcessDsts = nDst + sendFifoPeers;
       assert(nProcessDsts == 0 || nProcessSrcs != 0);
       if (nProcessDsts != 0) {
-        ncclFlowReduceCopy<T, RedOp, 1 + (Recv ? MaxPeers : 0), 1 + (Send ? MaxPeers : 0)>(
+        backend.operations.template reduceCopy<T, RedOp, 1 + (Recv ? MaxPeers : 0), 1 + (Send ? MaxPeers : 0)>(
           workers.thread_rank(), workers.size(), nProcessSrcs, slotSrc, nProcessDsts, slotDst, redOp, (int)slotCount);
       }
     }

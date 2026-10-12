@@ -34,12 +34,15 @@ __device__ __forceinline__ void ncclGenkRun_AllReduce_Ring_Flow(ncclGenkDevWorkA
 #if !defined(NCCL_OS_WINDOWS)
   ncclFlowConfig<ncclGenkGinBackendMask> const flowConfig =
     ncclGenkRingGinConfig<Protocol, ncclGenkGinBackendMask>(args->kcomm, channelId);
-  ncclFlowProcessor<ncclGenkGinBackendMask, nSlotsPerProcess, maxPeers, Protocol> flow(
-    comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps, flowShmem);
+  ncclFlowProcessor<ncclGenkGinBackendMask, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(
+    ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps,
+    flowShmem);
 #else
   ncclFlowConfig<0> const flowConfig = ncclGenkRingLsaConfig<Protocol>(args->kcomm);
-  ncclFlowProcessor<0, nSlotsPerProcess, maxPeers, Protocol> flow(comm, flowConfig, sendPeers, nSendPeers, recvPeers,
-                                                                  nRecvPeers, channelId, nWorkerWarps, flowShmem);
+  ncclFlowProcessor<0, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(ncclGenkFlowOps{}, comm, flowConfig,
+                                                                                   sendPeers, nSendPeers, recvPeers,
+                                                                                   nRecvPeers, channelId, nWorkerWarps,
+                                                                                   flowShmem);
 #endif
   int const minChunkElts = args->minChunkPayloadBytes / sizeof(T);
   constexpr int maxChunkElts = ProtocolTraits::RingChunkPayloadBytes / sizeof(T);
@@ -204,15 +207,14 @@ __device__ __forceinline__ void ncclGenkRun_AllReduce_Tree_Flow(ncclGenkDevWorkA
 #if !defined(NCCL_OS_WINDOWS)
   ncclFlowConfig<ncclGenkGinBackendMask> const flowConfig =
     ncclGenkTreeGinConfig<Protocol, ncclGenkGinBackendMask>(args->kcomm, channelId);
-  ncclFlowProcessor<ncclGenkGinBackendMask, /*SlotsPerProcess=*/1, maxPeers, Protocol> flow(
-    comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps, flowShmem, nParts,
-    sendPart, recvPart, sendSlots, recvSlots, partWorkerWarps);
+  ncclFlowProcessor<ncclGenkGinBackendMask, /*SlotsPerProcess=*/1, maxPeers, Protocol, ncclGenkFlowOps> flow(
+    ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps,
+    flowShmem, nParts, sendPart, recvPart, sendSlots, recvSlots, partWorkerWarps);
 #else
   ncclFlowConfig<0> const flowConfig = ncclGenkTreeLsaConfig<Protocol>(args->kcomm);
-  ncclFlowProcessor<0, /*SlotsPerProcess=*/1, maxPeers, Protocol> flow(comm, flowConfig, sendPeers, nSendPeers,
-                                                                       recvPeers, nRecvPeers, channelId, nWorkerWarps,
-                                                                       flowShmem, nParts, sendPart, recvPart, sendSlots,
-                                                                       recvSlots, partWorkerWarps);
+  ncclFlowProcessor<0, /*SlotsPerProcess=*/1, maxPeers, Protocol, ncclGenkFlowOps> flow(
+    ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps,
+    flowShmem, nParts, sendPart, recvPart, sendSlots, recvSlots, partWorkerWarps);
 #endif
 
   int const minChunkElts = args->minChunkPayloadBytes / sizeof(T);

@@ -31,12 +31,12 @@ __device__ __forceinline__ void ncclGenkRun_Reduce_Ring_Flow(ncclGenkDevWorkArgs
 #if !defined(NCCL_OS_WINDOWS)
   ncclFlowConfig<ncclGenkGinBackendMask> const flowConfig =
     ncclGenkRingGinConfig<Protocol, ncclGenkGinBackendMask>(args->kcomm, channelId);
-  ncclFlowProcessor<ncclGenkGinBackendMask, nSlotsPerProcess, maxPeers, Protocol> flow(
-    comm, flowConfig, sendPeers, nPeers, recvPeers, nPeers, channelId, nWorkerWarps, flowShmem);
+  ncclFlowProcessor<ncclGenkGinBackendMask, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(
+    ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nPeers, recvPeers, nPeers, channelId, nWorkerWarps, flowShmem);
 #else
   ncclFlowConfig<0> const flowConfig = ncclGenkRingLsaConfig<Protocol>(args->kcomm);
-  ncclFlowProcessor<0, nSlotsPerProcess, maxPeers, Protocol> flow(comm, flowConfig, sendPeers, nPeers, recvPeers,
-                                                                  nPeers, channelId, nWorkerWarps, flowShmem);
+  ncclFlowProcessor<0, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(
+    ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nPeers, recvPeers, nPeers, channelId, nWorkerWarps, flowShmem);
 #endif
   int const minChunkElts = args->minChunkPayloadBytes / sizeof(T);
   constexpr int maxChunkElts = ProtocolTraits::RingChunkPayloadBytes / sizeof(T);

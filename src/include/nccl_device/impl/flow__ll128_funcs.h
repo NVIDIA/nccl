@@ -13,10 +13,6 @@
 #include <cassert>
 
 #ifdef __CUDACC__
-// Implemented by the symmetric kernels using their internal packed reduction operators.
-template <typename RedOp>
-NCCL_DEVICE_INLINE uint64_t ncclFlowLL128Reduce(RedOp const& redOp, uint64_t a, uint64_t b);
-
 NCCL_DEVICE_INLINE void ncclFlowLL128Load128(uint64_t const* src, uint64_t& lo, uint64_t& hi) {
   asm volatile("ld.volatile.global.v2.u64 {%0,%1}, [%2];" : "=l"(lo), "=l"(hi) : "l"(src) : "memory");
 }
@@ -194,7 +190,7 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
         if (peer == 0 && dataValid) ncclFlowLL128LoadDataFinish(data, flagThread);
         NVCC_PRAGMA_UNROLL_AUTO
         for (int u = 0; u < NCCL_LL128_SHMEM_ELEMS_PER_THREAD; u++) {
-          data[u] = dataValid ? ncclFlowLL128Reduce(redOp, peerData[u], data[u]) : peerData[u];
+          data[u] = dataValid ? backend.operations.reducePacked(redOp, peerData[u], data[u]) : peerData[u];
         }
         dataValid = true;
       }

@@ -290,16 +290,16 @@ NCCL_DEVICE_INLINE bool ncclFlowConnection<GinBackendMask, Protocol>::usesGin() 
 }
 #endif
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::ncclFlowProcessor(
-  ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int const* sendPeers, int nSendPeers,
-  int const* recvPeers, int nRecvPeers, int channelId, int nWorkerWarps, ncclFlowShmem& shmem, int nParts, int sendPart,
-  int recvPart, int const* sendSlots, int const* recvSlots, int const* partWorkerWarps)
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::ncclFlowProcessor(
+  FlowOps const& ops, ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int const* sendPeers,
+  int nSendPeers, int const* recvPeers, int nRecvPeers, int channelId, int nWorkerWarps, ncclFlowShmem& shmem,
+  int nParts, int sendPart, int recvPart, int const* sendSlots, int const* recvSlots, int const* partWorkerWarps)
   : Base(comm.abortFlag, config.channelSize / ((size_t)ncclFlowCreditSlots * nParts * MaxPeers), config.nSlots,
          nWorkerWarps, nSendPeers, nRecvPeers, nParts,
          ncclFlowThreadPart(nWorkerWarps, nParts, partWorkerWarps, ncclFlowGetSignalWarpsPerPart(Protocol)), sendSlots,
          recvSlots, shmem, partWorkerWarps),
-    conn() {
+    conn(), operations(ops) {
   assert(0 < config.nSlots);
   assert(SlotsPerProcess <= config.nSlots);
   assert(0 < nParts && nParts <= NCCL_FLOW_MAX_PARTS);
@@ -320,54 +320,59 @@ NCCL_DEVICE_INLINE ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, 
   this->initShmem();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::closeBackend() {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void
+ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::closeBackend() {
   conn.close();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::waitSend() {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::waitSend() {
   return conn.waitSend();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::postSend(size_t bytes) {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::postSend(
+  size_t bytes) {
   conn.postSend(bytes);
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::postSend(
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::postSend(
   size_t bytes, bool direct, ncclSymPtr<char> output, ncclSymPtr<char> source) {
   conn.postSend(bytes, direct, output, source);
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::waitRecv() {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::waitRecv() {
   return conn.waitRecv();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::postRecv() {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::postRecv() {
   conn.postRecv();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::advanceStep() {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::advanceStep() {
   conn.advanceStep();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::advanceFifoSlot() {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void*
+ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::advanceFifoSlot() {
   return conn.advanceFifoSlot();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE uint64_t ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::stepFlag() const {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE uint64_t
+ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::stepFlag() const {
   return conn.stepFlag();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE bool ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol>::usesGin() const {
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE bool ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::usesGin()
+  const {
   return conn.usesGin();
 }
 

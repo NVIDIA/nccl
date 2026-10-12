@@ -136,22 +136,26 @@ struct ncclFlowConfig {
 // LSA or GIN per peer at runtime. SlotsPerProcess is the maximum number of FIFO slots in one process() call.
 // MaxPeers is the per-part connection capacity. It bounds nSendPeers, nRecvPeers, and every index in sendSlots
 // and recvSlots, even if some calls have no peers. Each slot has its own FIFO and connection state.
-// Protocol selects the FIFO format.
-template <unsigned GinBackendMask, int SlotsPerProcess = 1, int MaxPeers = 1,
-          ncclFlowProtocol FlowProtocol = ncclFlowProtocolSimple>
+// Protocol selects the FIFO format. FlowOps is a caller-provided object copied into each processor. Simple calls
+// ops.reduceCopy<T, RedOp, MaxSrcs, MaxDsts>(thread, nThreads, nSrcs, srcFn, nDsts, dstFn, redOp, nElts);
+// LL and LL128 call ops.reducePacked(redOp, a, b), returning a uint64_t. Only the selected protocol's
+// operation is required.
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol FlowProtocol, typename FlowOps>
 struct ncclFlowProcessor;
 
 #if defined(__CUDACC_EXTENDED_LAMBDA__)
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol FlowProtocol>
-struct ncclFlowProcessor : ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, FlowProtocol>,
-                                        SlotsPerProcess, MaxPeers> {
-  using Base =
-    ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, FlowProtocol>, SlotsPerProcess, MaxPeers>;
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol FlowProtocol, typename FlowOps>
+struct ncclFlowProcessor
+  : ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, FlowProtocol, FlowOps>, SlotsPerProcess,
+                 MaxPeers> {
+  using Base = ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, FlowProtocol, FlowOps>,
+                            SlotsPerProcess, MaxPeers>;
   static constexpr ncclFlowProtocol Protocol = FlowProtocol;
 
-  // Set up a Flow processor for this CTA to exchange data with the specified peers. sendPeers and recvPeers
-  // contain world ranks, with each count at most MaxPeers. config supplies the FIFO layout (including nSlots),
-  // connection state, and optional GIN resources; channelId selects their instance.
+  // Set up a Flow processor for this CTA to exchange data with the specified peers, using the caller's ops
+  // object for reduction and copy. sendPeers and recvPeers contain world ranks, with each count at most MaxPeers.
+  // config supplies the FIFO layout (including nSlots), connection state, and optional GIN resources;
+  // channelId selects their instance.
   // Every CTA thread constructs a processor; shmem resides in CTA shared memory. Receive-post roles grant
   // ncclFlowCreditSlots credit units (nSlots physical slots) to their peers at construction.
   //
@@ -161,11 +165,12 @@ struct ncclFlowProcessor : ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsP
   // same peers and slot maps. partWorkerWarps optionally divides nWorkerWarps among parts. Launch
   // 32 * (nWorkerWarps + nParts * ncclFlowGetSignalWarpsPerPart(Protocol))
   // threads, with at least 2 * nParts worker warps.
-  NCCL_DEVICE_INLINE ncclFlowProcessor(ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config,
-                                       int const* sendPeers, int nSendPeers, int const* recvPeers, int nRecvPeers,
-                                       int channelId, int nWorkerWarps, ncclFlowShmem& shmem, int nParts = 1,
-                                       int sendPart = 0, int recvPart = 0, int const* sendSlots = nullptr,
-                                       int const* recvSlots = nullptr, int const* partWorkerWarps = nullptr);
+  NCCL_DEVICE_INLINE ncclFlowProcessor(FlowOps const& ops, ncclDevComm const& comm,
+                                       ncclFlowConfig<GinBackendMask> const& config, int const* sendPeers,
+                                       int nSendPeers, int const* recvPeers, int nRecvPeers, int channelId,
+                                       int nWorkerWarps, ncclFlowShmem& shmem, int nParts = 1, int sendPart = 0,
+                                       int recvPart = 0, int const* sendSlots = nullptr, int const* recvSlots = nullptr,
+                                       int const* partWorkerWarps = nullptr);
 
   // Process nElts elements collectively. send/recv tags select the active directions. src(i) and dst(i)
   // provide nSrc and nDst explicit T* operands; Flow appends non-direct receive FIFOs to the sources and
@@ -187,10 +192,11 @@ struct ncclFlowProcessor : ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsP
   }
 
 private:
-  friend struct ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, FlowProtocol>,
+  friend struct ncclFlowBase<ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, FlowProtocol, FlowOps>,
                              SlotsPerProcess, MaxPeers>;
 
   ncclFlowConnection<GinBackendMask, FlowProtocol> conn;
+  FlowOps operations;
 
   NCCL_DEVICE_INLINE void* waitSend();
   NCCL_DEVICE_INLINE void postSend(size_t bytes = 0);
@@ -205,7 +211,7 @@ private:
   NCCL_DEVICE_INLINE bool usesGin() const;
 };
 #else // __CUDACC_EXTENDED_LAMBDA__
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol FlowProtocol>
+template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol FlowProtocol, typename FlowOps>
 struct ncclFlowProcessor {
   static_assert(nccl::utility::always_false<ncclFlowProcessor>::value,
                 "NCCL Flow requires device side lambdas, please use '--extended-lambda' as compilation flag to enable "
@@ -216,8 +222,9 @@ struct ncclFlowProcessor {
 };
 #endif // __CUDACC_EXTENDED_LAMBDA__
 
-template <int SlotsPerProcess = 1, int MaxPeers = 1, ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
-using ncclLsaFlowProcessor = ncclFlowProcessor<0, SlotsPerProcess, MaxPeers, Protocol>;
+template <typename FlowOps, int SlotsPerProcess = 1, int MaxPeers = 1,
+          ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
+using ncclLsaFlowProcessor = ncclFlowProcessor<0, SlotsPerProcess, MaxPeers, Protocol, FlowOps>;
 #endif
 
 #endif // NCCL_DEVICE_FLOW_H_

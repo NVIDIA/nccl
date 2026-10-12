@@ -582,7 +582,8 @@ typedef enum ncclGroupTaskType {
   ncclGroupTaskTypeSymRegister = 1,
   ncclGroupTaskTypeRawTask = 2,
   ncclGroupTaskTypeMgmtTask = 3,
-  ncclGroupTaskTypeNum = 4,
+  ncclGroupTaskTypeDestroyTask = 4, // comms being destroyed; dropped at group end instead of left
+  ncclGroupTaskTypeNum = 5,
 } ncclGroupTaskType_t;
 
 struct ncclCommSymTeams;

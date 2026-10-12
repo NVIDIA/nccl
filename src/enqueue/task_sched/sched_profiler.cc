@@ -17,8 +17,16 @@ ncclResult_t ncclSchedProfilerLaunchCreate(struct ncclComm* comm, bool captured,
   struct ncclSchedProfilerLaunch* launch = nullptr;
   ncclResult_t ret = ncclSuccess;
 
-  NCCLCHECKGOTO(ncclCalloc(&launch, 1), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&launch->tasks, nTasks), ret, fail);
+  if (captured) {
+    // A captured launch outlives the group: its record is replayed from a graph host callback
+    // and freed with the graph.
+    NCCLCHECKGOTO(ncclCalloc(&launch, 1), ret, fail);
+    NCCLCHECKGOTO(ncclCalloc(&launch->tasks, nTasks), ret, fail);
+  } else {
+    // An eager launch is done with its record before the group's scoped memory is released.
+    launch = ncclMemoryStackAlloc<struct ncclSchedProfilerLaunch>(&comm->memScoped);
+    launch->tasks = ncclMemoryStackAlloc<struct ncclSchedProfilerTask>(&comm->memScoped, nTasks);
+  }
   launch->comm = comm;
   launch->captured = captured;
   launch->eActivationMask = firstTask->raw->profiler.eActivationMask;
@@ -31,7 +39,8 @@ fail:
 }
 
 void ncclSchedProfilerLaunchDestroy(struct ncclSchedProfilerLaunch* launch) {
-  if (launch == nullptr) return;
+  // Only a captured launch owns heap memory; an eager record lives in the group's scoped memory.
+  if (launch == nullptr || !launch->captured) return;
   free(launch->tasks);
   free(launch);
 }
@@ -60,12 +69,4 @@ void ncclSchedProfilerLaunchAddTask(struct ncclSchedProfilerLaunch* launch, cons
   t->nWarps = (uint8_t)tInfo->tuningOut.nWarps;
   t->api = tInfo->raw->profiler;
   t->eventHandle = {};
-}
-
-void CUDART_CB ncclSchedProfilerReplayCallback(void* launch_) {
-  struct ncclSchedProfilerLaunch* launch = (struct ncclSchedProfilerLaunch*)launch_;
-  ncclResult_t result = ncclProfilerSchedReplay(launch);
-  if (result != ncclSuccess) {
-    WARN("ncclSchedProfilerReplayCallback() failed : %s", ncclGetErrorString(result));
-  }
 }

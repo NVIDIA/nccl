@@ -440,13 +440,10 @@ ncclResult_t ncclProfilerSchedPreLaunch(struct ncclSchedProfilerLaunch* launch, 
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerSchedPostLaunch(struct ncclSchedProfilerLaunch* launch) {
+ncclResult_t ncclProfilerSchedPostLaunch(struct ncclSchedProfilerLaunch* launch, cudaStream_t stream, bool launched) {
   (void)launch;
-  return ncclSuccess;
-}
-
-ncclResult_t ncclProfilerSchedReplay(struct ncclSchedProfilerLaunch* launch) {
-  (void)launch;
+  (void)stream;
+  (void)launched;
   return ncclSuccess;
 }
 

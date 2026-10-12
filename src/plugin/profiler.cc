@@ -2312,10 +2312,22 @@ static ncclResult_t profilerSchedStopTaskEvents(struct ncclSchedProfilerLaunch* 
   return ncclSuccess;
 }
 
+// cudaLaunchHostFunc callback of a captured launch: its group and collective events, start to
+// stop, and the KernelCh work posts, once per replay.
+static void CUDART_CB profilerSchedReplayCallback(void* launch_) {
+  struct ncclSchedProfilerLaunch* launch = (struct ncclSchedProfilerLaunch*)launch_;
+  ncclResult_t result = profilerSchedStartTaskEvents(launch);
+  if (result == ncclSuccess) result = profilerSchedStopTaskEvents(launch);
+  if (result != ncclSuccess) WARN("profilerSchedReplayCallback() failed : %s", ncclGetErrorString(result));
+}
+
 ncclResult_t ncclProfilerSchedPreLaunch(struct ncclSchedProfilerLaunch* launch, cudaStream_t stream) {
   if (launch == nullptr) return ncclSuccess;
   // Counters go into the args buffer before the driver snapshots it.
   profilerSchedReserveSymCounters(launch);
+  // The group and collective events bracket the launch, with the kernel-launch event inside
+  // them. A captured launch emits its group and collective events on every replay instead.
+  if (!launch->captured) NCCLCHECK(profilerSchedStartTaskEvents(launch));
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (launch->eActivationMask & ncclProfileKernelLaunch)) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileKernelLaunch;
@@ -2324,22 +2336,20 @@ ncclResult_t ncclProfilerSchedPreLaunch(struct ncclSchedProfilerLaunch* launch, 
     profilerStart(launch->comm->profilerContext, &launch->kernelLaunchEventHandle, &eDescr,
                   &launch->groupApiEventHandle, nullptr);
   }
-  // A captured launch emits its task events per replay instead (ncclProfilerSchedReplay).
-  if (!launch->captured) NCCLCHECK(profilerSchedStartTaskEvents(launch));
   return ncclSuccess;
 }
 
-ncclResult_t ncclProfilerSchedPostLaunch(struct ncclSchedProfilerLaunch* launch) {
+ncclResult_t ncclProfilerSchedPostLaunch(struct ncclSchedProfilerLaunch* launch, cudaStream_t stream, bool launched) {
   if (launch == nullptr) return ncclSuccess;
   profilerStop(&launch->kernelLaunchEventHandle);
-  if (!launch->captured) NCCLCHECK(profilerSchedStopTaskEvents(launch));
-  return ncclSuccess;
-}
-
-ncclResult_t ncclProfilerSchedReplay(struct ncclSchedProfilerLaunch* launch) {
-  if (launch == nullptr) return ncclSuccess;
-  NCCLCHECK(profilerSchedStartTaskEvents(launch));
-  NCCLCHECK(profilerSchedStopTaskEvents(launch));
+  // An eager launch closes the group and collective events PreLaunch opened, launched or not.
+  // A captured launch emits them on every replay; only KernelCh profiling adds that host
+  // callback, and a failed launch adds nothing to the graph.
+  if (!launch->captured) {
+    NCCLCHECK(profilerSchedStopTaskEvents(launch));
+  } else if (launched && (launch->eActivationMask & ncclProfileKernelCh)) {
+    CUDACHECK(cudaLaunchHostFunc(stream, profilerSchedReplayCallback, launch));
+  }
   return ncclSuccess;
 }
 

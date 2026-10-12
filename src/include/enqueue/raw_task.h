@@ -75,6 +75,8 @@ struct ncclRawTaskSendRecv {
   size_t bytes;
   cudaStream_t stream;
   cudaEvent_t launchCompletionEvent;
+  // Whether the user buffer may be registered for this transfer (see p2pTaskAppend).
+  bool allowUB;
 };
 
 // ncclPutSignal API inputs captured at enqueue time.

@@ -160,11 +160,7 @@ static ncclResult_t fillP2pTaskFromRaw(struct ncclComm* comm, struct ncclTaskTun
   task->root = raw->peer;
   task->bytes = raw->bytes;
   task->launchCompletionEvent = raw->launchCompletionEvent;
-  if (task->collAPI == ncclFuncAlltoAll || task->collAPI == ncclFuncScatter || task->collAPI == ncclFuncGather) {
-    task->allowUB = false;
-  } else {
-    task->allowUB = true;
-  }
+  task->allowUB = raw->allowUB;
   ncclTaskCaptureProfilerCtx(task, tInfo->raw->profiler);
   return ncclSuccess;
 }

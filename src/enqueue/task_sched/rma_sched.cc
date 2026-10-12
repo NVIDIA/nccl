@@ -1199,9 +1199,10 @@ ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
 
   struct ncclRmaSchedPlan rmaPlan = {};
   struct ncclRmaSchedStreamPlan* streamPlan = nullptr;
-  struct ncclRmaProxyReclaimToken* token = nullptr;
   int nRmaCtx = comm->config.numRmaCtx;
   struct ncclSchedCallback* cb = nullptr;
+  // Set while depStream is acquired for streamPlan, so a failure releases it exactly once.
+  bool depAcquired = false;
   ncclResult_t ret = ncclSuccess;
 
   NCCLCHECKGOTO(scheduleRmaTasks(comm, queue, &rmaPlan), ret, fail);
@@ -1216,6 +1217,7 @@ ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
 
     if (depStream) {
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &streamPlan->acqDepStream), ret, fail);
+      depAcquired = true;
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, streamPlan->acqDepStream, finishedEvent), ret, fail);
     }
 
@@ -1224,6 +1226,7 @@ ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
     if (depStream) {
       CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, streamPlan->acqDepStream, finishedEvent), ret, fail);
+      depAcquired = false;
       NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, depStream, false), ret, fail);
     }
   }
@@ -1236,6 +1239,7 @@ ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
 
     if (depStream) {
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &streamPlan->acqDepStream), ret, fail);
+      depAcquired = true;
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, streamPlan->acqDepStream, finishedEvent), ret, fail);
     }
 
@@ -1246,37 +1250,35 @@ ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
     if (depStream) {
       CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, streamPlan->acqDepStream, finishedEvent), ret, fail);
+      depAcquired = false;
       NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, depStream, false), ret, fail);
     }
   }
 
   for (streamPlan = ncclIntruQueueHead(&rmaPlan.streamPlans); streamPlan != nullptr; streamPlan = streamPlan->next) {
     if (streamPlan->captured && streamPlan->reclaimToken != nullptr) {
-      token = streamPlan->reclaimToken;
-      streamPlan->reclaimToken = nullptr;
-      NCCLCHECKGOTO(ncclCalloc(&cb, 1), ret, rma_reclaim_token);
+      NCCLCHECKGOTO(ncclCalloc(&cb, 1), ret, fail);
       cb->fn = ncclRmaProxyReclaimDescCallback;
-      cb->args = token;
-      NCCLCHECKGOTO(ncclCudaGraphAddDestructor(streamPlan->graph, rmaSchedStreamPlanDestructor, cb), ret,
-                    rma_reclaim_token);
+      cb->args = streamPlan->reclaimToken;
+      NCCLCHECKGOTO(ncclCudaGraphAddDestructor(streamPlan->graph, rmaSchedStreamPlanDestructor, cb), ret, fail);
+      // The graph destructor owns the callback and its token from here on; the failure path
+      // reclaims the tokens still held by the other stream plans.
+      streamPlan->reclaimToken = nullptr;
       comm->captureRef += 1;
-      token = nullptr;
       cb = nullptr;
     }
   }
 
 exit:
   return ret;
-rma_reclaim_token:
-  (void)ncclRmaProxyReclaimDesc(comm, token);
-  free(token);
-  free(cb);
-  goto fail;
 fail:
-  if (depStream != nullptr && streamPlan != nullptr) {
+  free(cb); // allocated for a token that is still on its stream plan
+  if (depAcquired) {
     (void)ncclStrongStreamRelease(streamPlan->graph, depStream, false);
   }
-  if (streamPlan != nullptr && streamPlan->reclaimToken != nullptr) {
+  // Tokens not yet handed to a graph destructor still own their captured descriptors.
+  for (streamPlan = ncclIntruQueueHead(&rmaPlan.streamPlans); streamPlan != nullptr; streamPlan = streamPlan->next) {
+    if (streamPlan->reclaimToken == nullptr) continue;
     (void)ncclRmaProxyReclaimDesc(comm, streamPlan->reclaimToken);
     free(streamPlan->reclaimToken);
     streamPlan->reclaimToken = nullptr;

@@ -2880,50 +2880,18 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
   return ncclSuccess;
 }
 
-struct ncclCeInitAsyncJob {
-  struct ncclAsyncJob base;
-  struct ncclComm* comm;
-};
-
-static void ncclCeInitAsyncJobFree(void* _job) {
-  delete (struct ncclCeInitAsyncJob*)_job;
-}
-
-static ncclResult_t ncclCeInitJob(struct ncclAsyncJob* job_) {
-  struct ncclCeInitAsyncJob* job = (struct ncclCeInitAsyncJob*)job_;
-  ncclResult_t ret = ncclSuccess;
-
-  CUDACHECKGOTO(cudaSetDevice(job->comm->cudaDev), ret, fail);
-  NCCLCHECKGOTO(ncclCeInit(job->comm), ret, fail);
-
-exit:
-  return ret;
-fail:
-  job->comm->ceColl.initialized = false;
-  goto exit;
-}
-
 static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* info, struct ncclDevrWindow* sendWin,
                                      struct ncclDevrWindow* recvWin, struct ncclDevRedOpFull opDev) {
   ncclResult_t ret = ncclSuccess;
   struct ncclKernelPlanner* planner = &comm->planner;
-  struct ncclCeInitAsyncJob* ceInitJob = nullptr;
   struct ncclCeInitTask* ceTask = nullptr;
   bool isGraphCaptured = false;
   struct ncclTaskColl* t = nullptr;
   size_t elementSize;
 
-  // Check if CE needs initialization
-  if (ncclCommEnqueueRearch(comm)) {
-    if (!comm->ceColl.initialized) {
-      NEW_NOTHROW_GOTO(ceInitJob, ncclCeInitAsyncJob, ret, fail);
-      ceInitJob->comm = comm;
-      NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)ceInitJob, ncclCeInitJob, ncclCeInitAsyncJobFree, comm),
-                    ret, fail);
-      comm->ceColl.initialized = true;
-      ceInitJob = nullptr; // ceInitJob is now owned by the management task
-    }
-  } else if (!comm->ceColl.initialized) {
+  // Check if CE needs initialization. This task is launched by the legacy group launch, even on a
+  // rearch comm (cudaStreamPerThread), so CE init must also run there, ahead of the launch.
+  if (!comm->ceColl.initialized) {
     NCCLCHECKGOTO(ncclCalloc(&ceTask, 1), ret, fail);
     ceTask->comm = comm;
     ncclIntruQueueEnqueue(&comm->ceInitTaskQueue, ceTask);
@@ -2974,7 +2942,6 @@ static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* inf
 exit:
   return ret;
 fail:
-  if (ceInitJob) ncclCeInitAsyncJobFree(ceInitJob);
   free(ceTask);
   goto exit;
 }
@@ -3269,6 +3236,19 @@ static ncclResult_t rawTaskP2pApiEvents(struct ncclComm* comm, struct ncclInfo* 
 
 // TODO(raw task): move this raw task capture implementation into raw_task.cc
 // once the remaining enqueue-local profiler and red-op dependencies are split.
+// Only a plain or profiler-tag-only Broadcast is merged into an AllGatherV, and never when that
+// path is disabled or in confidential-computing mode. Any other Broadcast stays a regular
+// collective.
+static bool rawBcastCanMerge(struct ncclComm* comm, const struct ncclInfo* info) {
+  if (!ncclParamAllgathervEnable() || comm->ccEnable) return false;
+  if (info->collConfig.size == 0) return true;
+  // collConfigIsProfilerTagOnly expects the per-call CTAPolicy to be resolved already.
+  ncclCollConfig_t config = info->collConfig;
+  bool envOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
+  config.CTAPolicy = ncclCollConfigResolveCTAPolicy(config.CTAPolicy, comm->config.CTAPolicy, envOverridden);
+  return collConfigIsProfilerTagOnly(&config, comm->config.CTAPolicy);
+}
+
 static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) {
   struct ncclRawTaskQueue* rtq = &comm->rawTaskQueue;
   struct ncclRawTask* t;
@@ -3321,6 +3301,7 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     t->sendRecv.bytes = info->count * ncclTypeSize(info->datatype);
     t->sendRecv.stream = info->stream;
     t->sendRecv.launchCompletionEvent = nullptr;
+    t->sendRecv.allowUB = true;
     ncclIntruQueueEnqueue(&rtq->genericQueue, t);
   } else if (info->coll == ncclFuncPutSignal || info->coll == ncclFuncSignal || info->coll == ncclFuncWaitSignal) {
     if (!comm->hostRmaSupport) {
@@ -3485,7 +3466,7 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     if (info->coll == ncclFuncAlltoAll || info->coll == ncclFuncScatter || info->coll == ncclFuncGather) {
       NCCLCHECK(rawTaskP2pApiEvents(comm, info, t));
     }
-    if (info->coll == ncclFuncBroadcast) {
+    if (info->coll == ncclFuncBroadcast && rawBcastCanMerge(comm, info)) {
       ncclIntruQueueEnqueue(&(*rtq->bcastQueue)[info->root], t);
     } else {
       ncclIntruQueueEnqueue(&rtq->genericQueue, t);

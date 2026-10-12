@@ -27,6 +27,8 @@
 #endif
 
 NCCL_PARAM(SymSchedMemSyncDomain, "MEM_SYNC_DOMAIN", cudaLaunchMemSyncDomainRemote);
+int64_t ncclParamCGAClusterSize();
+int64_t ncclParamRasEnable();
 
 enum ncclImplicitOrder {
   ncclImplicitOrderNone = 0,
@@ -42,19 +44,21 @@ struct ncclSymSchedKernelPlan {
   size_t kernelArgsSize;
   int nChannels;
   int threadPerBlock;
+  int cgaClusterSize;
+  cudaEvent_t launchCompletionEvent; // user event recorded when this kernel launches, or nullptr
   struct ncclSchedProfilerLaunch* profiler; // nullptr unless the launch is profiled
 };
 
-// kernelIndex selects the symmetric kernel. llGroupSeq is 0 when tasks share a launch.
-// LL tasks cannot be grouped, so each one gets a unique llGroupSeq.
+// kernelIndex selects the symmetric kernel. groupSeq is 0 when tasks share a launch.
+// LL tasks cannot be grouped and configured tasks must not be, so each one gets a unique groupSeq.
 struct ncclSymSchedKernelTaskGroupKey {
   int kernelIndex;
-  int llGroupSeq;
+  int groupSeq;
 };
 
 inline bool operator<(struct ncclSymSchedKernelTaskGroupKey a, struct ncclSymSchedKernelTaskGroupKey b) {
   if (a.kernelIndex != b.kernelIndex) return a.kernelIndex < b.kernelIndex;
-  return a.llGroupSeq < b.llGroupSeq;
+  return a.groupSeq < b.groupSeq;
 }
 
 using ncclSymSchedTaskQueue = ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>;
@@ -65,10 +69,9 @@ struct ncclSymSchedStreamPlan {
   cudaStream_t stream;
   bool captured;
   struct ncclCudaGraph graph;
-  cudaEvent_t launchCompletionEvent;
   ncclSymSchedKernelTaskGroup kernelTaskGroup;
   struct ncclSymSchedKernelPlan* kernelPlans;
-  int llGroupSeq;
+  int groupSeq;
 };
 
 struct ncclSymSchedPlan {
@@ -209,9 +212,8 @@ static ncclResult_t symSchedGetStreamPlan(struct ncclSymSchedPlan* symPlan, cuda
   streamPlan->stream = stream;
   streamPlan->captured = captured;
   streamPlan->graph = graph;
-  streamPlan->launchCompletionEvent = nullptr;
   streamPlan->kernelPlans = nullptr;
-  streamPlan->llGroupSeq = 0;
+  streamPlan->groupSeq = 0;
   streamPlan->next = nullptr;
   symSchedEnqueueStreamPlan(symPlan, streamPlan);
   *streamPlanOut = streamPlan;
@@ -221,8 +223,6 @@ static ncclResult_t symSchedGetStreamPlan(struct ncclSymSchedPlan* symPlan, cuda
 static ncclResult_t symSchedEnqueueKernelTask(struct ncclComm* comm, struct ncclSymSchedStreamPlan* streamPlan,
                                               struct ncclTaskTuningInfo* taskInfo) {
   int symKernelId = taskInfo->tuningOut.symKernelId;
-  cudaEvent_t launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&taskInfo->raw->collConfig);
-  if (launchCompletionEvent != nullptr) streamPlan->launchCompletionEvent = launchCompletionEvent;
 
   struct ncclRawTaskColl* raw = &taskInfo->raw->coll;
   struct ncclDevRedOpFull opDev = symSchedSymkOpDev(comm, taskInfo);
@@ -230,20 +230,30 @@ static ncclResult_t symSchedEnqueueKernelTask(struct ncclComm* comm, struct nccl
   key.kernelIndex = ncclSymkGetKernelIndex((ncclSymkKernelId)symKernelId, opDev.op, raw->datatype);
   // LL kernels do not support grouping, so each LL task gets its own group.
   bool isLLKernel = ((1 << symKernelId) & ncclSymkLLKernelMask()) != 0;
-  key.llGroupSeq = isLLKernel ? ++streamPlan->llGroupSeq : 0;
+  // A task with per-call CTA bounds, algorithm selection, launch-completion event or a non-default
+  // CTA policy also gets its own group, so its configuration applies to its launch only.
+  bool isolate =
+    ncclCollConfigNeedAggIsolate(&taskInfo->raw->collConfig) || taskInfo->tuningIn.CTAPolicy != comm->config.CTAPolicy;
+  key.groupSeq = (isLLKernel || isolate) ? ++streamPlan->groupSeq : 0;
 
   auto inserted = streamPlan->kernelTaskGroup.emplace(key, ncclSymSchedTaskQueue{});
   ncclIntruQueueEnqueue(&inserted.first->second, taskInfo);
   return ncclSuccess;
 }
 
-static int symSchedGroupMaxChannels(struct ncclComm* comm, ncclSymSchedTaskQueue* tasks) {
-  int maxChannels = 0;
+// The group budget is the sum of the tasks' tuned CTA counts. Like a single symmetric tuning, it
+// is bounded by the symmetric block limit and maxCTAs, not by comm->nChannels, and never drops
+// below one task's own tuned count (which NCCL_SYM_CTAS may set above maxCTAs).
+static int symSchedGroupMaxChannels(ncclSymSchedTaskQueue* tasks) {
+  int sumChannels = 0;
+  int maxTaskChannels = 0;
+  int maxCTAs = ncclSymkMaxBlocks;
   for (struct ncclTaskTuningInfo* task = ncclIntruQueueHead(tasks); task != nullptr; task = task->next) {
-    maxChannels += task->tuningOut.nChannels;
-    if (maxChannels > comm->nChannels) return comm->nChannels;
+    sumChannels += task->tuningOut.nChannels;
+    maxTaskChannels = std::max(maxTaskChannels, task->tuningOut.nChannels);
+    maxCTAs = std::min(maxCTAs, task->tuningIn.maxCTAs);
   }
-  return maxChannels;
+  return std::min(sumChannels, std::max(maxCTAs, maxTaskChannels));
 }
 
 static int symSchedCountKernelBatch(struct ncclComm* comm, ncclSymSchedTaskQueue* tasks, int maxChannels) {
@@ -307,36 +317,48 @@ static ncclResult_t symSchedBuildKernelPlan(struct ncclComm* comm, struct ncclSy
   struct ncclTaskTuningInfo* taskInfo = nullptr;
   ncclSymkKernelId kernelId = (ncclSymkKernelId)headTask->tuningOut.symKernelId;
   struct ncclSchedProfilerLaunch* profiler = nullptr;
-  // Profiling requested = plugin loaded and the call's mask has ncclProfileKernelCh.
-  // Device-side instrumentation is eager-only: the args buffer is snapshotted at launch,
-  // so the mirrored counters cannot advance across graph replays. Under capture the clean
-  // kernel runs and only the host-side group/coll events are replayed.
+  // A launch record exists whenever a profiler plugin is loaded or RAS is enabled: the host-side
+  // events follow their own mask bits, and starting the collective events counts comm->seqNumber,
+  // which RAS reads. A captured launch counts only through KernelCh events, so without a plugin
+  // it needs no record.
+  // Device-side instrumentation needs ncclProfileKernelCh and is eager-only: the args buffer
+  // is snapshotted at launch, so the mirrored counters cannot advance across graph replays.
+  // Under capture the clean kernel runs and only the host-side group/coll events are replayed.
   int eActivationMask = headTask->raw->profiler.eActivationMask;
-  bool profilingRequested = ncclProfilerPluginLoaded() && (eActivationMask & ncclProfileKernelCh);
-  bool profilerEnabled = profilingRequested && !streamPlan->captured;
+  bool profilingRequested = ncclProfilerPluginLoaded() || (ncclParamRasEnable() == 1 && !streamPlan->captured);
+  bool profileKernelChEnabled =
+    ncclProfilerPluginLoaded() && (eActivationMask & ncclProfileKernelCh) && !streamPlan->captured;
+
+  kernelPlan = ncclMemoryStackAlloc<struct ncclSymSchedKernelPlan>(&comm->memScoped);
+  kernelPlan->launchCompletionEvent = nullptr;
 
   {
     struct ncclTaskTuningInfo* task = headTask;
     for (int workCount = 0; workCount < nWorks; workCount++, task = task->next) {
+      // A task with a launch-completion event is isolated, so the event belongs to this launch.
+      cudaEvent_t launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&task->raw->collConfig);
+      if (launchCompletionEvent != nullptr) kernelPlan->launchCompletionEvent = launchCompletionEvent;
       totalCount += alignUp(task->raw->coll.count, cellCount);
       logCount += task->raw->coll.count;
       totalChannels += task->tuningOut.nChannels;
       if (totalChannels > nMaxChannels) totalChannels = nMaxChannels;
       if (task->tuningOut.nWarps > maxnWarps) maxnWarps = task->tuningOut.nWarps;
+      // The cluster size is a launch attribute; a later task's per-call value applies to the
+      // whole launch. Users should keep it consistent within a group.
+      NCCL_CONFIG_SET(kernelPlan, cgaClusterSize, ncclParamCGAClusterSize(), task->raw->collConfig.cgaClusterSize,
+                      comm->config.cgaClusterSize, 0, NCCL_MAX_CGA_CLUSTER_SIZE);
     }
   }
-
-  kernelPlan = ncclMemoryStackAlloc<struct ncclSymSchedKernelPlan>(&comm->memScoped);
 
   {
     int kernelIndex = ncclSymkGetKernelIndex(kernelId, headOpDev.op, datatype);
     int maxDynamicSmem = ncclSymkKernelMaxDynamicSmem[kernelIndex];
     kernelPlan->threadPerBlock = maxnWarps * WARP_SIZE;
-    kernelPlan->kernelFn = (profilerEnabled && ncclSymkKernelListProfile[kernelIndex] != nullptr) ?
+    kernelPlan->kernelFn = (profileKernelChEnabled && ncclSymkKernelListProfile[kernelIndex] != nullptr) ?
                              ncclSymkKernelListProfile[kernelIndex] :
                              ncclSymkKernelList[kernelIndex];
     kernelPlan->kernelDynSmem = (1 & ncclSymkDynamicSmemKernelMask() >> (int)kernelId) ? maxDynamicSmem : 0;
-    kernelPlan->kernelArgsSize = ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(totalChannels, nWorks, profilerEnabled);
+    kernelPlan->kernelArgsSize = ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(totalChannels, nWorks, profileKernelChEnabled);
     NCCLCHECKGOTO(ncclCalloc((char**)&argsBuf, kernelPlan->kernelArgsSize), ret, fail);
     kernelPlan->kernelSymArgs = argsBuf;
     kernelPlan->profiler = nullptr;
@@ -346,7 +368,7 @@ static ncclResult_t symSchedBuildKernelPlan(struct ncclComm* comm, struct ncclSy
     // KernelCh-only launches leave the phase bit clear, so the profile variant skips the
     // phase stamps and their fence at runtime.
     argsBuf->profilerMode =
-      profilerEnabled ? ncclProfilerDeviceMode(eActivationMask) : (uint8_t)ncclDevProfilerModeNone;
+      profileKernelChEnabled ? ncclProfilerDeviceMode(eActivationMask) : (uint8_t)ncclDevProfilerModeNone;
 
     if (profilingRequested) {
       NCCLCHECKGOTO(ncclSchedProfilerLaunchCreate(comm, streamPlan->captured, headTask, nWorks, &profiler), ret, fail);
@@ -441,7 +463,7 @@ fail:
 
 static ncclResult_t symSchedBuildKernelTaskGroupPlans(struct ncclComm* comm, struct ncclSymSchedStreamPlan* streamPlan,
                                                       ncclSymSchedTaskQueue* tasks) {
-  int maxChannels = symSchedGroupMaxChannels(comm, tasks);
+  int maxChannels = symSchedGroupMaxChannels(tasks);
   while (!ncclIntruQueueEmpty(tasks)) {
     int nWorks = symSchedCountKernelBatch(comm, tasks, maxChannels);
     if (nWorks == 0) return ncclInternalError;
@@ -465,8 +487,8 @@ static ncclResult_t symSchedBuildKernelPlans(struct ncclComm* comm, struct ncclS
   return ncclSuccess;
 }
 
-static ncclResult_t symSchedGetImplicitOrder(enum ncclImplicitOrder* mode, bool capturing) {
-  if (ncclParamLaunchOrderImplicit()) {
+static ncclResult_t symSchedGetImplicitOrder(struct ncclComm* comm, enum ncclImplicitOrder* mode, bool capturing) {
+  if (comm->config.launchOrderImplicit == 1) {
     int driver = 0;
     NCCLCHECK(ncclCudaDriverVersion(&driver));
     if (capturing && driver < 12090) {
@@ -504,7 +526,7 @@ static ncclResult_t launchSymKernelPlan(struct ncclComm* comm, struct ncclSymSch
   if (CUDART_VERSION >= 11080 && driverVersion >= 11080) {
 #if CUDART_VERSION >= 11080
     int compCap = comm->compCap;
-    unsigned int clusterSize = (compCap >= 90) ? comm->config.cgaClusterSize : 0;
+    unsigned int clusterSize = (compCap >= 90) ? kernelPlan->cgaClusterSize : 0;
 
     CUlaunchConfig launchConfig = {0};
     CUlaunchAttribute launchAttrs[6] = {};
@@ -686,7 +708,7 @@ ncclResult_t ncclSchedLaunchSymTasks(struct ncclComm* comm,
     cudaEvent_t ncclLaunchEvent = nullptr;
     enum ncclImplicitOrder implicitOrder;
 
-    NCCLCHECKGOTO(symSchedGetImplicitOrder(&implicitOrder, streamPlan->captured), ret, fail);
+    NCCLCHECKGOTO(symSchedGetImplicitOrder(comm, &implicitOrder, streamPlan->captured), ret, fail);
 
     if (depStream) {
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &acqDepStream), ret, fail);
@@ -694,26 +716,23 @@ ncclResult_t ncclSchedLaunchSymTasks(struct ncclComm* comm,
     }
 
     if (launchOrderStream && implicitOrder != ncclImplicitOrderNone) {
-      NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, launchOrderStream, false, &acqLaunchOrderStream), ret,
-                    fail);
+      // The launch-order stream is shared by every comm on the CUDA context, and comms launch
+      // from their own threads. Captures must lock it; eager launches stay in program order.
+      NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, launchOrderStream, /*concurrent=*/streamPlan->captured,
+                                            &acqLaunchOrderStream),
+                    ret, fail);
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, acqLaunchOrderStream, finishedEvent), ret, fail);
     }
 
     for (kernelPlan = streamPlan->kernelPlans; kernelPlan != nullptr; kernelPlan = kernelPlan->next) {
       bool lastKernel = kernelPlan->next == nullptr;
-      // Only the last kernel records the stream's user launch-completion event.
-      cudaEvent_t userLaunchEvent = lastKernel ? streamPlan->launchCompletionEvent : nullptr;
+      cudaEvent_t userLaunchEvent = kernelPlan->launchCompletionEvent;
       // Serial order records its event after the loop. Launch order arms it on the last kernel.
       ncclLaunchEvent = implicitOrder == ncclImplicitOrderLaunch && lastKernel ? comm->sharedRes->launchEvent : nullptr;
       NCCLCHECKGOTO(ncclProfilerSchedPreLaunch(kernelPlan->profiler, launchStream), ret, fail);
       NCCLCHECKGOTO(launchSymKernelPlan(comm, kernelPlan, launchStream, userLaunchEvent, ncclLaunchEvent), ret,
                     sym_post_launch);
-      NCCLCHECKGOTO(ncclProfilerSchedPostLaunch(kernelPlan->profiler), ret, fail);
-      // A captured launch emits its group/coll events on every replay.
-      if (kernelPlan->profiler != nullptr && streamPlan->captured) {
-        CUDACHECKGOTO(cudaLaunchHostFunc(launchStream, ncclSchedProfilerReplayCallback, kernelPlan->profiler), ret,
-                      fail);
-      }
+      NCCLCHECKGOTO(ncclProfilerSchedPostLaunch(kernelPlan->profiler, launchStream, /*launched=*/true), ret, fail);
     }
 
     if (ncclLaunchEvent == nullptr && streamPlan->kernelPlans != nullptr && implicitOrder == ncclImplicitOrderSerial) {
@@ -728,7 +747,8 @@ ncclResult_t ncclSchedLaunchSymTasks(struct ncclComm* comm,
     }
     if (launchOrderStream && implicitOrder != ncclImplicitOrderNone) {
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, acqLaunchOrderStream, ncclLaunchEvent), ret, fail);
-      NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, launchOrderStream, false), ret, fail);
+      NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, launchOrderStream, /*concurrent=*/streamPlan->captured),
+                    ret, fail);
     }
   }
 
@@ -736,7 +756,7 @@ exit:
   NCCLCHECKIGNORE(symSchedPlanFree(&symPlan), ret);
   return ret;
 sym_post_launch:
-  (void)ncclProfilerSchedPostLaunch(kernelPlan->profiler);
+  (void)ncclProfilerSchedPostLaunch(kernelPlan->profiler, /*stream=*/nullptr, /*launched=*/false);
   goto fail;
 fail:
   goto exit;

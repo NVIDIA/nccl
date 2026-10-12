@@ -585,7 +585,7 @@ static void groupCleanup(struct ncclComm** groupCommHeadPtr,
           }
           ncclClassifiedTaskQueuesConstruct(&comm->classifiedTaskQueues);
         }
-      } else if (type == ncclGroupTaskTypeMgmtTask) {
+      } else if (type == ncclGroupTaskTypeMgmtTask || type == ncclGroupTaskTypeDestroyTask) {
         while (!ncclIntruQueueEmpty(&comm->mgmtTaskQueue)) {
           struct ncclAsyncJob* task = ncclIntruQueueDequeue(&comm->mgmtTaskQueue);
           if (task->destructor) task->destructor((void*)task);
@@ -945,29 +945,15 @@ static ncclResult_t groupValidateLaunchCompletionEvents(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
-static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimInfo_t* simInfo = NULL) {
+// Runs the management jobs of the communicators on one group list, clique by clique: one job
+// per communicator, and the jobs of a clique launched together.
+static ncclResult_t groupLaunchMgmtTasks(struct ncclComm* head, int type, volatile bool* groupAbortFlag) {
   ncclResult_t ret = ncclSuccess;
-  struct ncclGroupJob* gjob = (struct ncclGroupJob*)job_;
-  struct ncclComm** groupCommHeadMain = gjob->groupCommHead;
-  bool* groupAbortFlag = &gjob->abortFlag;
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> jobs;
 
-  struct ncclComm* comm = nullptr;
-  struct ncclComm* cliqueHead = nullptr;
-  bool destroyFlag = false;
-  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncMgmtTaskJobs;
-  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncPrepareJobs;
-  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncScheduleJobs;
-  ncclIntruQueueConstruct(&asyncMgmtTaskJobs);
-  ncclIntruQueueConstruct(&asyncPrepareJobs);
-  ncclIntruQueueConstruct(&asyncScheduleJobs);
-  INFO(NCCL_COLL, "groupLaunchEnqueueRearch");
-
-  NCCLCHECKGOTO(groupValidateLaunchCompletionEvents(groupCommHeadMain[ncclGroupTaskTypeRawTask]), ret, fail);
-
-  // launch management tasks
-  cliqueHead = groupCommHeadMain[ncclGroupTaskTypeMgmtTask];
-  while (cliqueHead) {
-    comm = cliqueHead;
+  ncclIntruQueueConstruct(&jobs);
+  for (struct ncclComm* cliqueHead = head; cliqueHead != nullptr;) {
+    struct ncclComm* comm = cliqueHead;
     do {
       struct ncclMgmtTaskJob* job;
       NEW_NOTHROW_GOTO(job, ncclMgmtTaskJob, ret, fail);
@@ -979,18 +965,53 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
       job->base.childAbortFlag = comm->childAbortFlag;
       job->base.childAbortFlagDev = comm->childAbortFlagDev;
       job->base.destroyFlag = comm->destroyFlag;
-      destroyFlag = comm->destroyFlag;
       job->comm = comm;
-      ncclIntruQueueEnqueue(&asyncMgmtTaskJobs, &job->base);
-      comm = comm->groupNext[ncclGroupTaskTypeMgmtTask];
+      ncclIntruQueueEnqueue(&jobs, &job->base);
+      comm = comm->groupNext[type];
     } while (comm != nullptr && comm->intraComm0 == cliqueHead->intraComm0);
-    NCCLCHECKGOTO(ncclGroupJobLaunch(&asyncMgmtTaskJobs, groupAbortFlag), ret, fail);
-    while (!ncclIntruQueueEmpty(&asyncMgmtTaskJobs)) {
-      struct ncclAsyncJob* mgmtTaskJob = ncclIntruQueueDequeue(&asyncMgmtTaskJobs);
-      if (mgmtTaskJob->destructor) mgmtTaskJob->destructor((void*)mgmtTaskJob);
+    NCCLCHECKGOTO(ncclGroupJobLaunch(&jobs, groupAbortFlag), ret, fail);
+    while (!ncclIntruQueueEmpty(&jobs)) {
+      struct ncclAsyncJob* job = ncclIntruQueueDequeue(&jobs);
+      if (job->destructor) job->destructor((void*)job);
     }
     cliqueHead = comm;
   }
+exit:
+  return ret;
+fail:
+  while (!ncclIntruQueueEmpty(&jobs)) {
+    struct ncclAsyncJob* job = ncclIntruQueueDequeue(&jobs);
+    if (job->destructor) job->destructor((void*)job);
+  }
+  goto exit;
+}
+
+static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimInfo_t* simInfo = NULL) {
+  ncclResult_t ret = ncclSuccess;
+  struct ncclGroupJob* gjob = (struct ncclGroupJob*)job_;
+  struct ncclComm** groupCommHeadMain = gjob->groupCommHead;
+  bool* groupAbortFlag = &gjob->abortFlag;
+
+  struct ncclComm* comm = nullptr;
+  struct ncclComm* cliqueHead = nullptr;
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncPrepareJobs;
+  struct ncclIntruQueue<struct ncclAsyncJob, &ncclAsyncJob::next> asyncScheduleJobs;
+  ncclIntruQueueConstruct(&asyncPrepareJobs);
+  ncclIntruQueueConstruct(&asyncScheduleJobs);
+  INFO(NCCL_COLL, "groupLaunchEnqueueRearch");
+
+  NCCLCHECKGOTO(groupValidateLaunchCompletionEvents(groupCommHeadMain[ncclGroupTaskTypeRawTask]), ret, fail);
+
+  // launch management tasks, then the destroy jobs
+  NCCLCHECKGOTO(groupLaunchMgmtTasks(groupCommHeadMain[ncclGroupTaskTypeMgmtTask], ncclGroupTaskTypeMgmtTask,
+                                     groupAbortFlag),
+                ret, fail);
+  // A destroy job frees its communicator, so the destroy list is dropped rather than walked once
+  // its jobs have been launched, whatever their result. The other lists leave the group below.
+  ret =
+    groupLaunchMgmtTasks(groupCommHeadMain[ncclGroupTaskTypeDestroyTask], ncclGroupTaskTypeDestroyTask, groupAbortFlag);
+  groupCommHeadMain[ncclGroupTaskTypeDestroyTask] = nullptr;
+  if (ret != ncclSuccess) goto fail;
   // prepare tasks clique by clique
   cliqueHead = groupCommHeadMain[ncclGroupTaskTypeRawTask];
   while (cliqueHead) {
@@ -1020,29 +1041,24 @@ static ncclResult_t groupLaunchEnqueueRearch(struct ncclAsyncJob* job_, ncclSimI
     cliqueHead = comm;
   }
 
-  if (destroyFlag) {
-    for (int type = ncclGroupTaskTypeRawTask; type <= ncclGroupTaskTypeMgmtTask; ++type) {
-      groupCommHeadMain[type] = nullptr;
-    }
-  } else {
-    for (int type = ncclGroupTaskTypeRawTask; type <= ncclGroupTaskTypeMgmtTask; ++type) {
-      while (groupCommHeadMain[type] != nullptr) {
-        struct ncclComm* comm = groupCommHeadMain[type];
-        struct ncclComm* next = comm->groupNext[type];
-        // Poll for callbacks sent to us from other threads. Typically these free
-        // resources from our memory pools and UB
-        if (comm->reclaimSteps == GROUP_MAX_RECLAIM_STEPS) {
-          NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/false), ret, fail);
-          comm->reclaimSteps = 0;
-        } else {
-          comm->reclaimSteps++;
-        }
-        (void)ncclGroupCommLeave(comm, type);
-        if (!comm->config.blocking) {
-          (void)ncclCommSetAsyncError(comm, ret);
-        }
-        groupCommHeadMain[type] = next;
+  // The destroy list was dropped above; every other list leaves the group.
+  for (int type = ncclGroupTaskTypeRawTask; type <= ncclGroupTaskTypeMgmtTask; ++type) {
+    while (groupCommHeadMain[type] != nullptr) {
+      struct ncclComm* comm = groupCommHeadMain[type];
+      struct ncclComm* next = comm->groupNext[type];
+      // Poll for callbacks sent to us from other threads. Typically these free
+      // resources from our memory pools and UB
+      if (comm->reclaimSteps == GROUP_MAX_RECLAIM_STEPS) {
+        NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/false), ret, fail);
+        comm->reclaimSteps = 0;
+      } else {
+        comm->reclaimSteps++;
       }
+      (void)ncclGroupCommLeave(comm, type);
+      if (!comm->config.blocking) {
+        (void)ncclCommSetAsyncError(comm, ret);
+      }
+      groupCommHeadMain[type] = next;
     }
   }
 

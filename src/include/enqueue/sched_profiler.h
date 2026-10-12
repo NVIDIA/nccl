@@ -62,7 +62,4 @@ void ncclSchedProfilerLaunchDestroy(struct ncclSchedProfilerLaunch* launch);
 // task and tuning result so the scheduler can free them afterwards. No-op on a null launch.
 void ncclSchedProfilerLaunchAddTask(struct ncclSchedProfilerLaunch* launch, const struct ncclTaskTuningInfo* tInfo);
 
-// cudaLaunchHostFunc callback: ncclProfilerSchedReplay on the launch passed as arg.
-void CUDART_CB ncclSchedProfilerReplayCallback(void* launch);
-
 #endif // NCCL_ENQUEUE_SCHED_PROFILER_H_

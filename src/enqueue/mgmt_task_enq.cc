@@ -21,7 +21,9 @@ ncclResult_t ncclMgmtTaskEnqueue(struct ncclAsyncJob* task, ncclResult_t (*func)
   task->childAbortFlagDev = comm->childAbortFlagDev;
   task->state = ncclGroupJobRunning;
   task->comm = comm;
-  ncclGroupCommJoin(comm, ncclGroupTaskTypeMgmtTask);
+  // A communicator being destroyed joins the destroy list: its job frees it, so the group end
+  // drops that list instead of leaving it.
+  ncclGroupCommJoin(comm, comm->destroyFlag ? ncclGroupTaskTypeDestroyTask : ncclGroupTaskTypeMgmtTask);
   /* check if there are blocking and nonblocking comms at the same time in group. */
   if (comm->destroyFlag) {
     ncclGroupBlocking = 1;

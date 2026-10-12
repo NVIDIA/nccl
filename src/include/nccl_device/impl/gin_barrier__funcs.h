@@ -125,8 +125,10 @@ NCCL_DEVICE_INLINE ncclResult_t ncclGinBarrierSession_internal<Coop>::syncIntern
     startCycle = clock64();
   }
 
+  // The coop.sync keeps a thread from signalling a peer that another thread is still flushing.
   if ((fence & ncclGinFenceLevel::Put) && !this->net._supportsStrongSignal()) {
     fenceFlush(nccl::utility::acquireOrderOf(ord));
+    this->coop.sync();
   }
 
   // Signal/wait with the calling rank's own slot included on Put so self-puts get the same

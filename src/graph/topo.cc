@@ -1914,7 +1914,7 @@ ncclResult_t ncclTopoGetFusionEnv(int* mergeLevel, const char** forceMerge, int 
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTopoGetMergePolicy(int* mergePolicy, int cudaCompCap, int cpuArch) {
+ncclResult_t ncclTopoGetMergePolicy(int* mergePolicy, int cudaCompCap, int cpuArch) {
   *mergePolicy = ncclTopoIsVeraRubin(cudaCompCap, cpuArch) ? NCCL_NET_MERGE_POLICY_RAIL : NCCL_NET_MERGE_POLICY_ALL;
   const char* env = ncclGetEnv("NCCL_NET_MERGE_POLICY");
   if (env) {

@@ -2137,33 +2137,35 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
       }
     }
   }
-  NCCLCHECKGOTO(ncclCalloc(&mem, nLocalRanks * xmlMemSize(NCCL_TOPO_XML_MAX_NODES)), ret, fail);
-  rankXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * localRank);
-  memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));
-  NCCLCHECKGOTO(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1), ret, fail);
-  // nLocalRanks can't actually be 0, or we wouldn't be running at all...
-  // coverity[divide_by_zero]
-  NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem,
-                                            xmlMemSize(NCCL_TOPO_XML_MAX_NODES)),
-                ret, fail);
-  // ncclTopoFuseXml only copies existing source nodes into dst (never adds new
-  // ones), so fusedMaxNodes is a true upper bound on the fused node count.
-  for (int i = 0; i < nLocalRanks; i++) {
-    struct ncclXml* peerXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * i);
-    fusedMaxNodes += peerXml->maxIndex;
-  }
-  if (fusedMaxNodes > xml->maxNodes) {
-    free(xml);
-    xml = NULL;
-    NCCLCHECKGOTO(xmlAlloc(&xml, fusedMaxNodes), ret, fail);
-  } else {
-    // The original topology is preserved in mem, so reuse this allocation as the empty fusion destination.
-    xml->maxIndex = 0;
-  }
-  for (int i = 0; i < nLocalRanks; i++) {
-    struct ncclXml* peerXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * i);
-    NCCLCHECKGOTO(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0), ret, fail);
-    NCCLCHECKGOTO(ncclTopoFuseXml(xml, peerXml), ret, fail);
+  if (comm->nRanks > 1) {
+    NCCLCHECKGOTO(ncclCalloc(&mem, nLocalRanks * xmlMemSize(NCCL_TOPO_XML_MAX_NODES)), ret, fail);
+    rankXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * localRank);
+    memcpy(rankXml, xml, xmlMemSize(NCCL_TOPO_XML_MAX_NODES));
+    NCCLCHECKGOTO(ncclTopoConvertXml(rankXml, (uintptr_t)xml->nodes, 1), ret, fail);
+    // nLocalRanks can't actually be 0, or we wouldn't be running at all...
+    // coverity[divide_by_zero]
+    NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem,
+                                              xmlMemSize(NCCL_TOPO_XML_MAX_NODES)),
+                  ret, fail);
+    // ncclTopoFuseXml only copies existing source nodes into dst (never adds new
+    // ones), so fusedMaxNodes is a true upper bound on the fused node count.
+    for (int i = 0; i < nLocalRanks; i++) {
+      struct ncclXml* peerXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * i);
+      fusedMaxNodes += peerXml->maxIndex;
+    }
+    if (fusedMaxNodes > xml->maxNodes) {
+      free(xml);
+      xml = NULL;
+      NCCLCHECKGOTO(xmlAlloc(&xml, fusedMaxNodes), ret, fail);
+    } else {
+      // The original topology is preserved in mem, so reuse this allocation as the empty fusion destination.
+      xml->maxIndex = 0;
+    }
+    for (int i = 0; i < nLocalRanks; i++) {
+      struct ncclXml* peerXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * i);
+      NCCLCHECKGOTO(ncclTopoConvertXml(peerXml, (uintptr_t)peerXml->nodes, 0), ret, fail);
+      NCCLCHECKGOTO(ncclTopoFuseXml(xml, peerXml), ret, fail);
+    }
   }
 
   if (dumpXmlFile && comm->rank == ncclParamTopoDumpFileRank()) {

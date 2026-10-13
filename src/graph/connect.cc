@@ -537,6 +537,7 @@ ncclResult_t ncclTopoPostset(struct ncclComm* comm, int* firstRanks, int* treePa
     nChannels = comm->nChannels =
       copyChannels(comm, nChannels, std::max(ncclMinNchannels(), comm->config.minCTAs), ringPrev, ringNext);
   }
+  if (comm->nRanks == 1) nChannels = comm->nChannels = 1;
 
   comm->collChannels = comm->nChannels;
 #if CUDART_VERSION >= 12010

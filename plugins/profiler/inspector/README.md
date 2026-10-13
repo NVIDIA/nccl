@@ -352,6 +352,7 @@ the Inspector directory when copying the tools elsewhere.
 v4.4 introduces segmented Proxy output; the bundled reader accepts both v4.3
 and v4.4 marker-based streams, as well as v4.0-v4.2 per-record context. Nested
 Steps remain inside their parent record: they do not consume marker counts.
+Upstream v4.3 logs with per-record context and user tags are also accepted.
 
 For example, a collective record following its marker looks like:
 
@@ -362,6 +363,7 @@ For example, a collective record following its marker looks like:
     "coll_algo": "RING",
     "coll_proto": "LL",
     "coll_sn": 1407,
+    "coll_user_tag": "42",
     "coll_msg_size_bytes": 17179869184,
     "coll_exec_time_us": 61974,
     "coll_algobw_gbs": 277.210914,

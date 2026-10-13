@@ -3,6 +3,8 @@
 
 Nested Step arrays stay inside their Proxy record. Marker counts refer to
 top-level payload records, not to the number of nested Steps.
+Upstream v4.3 records retain per-record context; earlier Proxy v4.3 streams
+use marker context. Both layouts are accepted without discarding user tags.
 """
 
 
@@ -35,9 +37,14 @@ class DumpContext:
                     raise ValueError("Invalid Inspector dump counts")
             return record
         if self.header is not None:
-            if len(record) != 1:
+            payload = record
+            if (self.metadata.get("inspector_output_format_version") == "v4.3"
+                    and "header" in record and "metadata" in record):
+                payload = {key: value for key, value in record.items()
+                           if key not in ("header", "metadata")}
+            if len(payload) != 1:
                 raise ValueError("Unexpected fields in Inspector dump payload")
-            kind = next(iter(record))
+            kind = next(iter(payload))
             if self.remaining.get(kind, 0) <= 0:
                 raise ValueError("Unexpected record beyond Inspector dump counts")
             self.remaining[kind] -= 1

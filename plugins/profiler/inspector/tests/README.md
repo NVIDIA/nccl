@@ -1,5 +1,11 @@
 # Proxy regression tests
 
+Reader compatibility tests run with Python 3 on any platform:
+
+```sh
+python3 tests/test_json_reader.py
+```
+
 On Linux with Python 3 and a C++14 compiler, run from the Inspector directory:
 
 ```sh

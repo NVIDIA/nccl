@@ -1256,9 +1256,6 @@ ncclResult_t ncclTopoGetPath(ncclXmlNode** nodes, int nNodes, int* path, ncclXml
 
     if (c) {
       common = temp;
-      if (common == NULL) {
-        TRACE(NCCL_GRAPH, "COMMON IS NULL");
-      }
       for (int i = 0; i < nNodes; i++) {
         parents[i].pop();
       }

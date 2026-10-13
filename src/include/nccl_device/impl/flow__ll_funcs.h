@@ -32,15 +32,15 @@ NCCL_DEVICE_INLINE void ncclFlowLLStore(ncclLLFifoLine* dst, uint64_t data, uint
                : "memory");
 }
 
-NCCL_DEVICE_INLINE bool ncclFlowLLNeedsCleanup(uint32_t flag, int nSlots) {
+NCCL_DEVICE_INLINE bool ncclFlowLLNeedsCleanup(uint32_t flag, int nSlices) {
 #ifdef TEST_LL_CLEANUP
   uint32_t const flagMask = NCCL_LL_FLAG_MAX - 1;
 #else
   uint32_t const flagMask = ~uint32_t(0);
 #endif
-  // Modular distance from this flag to zero. The final nSlots operations visit and clean every FIFO slot once.
+  // Modular distance from this flag to zero. The final nSlices operations visit and clean every FIFO slice once.
   uint32_t const stepsUntilWrap = (-flag) & flagMask;
-  return stepsUntilWrap < (uint32_t)nSlots;
+  return stepsUntilWrap < (uint32_t)nSlices;
 }
 
 template <typename T>
@@ -106,33 +106,33 @@ NCCL_DEVICE_INLINE void ncclFlowLLStoreData(T* dst, uint64_t data, int nElts) {
   }
 }
 
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
 template <bool Send, bool DirectSend, bool Recv, bool DirectRecv, typename T, typename SrcLambda, typename DstLambda,
           typename RedOp>
-NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::process(
+NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process(
   bool sendDirect, bool recvDirect, ncclSymPtr<T> /*input*/, ncclSymPtr<T> /*output*/, SrcLambda srcLambda, int nSrc,
   DstLambda dstLambda, int nDst, RedOp const& redOp, size_t nElts, ncclFlowProtocolTag<ncclFlowProtocolLL>) {
   static_assert(!DirectSend && !DirectRecv, "LL Flow does not support direct operations");
   assert(!sendDirect && !recvDirect);
-  static_assert(SlotsPerProcess == 1, "LL Flow processes one FIFO slot per call");
+  static_assert(SlicesPerChunk == 1, "LL Flow processes one FIFO slice per call");
   static_assert(sizeof(T) <= sizeof(uint64_t) && sizeof(uint64_t) % sizeof(T) == 0,
                 "T must divide the eight-byte LL payload");
   constexpr int EltPerLine = sizeof(uint64_t) / sizeof(T);
   Backend& backend = *static_cast<Backend*>(this);
-  ncclFlowPartShmem& shmem = *processShmem;
+  ncclFlowPartShmem& shmem = *partShmem;
   int const nLines = (int)nccl::utility::divUp(nElts, (size_t)EltPerLine);
-  int const sliceSteps = ncclFlowCreditSlots / nSlots;
-  int const slotLines = (int)(stepSize * sliceSteps / sizeof(ncclLLFifoLine));
+  int const sliceSteps = ncclFlowFifoSlots / nSlices;
+  int const sliceLines = (int)(stepSize * sliceSteps / sizeof(ncclLLFifoLine));
   bool const isWorker = role == RoleWorker || role == RoleSendWait || role == RoleRecvWait;
-  int const processSendPeers = Send ? nSendPeers : 0;
-  int const processRecvPeers = Recv ? nRecvPeers : 0;
+  int const chunkSendPeers = Send ? nSendPeers : 0;
+  int const chunkRecvPeers = Recv ? nRecvPeers : 0;
   bool const isPost = (Send && role == RoleSendPost) || (Recv && role == RoleRecvPost);
   assert((stepSize * sliceSteps) % sizeof(ncclLLFifoLine) == 0);
-  assert(0 <= nLines && nLines <= slotLines);
+  assert(0 <= nLines && nLines <= sliceLines);
   assert(0 <= nSrc && nSrc <= 1);
   assert(0 <= nDst && nDst <= 1);
-  assert(0 < nSrc + processRecvPeers);
-  assert(0 < nDst + processSendPeers);
+  assert(0 < nSrc + chunkRecvPeers);
+  assert(0 < nDst + chunkSendPeers);
 
   if (isWorker) {
     if (Send && role == RoleSendWait) {
@@ -140,7 +140,7 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
       shmem.sendFlag[rolePeer] = backend.stepFlag();
     }
     if (Recv && role == RoleRecvWait) {
-      shmem.recvBuf[rolePeer] = backend.advanceFifoSlot();
+      shmem.recvBuf[rolePeer] = backend.advanceSlice();
       shmem.recvFlag[rolePeer] = backend.stepFlag();
     }
     workers.sync();
@@ -158,21 +158,21 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
         data = loader.finish();
         dataValid = true;
       }
-      for (int peer = 0; peer < processRecvPeers; peer++) {
+      for (int peer = 0; peer < chunkRecvPeers; peer++) {
         uint64_t const peerData =
           ncclFlowLLLoad((ncclLLFifoLine*)shmem.recvBuf[peer] + line, (uint32_t)shmem.recvFlag[peer], abortFlag);
         data = dataValid ? backend.operations.reducePacked(redOp, peerData, data) : peerData;
         dataValid = true;
       }
-      for (int peer = 0; peer < processSendPeers; peer++) {
+      for (int peer = 0; peer < chunkSendPeers; peer++) {
         ncclFlowLLStore((ncclLLFifoLine*)shmem.sendBuf[peer] + line, data, (uint32_t)shmem.sendFlag[peer]);
       }
       if (nDst != 0) ncclFlowLLStoreData(dstLambda(0) + eltOffset, data, lineElts);
     }
 
-    for (int peer = 0; peer < processSendPeers; peer++) {
-      if (ncclFlowLLNeedsCleanup((uint32_t)shmem.sendFlag[peer], nSlots)) {
-        for (int cleanLine = line; cleanLine < slotLines; cleanLine += workers.size()) {
+    for (int peer = 0; peer < chunkSendPeers; peer++) {
+      if (ncclFlowLLNeedsCleanup((uint32_t)shmem.sendFlag[peer], nSlices)) {
+        for (int cleanLine = line; cleanLine < sliceLines; cleanLine += workers.size()) {
           ncclFlowLLStore((ncclLLFifoLine*)shmem.sendBuf[peer] + cleanLine, 0, (uint32_t)shmem.sendFlag[peer]);
         }
       }
@@ -183,7 +183,7 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
   partThreads.sync();
   if (isPost) {
     if (role == RoleSendPost) {
-      size_t const sendBytes = ncclFlowLLNeedsCleanup((uint32_t)backend.stepFlag(), nSlots) ?
+      size_t const sendBytes = ncclFlowLLNeedsCleanup((uint32_t)backend.stepFlag(), nSlices) ?
                                  stepSize * sliceSteps :
                                  (size_t)nLines * sizeof(ncclLLFifoLine);
       backend.postSend(sendBytes);

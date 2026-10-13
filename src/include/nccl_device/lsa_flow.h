@@ -17,14 +17,14 @@
 #ifdef __CUDACC__
 template <ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
 struct ncclLsaFlowConn {
-  const int nSlots;
+  const int nSlices;
   const int sliceSteps;
   const size_t stepSize;
   const int type;
   uint32_t* abortFlag;
   ncclFlowConnState* state;
   char* fifo;
-  // Transport credits are shared across protocols; LL tracks its FIFO slot and flag sequence separately.
+  // Transport credits are shared across protocols; LL tracks its FIFO slice and flag sequence separately.
   uint64_t step;
   uint32_t llStep;
   uint64_t signalValue;
@@ -33,9 +33,9 @@ struct ncclLsaFlowConn {
   uint64_t* peerSignal;
 
   // recvFifo and state identify the same persistent topology connection on every rank. peer is an LSA-accessible
-  // world rank addressable through ncclGetPeerPointer. nSlots must divide ncclFlowCreditSlots.
+  // world rank addressable through ncclGetPeerPointer. nSlices must divide ncclFlowFifoSlots.
   NCCL_DEVICE_INLINE ncclLsaFlowConn(ncclDevComm const& comm, ncclSymPtr<char> recvFifo,
-                                     ncclSymPtr<ncclFlowConnState> state, int peer, int nSlots, size_t stepSize,
+                                     ncclSymPtr<ncclFlowConnState> state, int peer, int nSlices, size_t stepSize,
                                      int type, bool recvPost);
 
   NCCL_DEVICE_INLINE void close();
@@ -45,7 +45,7 @@ struct ncclLsaFlowConn {
   NCCL_DEVICE_INLINE void postRecv(bool force = false);
 
   NCCL_DEVICE_INLINE void advanceStep();
-  NCCL_DEVICE_INLINE void* advanceFifoSlot();
+  NCCL_DEVICE_INLINE void* advanceSlice();
   NCCL_DEVICE_INLINE uint64_t stepFlag() const;
 };
 

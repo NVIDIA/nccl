@@ -25,18 +25,18 @@ __device__ __forceinline__ void ncclGenkRun_AllGather_Ring_Flow(ncclGenkDevWorkA
   int const nPeers = nRanks == 1 ? 0 : 1;
   int const sendPeers[maxPeers] = {ring.next};
   int const recvPeers[maxPeers] = {ring.prev};
-  constexpr int nSlotsPerProcess = ProtocolTraits::SlotsPerRingProcess;
+  constexpr int nSlicesPerChunk = ProtocolTraits::SlicesPerRingChunk;
   constexpr int signalWarpsPerPart = ncclFlowGetSignalWarpsPerPart(Protocol);
   int const nWorkerWarps = blockDim.x / WARP_SIZE - signalWarpsPerPart;
   __shared__ ncclFlowShmem flowShmem;
 #if !defined(NCCL_OS_WINDOWS)
   ncclFlowConfig<ncclGenkGinBackendMask> const flowConfig =
     ncclGenkRingGinConfig<Protocol, ncclGenkGinBackendMask>(args->kcomm, channelId);
-  ncclFlowProcessor<ncclGenkGinBackendMask, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(
+  ncclFlowProcessor<ncclGenkGinBackendMask, nSlicesPerChunk, maxPeers, Protocol, ncclGenkFlowOps> flow(
     ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nPeers, recvPeers, nPeers, channelId, nWorkerWarps, flowShmem);
 #else
   ncclFlowConfig<0> const flowConfig = ncclGenkRingLsaConfig<Protocol>(args->kcomm);
-  ncclFlowProcessor<0, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(
+  ncclFlowProcessor<0, nSlicesPerChunk, maxPeers, Protocol, ncclGenkFlowOps> flow(
     ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nPeers, recvPeers, nPeers, channelId, nWorkerWarps, flowShmem);
 #endif
   int const minChunkElts = args->minChunkPayloadBytes;

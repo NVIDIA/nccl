@@ -27,36 +27,35 @@ constexpr int ncclSymkMaxBlocks = 64;
 constexpr int ncclSymkMaxThreads = 512;
 constexpr int ncclSymkLLMaxEltSize = 8;
 constexpr int ncclGenkRingMaxWorkerWarps = ncclSymkMaxThreads / WARP_SIZE;
-constexpr int ncclGenkRingSlotsPerProcess = 2;
-// Simple Ring uses four 1 MiB published slices in its 4 MiB FIFO and processes two slices per 2 MiB chunk.
+constexpr int ncclGenkRingSlicesPerChunk = 2;
+// Simple Ring groups its FIFO slots into two slices per chunk.
 constexpr size_t ncclGenkRingSimpleChannelSize = 1 << 22;
-constexpr int ncclGenkRingSimpleFifoSlots = 2 * ncclGenkRingSlotsPerProcess;
-constexpr int ncclGenkRingLLFifoSlots = NCCL_STEPS;
-constexpr int ncclGenkRingLL128FifoSlots = NCCL_STEPS;
+constexpr int ncclGenkRingSimpleFifoSlices = 2 * ncclGenkRingSlicesPerChunk;
+constexpr int ncclGenkRingLLFifoSlices = ncclFlowFifoSlots;
+constexpr int ncclGenkRingLL128FifoSlices = ncclFlowFifoSlots;
 constexpr int ncclGenkTreeMaxWorkerWarps = ncclSymkMaxThreads / WARP_SIZE;
 constexpr int ncclGenkTreeParts = 2;
-constexpr int ncclGenkTreeFifoSlots = 8;
-constexpr int ncclGenkTreeSlots = 3;
+constexpr int ncclGenkTreeFifoSlices = ncclFlowFifoSlots;
+constexpr int ncclGenkTreeConnectionsPerPart = 3;
 constexpr int ncclGenkRingConnections = 1;
-constexpr int ncclGenkTreeConnections = ncclGenkTreeParts * ncclGenkTreeSlots;
+constexpr int ncclGenkTreeConnections = ncclGenkTreeParts * ncclGenkTreeConnectionsPerPart;
 constexpr size_t ncclGenkTreeSimpleSliceBytes = 1 << 19;
 constexpr size_t ncclGenkTreeSimpleChannelSize =
-  ncclGenkTreeSimpleSliceBytes * ncclGenkTreeFifoSlots * ncclGenkTreeConnections;
+  ncclGenkTreeSimpleSliceBytes * ncclGenkTreeFifoSlices * ncclGenkTreeConnections;
 constexpr size_t ncclGenkRingLLChunkPayloadBytes = NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads * sizeof(uint64_t);
 constexpr size_t ncclGenkTreeLLChunkPayloadBytes = ncclGenkRingLLChunkPayloadBytes;
 constexpr size_t ncclGenkRingLLChannelWireBytes =
-  NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads * ncclGenkRingLLFifoSlots * sizeof(ncclLLFifoLine);
-constexpr size_t ncclGenkTreeLLChannelWireBytes = NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads *
-                                                  ncclGenkTreeFifoSlots * ncclGenkTreeConnections *
-                                                  sizeof(ncclLLFifoLine);
+  NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads * ncclFlowFifoSlots * sizeof(ncclLLFifoLine);
+constexpr size_t ncclGenkTreeLLChannelWireBytes =
+  NCCL_LL_LINES_PER_THREAD * ncclSymkMaxThreads * ncclFlowFifoSlots * ncclGenkTreeConnections * sizeof(ncclLLFifoLine);
 // Ring and Tree use the same LL128 wire slot size.
 constexpr size_t ncclGenkLL128SlotSize = 256 << 10;
 constexpr size_t ncclGenkRingLL128ChunkPayloadBytes =
   ncclGenkLL128SlotSize * NCCL_LL128_DATAELEMS / NCCL_LL128_LINEELEMS;
 constexpr size_t ncclGenkTreeLL128ChunkPayloadBytes = ncclGenkRingLL128ChunkPayloadBytes;
-constexpr size_t ncclGenkRingLL128ChannelWireBytes = ncclGenkLL128SlotSize * ncclGenkRingLL128FifoSlots;
+constexpr size_t ncclGenkRingLL128ChannelWireBytes = ncclGenkLL128SlotSize * ncclFlowFifoSlots;
 constexpr size_t ncclGenkTreeLL128ChannelWireBytes =
-  ncclGenkLL128SlotSize * ncclGenkTreeFifoSlots * ncclGenkTreeConnections;
+  ncclGenkLL128SlotSize * ncclFlowFifoSlots * ncclGenkTreeConnections;
 // General kernels use a dedicated device communicator whose selected GIN backend matches this mask.
 constexpr unsigned ncclGenkGinBackendMask = 1u << (unsigned)NCCL_NET_DEVICE_GIN_PROXY;
 
@@ -323,16 +322,16 @@ struct ncclGenkRing {
 };
 
 // Per-channel view of the finalized topology tree for this rank: at most one LSA child and two GIN children. All
-// peers are world ranks. Slots identify the fixed ncclFlowProcessor FIFO region used at both ends of an edge. A -1
-// entry is unused.
+// peers are world ranks. Indices identify the fixed ncclFlowProcessor FIFO and state used at both ends of an edge.
+// A -1 entry is unused.
 struct ncclGenkTree {
   int upLsa;
   int upGin;
-  int upSlot;
+  int upIndex;
   int downLsa;
-  int downLsaSlot;
+  int downLsaIndex;
   int downGin[2];
-  int downGinSlots[2];
+  int downGinIndices[2];
 };
 
 // Device state for the general Ring/Tree kernels built on ncclFlowProcessor.
@@ -356,7 +355,7 @@ struct ncclGenkDevComm {
   ncclDevResourceHandle ringLL128Buffer;
   ncclDevResourceHandle treeLL128Buffer;
   ncclDevResourceHandle connState; // Ring states followed by Tree states.
-  // Profiler counters (host-pinned), indexed by channel id and per-channel slot.
+  // Profiler counters (host-pinned), indexed by channel id and per-channel entry.
   // workPhases holds per-phase timestamps published behind a fence.
   struct ncclDevProfiler* workStarted;
   struct ncclDevProfiler* workCompleted;
@@ -379,7 +378,7 @@ struct ncclSymkDevComm {
   struct ncclGinSyncHandle ginSyncHandle;
   ncclDevResourceHandle rsGinAccumBuf;
   uint32_t rsGinAccumBytesPerBlock;
-  // Profiler counters (host-pinned), indexed by channel id and per-channel slot.
+  // Profiler counters (host-pinned), indexed by channel id and per-channel entry.
   // workPhases holds per-phase timestamps published behind a fence.
   struct ncclDevProfiler* workStarted;
   struct ncclDevProfiler* workCompleted;

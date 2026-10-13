@@ -161,18 +161,18 @@ struct ncclRing {
 #define NCCL_MAX_TREE_ARITY_TOP 2
 // Nodes inside the binary tree can have to two nodes down (+1 intra-node).
 #define NCCL_MAX_TREE_ARITY 3
-// Slot zero is used by the symmetric ring. Tree edges use stable reciprocal slots so compact peer ordering may
-// differ at the two endpoints without aliasing persistent flow state.
-constexpr int ncclFlowTreeSlotChild0 = 1;
-constexpr int ncclFlowTreeSlotChild1 = 2;
-constexpr int ncclFlowTreeSlotIntra = 3;
-constexpr int ncclFlowTreeSlotCount = 4;
+// Connection index zero is used by the symmetric ring. Tree edges use stable reciprocal indices so compact peer
+// ordering may differ at the two endpoints without aliasing persistent Flow state.
+constexpr int ncclFlowTreeIndexChild0 = 1;
+constexpr int ncclFlowTreeIndexChild1 = 2;
+constexpr int ncclFlowTreeIndexIntra = 3;
+constexpr int ncclFlowTreeIndexCount = 4;
 struct ncclTree {
   int depth;
   int up;
   int down[NCCL_MAX_TREE_ARITY];
-  int upSlot;
-  int downSlots[NCCL_MAX_TREE_ARITY];
+  int upIndex;
+  int downIndices[NCCL_MAX_TREE_ARITY];
 };
 
 #define NCCL_MAX_DIRECT_ARITY 7

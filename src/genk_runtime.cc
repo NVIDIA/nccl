@@ -39,16 +39,16 @@ static ncclResult_t ncclGenkInitTreeTopology(struct ncclComm* comm) {
     struct ncclGenkTree& genkTree = trees[c];
     genkTree.upLsa = -1;
     genkTree.upGin = -1;
-    genkTree.upSlot = -1;
+    genkTree.upIndex = -1;
     genkTree.downLsa = -1;
-    genkTree.downLsaSlot = -1;
+    genkTree.downLsaIndex = -1;
     genkTree.downGin[0] = -1;
     genkTree.downGin[1] = -1;
-    genkTree.downGinSlots[0] = -1;
-    genkTree.downGinSlots[1] = -1;
+    genkTree.downGinIndices[0] = -1;
+    genkTree.downGinIndices[1] = -1;
 
     if (tree.up != -1) {
-      genkTree.upSlot = tree.upSlot;
+      genkTree.upIndex = tree.upIndex;
       if (comm->rankToNode[tree.up] == comm->node) genkTree.upLsa = tree.up;
       else genkTree.upGin = tree.up;
     }
@@ -63,14 +63,14 @@ static ncclResult_t ncclGenkInitTreeTopology(struct ncclComm* comm) {
           return ncclInternalError;
         }
         genkTree.downLsa = peer;
-        genkTree.downLsaSlot = tree.downSlots[i];
+        genkTree.downLsaIndex = tree.downIndices[i];
       } else {
         if (nDownGin == 2) {
           WARN("Symmetric tree channel %d has more than two GIN children", c);
           return ncclInternalError;
         }
         genkTree.downGin[nDownGin] = peer;
-        genkTree.downGinSlots[nDownGin++] = tree.downSlots[i];
+        genkTree.downGinIndices[nDownGin++] = tree.downIndices[i];
       }
     }
   }

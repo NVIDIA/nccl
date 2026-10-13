@@ -27,22 +27,22 @@ __device__ __forceinline__ void ncclGenkRun_AllReduce_Ring_Flow(ncclGenkDevWorkA
   constexpr int nRecvPeers = 1;
   int const sendPeers[nSendPeers] = {sendWorld};
   int const recvPeers[nRecvPeers] = {recvWorld};
-  constexpr int nSlotsPerProcess = ProtocolTraits::SlotsPerRingProcess;
+  constexpr int nSlicesPerChunk = ProtocolTraits::SlicesPerRingChunk;
   constexpr int signalWarpsPerPart = ncclFlowGetSignalWarpsPerPart(Protocol);
   int const nWorkerWarps = blockDim.x / WARP_SIZE - signalWarpsPerPart;
   __shared__ ncclFlowShmem flowShmem;
 #if !defined(NCCL_OS_WINDOWS)
   ncclFlowConfig<ncclGenkGinBackendMask> const flowConfig =
     ncclGenkRingGinConfig<Protocol, ncclGenkGinBackendMask>(args->kcomm, channelId);
-  ncclFlowProcessor<ncclGenkGinBackendMask, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(
+  ncclFlowProcessor<ncclGenkGinBackendMask, nSlicesPerChunk, maxPeers, Protocol, ncclGenkFlowOps> flow(
     ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps,
     flowShmem);
 #else
   ncclFlowConfig<0> const flowConfig = ncclGenkRingLsaConfig<Protocol>(args->kcomm);
-  ncclFlowProcessor<0, nSlotsPerProcess, maxPeers, Protocol, ncclGenkFlowOps> flow(ncclGenkFlowOps{}, comm, flowConfig,
-                                                                                   sendPeers, nSendPeers, recvPeers,
-                                                                                   nRecvPeers, channelId, nWorkerWarps,
-                                                                                   flowShmem);
+  ncclFlowProcessor<0, nSlicesPerChunk, maxPeers, Protocol, ncclGenkFlowOps> flow(ncclGenkFlowOps{}, comm, flowConfig,
+                                                                                  sendPeers, nSendPeers, recvPeers,
+                                                                                  nRecvPeers, channelId, nWorkerWarps,
+                                                                                  flowShmem);
 #endif
   int const minChunkElts = args->minChunkPayloadBytes / sizeof(T);
   constexpr int maxChunkElts = ProtocolTraits::RingChunkPayloadBytes / sizeof(T);
@@ -169,7 +169,7 @@ __device__ __forceinline__ void ncclGenkRun_AllReduce_Tree_Flow(ncclGenkDevWorkA
   constexpr int reducePart = 0;
   constexpr int bcastPart = 1;
   constexpr int nParts = ncclGenkTreeParts;
-  constexpr int maxPeers = ncclGenkTreeSlots;
+  constexpr int maxPeers = ncclGenkTreeConnectionsPerPart;
   constexpr int signalWarpsPerPart = ncclFlowGetSignalWarpsPerPart(Protocol);
   int const nWorkerWarps = blockDim.x / WARP_SIZE - nParts * signalWarpsPerPart;
   int const reduceWorkerWarps = ProtocolTraits::treeReduceWorkerWarps(nWorkerWarps);
@@ -179,25 +179,25 @@ __device__ __forceinline__ void ncclGenkRun_AllReduce_Tree_Flow(ncclGenkDevWorkA
   assert(part == reducePart || part == bcastPart);
 
   int downPeers[NCCL_MAX_TREE_ARITY];
-  int downSlots[NCCL_MAX_TREE_ARITY];
+  int downIndices[NCCL_MAX_TREE_ARITY];
   int nDownPeers = 0;
   if (tree.downLsa != -1) {
     downPeers[nDownPeers] = tree.downLsa;
-    downSlots[nDownPeers++] = tree.downLsaSlot - ncclFlowTreeSlotChild0;
+    downIndices[nDownPeers++] = tree.downLsaIndex - ncclFlowTreeIndexChild0;
   }
   for (int i = 0; i < 2; i++) {
     if (tree.downGin[i] != -1) {
       downPeers[nDownPeers] = tree.downGin[i];
-      downSlots[nDownPeers++] = tree.downGinSlots[i] - ncclFlowTreeSlotChild0;
+      downIndices[nDownPeers++] = tree.downGinIndices[i] - ncclFlowTreeIndexChild0;
     }
   }
 
-  int const upSlot = tree.upSlot - ncclFlowTreeSlotChild0;
+  int const upIndex = tree.upIndex - ncclFlowTreeIndexChild0;
   int const* sendPeers = part == reducePart && !isRoot ? &upPeer : downPeers;
-  int const* sendSlots = part == reducePart && !isRoot ? &upSlot : downSlots;
+  int const* sendIndices = part == reducePart && !isRoot ? &upIndex : downIndices;
   int const nSendPeers = part == reducePart ? (isRoot ? nDownPeers : 1) : (isRoot ? 0 : nDownPeers);
   int const* recvPeers = part == reducePart ? downPeers : &upPeer;
-  int const* recvSlots = part == reducePart ? downSlots : &upSlot;
+  int const* recvIndices = part == reducePart ? downIndices : &upIndex;
   int const nRecvPeers = part == reducePart ? nDownPeers : !isRoot;
   // The fused root receives from the reduce-part FIFOs and publishes into the broadcast-part FIFOs.
   int const sendPart = isRoot && part == reducePart ? bcastPart : part;
@@ -207,14 +207,14 @@ __device__ __forceinline__ void ncclGenkRun_AllReduce_Tree_Flow(ncclGenkDevWorkA
 #if !defined(NCCL_OS_WINDOWS)
   ncclFlowConfig<ncclGenkGinBackendMask> const flowConfig =
     ncclGenkTreeGinConfig<Protocol, ncclGenkGinBackendMask>(args->kcomm, channelId);
-  ncclFlowProcessor<ncclGenkGinBackendMask, /*SlotsPerProcess=*/1, maxPeers, Protocol, ncclGenkFlowOps> flow(
+  ncclFlowProcessor<ncclGenkGinBackendMask, /*SlicesPerChunk=*/1, maxPeers, Protocol, ncclGenkFlowOps> flow(
     ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps,
-    flowShmem, nParts, sendPart, recvPart, sendSlots, recvSlots, partWorkerWarps);
+    flowShmem, nParts, sendPart, recvPart, sendIndices, recvIndices, partWorkerWarps);
 #else
   ncclFlowConfig<0> const flowConfig = ncclGenkTreeLsaConfig<Protocol>(args->kcomm);
-  ncclFlowProcessor<0, /*SlotsPerProcess=*/1, maxPeers, Protocol, ncclGenkFlowOps> flow(
+  ncclFlowProcessor<0, /*SlicesPerChunk=*/1, maxPeers, Protocol, ncclGenkFlowOps> flow(
     ncclGenkFlowOps{}, comm, flowConfig, sendPeers, nSendPeers, recvPeers, nRecvPeers, channelId, nWorkerWarps,
-    flowShmem, nParts, sendPart, recvPart, sendSlots, recvSlots, partWorkerWarps);
+    flowShmem, nParts, sendPart, recvPart, sendIndices, recvIndices, partWorkerWarps);
 #endif
 
   int const minChunkElts = args->minChunkPayloadBytes / sizeof(T);

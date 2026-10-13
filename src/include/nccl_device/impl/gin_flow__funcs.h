@@ -19,8 +19,8 @@ template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE ncclGinFlowConn<GinBackendMask, Protocol>::ncclGinFlowConn(
   ncclDevComm const& comm, int contextId, ncclTeam team_, int peer_, ncclSymPtr<char> recvFifo,
   ncclSymPtr<char> sendFifo, ncclSymPtr<ncclFlowConnState> state_, ncclGinSignal_t signal0, size_t signalIndex,
-  int nSlots_, size_t stepSize_, int type_, bool waitRole, bool recvPost)
-  : nSlots(nSlots_), sliceSteps(ncclFlowCreditSlots / nSlots_), stepSize(stepSize_), type(type_), gin(comm, contextId),
+  int nSlices_, size_t stepSize_, int type_, bool waitRole, bool recvPost)
+  : nSlices(nSlices_), sliceSteps(ncclFlowFifoSlots / nSlices_), stepSize(stepSize_), type(type_), gin(comm, contextId),
     team(team_), peer(peer_), state(state_.localPtr()), fifo(), peerFifo(), step(0), llStep(0), signalValue(0),
     flushOnClose(false) {
   if (type != ncclFlowTypeNone) {
@@ -58,15 +58,15 @@ NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::close() {
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void* ncclGinFlowConn<GinBackendMask, Protocol>::waitSend() {
-  void* const ptr = advanceFifoSlot();
+  void* const ptr = advanceSlice();
   gin.waitSignal(ncclCoopThread{}, localSignal, step, /*bits=*/64);
   return ptr;
 }
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postSend(size_t bytes) {
-  size_t const offset = Protocol == ncclFlowProtocolLL ? ((llStep - 1) % nSlots) * sliceSteps * stepSize :
-                                                         ((step - sliceSteps) % ncclFlowCreditSlots) * stepSize;
+  size_t const offset = Protocol == ncclFlowProtocolLL ? ((llStep - 1) % nSlices) * sliceSteps * stepSize :
+                                                         ((step - sliceSteps) % ncclFlowFifoSlots) * stepSize;
   assert(bytes <= stepSize * sliceSteps);
   if (Protocol == ncclFlowProtocolSimple) {
     postSendSimple(bytes, fifo + offset, peerFifo + offset);
@@ -77,7 +77,7 @@ NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postSend(size
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postSendFrom(size_t bytes, ncclSymPtr<char> source) {
-  size_t const offset = ((step - sliceSteps) % ncclFlowCreditSlots) * stepSize;
+  size_t const offset = ((step - sliceSteps) % ncclFlowFifoSlots) * stepSize;
   if (bytes != 0) flushOnClose = true;
   postSendSimple(bytes, source, peerFifo + offset);
 }
@@ -87,7 +87,7 @@ NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postSendDirec
   size_t bytes, ncclSymPtr<char> peerOutput, ncclSymPtr<char> source) {
   bool const externalSource = source.window != nullptr;
   if (!externalSource) {
-    size_t const offset = ((step - sliceSteps) % ncclFlowCreditSlots) * stepSize;
+    size_t const offset = ((step - sliceSteps) % ncclFlowFifoSlots) * stepSize;
     source = fifo + offset;
   }
   if (bytes != 0 && externalSource) flushOnClose = true;
@@ -124,15 +124,15 @@ NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::signal(uint64
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void* ncclGinFlowConn<GinBackendMask, Protocol>::waitRecv() {
-  void* const ptr = advanceFifoSlot();
+  void* const ptr = advanceSlice();
   gin.waitSignal(ncclCoopThread{}, localSignal, step, /*bits=*/64);
   return ptr;
 }
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void* ncclGinFlowConn<GinBackendMask, Protocol>::advanceFifoSlot() {
-  size_t const offset = Protocol == ncclFlowProtocolLL ? (llStep % nSlots) * sliceSteps * stepSize :
-                                                         (step % ncclFlowCreditSlots) * stepSize;
+NCCL_DEVICE_INLINE void* ncclGinFlowConn<GinBackendMask, Protocol>::advanceSlice() {
+  size_t const offset =
+    Protocol == ncclFlowProtocolLL ? (llStep % nSlices) * sliceSteps * stepSize : (step % ncclFlowFifoSlots) * stepSize;
   advanceStep();
   return fifo.localPtr() + offset;
 }
@@ -144,8 +144,8 @@ NCCL_DEVICE_INLINE uint64_t ncclGinFlowConn<GinBackendMask, Protocol>::stepFlag(
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void ncclGinFlowConn<GinBackendMask, Protocol>::postRecv(bool force) {
-  uint64_t const value = step + ncclFlowCreditSlots;
-  uint64_t const batch = sliceSteps * ((nSlots + 1) / 2);
+  uint64_t const value = step + ncclFlowFifoSlots;
+  uint64_t const batch = sliceSteps * ((nSlices + 1) / 2);
   if (signalValue == 0 || (value > signalValue && (force || value - signalValue >= batch))) signal(value);
 }
 

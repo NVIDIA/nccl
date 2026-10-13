@@ -15,7 +15,7 @@
 #ifdef __CUDACC__
 template <unsigned GinBackendMask = NCCL_GIN_BACKEND_MASK_ALL, ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
 struct ncclGinFlowConn {
-  const int nSlots;
+  const int nSlices;
   const int sliceSteps;
   const size_t stepSize;
   const int type;
@@ -27,7 +27,7 @@ struct ncclGinFlowConn {
   ncclSymPtr<char> peerFifo;
   ncclGinSignal_t localSignal;
   ncclGinSignal_t peerSignal;
-  // Transport counters are shared across protocols; LL tracks its FIFO slot and flag sequence separately.
+  // Transport counters are shared across protocols; LL tracks its FIFO slice and flag sequence separately.
   uint64_t step;
   uint32_t llStep;
   uint64_t signalValue;
@@ -36,11 +36,11 @@ struct ncclGinFlowConn {
   // drained before the kernel returns.
   bool flushOnClose;
 
-  // nSlots must divide ncclFlowCreditSlots.
+  // nSlices must divide ncclFlowFifoSlots.
   NCCL_DEVICE_INLINE ncclGinFlowConn(ncclDevComm const& comm, int contextId, ncclTeam team, int peer,
                                      ncclSymPtr<char> recvFifo, ncclSymPtr<char> sendFifo,
                                      ncclSymPtr<ncclFlowConnState> state, ncclGinSignal_t signal0, size_t signalIndex,
-                                     int nSlots, size_t stepSize, int type, bool waitRole, bool recvPost);
+                                     int nSlices, size_t stepSize, int type, bool waitRole, bool recvPost);
 
   NCCL_DEVICE_INLINE void close();
   NCCL_DEVICE_INLINE void* waitSend();
@@ -53,7 +53,7 @@ struct ncclGinFlowConn {
   NCCL_DEVICE_INLINE void advanceStep();
   NCCL_DEVICE_INLINE void postSendSimple(size_t bytes, ncclSymPtr<char> source, ncclSymPtr<char> destination);
   NCCL_DEVICE_INLINE void signal(uint64_t value);
-  NCCL_DEVICE_INLINE void* advanceFifoSlot();
+  NCCL_DEVICE_INLINE void* advanceSlice();
   NCCL_DEVICE_INLINE uint64_t stepFlag() const;
 };
 

@@ -19,27 +19,27 @@ template <ncclFlowProtocol Protocol>
 struct ncclFlowProtocolTag {};
 
 // Common processing protocol for point-to-point backends. Backend must provide:
-//   waitSend()          wait for and return the next writable slot
-//   waitRecv()          wait for and return a readable slot
-//   advanceFifoSlot()   advance and return the next FIFO slot without waiting
+//   waitSend()          wait for and return the next writable slice
+//   waitRecv()          wait for and return a readable slice
+//   advanceSlice()      advance and return the next FIFO slice without waiting
 //   advanceStep()       mirror the FIFO advancement in a post role
-//   postSend(bytes)     publish the written slot
-//   postRecv()          make the consumed slot eligible for credit return
+//   postSend(bytes)     publish the written slice
+//   postRecv()          make the consumed slice eligible for credit return
 //   stepFlag()          return the current protocol readiness flag
-// Connections count credits in common steps. Simple and LL128 derive FIFO slots from that step; LL keeps an
-// independent wrapping sequence for its FIFO slots and embedded flags.
+// Connections count credits in common steps. Simple and LL128 derive FIFO offsets from that step; LL keeps an
+// independent wrapping sequence for its slices and embedded flags.
 // The CTA consists of nWorkerWarps divided between nParts, with protocol-specific signaling warps appended to each
 // part. An optional partWorkerWarps array gives the number of contiguous worker warps assigned to each part and must
 // sum to nWorkerWarps; the default divides workers evenly. Within each part, the first worker warp waits for send
 // buffers and the second waits for receive buffers. Separate signaling warps normally publish sends and receives;
 // LL128 uses the lower and upper halves of one warp. Each part uses independent shared state and named barriers.
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
 struct ncclFlowBase {
-  static_assert(0 < SlotsPerProcess, "ncclFlowProcessor must process at least one slot");
+  static_assert(0 < SlicesPerChunk, "ncclFlowProcessor must process at least one slice");
   static_assert(0 < MaxPeers && MaxPeers <= NCCL_FLOW_MAX_PEERS, "ncclFlowProcessor max peer count is out of range");
 
-  NCCL_DEVICE_INLINE ncclFlowBase(uint32_t* abortFlag, size_t stepSize, int nSlots, int nWorkerWarps, int nSendPeers,
-                                  int nRecvPeers, int nParts, int part, int const* sendSlots, int const* recvSlots,
+  NCCL_DEVICE_INLINE ncclFlowBase(uint32_t* abortFlag, size_t stepSize, int nSlices, int nWorkerWarps, int nSendPeers,
+                                  int nRecvPeers, int nParts, int part, int const* sendIndices, int const* recvIndices,
                                   ncclFlowShmem& shmem, int const* partWorkerWarps);
 
   // Save persistent connection state and drain GIN accesses to external source windows. Every thread may call
@@ -64,13 +64,13 @@ protected:
 
   int role;
   int rolePeer;
-  int roleSlot;
+  int roleIndex;
   const int nSendPeers;
   const int nRecvPeers;
   uint32_t* const abortFlag;
   const size_t stepSize;
-  const int nSlots;
-  ncclFlowPartShmem* const processShmem;
+  const int nSlices;
+  ncclFlowPartShmem* const partShmem;
   ncclCoopWarpSpan workers;
   ncclCoopWarpSpan partThreads;
 
@@ -111,9 +111,9 @@ struct ncclFlowConnection<0, Protocol> {
   } storage;
 
   NCCL_DEVICE_INLINE ncclFlowConnection() {}
-  NCCL_DEVICE_INLINE void construct(ncclDevComm const& comm, ncclFlowConfig<0> const& config, int peer, int peerIndex,
-                                    int maxPeers, int channelId, int nParts, int part, int type, bool waitRole,
-                                    bool recvPost);
+  NCCL_DEVICE_INLINE void construct(ncclDevComm const& comm, ncclFlowConfig<0> const& config, int peer,
+                                    int connectionIndex, int maxPeers, int channelId, int nParts, int part, int type,
+                                    bool waitRole, bool recvPost);
   NCCL_DEVICE_INLINE void close();
   NCCL_DEVICE_INLINE void* waitSend();
   NCCL_DEVICE_INLINE void postSend(size_t bytes);
@@ -121,7 +121,7 @@ struct ncclFlowConnection<0, Protocol> {
   NCCL_DEVICE_INLINE void* waitRecv();
   NCCL_DEVICE_INLINE void postRecv();
   NCCL_DEVICE_INLINE void advanceStep();
-  NCCL_DEVICE_INLINE void* advanceFifoSlot();
+  NCCL_DEVICE_INLINE void* advanceSlice();
   NCCL_DEVICE_INLINE uint64_t stepFlag() const;
   NCCL_DEVICE_INLINE bool usesGin() const;
 };
@@ -144,7 +144,7 @@ struct ncclFlowConnection {
 
   NCCL_DEVICE_INLINE ncclFlowConnection() : useGin(false) {}
   NCCL_DEVICE_INLINE void construct(ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int peer,
-                                    int peerIndex, int maxPeers, int channelId, int nParts, int part, int type,
+                                    int connectionIndex, int maxPeers, int channelId, int nParts, int part, int type,
                                     bool waitRole, bool recvPost);
   NCCL_DEVICE_INLINE void close();
   NCCL_DEVICE_INLINE void* waitSend();
@@ -153,7 +153,7 @@ struct ncclFlowConnection {
   NCCL_DEVICE_INLINE void* waitRecv();
   NCCL_DEVICE_INLINE void postRecv();
   NCCL_DEVICE_INLINE void advanceStep();
-  NCCL_DEVICE_INLINE void* advanceFifoSlot();
+  NCCL_DEVICE_INLINE void* advanceSlice();
   NCCL_DEVICE_INLINE uint64_t stepFlag() const;
   NCCL_DEVICE_INLINE bool usesGin() const;
 };

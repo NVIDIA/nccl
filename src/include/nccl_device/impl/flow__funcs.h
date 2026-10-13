@@ -18,8 +18,8 @@
 #include <cassert>
 #include <new>
 
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
-NCCL_DEVICE_INLINE int ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::threadRole(
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
+NCCL_DEVICE_INLINE int ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::threadRole(
   int nWorkerWarps, int nSendPeers, int nRecvPeers, int nParts, int part, int const* partWorkerWarps, int* rolePeer) {
   constexpr int warpSize = 32;
   constexpr int signalWarpsPerPart = ncclFlowGetSignalWarpsPerPart(Backend::Protocol);
@@ -52,19 +52,20 @@ NCCL_DEVICE_INLINE int ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::threadR
   return 0 <= workerThread && workerThread < workerWarps * warpSize ? RoleWorker : RoleIdle;
 }
 
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
-NCCL_DEVICE_INLINE int ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::roleType(int role) {
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
+NCCL_DEVICE_INLINE int ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::roleType(int role) {
   if (role == RoleSendWait || role == RoleSendPost) return ncclFlowTypeSend;
   if (role == RoleRecvWait || role == RoleRecvPost) return ncclFlowTypeRecv;
   return ncclFlowTypeNone;
 }
 
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
-NCCL_DEVICE_INLINE ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::ncclFlowBase(
-  uint32_t* abortFlag_, size_t stepSize_, int nSlots_, int nWorkerWarps_, int nSendPeers_, int nRecvPeers_, int nParts_,
-  int part_, int const* sendSlots, int const* recvSlots, ncclFlowShmem& shmem, int const* partWorkerWarps)
-  : role(RoleIdle), rolePeer(-1), roleSlot(-1), nSendPeers(nSendPeers_), nRecvPeers(nRecvPeers_), abortFlag(abortFlag_),
-    stepSize(stepSize_), nSlots(nSlots_), processShmem(&shmem.parts[part_]),
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
+NCCL_DEVICE_INLINE ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::ncclFlowBase(
+  uint32_t* abortFlag_, size_t stepSize_, int nSlices_, int nWorkerWarps_, int nSendPeers_, int nRecvPeers_,
+  int nParts_, int part_, int const* sendIndices, int const* recvIndices, ncclFlowShmem& shmem,
+  int const* partWorkerWarps)
+  : role(RoleIdle), rolePeer(-1), roleIndex(-1), nSendPeers(nSendPeers_), nRecvPeers(nRecvPeers_),
+    abortFlag(abortFlag_), stepSize(stepSize_), nSlices(nSlices_), partShmem(&shmem.parts[part_]),
     workers(/*warp0=*/ncclFlowPartWorkerWarp0(nWorkerWarps_, nParts_, part_, partWorkerWarps,
                                               ncclFlowGetSignalWarpsPerPart(Backend::Protocol)),
             /*nWarps=*/ncclFlowPartWorkerWarps(nWorkerWarps_, nParts_, part_, partWorkerWarps),
@@ -75,8 +76,8 @@ NCCL_DEVICE_INLINE ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::ncclFlowBas
                   ncclFlowGetSignalWarpsPerPart(Backend::Protocol),
                 /*id=*/nParts_ + part_) {
   assert(0 < nWorkerWarps_);
-  assert(0 < nSlots);
-  assert(ncclFlowCreditSlots % nSlots == 0);
+  assert(0 < nSlices);
+  assert(ncclFlowFifoSlots % nSlices == 0);
   assert(0 < nParts_ && nParts_ <= NCCL_FLOW_MAX_PARTS);
   assert(0 <= part_ && part_ < nParts_);
   assert(2 * nParts_ <= nWorkerWarps_);
@@ -87,36 +88,38 @@ NCCL_DEVICE_INLINE ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::ncclFlowBas
   assert(0 <= nRecvPeers && nRecvPeers <= MaxPeers);
   assert(0 < stepSize);
   role = threadRole(nWorkerWarps_, nSendPeers, nRecvPeers, nParts_, part_, partWorkerWarps, &rolePeer);
-  if (role == RoleSendWait || role == RoleSendPost) roleSlot = sendSlots == nullptr ? rolePeer : sendSlots[rolePeer];
-  if (role == RoleRecvWait || role == RoleRecvPost) roleSlot = recvSlots == nullptr ? rolePeer : recvSlots[rolePeer];
-  assert(roleSlot == -1 || 0 <= roleSlot && roleSlot < MaxPeers);
+  if (role == RoleSendWait || role == RoleSendPost)
+    roleIndex = sendIndices == nullptr ? rolePeer : sendIndices[rolePeer];
+  if (role == RoleRecvWait || role == RoleRecvPost)
+    roleIndex = recvIndices == nullptr ? rolePeer : recvIndices[rolePeer];
+  assert(roleIndex == -1 || 0 <= roleIndex && roleIndex < MaxPeers);
 }
 
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
-NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::initShmem() {
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
+NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::initShmem() {
   if (partThreads.thread_rank() == 0) {
     for (int peer = 0; peer < MaxPeers; peer++) {
-      processShmem->sendBuf[peer] = nullptr;
-      processShmem->recvBuf[peer] = nullptr;
-      processShmem->sendFlag[peer] = 0;
-      processShmem->recvFlag[peer] = 0;
-      processShmem->sendUsesFifo[peer] = false;
-      processShmem->recvUsesFifo[peer] = false;
+      partShmem->sendBuf[peer] = nullptr;
+      partShmem->recvBuf[peer] = nullptr;
+      partShmem->sendFlag[peer] = 0;
+      partShmem->recvFlag[peer] = 0;
+      partShmem->sendUsesFifo[peer] = false;
+      partShmem->recvUsesFifo[peer] = false;
     }
   }
   partThreads.sync();
 }
 
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
-NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::close() {
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
+NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::close() {
   if (role != RoleSendPost && role != RoleRecvPost) return;
   static_cast<Backend*>(this)->closeBackend();
 }
 
-template <typename Backend, int SlotsPerProcess, int MaxPeers>
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
 template <bool Send, bool DirectSend, bool Recv, bool DirectRecv, typename T, typename SrcLambda, typename DstLambda,
           typename RedOp>
-NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::process(
+NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process(
   ncclFlowSendTag<Send, DirectSend> send, ncclFlowRecvTag<Recv, DirectRecv> recv, ncclSymPtr<T> input,
   ncclSymPtr<T> output, SrcLambda srcLambda, int nSrc, DstLambda dstLambda, int nDst, RedOp const& redOp,
   size_t nElts) {
@@ -127,19 +130,19 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlotsPerProcess, MaxPeers>::proces
 
 template <ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void ncclFlowConnection<0, Protocol>::construct(
-  ncclDevComm const& comm, ncclFlowConfig<0> const& config, int peer, int peerIndex, int maxPeers, int channelId,
+  ncclDevComm const& comm, ncclFlowConfig<0> const& config, int peer, int connectionIndex, int maxPeers, int channelId,
   int nParts, int part, int type, bool /*waitRole*/, bool recvPost) {
-  int const nSlots = config.nSlots;
-  assert(config.channelSize % (ncclFlowCreditSlots * nParts * maxPeers) == 0);
-  size_t const stepSize = config.channelSize / (ncclFlowCreditSlots * nParts * maxPeers);
+  int const nSlices = config.nSlices;
+  assert(config.channelSize % (ncclFlowFifoSlots * nParts * maxPeers) == 0);
+  size_t const stepSize = config.channelSize / (ncclFlowFifoSlots * nParts * maxPeers);
   size_t const fifoOffset =
-    (size_t)channelId * config.channelSize + ((size_t)part * maxPeers + peerIndex) * ncclFlowCreditSlots * stepSize;
-  int const connection = part * maxPeers + peerIndex;
-  assert(connection < config.connStatesPerChannel);
-  size_t const stateIndex = (size_t)channelId * config.connStatesPerChannel + connection;
+    (size_t)channelId * config.channelSize + ((size_t)part * maxPeers + connectionIndex) * ncclFlowFifoSlots * stepSize;
+  int const partConnectionIndex = part * maxPeers + connectionIndex;
+  assert(partConnectionIndex < config.connStatesPerChannel);
+  size_t const stateIndex = (size_t)channelId * config.connStatesPerChannel + partConnectionIndex;
   ncclSymPtr<char> recvFifo = config.recvBuffer + fifoOffset;
   ncclSymPtr<ncclFlowConnState> state = config.connState + stateIndex;
-  ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlots, stepSize, type, recvPost);
+  ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlices, stepSize, type, recvPost);
 }
 
 template <ncclFlowProtocol Protocol>
@@ -179,8 +182,8 @@ NCCL_DEVICE_INLINE void ncclFlowConnection<0, Protocol>::advanceStep() {
 }
 
 template <ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void* ncclFlowConnection<0, Protocol>::advanceFifoSlot() {
-  return storage.lsa.advanceFifoSlot();
+NCCL_DEVICE_INLINE void* ncclFlowConnection<0, Protocol>::advanceSlice() {
+  return storage.lsa.advanceSlice();
 }
 
 template <ncclFlowProtocol Protocol>
@@ -196,16 +199,16 @@ NCCL_DEVICE_INLINE bool ncclFlowConnection<0, Protocol>::usesGin() const {
 #if !defined(NCCL_OS_WINDOWS)
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void ncclFlowConnection<GinBackendMask, Protocol>::construct(
-  ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int peer, int peerIndex, int maxPeers,
+  ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int peer, int connectionIndex, int maxPeers,
   int channelId, int nParts, int part, int type, bool waitRole, bool recvPost) {
-  int const nSlots = config.nSlots;
-  assert(config.channelSize % (ncclFlowCreditSlots * nParts * maxPeers) == 0);
-  size_t const stepSize = config.channelSize / (ncclFlowCreditSlots * nParts * maxPeers);
-  size_t const connectionOffset = ((size_t)part * maxPeers + peerIndex) * ncclFlowCreditSlots * stepSize;
+  int const nSlices = config.nSlices;
+  assert(config.channelSize % (ncclFlowFifoSlots * nParts * maxPeers) == 0);
+  size_t const stepSize = config.channelSize / (ncclFlowFifoSlots * nParts * maxPeers);
+  size_t const connectionOffset = ((size_t)part * maxPeers + connectionIndex) * ncclFlowFifoSlots * stepSize;
   size_t const fifoOffset = (size_t)channelId * config.channelSize + connectionOffset;
-  int const connection = part * maxPeers + peerIndex;
-  assert(connection < config.connStatesPerChannel);
-  size_t const stateIndex = (size_t)channelId * config.connStatesPerChannel + connection;
+  int const partConnectionIndex = part * maxPeers + connectionIndex;
+  assert(partConnectionIndex < config.connStatesPerChannel);
+  size_t const stateIndex = (size_t)channelId * config.connStatesPerChannel + partConnectionIndex;
   ncclSymPtr<char> recvFifo = config.recvBuffer + fifoOffset;
   ncclSymPtr<ncclFlowConnState> state = config.connState + stateIndex;
 
@@ -222,9 +225,9 @@ NCCL_DEVICE_INLINE void ncclFlowConnection<GinBackendMask, Protocol>::construct(
     int const contextId = config.ginContextIndex % comm.ginContextCount;
     ::new (&storage.gin) ncclGinFlowConn<GinBackendMask, Protocol>(comm, contextId, config.ginTeam, ginPeer, recvFifo,
                                                                    sendFifo, state, config.ginSignal0, stateIndex,
-                                                                   nSlots, stepSize, type, waitRole, recvPost);
+                                                                   nSlices, stepSize, type, waitRole, recvPost);
   } else {
-    ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlots, stepSize, type, recvPost);
+    ::new (&storage.lsa) ncclLsaFlowConn<Protocol>(comm, recvFifo, state, peer, nSlices, stepSize, type, recvPost);
   }
 }
 
@@ -275,8 +278,8 @@ NCCL_DEVICE_INLINE void ncclFlowConnection<GinBackendMask, Protocol>::advanceSte
 }
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void* ncclFlowConnection<GinBackendMask, Protocol>::advanceFifoSlot() {
-  return useGin ? storage.gin.advanceFifoSlot() : storage.lsa.advanceFifoSlot();
+NCCL_DEVICE_INLINE void* ncclFlowConnection<GinBackendMask, Protocol>::advanceSlice() {
+  return useGin ? storage.gin.advanceSlice() : storage.lsa.advanceSlice();
 }
 
 template <unsigned GinBackendMask, ncclFlowProtocol Protocol>
@@ -290,20 +293,20 @@ NCCL_DEVICE_INLINE bool ncclFlowConnection<GinBackendMask, Protocol>::usesGin() 
 }
 #endif
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::ncclFlowProcessor(
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::ncclFlowProcessor(
   FlowOps const& ops, ncclDevComm const& comm, ncclFlowConfig<GinBackendMask> const& config, int const* sendPeers,
   int nSendPeers, int const* recvPeers, int nRecvPeers, int channelId, int nWorkerWarps, ncclFlowShmem& shmem,
-  int nParts, int sendPart, int recvPart, int const* sendSlots, int const* recvSlots, int const* partWorkerWarps)
-  : Base(comm.abortFlag, config.channelSize / ((size_t)ncclFlowCreditSlots * nParts * MaxPeers), config.nSlots,
+  int nParts, int sendPart, int recvPart, int const* sendIndices, int const* recvIndices, int const* partWorkerWarps)
+  : Base(comm.abortFlag, config.channelSize / ((size_t)ncclFlowFifoSlots * nParts * MaxPeers), config.nSlices,
          nWorkerWarps, nSendPeers, nRecvPeers, nParts,
-         ncclFlowThreadPart(nWorkerWarps, nParts, partWorkerWarps, ncclFlowGetSignalWarpsPerPart(Protocol)), sendSlots,
-         recvSlots, shmem, partWorkerWarps),
+         ncclFlowThreadPart(nWorkerWarps, nParts, partWorkerWarps, ncclFlowGetSignalWarpsPerPart(Protocol)),
+         sendIndices, recvIndices, shmem, partWorkerWarps),
     conn(), operations(ops) {
-  assert(0 < config.nSlots);
-  assert(SlotsPerProcess <= config.nSlots);
+  assert(0 < config.nSlices);
+  assert(SlicesPerChunk <= config.nSlices);
   assert(0 < nParts && nParts <= NCCL_FLOW_MAX_PARTS);
-  assert(config.channelSize % ((size_t)ncclFlowCreditSlots * nParts * MaxPeers) == 0);
+  assert(config.channelSize % ((size_t)ncclFlowFifoSlots * nParts * MaxPeers) == 0);
   assert(0 <= sendPart && sendPart < nParts);
   assert(0 <= recvPart && recvPart < nParts);
   assert(nSendPeers == 0 || sendPeers != nullptr);
@@ -314,64 +317,63 @@ NCCL_DEVICE_INLINE ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, 
     int const peer = send ? sendPeers[this->rolePeer] : recvPeers[this->rolePeer];
     int const peerPart = send ? sendPart : recvPart;
     bool const waitRole = this->role == Base::RoleSendWait || this->role == Base::RoleRecvWait;
-    conn.construct(comm, config, peer, this->roleSlot, MaxPeers, channelId, nParts, peerPart, type, waitRole,
+    conn.construct(comm, config, peer, this->roleIndex, MaxPeers, channelId, nParts, peerPart, type, waitRole,
                    this->role == Base::RoleRecvPost);
   }
   this->initShmem();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE void
-ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::closeBackend() {
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::closeBackend() {
   conn.close();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::waitSend() {
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::waitSend() {
   return conn.waitSend();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::postSend(
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::postSend(
   size_t bytes) {
   conn.postSend(bytes);
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::postSend(
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::postSend(
   size_t bytes, bool direct, ncclSymPtr<char> output, ncclSymPtr<char> source) {
   conn.postSend(bytes, direct, output, source);
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::waitRecv() {
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void* ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::waitRecv() {
   return conn.waitRecv();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::postRecv() {
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::postRecv() {
   conn.postRecv();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::advanceStep() {
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE void ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::advanceStep() {
   conn.advanceStep();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
 NCCL_DEVICE_INLINE void*
-ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::advanceFifoSlot() {
-  return conn.advanceFifoSlot();
+ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::advanceSlice() {
+  return conn.advanceSlice();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
 NCCL_DEVICE_INLINE uint64_t
-ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::stepFlag() const {
+ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::stepFlag() const {
   return conn.stepFlag();
 }
 
-template <unsigned GinBackendMask, int SlotsPerProcess, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
-NCCL_DEVICE_INLINE bool ncclFlowProcessor<GinBackendMask, SlotsPerProcess, MaxPeers, Protocol, FlowOps>::usesGin()
+template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol Protocol, typename FlowOps>
+NCCL_DEVICE_INLINE bool ncclFlowProcessor<GinBackendMask, SlicesPerChunk, MaxPeers, Protocol, FlowOps>::usesGin()
   const {
   return conn.usesGin();
 }

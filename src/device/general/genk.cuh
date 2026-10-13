@@ -22,13 +22,13 @@ struct ncclGenkProtocolTraits<ncclFlowProtocolSimple> {
   static constexpr bool SupportsDirect = false; // Temporarily disabled until the synchronization is sorted out.
   using DirectSend = ncclFlowDirectSend;
   using DirectRecv = ncclFlowDirectRecv;
-  static constexpr int SlotsPerRingProcess = ncclGenkRingSlotsPerProcess;
-  static constexpr int RingFifoSlots = ncclGenkRingSimpleFifoSlots;
+  static constexpr int SlicesPerRingChunk = ncclGenkRingSlicesPerChunk;
+  static constexpr int RingFifoSlices = ncclGenkRingSimpleFifoSlices;
   static constexpr size_t RingChannelWireBytes = ncclGenkRingSimpleChannelSize;
   static constexpr size_t TreeChannelWireBytes = ncclGenkTreeSimpleChannelSize;
-  static constexpr size_t RingChunkPayloadBytes = ncclGenkRingSimpleChannelSize / RingFifoSlots * SlotsPerRingProcess;
+  static constexpr size_t RingChunkPayloadBytes = ncclGenkRingSimpleChannelSize / RingFifoSlices * SlicesPerRingChunk;
   static constexpr size_t TreeChunkPayloadBytes =
-    ncclGenkTreeSimpleChannelSize / (ncclGenkTreeFifoSlots * ncclGenkTreeParts * ncclGenkTreeSlots);
+    ncclGenkTreeSimpleChannelSize / (ncclGenkTreeFifoSlices * ncclGenkTreeParts * ncclGenkTreeConnectionsPerPart);
 
   NCCL_DEVICE_INLINE static int treeReduceWorkerWarps(int nWorkerWarps) {
     int reduceWorkerWarps = nWorkerWarps / 2;
@@ -49,8 +49,8 @@ struct ncclGenkProtocolTraits<ncclFlowProtocolLL> {
   static constexpr bool SupportsDirect = false;
   using DirectSend = ncclFlowSend;
   using DirectRecv = ncclFlowRecv;
-  static constexpr int SlotsPerRingProcess = 1;
-  static constexpr int RingFifoSlots = ncclGenkRingLLFifoSlots;
+  static constexpr int SlicesPerRingChunk = 1;
+  static constexpr int RingFifoSlices = ncclGenkRingLLFifoSlices;
   static constexpr size_t RingChannelWireBytes = ncclGenkRingLLChannelWireBytes;
   static constexpr size_t TreeChannelWireBytes = ncclGenkTreeLLChannelWireBytes;
   static constexpr size_t RingChunkPayloadBytes = ncclGenkRingLLChunkPayloadBytes;
@@ -73,8 +73,8 @@ struct ncclGenkProtocolTraits<ncclFlowProtocolLL128> {
   static constexpr bool SupportsDirect = false;
   using DirectSend = ncclFlowSend;
   using DirectRecv = ncclFlowRecv;
-  static constexpr int SlotsPerRingProcess = 1;
-  static constexpr int RingFifoSlots = ncclGenkRingLL128FifoSlots;
+  static constexpr int SlicesPerRingChunk = 1;
+  static constexpr int RingFifoSlices = ncclGenkRingLL128FifoSlices;
   static constexpr size_t RingChannelWireBytes = ncclGenkRingLL128ChannelWireBytes;
   static constexpr size_t TreeChannelWireBytes = ncclGenkTreeLL128ChannelWireBytes;
   static constexpr size_t RingChunkPayloadBytes = ncclGenkRingLL128ChunkPayloadBytes;
@@ -96,7 +96,7 @@ template <ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE ncclFlowConfig<0> ncclGenkRingLsaConfig(ncclGenkDevComm const& genk) {
   using Traits = ncclGenkProtocolTraits<Protocol>;
   return {ncclGetResourceBuffer(genk.devComm, Traits::ringBuffer(genk)),
-          ncclGetResourceBuffer(genk.devComm, genk.connState), Traits::RingChannelWireBytes, Traits::RingFifoSlots,
+          ncclGetResourceBuffer(genk.devComm, genk.connState), Traits::RingChannelWireBytes, Traits::RingFifoSlices,
           ncclGenkRingConnections};
 }
 
@@ -109,7 +109,7 @@ template <ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE ncclFlowConfig<0> ncclGenkTreeLsaConfig(ncclGenkDevComm const& genk) {
   using Traits = ncclGenkProtocolTraits<Protocol>;
   return {ncclGetResourceBuffer(genk.devComm, Traits::treeBuffer(genk)), ncclGenkTreeConnState(genk),
-          Traits::TreeChannelWireBytes, ncclGenkTreeFifoSlots, ncclGenkTreeConnections};
+          Traits::TreeChannelWireBytes, ncclGenkTreeFifoSlices, ncclGenkTreeConnections};
 }
 
 #if !defined(NCCL_OS_WINDOWS)
@@ -127,7 +127,7 @@ NCCL_DEVICE_INLINE ncclFlowConfig<GinBackendMask> ncclGenkRingGinConfig(ncclGenk
   return {ncclGetResourceBuffer(comm, Traits::ringBuffer(genk)),
           ncclGetResourceBuffer(comm, genk.connState),
           Traits::RingChannelWireBytes,
-          Traits::RingFifoSlots,
+          Traits::RingFifoSlices,
           ncclGenkRingConnections,
           ncclTeamWorld(comm),
           genk.ginSignal0,
@@ -151,7 +151,7 @@ NCCL_DEVICE_INLINE ncclFlowConfig<GinBackendMask> ncclGenkTreeGinConfig(ncclGenk
   return {ncclGetResourceBuffer(comm, Traits::treeBuffer(genk)),
           ncclGenkTreeConnState(genk),
           Traits::TreeChannelWireBytes,
-          ncclGenkTreeFifoSlots,
+          ncclGenkTreeFifoSlices,
           ncclGenkTreeConnections,
           ncclTeamWorld(comm),
           genk.ginSignal0 + 2 * genk.nResourceChannels * ncclGenkRingConnections,

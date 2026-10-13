@@ -11,7 +11,6 @@
 #include "ptr__types.h"
 #ifdef __CUDACC__
 #include "nccl_device/gin/gin_device_api.h"
-#include <new>
 
 namespace nccl {
 namespace gin {
@@ -108,32 +107,26 @@ NCCL_DEVICE_INLINE ncclResult_t waitRollingLessEq(ncclGinOffsetPtr ref, uint64_t
 #endif // __CUDACC__
 
 #ifdef __CUDACC__
-// Common initialization helper for GIN backend
-template <typename GinType>
-NCCL_DEVICE_INLINE void ncclGinInitCommon(GinType* gin, ncclDevComm const& comm, int contextIndex) {
-  gin->nConnections = comm.ginConnectionCount;
-
-  static_assert(NCCL_GIN_MAX_CONNECTIONS == 4, "Required for following modulo hack to work.");
-  // this->connectionId = contextIndex % comm.ginConnectionCount;
-  gin->connectionId = comm.ginConnectionCount == 3 ? uint32_t(contextIndex) % 3 // 3 is only non power of 2
-                                                     :
-                                                     contextIndex & (comm.ginConnectionCount - 1); // powers of 2
-  // gin->contextId = contextIndex / comm.ginConnectionCount;
-  gin->contextId = comm.ginConnectionCount == 3 ?
-                     uint32_t(contextIndex) / 3 // 3 is only non power of 2
-                     :
-                     contextIndex >> (comm.ginConnectionCount == 4 ? 2 : comm.ginConnectionCount - 1); // powers of 2
-
-  gin->_ginBackend = comm.ginNetDeviceTypes[gin->connectionId];
-  gin->_ginHandle = comm.ginHandles[gin->connectionId];
-  gin->_signalShadows = comm.ginSignalShadows + contextIndex * comm.ginSignalCount;
-}
-
 template <unsigned beMask>
 NCCL_DEVICE_INLINE ncclGin_BackendMask<beMask>::ncclGin_BackendMask(ncclDevComm const& comm, int contextIndex,
                                                                     ncclGinResourceSharingMode resourceSharingMode_)
   : comm(comm), resourceSharingMode(resourceSharingMode_) {
-  ncclGinInitCommon(this, comm, contextIndex);
+  this->nConnections = comm.ginConnectionCount;
+
+  static_assert(NCCL_GIN_MAX_CONNECTIONS == 4, "Required for following modulo hack to work.");
+  // this->connectionId = contextIndex % comm.ginConnectionCount;
+  this->connectionId = comm.ginConnectionCount == 3 ? uint32_t(contextIndex) % 3 // 3 is only non power of 2
+                                                      :
+                                                      contextIndex & (comm.ginConnectionCount - 1); // powers of 2
+  // this->contextId = contextIndex / comm.ginConnectionCount;
+  this->contextId = comm.ginConnectionCount == 3 ?
+                      uint32_t(contextIndex) / 3 // 3 is only non power of 2
+                      :
+                      contextIndex >> (comm.ginConnectionCount == 4 ? 2 : comm.ginConnectionCount - 1); // powers of 2
+
+  this->_ginBackend = comm.ginNetDeviceTypes[this->connectionId];
+  this->_ginHandle = comm.ginHandles[this->connectionId];
+  this->_signalShadows = comm.ginSignalShadows + contextIndex * comm.ginSignalCount;
 }
 
 #endif

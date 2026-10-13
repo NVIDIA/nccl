@@ -70,7 +70,6 @@ enum ncclGinResourceSharingMode : uint8_t {
 };
 
 struct ncclGinCtx {
-  unsigned backendMask;
   ncclNetDeviceType backend;
   int rank;
   int nRanks;
@@ -210,8 +209,8 @@ struct ncclGinApi_BarrierOptions {
 #endif
 
 #ifdef __CUDACC__
-template <template <ncclNetDeviceType> typename ApiFn, typename... Arg>
-NCCL_DEVICE_INLINE static decltype(auto) ncclGinCallImpl(unsigned beMask, ncclGinCtx ctx, Arg&&... arg) {
+template <template <ncclNetDeviceType> typename ApiFn, unsigned beMask, typename... Arg>
+NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx_M<beMask> ctx, Arg&&... arg) {
   bool singleton = (beMask & (beMask - 1)) == 0;  // Only one bit set
   switch (singleton ? __popc(beMask - 1) : (int)ctx.backend) {
 #if NCCL_GIN_PROXY_ENABLE
@@ -239,15 +238,6 @@ NCCL_DEVICE_INLINE static decltype(auto) ncclGinCallImpl(unsigned beMask, ncclGi
   }
 }
 
-template <template <ncclNetDeviceType> typename ApiFn, typename... Arg>
-NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx ctx, Arg&&... arg) {
-  return ncclGinCallImpl<ApiFn>(ctx.backendMask, ctx, static_cast<Arg&&>(arg)...);
-}
-
-template <template <ncclNetDeviceType> typename ApiFn, unsigned beMask, typename... Arg>
-NCCL_DEVICE_INLINE static decltype(auto) ncclGinCall(ncclGinCtx_M<beMask> ctx, Arg&&... arg) {
-  return ncclGinCallImpl<ApiFn>(beMask, ctx, static_cast<Arg&&>(arg)...);
-}
 #endif
 
 #endif

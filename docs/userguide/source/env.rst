@@ -978,7 +978,7 @@ A path to a file which will be created or overwritten.
 
 The dumped file reflects the topology as seen by NCCL. For multi-node NVLink systems, the file
 contains the topology from all the hosts that are part of the same NVLink domain. This file is
-useful for debugging and inspection, but should be reduced to a sigle host before use with
+useful for debugging and inspection, but should be reduced to a single host before use with
 ``NCCL_TOPO_FILE`` (see the notes above).
 
 
@@ -1590,7 +1590,7 @@ The default behavior enables all supported algorithms: equivalent to
 otherwise.
 
 (since 2.24) The accepted values are expanded to allow more flexibility,
-just as decribed for ``NCCL_ALGO`` above, allowing the user to specify
+just as described for ``NCCL_ALGO`` above, allowing the user to specify
 protocols for each function.
 
 NCCL_NVB_DISABLE
@@ -1642,7 +1642,7 @@ NCCL_RUNTIME_CONNECT
 --------------------
 (since 2.22)
 
-Dynamically connect peers during runtime (e.g., calling `ncclAllreduce()`) instead of init stage.
+Dynamically connect peers during runtime (e.g., calling `ncclAllReduce()`) instead of init stage.
 
 Value accepted
 ^^^^^^^^^^^^^^
@@ -1722,7 +1722,7 @@ NCCL_GRAPH_MIXING_SUPPORT
 -------------------------
 (since 2.13)
 
-Enable/disable support for multiple outstanding NCCL calls from parallel CUDA graphs or a CUDA graph and non-captured NCCL calls. NCCL calls are considered outstanding starting from their host-side launch (e.g., a call to `ncclAllreduce()` for non-captured calls or `cudaGraphLaunch()` for captured calls) and ending when the device kernel execution completes. With graph mixing support disabled, the following use cases are NOT supported:
+Enable/disable support for multiple outstanding NCCL calls from parallel CUDA graphs or a CUDA graph and non-captured NCCL calls. NCCL calls are considered outstanding starting from their host-side launch (e.g., a call to `ncclAllReduce()` for non-captured calls or `cudaGraphLaunch()` for captured calls) and ending when the device kernel execution completes. With graph mixing support disabled, the following use cases are NOT supported:
 
 1. Using a NCCL communicator (or split-shared communicators) from parallel graph launches, where parallel means on different streams without dependencies that would serialize their execution.
 

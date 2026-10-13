@@ -57,11 +57,11 @@ typedef struct {
   int thread_id;
   int num_gpus;
   ncclUniqueId commId;
-  ncclComm_t *comms;
+  ncclComm_t* comms;
 } threadData_t;
 
-void *thread_worker(void *arg) {
-  threadData_t *data = (threadData_t *)arg;
+void* thread_worker(void* arg) {
+  threadData_t* data = (threadData_t*)arg;
   int thread_id = data->thread_id;
   cudaStream_t stream;
 
@@ -92,12 +92,12 @@ void *thread_worker(void *arg) {
   // Query Communicator Properties
   // =========================================================================
   // Verify the communicator was created correctly
-  int comm_thread_id, comm_size;
-  NCCLCHECK(ncclCommUserRank(data->comms[thread_id], &comm_thread_id));
+  int comm_rank, comm_size;
+  NCCLCHECK(ncclCommUserRank(data->comms[thread_id], &comm_rank));
   NCCLCHECK(ncclCommCount(data->comms[thread_id], &comm_size));
 
-  printf("  Thread %d: Communicator thread_id %d of %d\n", thread_id,
-         comm_thread_id, comm_size);
+  printf("  Thread %d: Communicator rank %d of %d\n", thread_id,
+         comm_rank, comm_size);
 
   // Synchronize CUDA stream to ensure all GPU work is complete
   if (stream != NULL) {
@@ -112,7 +112,7 @@ void *thread_worker(void *arg) {
   if (data->comms[thread_id] != NULL) {
     NCCLCHECK(ncclCommFinalize(data->comms[thread_id]));
     NCCLCHECK(ncclCommDestroy(data->comms[thread_id]));
-    printf("  Thread %d: Destroyed NCCL communicator\n", comm_thread_id);
+    printf("  Thread %d: Destroyed NCCL communicator\n", thread_id);
   }
 
   // Now destroy CUDA stream

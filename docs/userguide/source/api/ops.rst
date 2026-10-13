@@ -26,5 +26,5 @@ ncclRedOpDestroy
 .. c:function:: ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm)
 
 Destroys the reduction operator *op*. The operator must have been created by
-ncclRedOpCreatePreMul with the matching communicator *comm*. An operator may be
+ncclRedOpCreatePreMulSum with the matching communicator *comm*. An operator may be
 destroyed as soon as the last NCCL function which is given that operator returns.

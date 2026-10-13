@@ -81,7 +81,7 @@ The NCCL Device API enables GPU kernels to perform inter-GPU communication direc
 ```c
 ncclDevComm devComm;
 ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
-reqs.lsaBarrierCount = numBlocks;  // One barrier per thread block
+reqs.lsaBarrierCount = NCCL_DEVICE_CTA_COUNT;  // One barrier per thread block
 
 // Create device communicator
 ncclDevCommCreate(comm, &reqs, &devComm);
@@ -91,7 +91,7 @@ ncclDevCommCreate(comm, &reqs, &devComm);
 
 The device API requires symmetric memory windows registered with
 `NCCL_WIN_COLL_SYMMETRIC`. See the [symmetric memory
-example](../../05_symmetric_memory/) for allocation and requirements details.
+example](../../../05_symmetric_memory/) for allocation and requirements details.
 
 ```c
 ncclWindow_t send_win, recv_win;
@@ -136,7 +136,7 @@ within the LSA team:
 
 ```cpp
 // Access peer memory directly using LSA (Load/Store Accessible) pointers
-float* peerPtr = (float*)ncclGetLsaPointer(sendwin, sendoffset, peer);
+float* sendPtr = (float*)ncclGetLsaPointer(sendwin, sendoffset, peer);
 ```
 
 ### Key advantages

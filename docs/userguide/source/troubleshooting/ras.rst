@@ -289,7 +289,7 @@ Most of the fields should be fairly self-explanatory, with the possible exceptio
   ``cuda_dev`` may not be unique among ranks on a single node, whereas ``nvml_dev`` always is).
 * ``init_state``: ``0`` (`ncclSuccess`) if a rank is fully initialized, ``7`` (`ncclInProgress`) if initialization is
   still ongoing; any other value indicates an error.
-* ``async_error``: the value that would be returned if the rank called `ncclGetAsyncError`.
+* ``async_error``: the value that would be returned if the rank called `ncclCommGetAsyncError`.
 * ``unresponsive``: `true` if RAS was unable to reach the rank when collecting data -- this is the most common
   reason why a rank would be considered missing.  There are, however, corner cases during communicator initialization
   and termination when a process may be reachable but does not consider itself to be a member of a given communicator.

@@ -29,16 +29,22 @@ ncclResult_t ncclGpuGetCliqueIds(CUdevice dev, uint32_t* unicastId, uint32_t* mu
   }
 
   size_t count = 0;
-  CUCHECK(cuDeviceGetCliqueCount(&count, dev));
-  if (count == 0) {
-    WARN("CUDA did not report clique information for device %d", dev);
-    return ncclInternalError;
+  CUresult cuRet = CUPFN(cuDeviceGetCliqueCount(&count, dev));
+  if (cuRet != CUDA_SUCCESS || count == 0) {
+    INFO(NCCL_INIT, "CUDA did not report clique information for device %d (cuDeviceGetCliqueCount returned %d)", dev,
+         cuRet);
+    return ncclSuccess;
   }
 
   ncclResult_t ret = ncclSuccess;
   CUcliqueInfo* cliqueInfo = nullptr;
   NCCLCHECKGOTO(ncclCalloc(&cliqueInfo, count), ret, exit);
-  CUCHECKGOTO(cuDeviceGetCliqueInfo(cliqueInfo, &count, dev), ret, exit);
+  cuRet = CUPFN(cuDeviceGetCliqueInfo(cliqueInfo, &count, dev));
+  if (cuRet != CUDA_SUCCESS) {
+    INFO(NCCL_INIT, "CUDA did not report clique information for device %d (cuDeviceGetCliqueInfo returned %d)", dev,
+         cuRet);
+    goto exit;
+  }
   for (size_t i = 0; i < count; i++) {
     if (cliqueInfo[i].type == CU_CLIQUE_TYPE_UNICAST_LOGICAL_ENDPOINT) *unicastId = cliqueInfo[i].id;
     if (cliqueInfo[i].type == CU_CLIQUE_TYPE_MULTICAST_LOGICAL_ENDPOINT) *multicastId = cliqueInfo[i].id;
@@ -108,19 +114,16 @@ ncclResult_t computeCftSizes(struct ncclComm* comm, int* cftSize, int* cftMcSize
   if (comm->gpuCftSupport >= 13040) {
     int ucCliqueSize = computeCftCliqueSize(comm, /*multicast=*/false);
     int mcCliqueSize = comm->gpuCftMulticastSupport ? computeCftCliqueSize(comm, /*multicast=*/true) : 1;
-    if (ucCliqueSize == 0 || mcCliqueSize == 0) {
-      WARN("CUDA did not report the logical-endpoint clique information required by CFT");
-      return ncclInternalError;
-    }
+    if (ucCliqueSize != 0 && mcCliqueSize != 0) {
+      if (ucCliqueSize % lsaSize != 0 || ucCliqueSize % mcCliqueSize != 0) {
+        WARN("CUDA logical-endpoint clique sizes are incompatible with the CFT hierarchy: UC %d, MC %d, LSA %d",
+             ucCliqueSize, mcCliqueSize, lsaSize);
+        return ncclInternalError;
+      }
 
-    if (ucCliqueSize % lsaSize != 0 || ucCliqueSize % mcCliqueSize != 0) {
-      WARN("CUDA logical-endpoint clique sizes are incompatible with the CFT hierarchy: UC %d, MC %d, LSA %d",
-           ucCliqueSize, mcCliqueSize, lsaSize);
-      return ncclInternalError;
-    }
-
-    *cftSize = ucCliqueSize;
-    *cftMcSize = mcCliqueSize;
+      *cftSize = ucCliqueSize;
+      *cftMcSize = mcCliqueSize;
+    } // else: fallback to the LSA sizes
   }
 
   if (ncclParamCftUcTeamSize() > 0) *cftSize = ncclParamCftUcTeamSize();

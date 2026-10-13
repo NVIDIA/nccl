@@ -1191,6 +1191,11 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     "INCOMPLETE,ERROR,MISMATCH"
   };
 
+  // The local init may have failed, in which case the collective carries an empty local response
+  // (coll->data == nullptr); present it as zero communicators.
+  struct rasCollComms emptyData = {};
+  if (commsData == nullptr) commsData = &emptyData;
+
   TRACE(NCCL_RAS, "RAS: rasClientRunComms: starting");
   TRACE(NCCL_RAS, "RAS: coll nLegTimeouts %d, nPeers %d, nData %d; commsData nComms %d", coll->nLegTimeouts,
         coll->nPeers, coll->nData, commsData->nComms);

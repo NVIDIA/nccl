@@ -40,6 +40,7 @@ The GIN **CPU Proxy** backend has the following requirements:
 
 * NVIDIA NICs: CX4 or newer
 * GPUDirect RDMA with the internal plugin:
+
   * If using DMA-BUF, rdma-core >= 34.0.
   * If using nvidia-peermem, Mellanox OFED >= 5.0 or DOCA.
 
@@ -47,6 +48,7 @@ The GIN **GDAKI** backend has the following requirements:
 
 * NVIDIA NICs: CX4 or newer. rdma-core >= 44.0
 * GPU Direct RDMA:
+
   * If using DMA-BUF, linux kernel >= 6.1.
   * If using nvidia-peermem on baremetal, linux kernel >= 5.12 and either Mellanox OFED or DOCA driver.
   * If using nvidia-peermem on virtualized environments, linux kernel >= 6.1 and either Mellanox OFED or DOCA driver.

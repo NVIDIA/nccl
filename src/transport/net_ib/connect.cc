@@ -445,18 +445,22 @@ static ncclResult_t ncclIbReceiverQpCreate(struct ncclIbDev* ibDev, struct ncclI
     std::lock_guard<std::mutex> lock(ibDev->mutex);
     reduced = ibDev->ctsInlineReduced;
   }
+  uint32_t groupInline = NCCL_NET_IB_MAX_RECVS * sizeof(struct ncclIbSendFifo);
   if (!reduced) {
-    createQpAttrs->maxInlineData = NCCL_NET_IB_MAX_RECVS * sizeof(struct ncclIbSendFifo);
+    createQpAttrs->maxInlineData = groupInline;
     ncclResult_t res;
     NOWARN(res = ncclIbQpCreate(qp, createQpAttrs), NCCL_NET);
     if (res == ncclSuccess) return ncclSuccess;
+  }
+  // The retry differs only in the inline request, so failing it too means the error is not the group-sized request.
+  createQpAttrs->maxInlineData = sizeof(struct ncclIbSendFifo);
+  NCCLCHECK(ncclIbQpCreate(qp, createQpAttrs));
+  if (!reduced) {
     INFO(NCCL_NET, "NET/IB: %s refused %u bytes of inline data, grouped CTS will not be inline on this device",
-         ibDev->devName, createQpAttrs->maxInlineData);
+         ibDev->devName, groupInline);
     std::lock_guard<std::mutex> lock(ibDev->mutex);
     ibDev->ctsInlineReduced = true;
   }
-  createQpAttrs->maxInlineData = sizeof(struct ncclIbSendFifo);
-  NCCLCHECK(ncclIbQpCreate(qp, createQpAttrs));
   return ncclSuccess;
 }
 

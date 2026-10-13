@@ -240,6 +240,52 @@ CFT Operations
       *hasReport* is set to ``true`` and *report* is set to an error code that can be decoded via
       the ``cudaFabricOpErrorStatusGet/Count``.
 
+.. _cft_counted_operations:
+
+   .. cpp:function:: void putCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, void* smemSource, uint32_t bytes)
+
+      Initiates an asynchronous transfer of *bytes* bytes from the shared memory buffer referenced by *smemSource*
+      to the unicast logical endpoint referenced by *leId* at offset *leOffset*. *counterOffset* represents an offset,
+      within the destination logical endpoint, referencing a user-managed counter in the symmetric window. The 
+      symmetric window must be registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag. The user-managed counter is
+      incremented by the number of written bytes after data has settled in the destination rank's global memory. 
+
+   .. cpp:function:: void putMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, void* smemSource, uint32_t bytes)
+
+      Multicast variant of :cpp:func:`ncclCft::putCounted` where *leId* references a logical endpoint for which the symmetric
+      window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the :c:macro:`NCCL_CFT_MULTIMEM` bit was set in the
+      :c:macro:`cftCaps` bitmask at device communicator creation time.
+
+   .. cpp:function:: void redCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, RedOp const& red, void* smemSource, uint32_t bytes)
+
+      Initiates an asynchronous reduction operation (see :ref:`cft_reduction_operators` for reduction tags and data types) for *bytes* bytes
+      from the shared memory buffer referenced by *smemSource* to the unicast logical endpoint referenced by *leId* at offset *leOffset*.
+      *counterOffset* represents an offset, within the destination logical endpoint, referencing a user-managed counter in the counted symmetric
+      window. The counted window must be registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag. The user-managed counter is incremented by
+      the number of written bytes after data has settled in the destination rank's global memory.
+
+   .. cpp:function:: void redMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, RedOp const& red, void* smemSource, uint32_t bytes)
+
+      Multicast variant of :cpp:func:`ncclCft::redCounted` where *leId* references a logical endpoint for which the symmetric
+      window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the :c:macro:`NCCL_CFT_MULTIMEM` bit was set in the
+      :c:macro:`cftCaps` bitmask at device communicator creation time.
+
+   .. cpp:function:: void waitCounted(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer, uint64_t* counter, size_t expected, uint32_t* abortFlag)
+
+      Makes all threads in *coop* wait for *counter* to reach the *expected* value. *order* dictates the semantics
+      used to order memory accesses from the *consumer* proxy after the wait. *counter* is a VA pointer referencing
+      a user-managed counter in the symmetric window. *expected* indicates the number of bytes that the wait expects
+      the *counter* to reach before returning control to the caller. *abortFlag* allows the wait to be aborted and
+      users should pass ``nullptr`` for now.
+
+   .. cpp:function:: ncclResult_t waitCounted(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer, uint64_t* counter, size_t expected, uint64_t timeoutCycles)
+
+      Makes all threads in *coop* wait for *counter* to reach the *expected* value. *order* dictates the semantics
+      used to order memory accesses from the *consumer* proxy after the wait. *counter* is a VA pointer referencing
+      a user-managed counter in the symmetric window. *expected* indicates the number of bytes that the wait expects
+      the *counter* to reach before returning control to the caller. *timeoutCycles* allows the wait to be interrupted
+      after the specified number of cycles has elapsed. If the wait is interrupted, the *ncclTimeout* code is returned.
+
 ``smemSource`` and ``smemDestination`` pointers must be 16-byte aligned, and ``bytes`` must be a multiple of 16.
 CFT operates on shared memory; a typical kernel stages data through shared memory, issues one or more operations,
 then calls :cpp:func:`ncclCft::submit` and :cpp:func:`ncclCft::flush` or :cpp:func:`ncclCft::flushSmem`

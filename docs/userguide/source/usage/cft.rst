@@ -131,6 +131,79 @@ For multicast CFT barriers, create the device communicator with
 :c:macro:`NCCL_CFT_MULTIMEM` and pass ``multimem=true`` to the barrier session
 constructor.
 
+CFT Counted Operations
+======================
+
+Counted operations (see :ref:`CFT counted operations <cft_counted_operations>`) enable latency optimized communication
+by removing the 'data + memory fence + flag update' synchronization pattern used in CFT put/red.
+In CFT counted operations, the flag is replaced by a user-managed counter in symmetric memory,
+appropriately registered with a CFT counted window (i.e., a window created with the :c:macro:`NCCL_WIN_CFT_COUNTED`
+flag). The counter update is ordered after the data, so that observing the counter update guarantees that the data can
+be accessed. Memory fencing between counter and data access at the destination is needed.
+
+Like other CFT operations, shared and global memory operands must be 16-byte aligned and the size of the counted operation
+must be a multiple of 16 bytes. The user-managed counter in global memory should be 256-byte aligned, for best performance.
+The number of concurrently active counters per GPU should not exceed 32, for best performance.
+
+The following example code shows how the user-managed counter should be allocated and registered with the symmetric memory
+window, and how it is used in a counted put operation. It is important to note that the initiator of the put computes the
+counter offset from the ``leOffset``, while the recepient uses the counter's VA pointer to poll for updates using
+``waitCounted``. It should also be noticed that ``waitCounted`` is a convenience API providing cooperative thread
+synchronization, memory ordering between counter updates and data accesses, and aborts/timeouts handling. Users can implement
+their own checks at the recipient rank, provided that they handle all the aforementioned requirements.
+
+
+.. code-block:: C
+
+   // Host Code
+   size_t dataCount = 4;
+   size_t dataSize = ALIGN_UP(dataCount * sizeof(float), /*alignment*/size_t(16u));
+   size_t counterSize = ALIGN_UP(/*counter*/sizeof(uint64_t), /*alignment*/size_t(256u));
+   size_t memSize = dataSize + counterSize;
+   void* buffer;
+   ncclMemAlloc(&buffer, memSize);
+
+   ncclWindow_t win;
+   ncclCommWindowRegister(comm, buffer, memSize, &win, NCCL_WIN_COLL_SYMMETRIC | NCCL_WIN_CFT_COUNTED);
+
+   ncclDevComm devComm;
+   ncclDevCommRequirements reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+   reqs.cftCaps = NCCL_CFT;
+   cftCountedKernel<<</*ctas*/1, /*threads*/512, /*smemBytes*/dataSize>>>(devComm, win, dataCount);
+   
+   // Device Code
+   __global__ void cftCountedKernel(ncclDevComm devComm, ncclWindow_t win, size_t count) {
+     ncclCoopCta coop;
+     ncclTeam team = ncclTeamCft(devComm);
+     
+     // Get local counter pointer
+     size_t dataSize = dataCount * sizeof(float);
+     float* buf = (float*)ncclGetLocalPointer(win, /*offset*/0);
+     uintptr_t base = reinterpret_cast<uintptr_t>(buf);
+     uintptr_t end = ALIGN_UP(base, uintptr_t(16u)) + uintptr_t(dataSize);
+     uintptr_t counterAddr = ALIGN_UP(end, uintptr_t(256u));
+     uint64_t* counterPtr = reinterpret_cast<uint64_t*>(counterAddr);
+
+     extern __shared__ alignas(16) unsigned char smemScratch[];
+     float* smem = reinterpret_cast<float*>(smemScratch);
+     smem[0] = smem[1] = smem[2] = smem[3] = 1.0f;
+     __shared__ ncclCftSmem cftSmem;
+     ncclCft<ncclCoopCta> cft { coop, cftSmem };
+
+     if (team.rank == 0) {
+       ncclCftLeId leId;
+       size_t leOffset;
+       ncclGetCftLeInfo(win, /*offset*/0, /*peer*/1, team, devComm, &leId, &leOffset);
+       size_t dataOffset = ALIGN_UP(leOffset, size_t(16u));
+       size_t counterOffset = ALIGN_UP(dataOffset + dataSize, size_t(256u));
+       cft.putCounted(coop, leId, dataOffset, counterOffset, smem, /*bytes*/dataSize);
+       cft.submit(coop);
+       cft.flush(coop);
+     } else /*if (team.rank == 1)*/ {
+       cft.waitCounted(coop, cuda::memory_order_acquire, ncclMemProxyType::Generic, counterPtr, /*bytes*/dataSize, nullptr);
+     }
+   }
+
 Examples
 ========
 

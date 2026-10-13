@@ -69,6 +69,8 @@ ncclGin
       type :c:enumerator:`NCCL_GIN_CONNECTION_RAIL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_RAIL>`, *peer* must be within the same rail team as the local rank.
       *bufType* specifies the physical memory composition of the source and destination buffers (see
       :ref:`devapi_segment_types`); it defaults to ``ncclGin_SegmentDevice``.
+      *optFlags* is a bitwise OR of optional flags to the backend (see :ref:`gin_opt_flags`); it defaults to
+      ``ncclGinOptFlagsDefault``.
 
    .. cpp:function:: void flush(Coop coop, cuda::memory_order ord = cuda::memory_order_acquire)
 

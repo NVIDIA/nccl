@@ -104,12 +104,9 @@ NOTE: In general we discourage the use of these variables in production since a 
 
   NCCL_MIN_CTAS, NCCL_MAX_CTAS - Increasing the number of CTAs will consume more GPU resources but possibly increase throughput.
 
-  NCCL_CHUNK_SIZE - Controls the size of messages sent through the network for ncclSend/ncclRecv and AlltoAll operations.
-                    Increasing this number may help improve bandwidth in latency-bound cases.
-
-  NCCL_IB_QPS_PER_CONNECTION - This controls the number of QPs per connection. The default value is 1. However, on
-                               systems with ECMP routing enabled or multiple ports per NIC, increasing this value
-                               can improve path diversity on the network and increase throughput.
+  NCCL_BUFFSIZE - Controls the size of internal communication buffers, in bytes.
+                  Increasing this value may improve bandwidth on high-latency networks at the cost of GPU memory.
+                  Smaller buffers may improve performance on some PCIe topologies
 
   NCCL_CROSS_NIC - This controls whether NCCL allows rings and trees to use different NICs, causing inter-node
                    communication to use different NICs on different nodes. Forcing cross-NIC communication may
@@ -119,7 +116,8 @@ NOTE: In general we discourage the use of these variables in production since a 
 RoCE considerations
 --------------------
 
-On RoCE fabric, using multiple QPs per connection is often necessary to achieve optimal performance.
+On RoCE networks, using multiple QPs per connection may be necessary to saturate the network.
+Set ``NCCL_IB_QPS_PER_CONNECTION`` to a value greater than 1 to enable multiple QPs per connection.
 
 .. _cpu_memory_affinity:
 

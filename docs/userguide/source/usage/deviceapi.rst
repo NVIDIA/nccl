@@ -222,12 +222,34 @@ implemented using PTX, e.g., ``multimem.ld_reduce.global.add`` and ``multimem.st
 Thread Groups
 -------------
 
-Many functions in the device API take a thread cooperative group as input to indicate which threads within the CTA will
-take part in the operation. NCCL provides three predefined ones: ``ncclCoopThread()``, ``ncclCoopWarp()``, and (the most
-commonly used) ``ncclCoopCta()``.
+Many functions in the device API take a thread cooperative group (*coop*) as input to indicate which threads within the CTA
+take part in the operation. NCCL's coop types follow the same interface as
+`CUDA Cooperative Groups <https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#cooperative-groups>`_ --
+``thread_rank()``, ``size()``, and ``sync()`` -- so a CUDA cooperative group, or any user-defined class providing that
+interface, can be passed wherever a coop is expected. NCCL additionally provides three predefined ones:
+``ncclCoopThread()``, ``ncclCoopWarp()``, and (the most commonly used) ``ncclCoopCta()``.
 
-Users may also pass CUDA cooperative groups, or any class which provides ``thread_rank()``, ``size()``, and ``sync()``
-methods.
+**Non-collective calls.** Not every function that takes a *coop* uses all of its threads to perform the operation.
+For functions such as :cpp:func:`ncclGin::put`, :cpp:func:`ncclGin::signal`, and :cpp:func:`ncclGin::waitSignal`,
+every thread that is a member of the coop must call the function together, passing the same arguments, but only a
+single thread of the coop actually performs the operation; the other member threads simply block on
+entry and exit via ``coop.sync()``, so that the whole coop observes a consistent state before and after the call.
+This means passing a larger coop (e.g. ``ncclCoopCta()`` instead of a single thread) does **not** parallelize the
+operation itself (e.g. it will not speed up a single ``put``'s data transfer) -- its purpose is to let a warp or CTA
+synchronize around a single logical operation. ``ncclGin::put`` and similar functions (e.g. ``get``, ``putValue``,
+``signal``) default their *coop* argument to ``ncclCoopThread()``, whereas ``waitSignal`` and ``waitCounter`` take
+*coop* as a required argument instead (no default).
+
+A few functions use the coop for a different purpose: for example, :cpp:func:`ncclGin::flush` performs an acquire
+that, by default, waits for any ``put`` that is executed-before it from the calling thread's perspective (``put``
+itself performs a release). What changes with the coop argument is not which puts *can* be drained, but which
+threads establish that executed-before relationship: calling ``flush`` with a CTA-wide coop (e.g. ``ncclCoopCta()``)
+has every thread of the CTA join a ``coop.sync()`` before the drain, so puts issued by any thread of the CTA --
+including ones issued individually with ``ncclCoopThread()`` -- are guaranteed executed-before the flush. Calling
+``flush`` with ``ncclCoopThread()`` skips that cross-thread synchronization, so only puts the calling thread already
+knows to be executed-before (its own, or others made visible by some other synchronization) are guaranteed drained.
+
+Check each function's reference entry for its exact behavior.
 
 .. _devapi_teams:
 

@@ -426,7 +426,10 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
 exit:
   return ret;
 fail:
-  free(listenSock);
+  if (listenSock) {
+    (void)ncclSocketClose(listenSock);
+    free(listenSock);
+  }
   free(args);
   goto exit;
 }

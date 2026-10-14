@@ -187,6 +187,10 @@ class NcclGinConnectionType(IntEnum):
     CUSTOM_STRIDE = 3
     """Strided. Ranks must be reachable via GIN at the stride given by
     :py:attr:`NCCLDevCommRequirements.gin_custom_stride`."""
+    CUSTOM_ARRAY = 4
+    """Sparse. Ranks must be reachable via GIN only to the world ranks listed
+    in :py:attr:`NCCLDevCommRequirements.gin_custom_peers`. Each connection
+    must be requested on both sides (symmetric peer lists)."""
 
 
 class NcclHostCftMode(IntEnum):

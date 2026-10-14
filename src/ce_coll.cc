@@ -104,7 +104,7 @@ ncclResult_t ncclCeInit(struct ncclComm* comm) {
 
   uint8_t* ceDevBase = nullptr;
   // Sync window has lsaSize slots (one per LSA-local rank): one ready array + one complete array
-  size_t ceDevBaseSize = alignUp(comm->devrState.lsaSize * sizeof(uint32_t), 16) * 2;
+  size_t ceDevBaseSize = alignUp(comm->devrState.lsaTeamSize * sizeof(uint32_t), 16) * 2;
   ncclWindow_vidmem* ceWinDev = nullptr;
   ncclWindow_vidmem* ceWinDevHost = nullptr;
 
@@ -120,7 +120,7 @@ ncclResult_t ncclCeInit(struct ncclComm* comm) {
   comm->ceColl.ceSyncWin = (struct ncclDevrWindow*)ceWinDevHost->winHost;
 
   comm->ceColl.baseUCSymReadyOffset = 0;
-  comm->ceColl.baseUCSymComplOffset = alignUp(comm->devrState.lsaSize * sizeof(uint32_t), 16);
+  comm->ceColl.baseUCSymComplOffset = alignUp(comm->devrState.lsaTeamSize * sizeof(uint32_t), 16);
   comm->ceColl.baseUCSymReadyPtr = (uint8_t*)comm->ceColl.ceSyncWin->userPtr + comm->ceColl.baseUCSymReadyOffset;
   comm->ceColl.baseUCSymComplPtr = (uint8_t*)comm->ceColl.ceSyncWin->userPtr + comm->ceColl.baseUCSymComplOffset;
   comm->ceColl.ceSeqNum = 0;
@@ -217,8 +217,8 @@ ncclResult_t ncclPrepMCSync(struct ncclComm* comm, bool isComplete, CUstreamBatc
                             size_t* opIdx, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
 
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   uint32_t* readyPtrs = (uint32_t*)comm->ceColl.baseUCSymReadyPtr;
   uint32_t* completePtrs = (uint32_t*)comm->ceColl.baseUCSymComplPtr;
 
@@ -267,8 +267,8 @@ ncclResult_t ncclPrepUCSync(struct ncclComm* comm, bool isComplete, CUstreamBatc
                             size_t* opIdx, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
 
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   uint32_t* readyPtrs = (uint32_t*)comm->ceColl.baseUCSymReadyPtr;
   uint32_t* completePtrs = (uint32_t*)comm->ceColl.baseUCSymComplPtr;
 
@@ -314,7 +314,7 @@ fail:
 ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream, struct ncclCeCollArgs* profilerArgs) {
   ncclResult_t ret = ncclSuccess;
   struct ncclProfilerEventRef ceSyncHandle = {};
-  int lsaSize = comm->devrState.lsaSize;
+  int lsaSize = comm->devrState.lsaTeamSize;
 
   // Get pointers to the ready and complete synchronization arrays
   uint32_t* readyPtrs = (uint32_t*)comm->ceColl.baseUCSymReadyPtr;
@@ -643,8 +643,8 @@ fail:
 // AllGather across the LSA team (intra-node only).
 ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;
   uint8_t* myRecvBuff = (uint8_t*)args->recvBuff + myLsaRank * chunkBytes;
@@ -714,8 +714,8 @@ fail:
 // AlltoAll across the LSA team (intra-node only).
 ncclResult_t ncclCeAlltoAll(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   // Calculate the size of data each rank sends to every other rank
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;
@@ -771,8 +771,8 @@ fail:
 // Scatter across the LSA team (intra-node only).
 ncclResult_t ncclCeScatter(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   // Calculate the size of data each rank sends to every other rank
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;
@@ -833,7 +833,7 @@ fail:
 // Gather across the LSA team (intra-node only).
 ncclResult_t ncclCeGather(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
-  int myLsaRank = comm->devrState.lsaSelf;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
   // Calculate the size of data each rank sends to every other rank
   const size_t chunkBytes = args->nElts * args->eltSize;
   uint8_t* mySendBuff = (uint8_t*)args->sendBuff;
@@ -1329,8 +1329,8 @@ static ncclResult_t ncclHierCeAllGatherDirect(struct ncclComm* comm, struct nccl
   int localRank = comm->localRank;
   int nNodes = comm->nNodes;
   int nRemoteNodes = nNodes - 1;
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   bool persistent = plan->persistent;
 
   struct ncclCeCollArgs* args = plan->ceCollArgs;
@@ -1776,8 +1776,8 @@ static ncclResult_t ncclHierCeAllGatherRing(struct ncclComm* comm, struct ncclKe
   int myNode = comm->node;
   int nNodes = comm->nNodes;
   int nRemoteNodes = nNodes - 1;
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   bool persistent = plan->persistent;
 
   struct ncclCeCollArgs* args = plan->ceCollArgs;
@@ -2245,8 +2245,8 @@ ncclResult_t ncclHierCeAlltoAll(struct ncclComm* comm, struct ncclKernelPlan* pl
   int myNode = comm->node;
   int nNodes = comm->nNodes;
   int localRanks = comm->localRanks;
-  int myLsaRank = comm->devrState.lsaSelf;
-  int lsaSize = comm->devrState.lsaSize;
+  int myLsaRank = comm->devrState.lsaTeamSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
   int numRemotePeers = (nNodes - 1) * localRanks;
   bool persistent = plan->persistent;
 

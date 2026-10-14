@@ -32,8 +32,8 @@ bool ncclRmaInitialized(struct ncclComm* comm) {
 }
 
 static bool isLsaAccessible(struct ncclComm* comm, int rank) {
-  for (int i = 0; i < comm->devrState.lsaSize; i++) {
-    if (comm->devrState.lsaRankList[i] == rank) {
+  for (int i = 0; i < comm->devrState.lsaTeamSize; i++) {
+    if (comm->devrState.lsaTeamRankList[i] == rank) {
       return true;
     }
   }

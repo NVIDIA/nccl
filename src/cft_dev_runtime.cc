@@ -108,7 +108,7 @@ ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport, bool* 
 }
 
 ncclResult_t computeCftSizes(struct ncclComm* comm, int* cftSize, int* cftMcSize) {
-  int lsaSize = computeLsaSize(comm);
+  int lsaSize = computeLsaTeamSize(comm);
   *cftSize = lsaSize;
   *cftMcSize = lsaSize;
   if (comm->gpuCftSupport >= 13040) {

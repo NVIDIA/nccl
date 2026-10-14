@@ -2008,7 +2008,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   // contextStride calculation
   {
-    int defaultUserStride = globalCrossNicSupport ? 1 : computeLsaSize(comm);
+    int defaultUserStride = globalCrossNicSupport ? 1 : computeLsaTeamSize(comm);
     int64_t envUserStride = ncclParamRmaRankStride();
     comm->rmaUserCtxStride =
       envUserStride != NCCL_CONFIG_UNDEF_INT ?

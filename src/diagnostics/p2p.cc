@@ -95,30 +95,12 @@ struct ncclDiagP2pMapping {
 };
 
 static ncclResult_t ncclDiagP2pBuildRankSet(struct ncclComm* comm, int** ranks, int* rank, int* nRanks) {
-  // The topology is fused over the local ranks normally and over the MNNVL clique when MNNVL is active. Cross-clique
-  // P2P expands that set to every rank in the same NVLink fabric domain.
-  if (!comm->p2pCrossClique) {
-    *ranks = comm->MNNVL ? comm->clique.ranks : comm->localRankToRank;
-    *rank = comm->MNNVL ? comm->cliqueRank : comm->localRank;
-    *nRanks = comm->MNNVL ? comm->clique.size : comm->localRanks;
-    return ncclSuccess;
-  }
-
-  if (comm->nvlDomainSize <= 0) return ncclInternalError;
-  NCCLCHECK(ncclCalloc(ranks, comm->nvlDomainSize));
-  *rank = -1;
-  *nRanks = comm->nvlDomainSize;
-  int slot = 0;
-  for (int peer = 0; peer < comm->nRanks; peer++) {
-    if (memcmp(comm->peerInfo[comm->rank].fabricInfo.clusterUuid, comm->peerInfo[peer].fabricInfo.clusterUuid,
-               sizeof(comm->peerInfo[comm->rank].fabricInfo.clusterUuid)) != 0)
-      continue;
-    if (slot == *nRanks) return ncclInternalError;
-    (*ranks)[slot] = peer;
-    if (peer == comm->rank) *rank = slot;
-    slot++;
-  }
-  return *rank >= 0 && slot == *nRanks ? ncclSuccess : ncclInternalError;
+  NCCLCHECK(ncclDevrInitOnce(comm));
+  struct ncclDevrState* devr = &comm->devrState;
+  *ranks = devr->lsaDomainRankList;
+  *rank = devr->lsaDomainSelf;
+  *nRanks = devr->lsaDomainSize;
+  return *ranks != nullptr && *rank >= 0 && *rank < *nRanks ? ncclSuccess : ncclInternalError;
 }
 
 static int ncclDiagP2pRankToSlot(const int* ranks, int nRanks, int rank) {
@@ -959,7 +941,6 @@ fail:
          cleanupRet);
   }
   ret = runRet == ncclSuccess ? cleanupRet : runRet;
-  if (comm->p2pCrossClique) free(p2pRanks);
   free(edgeMatrix);
   free(setupResults);
   free(summaries);

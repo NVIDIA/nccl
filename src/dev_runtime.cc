@@ -141,20 +141,53 @@ static void listRemove(Obj* list, int* count, int index);
 
 ////////////////////////////////////////////////////////////////////////////////
 
+static ncclResult_t initLsaDomainData(struct ncclComm* comm) {
+  struct ncclDevrState* devr = &comm->devrState;
+
+  if (!comm->p2pCrossClique) {
+    int* ranks;
+    if (comm->MNNVL) {
+      ranks = comm->clique.ranks;
+      devr->lsaDomainSelf = comm->cliqueRank;
+      devr->lsaDomainSize = comm->clique.size;
+    } else {
+      ranks = comm->localRankToRank;
+      devr->lsaDomainSelf = comm->localRank;
+      devr->lsaDomainSize = comm->localRanks;
+    }
+
+    NCCLCHECK(ncclCalloc(&devr->lsaDomainRankList, devr->lsaDomainSize));
+    memcpy(devr->lsaDomainRankList, ranks, devr->lsaDomainSize * sizeof(devr->lsaDomainRankList[0]));
+  } else {
+    devr->lsaDomainSize = comm->nvlDomainSize;
+    NCCLCHECK(ncclCalloc(&devr->lsaDomainRankList, devr->lsaDomainSize));
+    int slot = 0;
+    for (int peer = 0; peer < comm->nRanks; peer++) {
+      if (memcmp(comm->peerInfo[comm->rank].fabricInfo.clusterUuid, comm->peerInfo[peer].fabricInfo.clusterUuid,
+                 sizeof(comm->peerInfo[0].fabricInfo.clusterUuid)) != 0)
+        continue;
+      devr->lsaDomainRankList[slot] = peer;
+      if (peer == comm->rank) devr->lsaDomainSelf = slot;
+      slot++;
+    }
+  }
+  return ncclSuccess;
+}
+
 NCCL_PARAM(LsaTeamSize, "LSA_TEAM_SIZE", 0)
 
 // Compute the LSA team size from the comm topology without any side effects.
-int computeLsaSize(struct ncclComm* comm) {
-  if (comm->devrState.bigSize != 0) return comm->devrState.lsaSize;
+int computeLsaTeamSize(struct ncclComm* comm) {
+  if (comm->devrState.bigSize != 0) return comm->devrState.lsaTeamSize;
 
   // LSA needs to be the same size for all ranks, and it needs to represent
   // a consecutive set of ranks.
-  int lsaSize = ncclParamLsaTeamSize();
+  int lsaTeamSize = ncclParamLsaTeamSize();
   if (comm->p2pCrossClique && comm->nvlDomainSize == comm->nRanks) {
     // Single NVLD: all ranks share memory via fabric handles. Extend LSA to full domain.
     // Multi-NVLD (with potentially unequal domain sizes) is not yet supported for cross-clique LSA
-    lsaSize = comm->nRanks;
-    INFO(NCCL_INIT, "LSA extended to full NVL domain: lsaSize=%d (cross-clique P2P)", lsaSize);
+    lsaTeamSize = comm->nRanks;
+    INFO(NCCL_INIT, "LSA team extended to full NVL domain: lsaTeamSize=%d (cross-clique P2P)", lsaTeamSize);
   } else {
     // Standard node-based gcd LSA calculation
     int nodeSize = 1;
@@ -162,14 +195,14 @@ int computeLsaSize(struct ncclComm* comm) {
       if (comm->rankToNode[r] == comm->rankToNode[r - 1]) {
         nodeSize += 1;
       } else {
-        lsaSize = gcd(lsaSize, nodeSize);
+        lsaTeamSize = gcd(lsaTeamSize, nodeSize);
         nodeSize = 1;
       }
     }
-    lsaSize = gcd(lsaSize, nodeSize);
+    lsaTeamSize = gcd(lsaTeamSize, nodeSize);
   }
 
-  return lsaSize;
+  return lsaTeamSize;
 }
 
 size_t computeBigSize(struct ncclComm* comm) {
@@ -184,8 +217,8 @@ size_t computeBigSize(struct ncclComm* comm) {
 }
 
 bool ncclDevrIsOneLsaTeam(struct ncclComm* comm) {
-  int lsaSize = computeLsaSize(comm);
-  return lsaSize == comm->nRanks; // Same as comm->nRanks / comm->devrState.lsaSize == 1
+  int lsaTeamSize = computeLsaTeamSize(comm);
+  return lsaTeamSize == comm->nRanks; // Same as comm->nRanks / comm->devrState.lsaTeamSize == 1
 }
 
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
@@ -193,14 +226,16 @@ ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
   struct ncclDevrState* devr = &comm->devrState;
   if (devr->bigSize != 0) return ncclSuccess;
 
-  // LSA needs to be the same size for all ranks, and it needs to represent
-  // a consecutive set of ranks.
-  int lsaSize = computeLsaSize(comm);
+  NCCLCHECK(initLsaDomainData(comm));
+
+  // LSA team needs to be the same size for all ranks, and it needs to represent
+  // a consecutive set of ranks (unlike the just initialized LSA domain).
+  int lsaTeamSize = computeLsaTeamSize(comm);
   int cftSize = 0, cftMcSize = 0;
   NCCLCHECK(computeCftSizes(comm, &cftSize, &cftMcSize));
 
-  devr->lsaSize = lsaSize;
-  devr->lsaSelf = comm->rank % lsaSize;
+  devr->lsaTeamSize = lsaTeamSize;
+  devr->lsaTeamSelf = comm->rank % lsaTeamSize;
 
   devr->cftSize = cftSize;
   devr->cftSelf = comm->rank % devr->cftSize;
@@ -210,11 +245,8 @@ ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
 
   devr->le[0].baseId = devr->le[1].baseId = NCCL_LE_ID_INVALID;
 
-  devr->lsaRankList = (int*)malloc(devr->lsaSize * sizeof(int));
-  for (int i = 0; i < devr->lsaSize; i++) {
-    devr->lsaRankList[i] = comm->rank + (i - devr->lsaSelf);
-  }
-  devr->nLsaTeams = comm->nRanks / devr->lsaSize;
+  int lsaDomainTeamRank0 = devr->lsaDomainSelf - devr->lsaTeamSelf;
+  devr->lsaTeamRankList = devr->lsaDomainRankList + lsaDomainTeamRank0;
 
   CUmemAllocationProp memProp = {};
   memProp.type = CU_MEM_ALLOCATION_TYPE_PINNED;
@@ -232,7 +264,8 @@ ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
   return ncclSuccess;
 
 fail_lsaRankList:
-  free(devr->lsaRankList);
+  free(devr->lsaDomainRankList);
+  devr->lsaDomainRankList = nullptr;
   return ret;
 }
 
@@ -285,21 +318,22 @@ ncclResult_t ncclDevrFinalize(struct ncclComm* comm) {
 
   if (devr->lsaFlatBase != nullptr) {
     CUdeviceptr flatAddr = reinterpret_cast<CUdeviceptr>(devr->lsaFlatBase);
-    CUCHECKIGNORE(cuMemUnmap(flatAddr, comm->localRanks * devr->bigSize));
-    CUCHECKIGNORE(cuMemAddressFree(flatAddr, comm->localRanks * devr->bigSize));
+    CUCHECKIGNORE(cuMemUnmap(flatAddr, devr->lsaDomainSize * devr->bigSize));
+    CUCHECKIGNORE(cuMemAddressFree(flatAddr, devr->lsaDomainSize * devr->bigSize));
   }
   ncclShadowPoolDestruct(&devr->shadows, stream);
   CUDACHECKIGNORE(cudaStreamDestroy(stream));
   CUDACHECKIGNORE(cudaThreadExchangeStreamCaptureMode(&captureMode));
   ncclSpaceDestruct(&devr->bigSpace);
-  free(devr->lsaRankList);
+  // devr->lsaTeamRankList is part of devr->lsaDomainRankList so we don't free it separately.
+  free(devr->lsaDomainRankList);
   free(devr->winSorted);
   return ncclSuccess;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// Message layout used for local-rank all-gather (one per rank per segment).
+// Message layout used for P2P-domain all-gather (one per rank per segment).
 struct symLsaMessage {
   union {
     CUmemGenericAllocationHandle memHandle;
@@ -344,7 +378,7 @@ static ncclResult_t symMemoryImportAndMapSegmentHandle(struct ncclComm* comm, in
   } else {
     if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
       ncclIpcFd fd = NCCL_INVALID_IPC_FD;
-      NCCLCHECKGOTO(ncclProxyClientGetFdBlocking(comm, comm->localRankToRank[r], msg, &fd), ret, fail);
+      NCCLCHECKGOTO(ncclProxyClientGetFdBlocking(comm, comm->devrState.lsaDomainRankList[r], msg, &fd), ret, fail);
       CUCHECKGOTO(cuMemImportFromShareableHandle(&impHandle, reinterpret_cast<void*>((uintptr_t)fd),
                                                  ncclCuMemHandleType),
                   ret, fail);
@@ -372,7 +406,7 @@ static ncclResult_t symMemoryImportAndMapSegmentsForRank(struct ncclComm* comm, 
   for (int segment = 0; segment < numSegments; segment++) {
     symLsaMessage* msg = messages + r * maxSegments + segment;
     bool reuseLocal =
-      (r == comm->localRank) || (ncclParamSymReuseSysmemHandles() && msg->type == CU_MEM_LOCATION_TYPE_HOST_NUMA);
+      (r == devr->lsaDomainSelf) || (ncclParamSymReuseSysmemHandles() && msg->type == CU_MEM_LOCATION_TYPE_HOST_NUMA);
     CUmemGenericAllocationHandle handle = reuseLocal ? memHandles[segment] : (CUmemGenericAllocationHandle)0ULL;
     NCCLCHECKGOTO(symMemoryImportAndMapSegmentHandle(comm, r, addr, msg, handle, reuseLocal), ret, fail);
     addr += msg->segmentSize;
@@ -381,10 +415,10 @@ fail:
   return ret;
 }
 
-// The flat VA space has one bigSize slot per local rank. Slot r maps the memory exported by local rank r at
+// The flat VA space has one bigSize slot per P2P-domain rank. Slot r maps the memory exported by that rank at
 // lsaFlatBase + r * bigSize.
 //
-// The regular LSA team occupies a contiguous subrange starting at localRank-lsaSelf. Device windows bias their
+// The regular LSA team occupies a contiguous subrange starting at lsaDomainSelf-lsaTeamSelf. Device windows bias their
 // lsaFlatBase to the beginning of that subrange so ncclGetLsaPointer can use direct LSA-rank arithmetic, while
 // ncclGetPeerPointer uses lsaPeerDelta4G to convert a world rank into an offset from the base.
 static ncclResult_t symMemoryMapLsa(struct ncclComm* comm, struct ncclDevrMemory* mem) {
@@ -398,14 +432,14 @@ static ncclResult_t symMemoryMapLsa(struct ncclComm* comm, struct ncclDevrMemory
   // When LSA registration is not requested, do not import or map peer handles.
   const bool registerLsa = ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterLsa);
 
-  for (int rank = 0; rank < comm->localRanks; rank++) {
+  for (int rank = 0; rank < devr->lsaDomainSize; rank++) {
     maxSegments = std::max(maxSegments, segmentCounts[rank]);
   }
 
-  NCCLCHECKGOTO(ncclCalloc(&messages, (size_t)comm->localRanks * maxSegments), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&messages, (size_t)devr->lsaDomainSize * maxSegments), ret, fail);
 
   for (int segment = 0; segment < numSegments; segment++) {
-    symLsaMessage* msg = messages + comm->localRank * maxSegments + segment;
+    symLsaMessage* msg = messages + devr->lsaDomainSelf * maxSegments + segment;
     if (!registerLsa) {
       // The local handle is reused directly, so only its segment size is needed.
       msg->segmentSize = segmentSizes[segment];
@@ -413,36 +447,36 @@ static ncclResult_t symMemoryMapLsa(struct ncclComm* comm, struct ncclDevrMemory
       NCCLCHECKGOTO(symMemoryExportSegmentHandle(comm, msg, mem->memHandles[segment], segmentSizes[segment]), ret,
                     fail);
       INFO(NCCL_REG, "[%d] Segment %d, Type : %d, numSegments : %d, Segment size : %ld, memHandle : %lld",
-           comm->localRank, segment, msg->type, numSegments, msg->segmentSize, msg->memHandle);
+           devr->lsaDomainSelf, segment, msg->type, numSegments, msg->segmentSize, msg->memHandle);
     }
   }
 
   if (registerLsa) {
-    NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
-                                              messages, sizeof(symLsaMessage) * maxSegments),
+    NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, devr->lsaDomainRankList, devr->lsaDomainSelf,
+                                              devr->lsaDomainSize, messages, sizeof(symLsaMessage) * maxSegments),
                   ret, fail);
   }
 
   if (devr->lsaFlatBase == nullptr) {
     // Create on first need.
     CUdeviceptr addr;
-    CUCHECKGOTO(cuMemAddressReserve(&addr, comm->localRanks * devr->bigSize, NCCL_MAX_PAGE_SIZE, 0, 0), ret, fail);
+    CUCHECKGOTO(cuMemAddressReserve(&addr, devr->lsaDomainSize * devr->bigSize, NCCL_MAX_PAGE_SIZE, 0, 0), ret, fail);
     devr->lsaFlatBase = reinterpret_cast<void*>(addr);
   }
 
   if (!registerLsa) {
-    NCCLCHECKGOTO(symMemoryImportAndMapSegmentsForRank(comm, comm->localRank, messages, maxSegments, numSegments,
+    NCCLCHECKGOTO(symMemoryImportAndMapSegmentsForRank(comm, devr->lsaDomainSelf, messages, maxSegments, numSegments,
                                                        mem->memHandles, mem->bigOffset),
                   ret, fail);
   } else {
-    for (int r = 0; r < comm->localRanks; r++) {
+    for (int r = 0; r < devr->lsaDomainSize; r++) {
       NCCLCHECKGOTO(symMemoryImportAndMapSegmentsForRank(comm, r, messages, maxSegments, segmentCounts[r],
                                                          mem->memHandles, mem->bigOffset),
                     ret, fail);
     }
     // Ensure everyone has imported my mem handles.
-    NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
-                                            0xbeef),
+    NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, devr->lsaDomainRankList, devr->lsaDomainSelf,
+                                            devr->lsaDomainSize, 0xbeef),
                   ret, fail);
   }
 leave:
@@ -814,17 +848,17 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
   NCCLCHECKGOTO(ncclCalloc(&mem->segmentSizes, numSegments), ret, fail_mem);
   NCCLCHECKGOTO(ncclDevrPopulateSegmentSizes(mem, numSegments), ret, fail_mem);
 
-  NCCLCHECKGOTO(ncclCalloc(&mem->lsaNumSegments, comm->localRanks), ret, fail_mem);
+  NCCLCHECKGOTO(ncclCalloc(&mem->lsaNumSegments, devr->lsaDomainSize), ret, fail_mem);
   mem->lsaMinSize = size;
   mem->lsaMaxSize = size;
-  for (int r = 0; r < comm->localRanks; r++) {
-    int rank = comm->localRankToRank[r];
+  for (int r = 0; r < devr->lsaDomainSize; r++) {
+    int rank = devr->lsaDomainRankList[r];
     mem->lsaNumSegments[r] = globalSegmentInfo[rank].numSegments;
     mem->lsaMinSize = std::min(mem->lsaMinSize, globalSegmentInfo[rank].totalSize);
     mem->lsaMaxSize = std::max(mem->lsaMaxSize, globalSegmentInfo[rank].totalSize);
   }
 
-  // Use the max size across local ranks so every mapped rank allocates the
+  // Use the max size across P2P-domain ranks so every mapped rank allocates the
   // same extent at this offset, including for asymmetric windows.
   NCCLCHECKGOTO(ncclSpaceAlloc(&devr->bigSpace, devr->bigSize, mem->lsaMaxSize, devr->granularity, &bigOffset), ret,
                 fail_mem);
@@ -835,7 +869,7 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
 
   // If our caller doesn't have a VA then use its LSA flat mapping.
   if (mem->primaryAddr == nullptr) {
-    mem->primaryAddr = (char*)devr->lsaFlatBase + comm->localRank * devr->bigSize + mem->bigOffset;
+    mem->primaryAddr = (char*)devr->lsaFlatBase + devr->lsaDomainSelf * devr->bigSize + mem->bigOffset;
   }
 
   if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterCft) && comm->gpuCftSupport > 0) {
@@ -962,11 +996,11 @@ static void symMemoryDropRef(struct ncclComm* comm, struct ncclDevrMemory* mem) 
       symUnbindTeamLe(comm, mem, t->mcLeId[counted]);
     }
     if (ncclDevrWinRegEnabled(mem->winFlags, ncclDevrRegisterLsa)) {
-      for (int rank = 0; rank < comm->localRanks; rank++) {
+      for (int rank = 0; rank < devr->lsaDomainSize; rank++) {
         symMemoryUnmapLsaRank(devr, mem, rank);
       }
     } else {
-      symMemoryUnmapLsaRank(devr, mem, comm->localRank);
+      symMemoryUnmapLsaRank(devr, mem, devr->lsaDomainSelf);
     }
 
     ncclSpaceFree(&devr->bigSpace, mem->bigOffset, mem->lsaMaxSize);
@@ -1021,15 +1055,15 @@ static ncclResult_t symLsaPeerDelta4GInitOnce(struct ncclComm* comm, cudaStream_
   int* peerDelta4GDev = nullptr;
   int* peerDelta4GHost = nullptr;
   if (devr->lsaPeerDelta4GDev != nullptr) return ncclSuccess;
-  int lsaLocalRank0 = comm->localRank - devr->lsaSelf;
+  int lsaDomainTeamRank0 = devr->lsaDomainSelf - devr->lsaTeamSelf;
   int stride4G = devr->bigSize >> 32;
 
   NCCLCHECKGOTO(ncclShadowPoolAlloc(&devr->shadows, sizeof(int) * comm->nRanks, (void**)&peerDelta4GDev,
                                     (void**)&peerDelta4GHost, stream),
                 ret, fail);
   for (int r = 0; r < comm->nRanks; r++) peerDelta4GHost[r] = NCCL_LSA_PEER_DELTA4G_INVALID;
-  for (int r = 0; r < comm->localRanks; r++) {
-    peerDelta4GHost[comm->localRankToRank[r]] = (r - lsaLocalRank0) * stride4G;
+  for (int r = 0; r < devr->lsaDomainSize; r++) {
+    peerDelta4GHost[devr->lsaDomainRankList[r]] = (r - lsaDomainTeamRank0) * stride4G;
   }
   CUDACHECKGOTO(cudaMemcpyAsync(peerDelta4GDev, peerDelta4GHost, sizeof(int) * comm->nRanks, cudaMemcpyHostToDevice,
                                 stream),
@@ -1061,8 +1095,8 @@ static ncclResult_t symWindowCreate(struct ncclComm* comm, struct ncclDevrMemory
   win->winFlags = winFlags;
   win->localRegHandle = localReg;
   if (userPtr == nullptr) {
-    // Null means caller has no VA and will use its local-rank slot.
-    win->userPtr = userPtr = (char*)devr->lsaFlatBase + comm->localRank * devr->bigSize + mem->bigOffset;
+    // Null means caller has no VA and will use its P2P-domain slot.
+    win->userPtr = userPtr = (char*)devr->lsaFlatBase + devr->lsaDomainSelf * devr->bigSize + mem->bigOffset;
     userAddr = reinterpret_cast<uintptr_t>(userPtr);
   } else {
     win->userPtr = userPtr;
@@ -1072,12 +1106,12 @@ static ncclResult_t symWindowCreate(struct ncclComm* comm, struct ncclDevrMemory
   struct ncclWindow_vidmem* winDevHost;
   NCCLCHECK(ncclShadowPoolAlloc(&devr->shadows, &winDev, &winDevHost, stream));
   win->vidmem = winDev;
-  int lsaLocalRank0 = comm->localRank - devr->lsaSelf;
-  winDevHost->lsaFlatBase = (char*)devr->lsaFlatBase + lsaLocalRank0 * devr->bigSize + win->bigOffset;
+  int lsaDomainTeamRank0 = devr->lsaDomainSelf - devr->lsaTeamSelf;
+  winDevHost->lsaFlatBase = (char*)devr->lsaFlatBase + lsaDomainTeamRank0 * devr->bigSize + win->bigOffset;
   winDevHost->mcOffset4K = win->bigOffset >> 12;
   winDevHost->stride4G = devr->bigSize >> 32;
   winDevHost->winFlags = winFlags;
-  winDevHost->lsaRank = devr->lsaSelf;
+  winDevHost->lsaRank = devr->lsaTeamSelf;
   winDevHost->cftFlatRank = devr->cftSelf;
   winDevHost->worldRank = comm->rank;
   winDevHost->lsaPeerDelta4G = devr->lsaPeerDelta4GDev;
@@ -1459,7 +1493,7 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   ncclResult_t ret = ncclSuccess;
   struct ncclDevrState* devr = &comm->devrState;
   struct ncclTeam world = ncclTeamWorld(comm);
-  struct ncclTeam lsa = ncclTeamInnerFactor(world, devr->lsaSize);
+  struct ncclTeam lsa = ncclTeamInnerFactor(world, devr->lsaTeamSize);
   bool ginActivated = false;
   bool cftUcActivated = false;
   bool hasCountedCftMemory = symHasCountedCftMemory(devr);
@@ -1575,9 +1609,9 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
   outDevComm->rank = comm->rank;
   outDevComm->nRanks = comm->nRanks;
   outDevComm->nRanks_rcp32 = idivRcp32(comm->nRanks);
-  outDevComm->lsaRank = devr->lsaSelf;
-  outDevComm->lsaSize = devr->lsaSize;
-  outDevComm->lsaSize_rcp32 = idivRcp32(devr->lsaSize);
+  outDevComm->lsaRank = devr->lsaTeamSelf;
+  outDevComm->lsaSize = devr->lsaTeamSize;
+  outDevComm->lsaSize_rcp32 = idivRcp32(devr->lsaTeamSize);
   if (isInternal) outDevComm->abortFlag = comm->abortFlagDev;
 
   // needBarrier is ignored, the bootstrapBarrier below will barrier regardless
@@ -2030,7 +2064,7 @@ ncclResult_t ncclCommQueryProperties(ncclComm_t comm, ncclCommProperties_t* prop
     NCCLCHECK(ncclGetGinType(comm, &props->ginType));
     NCCLCHECK(ncclGetRailedGinType(comm, &props->railedGinType));
 
-    props->nLsaTeams = comm->nRanks / computeLsaSize(comm);
+    props->nLsaTeams = comm->nRanks / computeLsaTeamSize(comm);
   }
 
   if (props->version >= NCCL_VERSION(2, 31, 0)) {
@@ -2275,7 +2309,7 @@ ncclResult_t ncclDevrGetLsaRankPtr(struct ncclComm* comm, struct ncclDevrWindow*
   struct ncclDevrState* devr = &comm->devrState;
 
   // Validate lsaRank is within bounds
-  if (lsaRank < 0 || lsaRank >= devr->lsaSize) {
+  if (lsaRank < 0 || lsaRank >= devr->lsaTeamSize) {
     return ncclInvalidArgument;
   }
 
@@ -2284,10 +2318,10 @@ ncclResult_t ncclDevrGetLsaRankPtr(struct ncclComm* comm, struct ncclDevrWindow*
     return ncclInvalidArgument;
   }
 
-  // Calculate the address with offset for the specified lsa rank
-  int lsaLocalRank0 = comm->localRank - devr->lsaSelf;
-  *outPtr =
-    (void*)((uintptr_t)devr->lsaFlatBase + (lsaLocalRank0 + lsaRank) * devr->bigSize + winHost->bigOffset + offset);
+  // Calculate the address with offset for the specified lsa team rank
+  int lsaDomainTeamRank0 = devr->lsaDomainSelf - devr->lsaTeamSelf;
+  *outPtr = (void*)((uintptr_t)devr->lsaFlatBase + (lsaDomainTeamRank0 + lsaRank) * devr->bigSize + winHost->bigOffset +
+                    offset);
   return ncclSuccess;
 }
 
@@ -2330,7 +2364,8 @@ ncclResult_t ncclDevrGetLsaTeamPtrMC(struct ncclComm* comm, struct ncclDevrWindo
                           &needBarrier));
   if (needBarrier) {
     struct ncclDevrState* devr = &comm->devrState;
-    NCCLCHECK(bootstrapIntraNodeBarrier(comm->bootstrap, devr->lsaRankList, devr->lsaSelf, devr->lsaSize, 0xbeef));
+    NCCLCHECK(bootstrapIntraNodeBarrier(comm->bootstrap, devr->lsaTeamRankList, devr->lsaTeamSelf, devr->lsaTeamSize,
+                                        0xbeef));
   }
 
   // Return the base multicast address for this team with offset
@@ -2415,9 +2450,9 @@ ncclResult_t ncclGetLsaDevicePointer(ncclWindow_t window, size_t offset, int lsa
   NCCLCHECK(findCommAndHostWindowFromDeviceWindow(window, &comm, &winHost));
 
   devr = &comm->devrState;
-  if (lsaRank < 0 || lsaRank >= devr->lsaSize) {
-    WARN("The provided lsaRank %d is not in the valid lsaSize of [0,%d] for the provided window %p.", lsaRank,
-         devr->lsaSize, window);
+  if (lsaRank < 0 || lsaRank >= devr->lsaTeamSize) {
+    WARN("The provided lsaRank %d is not in the valid lsaTeamSize of [0,%d) for the provided window %p.", lsaRank,
+         devr->lsaTeamSize, window);
     return ncclInvalidArgument; // In this case the user should know what the lsa size is.
   }
 
@@ -2444,15 +2479,16 @@ ncclResult_t ncclGetPeerDevicePointer(ncclWindow_t window, size_t offset, int pe
   }
 
   devr = &comm->devrState;
-  if (comm->rankToNode[peer] != comm->node) {
+  int* peerDelta4GHost;
+  NCCLCHECK(ncclShadowPoolToHost(&devr->shadows, devr->lsaPeerDelta4GDev, &peerDelta4GHost));
+  if (peerDelta4GHost[peer] == NCCL_LSA_PEER_DELTA4G_INVALID) {
     // Return nullptr when peer is not LSA-accessible.
     *outPtr = nullptr;
     return ncclSuccess;
   }
 
-  int peerLocalRank = comm->rankToLocalRank[peer];
   if (offset >= winHost->size) return ncclInvalidArgument;
-  *outPtr = (void*)((uintptr_t)devr->lsaFlatBase + peerLocalRank * devr->bigSize + winHost->bigOffset + offset);
+  *outPtr = (void*)(add4G((uintptr_t)devr->lsaFlatBase + winHost->bigOffset, peerDelta4GHost[peer]) + offset);
 
   return ncclSuccess;
 }

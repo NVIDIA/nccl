@@ -27,7 +27,7 @@ ncclResult_t ncclRmaCeInit(struct ncclComm* comm) {
   comm->rmaState.rmaCeState.rmaCeCtxCount = comm->config.numRmaCtx;
 
   // CE only targets intra-node (LSA) peers, so signals are indexed by LSA-local rank.
-  signalSlots = (size_t)comm->devrState.lsaSize * comm->config.numRmaSig;
+  signalSlots = (size_t)comm->devrState.lsaTeamSize * comm->config.numRmaSig;
 
   NCCLCHECKGOTO(ncclCalloc(&ackInitHost, signalSlots), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&comm->rmaState.rmaCeState.rmaCeCtxs, comm->rmaState.rmaCeState.rmaCeCtxCount), ret, fail);
@@ -162,8 +162,8 @@ static ncclResult_t ncclRmaCePutLaunchPersist(struct ncclComm* comm, struct nccl
   ncclResult_t ret = ncclSuccess;
   int nRmaTasksCe = plan->rmaArgs->nRmaTasksCe;
 
-  int lsaSize = comm->devrState.lsaSize;
-  int lsaSelf = comm->devrState.lsaSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
+  int lsaSelf = comm->devrState.lsaTeamSelf;
 
   // Reusable per-task batch params
   // signal and data operations can not be in the same batch as batched mem copy does not guarantee order of execution
@@ -252,8 +252,8 @@ static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm, struct n
   ncclResult_t ret = ncclSuccess;
   int nRmaTasksCe = plan->rmaArgs->nRmaTasksCe;
 
-  int lsaSize = comm->devrState.lsaSize;
-  int lsaSelf = comm->devrState.lsaSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
+  int lsaSelf = comm->devrState.lsaTeamSelf;
 
   // signal and data operations can not be in the same batch as batched mem copy does not guarantee order of execution
   // we can not have signal operations to the same physical address in the same batch as batched mem copy does not
@@ -292,12 +292,12 @@ static ncclResult_t ncclRmaCePutLaunchNonPersist(struct ncclComm* comm, struct n
   nActivePeers = 0;
   for (int step = 1; step < lsaSize; step++) {
     int peerLsaRank = (lsaSelf + step) % lsaSize;
-    int peer = comm->devrState.lsaRankList[peerLsaRank];
+    int peer = comm->devrState.lsaTeamRankList[peerLsaRank];
     if (!ncclIntruQueueEmpty(&peerTaskQueues[peer])) {
       activePeers[nActivePeers++] = peer;
     }
   }
-  selfPeer = comm->devrState.lsaRankList[lsaSelf];
+  selfPeer = comm->devrState.lsaTeamRankList[lsaSelf];
   if (!ncclIntruQueueEmpty(&peerTaskQueues[selfPeer])) {
     activePeers[nActivePeers++] = selfPeer;
   }
@@ -449,8 +449,8 @@ ncclResult_t ncclRmaCeWaitLaunch(struct ncclComm* comm, struct ncclKernelPlan* p
 
   bool persistent = plan->persistent;
 
-  int lsaSize = comm->devrState.lsaSize;
-  int lsaSelf = comm->devrState.lsaSelf;
+  int lsaSize = comm->devrState.lsaTeamSize;
+  int lsaSelf = comm->devrState.lsaTeamSelf;
 
   struct ncclTaskRma* task = ncclIntruQueueHead(&plan->rmaTaskQueueCe);
   ncclIntruQueueDequeue(&plan->rmaTaskQueueCe);

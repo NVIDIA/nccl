@@ -29,7 +29,9 @@ struct alignas(128) ncclGinOutboxState {
     uint32_t ginContextId_plus_1:9;
     uint32_t nBufs_log2:5;
     uint32_t reserved:18;
-    uint32_t cursor;
+    // Requests in [tail, head) are live. Unsigned subtraction is bounded by nBufs.
+    uint32_t head;
+    uint32_t tail;
   } unpadded;
 };
 static_assert(ncclGinOutboxState::RequestBytes % alignof(ncclGinOutboxState) == 0, "Required");
@@ -82,6 +84,15 @@ struct ncclGinOutboxSession_internal {
   ncclGinOutboxHandle handle;
   int block;
   ncclGinOutboxState::Unpadded state;
+
+  NCCL_DEVICE_INLINE uint32_t getRetireCount(int n) const {
+    uint32_t nBufs = 1u << state.nBufs_log2;
+    uint32_t nLive = state.head - state.tail;
+    assert(0 <= n && unsigned(n) <= nBufs);
+    assert(nLive <= nBufs);
+    uint32_t nKeep = nBufs - unsigned(n);
+    return nLive > nKeep ? nLive - nKeep : 0;
+  }
 
   NCCL_DEVICE_INLINE size_t getBlockStride() const {
     return sizeof(ncclGinOutboxState) + ncclGinOutboxState::RequestBytes +

@@ -19,6 +19,7 @@ NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::ncclGinOutboxSess
   : ncclGinOutboxSession_internal<Coop, ginBackendMask>{coop, gin.comm, gin, handle, (int)index} {
   this->state = this->getStatePtr()->unpadded;
   assert(this->state.ginContextId_plus_1 == 0 || this->state.ginContextId_plus_1 == gin.contextId + 1);
+  assert(this->state.head == this->state.tail);
   this->state.ginContextId_plus_1 = gin.contextId + 1;
 }
 #endif
@@ -26,6 +27,12 @@ NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::ncclGinOutboxSess
 #ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclGinOutboxSession<Coop, ginBackendMask>::~ncclGinOutboxSession() {
+  if (this->state.head != this->state.tail) {
+    // Drain the live FIFO before its tickets can outlive this session. Waiting
+    // these requests avoids flushing later traffic from the shared GIN context.
+    this->waitBufs(this->coop, 1 << this->state.nBufs_log2);
+  }
+  this->state.tail = this->state.head;
   if (this->coop.thread_rank() == 0) {
     this->getStatePtr()->unpadded = this->state;
   }
@@ -38,20 +45,15 @@ template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportion(
   Coop, SubCoop subcoop, bool subcoopIsNonTrivial, int nBufs_log2_next, bool deferSync) {
+  assert(0 <= nBufs_log2_next && nBufs_log2_next <= ncclGinScratchMaxBufs_log2);
   int nBufs_log2_cur = this->state.nBufs_log2;
   if (nBufs_log2_cur != nBufs_log2_next) {
-    if (subcoopIsNonTrivial) {
-      NVCC_PRAGMA_UNROLL_DISABLED
-      for (int i = subcoop.thread_rank(); i < (1 << nBufs_log2_cur); i += subcoop.size()) {
-        uint32_t id = this->state.cursor + i;
-        if ((id >> nBufs_log2_cur) != 0) {
-          this->gin.wait(*this->getRequestPtr(id, nBufs_log2_cur), ncclCoopThread());
-        }
-      }
+    if (subcoopIsNonTrivial && this->state.head != this->state.tail) {
+      this->waitBufs(subcoop, 1 << nBufs_log2_cur);
     }
     if (!deferSync) this->coop.sync();
+    this->state.tail = this->state.head;
     this->state.nBufs_log2 = nBufs_log2_next;
-    this->state.cursor = 0;
   }
 }
 #endif
@@ -59,37 +61,18 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportion(
 #ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::apportionRequests(Coop coop, int nReqs_log2_next) {
-  if (this->state.nBufs_log2 != nReqs_log2_next) {
-    coop.sync();
-    this->state.nBufs_log2 = nReqs_log2_next;
-    this->state.cursor = 0;
-  }
+  this->apportion(coop, coop, /*subcoopIsNonTrivial=*/true, nReqs_log2_next);
 }
 #endif
 
 #ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 template <typename SubCoop>
-NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitBufs(SubCoop subcoop, int i0, int n) {
+NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitBufs(SubCoop subcoop, int n) {
+  uint32_t nRetire = this->getRetireCount(n);
   NVCC_PRAGMA_UNROLL_DISABLED
-  for (int i = subcoop.thread_rank(); i < n; i += subcoop.size()) {
-    uint32_t id = this->state.cursor + i0 + i;
-    if ((id >> this->state.nBufs_log2) != 0) {
-      this->gin.wait(*this->getRequestPtr(id, this->state.nBufs_log2), ncclCoopThread());
-    }
-  }
-}
-#endif
-
-#ifdef __CUDACC__
-template <typename Coop, unsigned ginBackendMask>
-template <typename SubCoop>
-NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitRecentRequests(SubCoop subcoop) {
-  int nReqs = min((int)this->state.cursor, 1 << this->state.nBufs_log2);
-  uint32_t id0 = this->state.cursor - nReqs;
-  NVCC_PRAGMA_UNROLL_DISABLED
-  for (int i = subcoop.thread_rank(); i < nReqs; i += subcoop.size()) {
-    this->gin.wait(*this->getRequestPtr(id0 + i, this->state.nBufs_log2), ncclCoopThread());
+  for (uint32_t i = subcoop.thread_rank(); i < nRetire; i += subcoop.size()) {
+    this->gin.wait(*this->getRequestPtr(this->state.tail + i, this->state.nBufs_log2), ncclCoopThread());
   }
 }
 #endif
@@ -97,7 +80,7 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::waitRecentRe
 #ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE ncclSymPtr<char> ncclGinOutboxSession<Coop, ginBackendMask>::getBuf(int i) const {
-  uint32_t id = this->state.cursor + i;
+  uint32_t id = this->state.head + i;
   int nBufs_log2 = this->state.nBufs_log2;
   ncclSymPtr<char> bufs = this->getBufsSymPtr();
   return bufs + ((id & (1 << nBufs_log2) - 1) << (this->handle.size_log2 - nBufs_log2));
@@ -111,7 +94,7 @@ NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr ncclGinOutboxSession<Coop, ginBacken
   ret.bufs = this->getBufsPtr();
   ret.nBufs_minus_1 = (1 << this->state.nBufs_log2) - 1;
   ret.bufSize_log2 = this->handle.size_log2 - this->state.nBufs_log2;
-  ret.cursor = this->state.cursor + i0;
+  ret.cursor = this->state.head + i0;
   return ret;
 }
 #endif
@@ -119,7 +102,7 @@ NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr ncclGinOutboxSession<Coop, ginBacken
 #ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::recordRequest(ncclTeam team, int peer, int i) {
-  uint32_t id = this->state.cursor + i;
+  uint32_t id = this->state.head + i;
   this->gin.flushAsync(team, peer, this->getRequestPtr(id, this->state.nBufs_log2), ncclCoopThread());
 }
 #endif
@@ -127,8 +110,12 @@ NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::recordReques
 #ifdef __CUDACC__
 template <typename Coop, unsigned ginBackendMask>
 NCCL_DEVICE_INLINE void ncclGinOutboxSession<Coop, ginBackendMask>::advance(Coop coop, int n) {
+  uint32_t nRetire = this->getRetireCount(n);
+  // All displaced requests have been waited on and all new requests recorded.
+  // Update every role's local copy of the FIFO positions together.
   coop.sync();
-  this->state.cursor += n;
+  this->state.tail += nRetire;
+  this->state.head += n;
 }
 #endif
 

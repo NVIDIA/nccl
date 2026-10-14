@@ -143,7 +143,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
               if (roleIsWorker) {
                 // Wait for outbox bufs to free up. Since outbox advances with each call of this
                 // function we always index starting at 0.
-                outbox.waitBufs(coopRole, 0, nSteps);
+                outbox.waitBufs(coopRole, nSteps);
                 coopRole.sync();
                 // Make `outbox.getBufPtr()` as cheap as possible within reduction loop.
                 auto outbox_getBufPtr = outbox.make_getBufPtr(0);
@@ -159,6 +159,10 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
             }
 
             if (!roleIsWorker) {
+              if (lsa.nRanks == 1) {
+                outbox.waitBufs(coopRole, nSteps);
+                coopRole.sync();
+              }
               inbox.postSends(
                 coopRole, step0, nSteps,
                 /*getPtr*/
@@ -172,7 +176,7 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
 
             // The LSA path advances scratch/request slots in lockstep across
             // worker and poster roles. The rail-only path has only the poster
-            // role and advances the request FIFO after overwriting the batch.
+            // role and advances the request FIFO after recording the batch.
             if (lsa.nRanks != 1 || !roleIsWorker) outbox.advance(coopStage, nSteps);
           },
           /*finishFn=*/nop);
@@ -236,7 +240,6 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
   });
 
   if (stage == 0) {
-    if (lsa.nRanks == 1) outbox.waitRecentRequests(coopRole);
     outbox.template ~ncclGinOutboxSession<ncclCoopWarpSpan>();
   }
 

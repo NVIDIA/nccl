@@ -45,10 +45,11 @@ struct ncclGinOutboxSession : ncclGinOutboxSession_internal<Coop, ginBackendMask
   template <typename SubCoop>
   NCCL_DEVICE_INLINE void apportion(Coop, SubCoop, bool subcoopIsNonTrivial, int nBufs_log2, bool deferSync = false);
   NCCL_DEVICE_INLINE void apportionRequests(Coop, int nReqs_log2);
+  // Wait for the oldest requests whose slots the next n posts will reuse.
+  // Synchronize SubCoop before writing those slots; advance() retires the waited
+  // prefix collectively after all n new requests have been recorded.
   template <typename SubCoop>
-  NCCL_DEVICE_INLINE void waitBufs(SubCoop, int i0, int n);
-  template <typename SubCoop>
-  NCCL_DEVICE_INLINE void waitRecentRequests(SubCoop);
+  NCCL_DEVICE_INLINE void waitBufs(SubCoop, int n);
   NCCL_DEVICE_INLINE ncclSymPtr<char> getBuf(int i) const;
   NCCL_DEVICE_INLINE ncclGinScratch_GetBufPtr make_getBufPtr(int i0) const;
   NCCL_DEVICE_INLINE void recordRequest(ncclTeam team, int peer, int i);

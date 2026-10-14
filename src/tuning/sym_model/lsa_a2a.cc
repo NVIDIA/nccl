@@ -172,7 +172,7 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
      lsaA2AParameters(3.1691, 0.0654, 63.6576, 0, 0, 1.6267, 520.2188, true), // LLMC
      lsaA2AParameters(11.2029, 0.3742, 63.1928, 10.8361, 8.4400, 0, 908.8153), // TmaLD/TmaST
      lsaA2AParameters(10.6800, 0.4016, 35.4584, 7.2951, 6.8343, 0, 813.3217), // LD/ST
-     lsaA2AParameters(12.0209, 0, 35.7418, 0, 0, 0, 1631.0837, true), // LDMC/STMC
+     lsaA2AParameters(12.0209, 0, 35.7418, 0, 0, 0, 1900.0000, true), // LDMC/STMC
    }},
 };
 
@@ -318,6 +318,8 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   bool isReduceScatter = lsaA2AReduceScatterKernelIndex(kernelId) >= 0;
   bool isAllReduceUnicast =
     kernelId == ncclSymkKernelId_AllReduce_RSxLD_AGxST || kernelId == ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST;
+  bool isVrAllReduceLdmc =
+    kernelId == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC && RUBIN_AND_LATER(input->comm->minCompCap);
   bool isLoadStoreMulticast =
     kernelId == ncclSymkKernelId_AllGather_TmaSTMC || kernelId == ncclSymkKernelId_AllGather_STMC ||
     kernelId == ncclSymkKernelId_ReduceScatter_LDMC || kernelId == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC;
@@ -342,6 +344,9 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   int activeCtas = lsaA2AActiveCtas(logicalBytes, requestedCtas);
   double scaledCtas = activeCtas * lsaA2AAllGatherCtaScale(tuning, kernelId, nRanks, activeCtas);
   double peakBandwidthGbps = tuning->peakBandwidthGbps;
+  // The 0.9 correction lowers
+  // the ceiling at small scales and vanishes as rank count grows.
+  if (isVrAllReduceLdmc) peakBandwidthGbps /= 1.0 + 0.9 / nRanks;
   double extraLatencyUs = 0.0;
   if (kernelId == ncclSymkKernelId_AllGather_TmaST && input->comm->minCompCap >= 100 &&
       !RUBIN_AND_LATER(input->comm->minCompCap)) {
@@ -362,6 +367,14 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   double bandwidthBoundTimeUs = exposeCtaComputeTime ?
                                   ctaComputeTimeUs + std::max(ctaTransferTimeUs, peakTransferTimeUs) :
                                   std::max(ctaComputeTimeUs + ctaTransferTimeUs, peakTransferTimeUs);
+  if (isVrAllReduceLdmc) {
+    // p starts at 5.6 at 4 ranks and drops by 0.6 per
+    // rank doubling to model more gradual CTA saturation. The floor of 2 bounds
+    // extrapolation; normalizing the p-norm by the larger time avoids overflow.
+    double exponent = std::max(2.0, 5.6 - 0.6 * std::log2(nRanks / 4.0));
+    double ratio = std::min(ctaComputeTimeUs + ctaTransferTimeUs, peakTransferTimeUs) / bandwidthBoundTimeUs;
+    bandwidthBoundTimeUs *= std::pow(1.0 + std::pow(ratio, exponent), 1.0 / exponent);
+  }
   if (kernelId == ncclSymkKernelId_ReduceScatter_LD || kernelId == ncclSymkKernelId_ReduceScatter_TmaLD ||
       isAllReduceUnicast) {
     // Follow reduce_scatter.cuh and all_reduce.cuh: bulk chunks, then 2 KiB small chunks,

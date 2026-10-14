@@ -21,6 +21,7 @@ uint64_t ncclInspectorProxyPxnSkipped = 0;
 bool enableNcclInspectorP2p = false;
 bool enableNcclInspectorProxy = true;
 bool requireKernelTiming = true;
+bool useNcclSourcedTimings = true;
 size_t ncclInspectorDumpMinSizeBytes = 0;
 inspectorResult_t inspectorGlobalInit(int) { abort(); }
 inspectorResult_t inspectorGlobalFinalize() { abort(); }
@@ -225,6 +226,39 @@ int main(int argc, char** argv) {
   check(inspectorLockInit(&parent.guard) == inspectorSuccess);
   parent.type = ncclProfileColl; parent.commInfo = &comm; parent.sn = 9;
   initRing(1024);
+  // Exercise the exported v8 callbacks as well as the internal helpers below.
+  // Op stop can precede child stop; the v8 stop descriptor must not disturb
+  // reference counting or completed byte accounting.
+  ncclProfilerEventDescr_t opDescr = {};
+  opDescr.type = ncclProfileProxyOp;
+  opDescr.parentObj = &parent;
+  opDescr.proxyOp.pid = ncclInspectorPid;
+  opDescr.proxyOp.nSteps = 1;
+  opDescr.proxyOp.isSend = 1;
+  void* opHandle = nullptr;
+  check(ncclProfiler_v8.startEvent(&comm, &opHandle, &opDescr) == ncclSuccess);
+  check(opHandle != nullptr);
+  ncclProfilerEventDescr_t stepDescr = {};
+  stepDescr.type = ncclProfileProxyStep;
+  stepDescr.parentObj = opHandle;
+  void* stepHandle = nullptr;
+  check(ncclProfiler_v8.startEvent(&comm, &stepHandle, &stepDescr) == ncclSuccess);
+  check(stepHandle != nullptr);
+  ncclProfilerEventStateArgs_t stateArgs = {};
+  stateArgs.proxyStep.transSize = 321;
+  stateArgs.tsCpu = 1000000;
+  check(ncclProfiler_v8.recordEventState(stepHandle, ncclProfilerProxyStepSendWait,
+                                       &stateArgs) == ncclSuccess);
+  ncclProfilerEventDescr_t stopDescr = {};
+  stopDescr.tsCpu = 2000000;
+  check(ncclProfiler_v8.stopEvent(opHandle, &stopDescr) == ncclSuccess);
+  check(g_eventPool.proxyOpAllocCount == 1);
+  check(ncclProfiler_v8.stopEvent(stepHandle, nullptr) == ncclSuccess);
+  check(g_eventPool.proxyOpAllocCount == 0 && g_eventPool.proxyStepAllocCount == 0);
+  auto interfaceRecords = drain();
+  check(interfaceRecords.back().recordType == NCCL_INSP_PROXY_RECORD_OP);
+  check(interfaceRecords.back().proxyOp.nStepsCompleted == 1);
+  check(interfaceRecords.back().proxyOp.transSizeBytes == 321);
   // A full eight-Step batch must leave no tail, and the ring must contain
   // independent small records rather than one embedded Step array.
   auto* boundary = startOp(8);

@@ -23,6 +23,10 @@ import contextlib
 from datetime import datetime
 import numpy as np
 
+# Keep the standalone command usable without installing a Python package.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from inspector_json_reader import DumpContext
+
 def setup_logging(output_dir):
     log_file = output_dir / "output.log"
     logging.basicConfig(
@@ -166,13 +170,17 @@ def parse_file(filepath: Path, output_dir):
     recs = []
     try:
         with smart_open(filepath, "r") as infile:
+            dump_context = DumpContext()
             for lineno, line in enumerate(infile):
                 try:
-                    json_recs = json.loads(line)
-                except json.JSONDecodeError:
+                    json_recs = dump_context.restore(json.loads(line))
+                except (ValueError, KeyError):
+                    dump_context.reset()
                     logging.error(f"Failed to parse line {filepath}:{lineno}")
                     continue
 
+                if "coll_perf" not in json_recs:
+                    continue
                 # Validate that required fields exist
                 if not all(key in json_recs for key in ["header", "metadata", "coll_perf"]):
                     logging.error(f"Missing required fields in {filepath}:{lineno}")
@@ -190,6 +198,7 @@ def parse_file(filepath: Path, output_dir):
                         **metadata,
                     )
                 )
+            dump_context.finish()
     except Exception as e:
         logging.error(f"Error reading file {filepath}: {e}")
         return

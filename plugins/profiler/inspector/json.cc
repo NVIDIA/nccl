@@ -384,6 +384,13 @@ jsonResult_t jsonBool(jsonFileOutput* jfo, bool val) {
   return jsonStr(jfo, val ? "true" : "false");
 }
 
+jsonResult_t jsonBoolean(jsonFileOutput* jfo, bool val) {
+  const jsonResult_t res = jsonValHelper(jfo);
+  if (res != jsonSuccess) return res;
+  fprintf(jfo->fp, "%s", val ? "true" : "false");
+  return jsonSuccess;
+}
+
 // Write an integer value
 jsonResult_t jsonInt(jsonFileOutput* jfo, const int val) {
   const jsonResult_t res = jsonValHelper(jfo);

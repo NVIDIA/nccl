@@ -171,6 +171,21 @@ help avoiding flow collisions.
 2: (Default) Try to use the same NIC for the same ring/tree, but still allow for the use of different NICs
 if it would result in a better performance.
 
+NCCL_GRAPH_ASSUME_RO
+--------------------
+
+Assumes GPU PCIe Relaxed Ordering is available, allowing topology search to try different GPU orders across channels on x86 AMD systems
+when intra-node communication traverses the interconnect between NUMA nodes (``SYS`` paths).
+The default restriction avoids performance degradation observed on some systems without GPU PCIe Relaxed Ordering.
+This variable does not detect or enable Relaxed Ordering.
+
+Values accepted
+^^^^^^^^^^^^^^^
+
+0: (Default) Keep the AMD/SYS restriction.
+
+1: Bypass the restriction and allow topology search to consider different channel orders.
+
 NCCL_IB_HCA
 -----------
 The ``NCCL_IB_HCA`` variable specifies which Host Channel Adapter (RDMA) interfaces to use for communication. On Windows,

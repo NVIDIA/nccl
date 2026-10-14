@@ -14,6 +14,7 @@
 #include <math.h>
 
 NCCL_PARAM(CrossNic, "CROSS_NIC", 2);
+NCCL_PARAM(GraphAssumeRo, "GRAPH_ASSUME_RO", 0);
 
 // Initialize system->maxBw. This is the per-channel (i.e. per-SM)
 // max bw.
@@ -1371,9 +1372,10 @@ search:
   if (pass == 1) {
     // First pass, we don't have a solution yet ; try other options
 
-    // Try having different channels (except when going through AMD CPUs)
-    if (tmpGraph->sameChannels == 1 && !(cpuArch == NCCL_TOPO_CPU_ARCH_X86 && cpuVendor == NCCL_TOPO_CPU_VENDOR_AMD &&
-                                         tmpGraph->typeIntra == PATH_SYS)) {
+    // Different channels can be slow through AMD CPUs without Relaxed Ordering. Allow an explicit override.
+    if (tmpGraph->sameChannels == 1 && (ncclParamGraphAssumeRo() == 1 ||
+                                        !(cpuArch == NCCL_TOPO_CPU_ARCH_X86 && cpuVendor == NCCL_TOPO_CPU_VENDOR_AMD &&
+                                          tmpGraph->typeIntra == PATH_SYS))) {
       tmpGraph->sameChannels = 0;
       goto search;
     }

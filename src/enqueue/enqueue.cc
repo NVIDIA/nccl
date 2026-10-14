@@ -449,8 +449,11 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
       t->count = bcastTask->count;
       t->root = bcastTask->root;
       t->datatype = bcastTask->datatype;
-      // Carry the profiler tag onto the converted coll task so its coll event reports it.
+      // Preserve profiler metadata when a single-root batch becomes a regular collective.
       t->profilerTag = bcastTask->profilerTag;
+      t->eActivationMask = bcastTask->eActivationMask;
+      t->groupApiEventHandle = bcastTask->groupApiEventHandle;
+      t->collApiEventHandle = bcastTask->collApiEventHandle;
       t->trafficBytes = t->count * ncclFuncTrafficPerByte(t->func, comm->nRanks);
       t->chunkSteps = BROADCAST_CHUNKSTEPS;
       t->sliceSteps = BROADCAST_SLICESTEPS;
@@ -2794,6 +2797,9 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
     t->root = info->root;
     // 0 for a plain broadcast; the user value for a profiler-tag-only ncclBroadcastConfig.
     t->profilerTag = info->collConfig.userProfilerTag;
+    t->eActivationMask = ncclProfilerApiState.eActivationMask;
+    t->groupApiEventHandle = ncclProfilerApiState.groupApiEventHandle;
+    t->collApiEventHandle = ncclProfilerApiState.collApiEventHandle;
 
     // update bcast min/max peer
     planner->bcast_info.minBcastPeer = std::min(planner->bcast_info.minBcastPeer, info->root);

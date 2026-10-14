@@ -678,7 +678,7 @@ class NCCLDevCommRequirements(LowppSpec, lowpp_cls=_nccl_bindings.DevCommRequire
     """World ranks to connect for GIN when :py:attr:`gin_connection_type` is
     :py:attr:`NcclGinConnectionType.CUSTOM_ARRAY`. Order does not matter. Use
     an empty sequence for no peer connections. Both ranks of each pair must
-    list each other."""
+    list each other. Ignored if gin_connection_type is not NcclGinConnectionType.CUSTOM_ARRAY."""
 
     gin_type: NcclGinType | None = None
     """GIN transport to require. If unset, NCCL uses
@@ -2741,7 +2741,6 @@ class Communicator:
 
         reqs = requirements._to_lowpp()
         
-        # gin_custom_peers is ignored if requirements.gin_connection_type != NcclGinConnectionType.CUSTOM_ARRAY
         if requirements.gin_connection_type == NcclGinConnectionType.CUSTOM_ARRAY:
             peer_array = _materialize_gin_custom_peers(requirements.gin_custom_peers)
             reqs.gin_custom_array = 0 if peer_array is None else int(peer_array.ctypes.data)

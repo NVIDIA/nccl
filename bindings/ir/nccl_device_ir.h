@@ -4,8 +4,8 @@
  *
  * See LICENSE.txt for more license information
  ************************************************************************/
-#ifndef _NCCL_DEVICE_WRAPPER_H_
-#define _NCCL_DEVICE_WRAPPER_H_
+#ifndef _NCCL_DEVICE_IR_H_
+#define _NCCL_DEVICE_IR_H_
 
 /*
  * NCCL Device API C-style wrapper functions
@@ -53,7 +53,7 @@
 #define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
 #define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
 #else
-#error "nccl_device_wrapper.h requires __NCCL_DEVICE_LTOIR_LIB__ or __clang_llvm_bitcode_lib__"
+#error "nccl_device_ir.h requires __NCCL_DEVICE_LTOIR_LIB__ or __clang_llvm_bitcode_lib__"
 #endif
 
 #include <cuda_fp16.h>
@@ -542,4 +542,4 @@ __device__ void ncclIrLsaCopyTma_F8E5M2(ncclIrCoop const* coop, __nv_fp8_e5m2* s
 
 } // extern "C"
 
-#endif // _NCCL_DEVICE_WRAPPER_H_
+#endif // _NCCL_DEVICE_IR_H_

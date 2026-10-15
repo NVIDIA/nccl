@@ -1,5 +1,5 @@
 """CuTeDSL bindings for C struct types declared in
-``bindings/ir/nccl_device_wrapper.h`` and ``src/include/nccl_device/``.
+``bindings/ir/nccl_device_ir.h`` and ``src/include/nccl_device/``.
 
 Codegen target -- each entry is 1:1 with a C struct definition.
 ``_LLVMPtrType`` and ``_array_i8`` are MLIR-type adapters used as

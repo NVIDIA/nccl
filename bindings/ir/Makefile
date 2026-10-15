@@ -9,7 +9,7 @@ include ../../makefiles/common.mk
 # LLVM IR generation
 
 # Source and target files
-LLVM_SRC := nccl_device_wrapper.cu
+LLVM_SRC := nccl_device_ir.cu
 LLVM_IMPL_HEADERS := impl/core.h impl/coop.h impl/gin.h impl/barrier.h impl/reduce_copy.h
 BUILDDIR ?= $(abspath ../../build)
 OBJDIR := $(BUILDDIR)/obj/llvm_ir
@@ -67,14 +67,14 @@ OPT_PASSES := --passes='internalize,inline,globaldce' \
               -internalize-public-api-list='*nccl*'
 
 # Build rules
-WRAPPER_HEADER := $(BUILDDIR)/include/nccl_device_wrapper.h
+IR_HEADER := $(BUILDDIR)/include/nccl_device_ir.h
 
-$(WRAPPER_HEADER): nccl_device_wrapper.h
+$(IR_HEADER): nccl_device_ir.h
 	@mkdir -p $(BUILDDIR)/include
-	@echo "Copying nccl_device_wrapper.h to build include..."
+	@echo "Copying nccl_device_ir.h to build include..."
 	cp -f $< $@
 
-$(UNOPTIMIZED_BC): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(WRAPPER_HEADER) util.h
+$(UNOPTIMIZED_BC): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER) util.h
 	@mkdir -p $(OBJDIR)
 	@echo "Generating unoptimized LLVM bitcode..."
 	$(CLANG) $(CLANG_FLAGS) $(LLVM_SRC) -o $@
@@ -109,10 +109,10 @@ llvm_ir: $(FINAL_BC)
 	@echo "  Optimized: $(OPTIMIZED_BC)"
 	@echo "  LLVM IR (Human-readable): $(LLVM_IR_FILE)"
 	@echo "  Final BC: $(FINAL_BC)"
-	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
+	@echo "  IR Header: $(IR_HEADER)"
 
 # LTO IR generation
-$(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(WRAPPER_HEADER) util.h
+$(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER) util.h
 	@mkdir -p $(LIBDIR)
 	@echo "Generating LTO IR..."
 	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
@@ -126,12 +126,12 @@ ltoir: $(FINAL_LTO_IR)
 	@echo "  C++ Standard: $(LTO_IR_CXX_STD)"
 	@echo "  GPU Architecture: $(LTO_IR_ARCH)"
 	@echo "  Final LTO IR: $(FINAL_LTO_IR)"
-	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
+	@echo "  IR Header: $(IR_HEADER)"
 
 build: llvm_ir ltoir
 
 clean:
-	rm -rf $(OBJDIR) $(FINAL_BC) $(FINAL_LTO_IR) $(WRAPPER_HEADER)
+	rm -rf $(OBJDIR) $(FINAL_BC) $(FINAL_LTO_IR) $(IR_HEADER)
 
 .PHONY: llvm_ir ltoir build clean
 

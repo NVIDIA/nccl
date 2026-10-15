@@ -1,4 +1,4 @@
-"""Low-level CuTeDSL bindings for ``bindings/ir/nccl_device_wrapper.h``.
+"""Low-level CuTeDSL bindings for ``bindings/ir/nccl_device_ir.h``.
 
 Fixed symbols use ``@cute.extern``. ReduceCopy symbols are selected by dtype
 through overloaded ``@cute.extern`` declarations. Callers handle argument

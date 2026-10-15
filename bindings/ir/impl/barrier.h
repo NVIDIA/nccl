@@ -7,7 +7,7 @@
 #ifndef _NCCL_DEVICE_WRAPPER_IMPL_BARRIER_H_
 #define _NCCL_DEVICE_WRAPPER_IMPL_BARRIER_H_
 
-// Internal implementation fragment; include only from nccl_device_wrapper.cu
+// Internal implementation fragment; include only from nccl_device_ir.cu
 // after its prerequisite headers.
 
 static_assert(sizeof(ncclIrLsaBarrierSession) == sizeof(ncclLsaBarrierSession<ncclCoopAny>),

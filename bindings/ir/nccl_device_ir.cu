@@ -9,10 +9,10 @@
  * NCCL Device API force instantiation and C style APIs for LLVM IR generation.
  */
 
-// nccl_device_wrapper.h must come first: it installs the build-specific
+// nccl_device_ir.h must come first: it installs the build-specific
 // inlining overrides that the device-API definitions in nccl_device.h below
 // are then compiled with, so the library emits real symbols.
-#include "nccl_device_wrapper.h"
+#include "nccl_device_ir.h"
 // The bitcode library is device-only: suppress "nccl_device/host.h" by
 // pre-defining its include guard, so the host entrypoints never enter this TU.
 #define _NCCL_DEVICE_HOST_H_

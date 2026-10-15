@@ -416,15 +416,58 @@ fail:
   goto exit;
 }
 
+// Fill parentSlots[r] with the parent NVLS slot that backs child slot r when the child shares the parent's
+// NVLS resources. Slot h < nHeads belongs to head h, so each child head maps to the parent slot whose head
+// is the same GPU; heads are distinct GPUs, so this pairs the head slots one-to-one and the remaining
+// slots keep their index. If the parent does not have the same heads, *share is cleared and the child must
+// allocate its own resources.
+static ncclResult_t nvlsMapSharedSlots(struct ncclComm* comm, struct ncclComm* parent, int* parentSlots, bool* share) {
+  int nHeads = comm->channels[0].nvls.nHeads;
+  bool remapped = false;
+
+  if (parent->channels[0].nvls.nHeads != nHeads) {
+    INFO(NCCL_INIT | NCCL_NVLS, "NVLS: comm %p has %d heads, parent %p has %d; not sharing NVLS resources", comm,
+         nHeads, parent, parent->channels[0].nvls.nHeads);
+    *share = false;
+    return ncclSuccess;
+  }
+
+  for (int h = 0; h < nHeads; h++) {
+    int gpu = comm->topParentRanks[comm->nvlsHeads[h]];
+    int s = 0;
+    while (s < nHeads && parent->topParentRanks[parent->nvlsHeads[s]] != gpu) s++;
+    if (s == nHeads) {
+      INFO(NCCL_INIT | NCCL_NVLS,
+           "NVLS: comm %p head %d (rank %d) is not a head of parent %p; not sharing NVLS resources", comm, h,
+           comm->nvlsHeads[h], parent);
+      *share = false;
+      return ncclSuccess;
+    }
+    parentSlots[h] = s;
+    remapped |= (s != h);
+  }
+  for (int r = nHeads; r < comm->localRanks; r++) parentSlots[r] = r;
+  if (remapped) {
+    INFO(NCCL_INIT | NCCL_NVLS, "NVLS: comm %p shares parent %p NVLS resources with head slots remapped", comm, parent);
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
   ncclResult_t res = ncclSuccess;
   size_t typeSize;
   char shmPath[sizeof("/dev/shm/nccl-XXXXXX")];
   uintptr_t* nvlsShmem = NULL;
+  int* parentSlots = NULL;
   bool nvlsShare =
     parent && ncclNvlsTransportEnabled(parent) && parent->shareResources && parent->localRanks == comm->localRanks;
 
   if (!ncclNvlsTransportEnabled(comm) || comm->nvlsChannels == 0) return ncclSuccess;
+
+  if (nvlsShare) {
+    NCCLCHECKGOTO(ncclCalloc(&parentSlots, comm->localRanks), res, fail);
+    NCCLCHECKGOTO(nvlsMapSharedSlots(comm, parent, parentSlots, &nvlsShare), res, fail);
+  }
 
   if (nvlsShare) {
     /* reuse NVLS resources */
@@ -434,7 +477,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     comm->nvlsChunkSize = parent->nvlsResources->chunkSize;
     comm->nvlsTreeMaxChunkSize = parent->nvlsResources->treeMaxChunkSize;
     for (int c = 0; c < comm->nvlsChannels; c++) {
-      NCCLCHECKGOTO(initNvlsChannel(comm, c, parent, true), res, fail);
+      NCCLCHECKGOTO(initNvlsChannel(comm, c, parent, parentSlots), res, fail);
     }
 
     comm->nvlsResources = parent->nvlsResources;
@@ -473,7 +516,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     resources = comm->nvlsResources;
 
     for (int c = 0; c < nChannels; c++) {
-      NCCLCHECKGOTO(initNvlsChannel(comm, c, NULL, false), res, fail);
+      NCCLCHECKGOTO(initNvlsChannel(comm, c, NULL, NULL), res, fail);
     }
 
     memset(&resources->accessDesc, 0, sizeof(resources->accessDesc));
@@ -609,6 +652,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
   }
 
 exit:
+  free(parentSlots);
   return res;
 fail:
   comm->nvlsSupport = 0;

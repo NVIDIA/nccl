@@ -183,6 +183,9 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     // on NCCL_GIN_PROXY_NTHREADS (atypical — env vars are normally uniform across a job).
     // Extra threads simply idle in the stride loop; no correctness issue.
 
+    // At most NCCL_GIN_MAX_CONNECTIONS (4) entries
+    // bounded snprintf truncates oversized names without overflowing.
+    char devNames[1024] = "";
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
       NCCLCHECKGOTO(backend->ncclGin->listen(backend->ginInstance, localGinDevs[commIdx % nLocalGinDevs],
                                              allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank,
@@ -209,7 +212,12 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
 
       NCCLCHECKGOTO(backend->ncclGin->closeListen(listenComms[backendIdx]), ret, fail);
       listenComms[backendIdx] = NULL;
+
+      snprintf(devNames + strlen(devNames), sizeof(devNames) - strlen(devNames), " [%d]%s",
+               localGinDevs[commIdx % nLocalGinDevs], backend->ginProps[commIdx].name);
     }
+    INFO(NCCL_INIT, "GIN: backend %s using %d connections on devices%s", backend->ncclGin->name, backend->ginCommCount,
+         devNames);
   }
 
 exit:

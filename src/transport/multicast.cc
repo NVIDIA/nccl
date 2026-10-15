@@ -153,6 +153,9 @@ ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct nccl
   desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   desc.location.id = comm->cudaDev;
   CUCHECKGOTO(cuMemSetAccess(base, capacity, &desc, 1), ret, fail);
+  NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
+                                          comm->localRankToRank[0]),
+                ret, fail);
 
   NCCLCHECKGOTO(ncclCalloc(&group, 1), ret, fail);
   group->handle = mcHandle;

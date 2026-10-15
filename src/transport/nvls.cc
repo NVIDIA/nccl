@@ -259,6 +259,9 @@ static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPa
 
   INFO(NCCL_NVLS, "NVLS rank %d (dev %d) bound UC ptr %p ucsize %zu into MC slice offset %zu (inputsize %zu)",
        comm->rank, comm->cudaDev, ucptr, ucsize, partition->offset, size);
+  NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
+                                          comm->localRankToRank[0]),
+                ret, fail3);
 
   // Publish the UC owner only on success (callers test outUc->ptr).
   outUc->handle = ucHandle;
@@ -510,6 +513,9 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
                   res, fail);
     NCCLCHECKGOTO(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode),
                                           &comm->sharedRes->deviceStream, /*concurrent=*/false),
+                  res, fail);
+    NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
+                                            comm->localRankToRank[0]),
                   res, fail);
   }
 

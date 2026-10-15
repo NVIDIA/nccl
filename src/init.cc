@@ -2144,7 +2144,13 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
       NCCLCHECKGOTO(commGetSplitInfo(comm, job->parent, job->color, job->key, &job->nranks, &job->myrank, parentRanks),
                     res, fail);
       // Negative color does not create a new comm object. We needed to take part in the allgather, but we're done now.
-      if (job->color == NCCL_SPLIT_NOCOLOR) goto exit;
+      if (job->color == NCCL_SPLIT_NOCOLOR) {
+        NCCLCHECKGOTO(bootstrapIntraNodeBarrier(job->parent->bootstrap, job->parent->localRankToRank,
+                                                job->parent->localRank, job->parent->localRanks,
+                                                job->parent->localRankToRank[0]),
+                      res, fail);
+        goto exit;
+      }
     }
     // child hash obtained from (parent hash, split count, color)
     uint64_t hacc[2] = {1, 1};
@@ -2194,6 +2200,13 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   comm->maxSharedMemOptin = maxSharedMem;
 
   NCCLCHECKGOTO(initTransportsRank(comm, job->parent, timers), res, fail);
+
+  if (job->parent && !job->isGrow && job->excludeRanksCount == 0) {
+    NCCLCHECKGOTO(bootstrapIntraNodeBarrier(job->parent->bootstrap, job->parent->localRankToRank,
+                                            job->parent->localRank, job->parent->localRanks,
+                                            job->parent->localRankToRank[0]),
+                  res, fail);
+  }
 
   // Start the NCCL progress counter monitor that refreshes host counter mirrors.
   if (ncclProgressCounterMonitorInit(comm) != ncclSuccess) {

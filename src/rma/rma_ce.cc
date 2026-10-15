@@ -14,6 +14,7 @@
 #include "rma/rma.h"
 #include "rma/rma_ce.h"
 #include "ce_coll.h"
+#include "bootstrap.h"
 
 ncclResult_t ncclRmaCeInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
@@ -92,6 +93,7 @@ ncclResult_t ncclRmaCeInit(struct ncclComm* comm) {
   CUDACHECKGOTO(cudaEventCreateWithFlags(&comm->rmaState.rmaCeState.ceEvent, cudaEventDisableTiming), ret, fail);
 
   comm->rmaState.rmaCeState.initialized = true;
+  NCCLCHECKGOTO(bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xbeef), ret, fail);
 
 exit:
   free(ackInitHost);

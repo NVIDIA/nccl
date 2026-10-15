@@ -419,7 +419,7 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   NCCLCHECKGOTO(ncclCalloc(&args, 1), ret, fail);
   args->listenSock = listenSock;
   args->magic = handle->magic;
-  thread = std::thread(bootstrapRoot, args);
+  STDTHREADCREATE_GOTO(thread, bootstrapRoot, ret, fail, args);
   ncclSetThreadName(thread, "NCCL BootstrapR");
   thread.detach();
 exit:

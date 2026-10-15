@@ -1035,7 +1035,7 @@ ncclResult_t ncclProxyStart(struct ncclComm* comm) {
 static ncclResult_t ncclProxyProgressCreate(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
   if (!state->thread.joinable()) {
-    state->thread = std::thread(ncclProxyProgress, proxyState);
+    STDTHREADCREATE(state->thread, ncclProxyProgress, proxyState);
     ncclSetThreadName(state->thread, "NCCL Progress%2d", proxyState->tpLocalnRanks);
   }
   return ncclSuccess;
@@ -1487,6 +1487,7 @@ fail:
 
 static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
+  ncclResult_t ret = ncclSuccess;
   if (state->opsPool == NULL) {
     int size = sizeof(struct ncclProxyOpsPool);
     struct ncclProxyOpsPool* pool = NULL;
@@ -1525,9 +1526,16 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
 #endif
 
     // All ops structures are created, we can start the progress thread
-    NCCLCHECK(ncclProxyProgressCreate(proxyState));
+    NCCLCHECKGOTO(ncclProxyProgressCreate(proxyState), ret, fail);
   }
   return ncclSuccess;
+fail:
+  // Without its thread the pool has no consumer: release it, so that the next connection starts over.
+  ncclOsUnsetMutexCondShared(state->opsPool->mutex, state->opsPool->cond, &state->opsPool->syncObjectsInitialized);
+  (void)ncclShmClose(state->handle);
+  state->opsPool = NULL;
+  state->handle = NULL;
+  return ret;
 }
 
 static void proxyOpsFree(struct ncclProxyState* proxyState) {
@@ -2132,6 +2140,7 @@ ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union
 }
 
 ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
+  ncclResult_t ret = ncclSuccess;
   /* proxyState is shared among parent comm and split comms. comm->proxyState->thread is
    * join()'d by commFree() in init.cc when the refCount reduces down to 0. */
   struct ncclProxyState* proxyState = comm->proxyState;
@@ -2157,15 +2166,24 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     proxyState->directMode = comm->directMode;
     memcpy(proxyState->buffSizes, comm->buffSizes, sizeof(comm->buffSizes));
 
-    comm->proxyState->thread = std::thread(ncclProxyService, comm->proxyState);
+    STDTHREADCREATE_GOTO(comm->proxyState->thread, ncclProxyService, ret, failService, comm->proxyState);
     ncclSetThreadName(comm->proxyState->thread, "NCCL Service %2d", comm->cudaDev);
 
     // UDS support
     INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d", comm, comm->rank);
-    comm->proxyState->threadUDS = std::thread(ncclProxyServiceUDS, comm->proxyState);
+    STDTHREADCREATE_GOTO(comm->proxyState->threadUDS, ncclProxyServiceUDS, ret, failUDS, comm->proxyState);
     ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Svc%2d", comm->cudaDev);
   }
   return ncclSuccess;
+// The service thread closes and frees listenSock and the UDS thread closes ipcSock when they exit; a thread that
+// was not created cannot, so release its socket here.
+failService:
+  (void)ncclSocketClose(proxyState->listenSock);
+  free(proxyState->listenSock);
+  proxyState->listenSock = NULL;
+failUDS:
+  (void)ncclIpcSocketClose(&proxyState->ipcSock);
+  return ret;
 }
 
 ncclResult_t ncclProxyStop(struct ncclComm* comm) {
@@ -2173,8 +2191,9 @@ ncclResult_t ncclProxyStop(struct ncclComm* comm) {
     struct ncclProxyState* sharedProxyState = comm->proxyState;
 
     if ((comm->proxyRefCountOld = ncclAtomicRefCountDecrement(&sharedProxyState->refCount)) == 0) {
-      if (COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire) == 0 && sharedProxyState->peerAddresses) {
-        // We need to send a ncclProxyMsgStop message to our own proxy
+      if (COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire) == 0 && sharedProxyState->peerAddresses &&
+          sharedProxyState->thread.joinable()) {
+        // We need to send a ncclProxyMsgStop message to our own proxy, unless its service thread was never created
         struct ncclSocket sock;
         int type = ncclProxyMsgStop;
         NCCLCHECK(ncclSocketInit(&sock, sharedProxyState->peerAddresses + comm->topParentRanks[comm->rank],

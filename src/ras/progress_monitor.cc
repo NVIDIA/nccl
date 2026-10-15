@@ -281,7 +281,7 @@ static ncclResult_t createGpuProgressCounterMonitor(int cudaDev, struct ncclGpuP
   CUDACHECKGOTO(cudaStreamCreateWithFlags(&g->sideStream, cudaStreamNonBlocking), ret, fail);
   CUDACHECKGOTO(cudaEventCreateWithFlags(&g->copyDone, cudaEventDisableTiming), ret, fail);
 
-  g->thread = std::thread(progressCounterMonitorLoop, g);
+  STDTHREADCREATE_GOTO(g->thread, progressCounterMonitorLoop, ret, fail, g);
   ncclSetThreadName(g->thread, "NCCL CtrMon %d", cudaDev);
 
   {

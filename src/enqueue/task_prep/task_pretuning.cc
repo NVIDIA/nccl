@@ -79,14 +79,8 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   }
   // The copy-engine models do not check availability themselves, so keep their entries out of the
   // selection when no copy-engine route can run this collective.
-  bool ceAvailable =
-    ncclCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
-  bool hierCeAvailable =
-    ncclHierCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin);
-  if ((!ceAvailable && !hierCeAvailable) ||
-      !(comm->symmetricSupport && raw->func == ncclFuncAllGather &&
-        raw->count > ncclSymCeAllGatherThreshold(comm) && comm->minCompCap >= 100 &&
-        !RUBIN_AND_LATER(comm->minCompCap) && comm->isAllDirectNvlink)) {
+  if (!ncclCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin) &&
+      !ncclHierCeAvailable(comm, raw->func, raw->opDev.op, raw->datatype, in->winRegType, sendWin, recvWin)) {
     in->tuningMask &= ~NCCL_TUNING_MASK_CE;
   }
   in->nvlsSupport = ncclNvlsTransportEnabled(comm) &&

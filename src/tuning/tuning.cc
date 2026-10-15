@@ -12,6 +12,7 @@
 #include "transport.h"
 #include "comm.h"
 #include "device.h"
+#include "cudawrap.h"
 #include "alloc.h"
 #include <cfloat>
 #include <cstring>
@@ -202,6 +203,19 @@ static int ncclTuningCollapseId(const struct ncclTuningResult_t* tuning) {
   return -1;
 }
 
+// CTAPolicy ZERO routes every copy-engine-capable collective to the copy engine.
+static bool tuningCeZeroRoute(const struct ncclTuningInput_t* input) {
+  return (input->CTAPolicy & NCCL_CTA_POLICY_ZERO) && (input->tuningMask & NCCL_TUNING_MASK_CE);
+}
+
+// A large AllGather on Blackwell direct NVLink takes the copy engine.
+static bool tuningCeAllGatherRoute(const struct ncclTuningInput_t* input) {
+  struct ncclComm* comm = input->comm;
+  return (input->tuningMask & NCCL_TUNING_MASK_CE) && input->func == ncclFuncAllGather && comm->symmetricSupport &&
+         comm->isAllDirectNvlink && comm->minCompCap >= 100 && !RUBIN_AND_LATER(comm->minCompCap) &&
+         (int64_t)input->count > ncclSymCeAllGatherThreshold(comm);
+}
+
 /*
   Get the best tuning for the given input and tuning mask.
   Simulates the all tunings for the given input and engages the tuner plugin if defined.
@@ -224,6 +238,13 @@ static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
   if (input->func == ncclFuncSendRecv || input->func == ncclFuncSend || input->func == ncclFuncRecv ||
       input->func == ncclFuncPutSignal || input->func == ncclFuncSignal || input->func == ncclFuncWaitSignal) {
     return ncclSuccess;
+  }
+
+  // Hard-coded copy-engine routes until the cost model can price the copy engine against the
+  // kernels. A route leaves only the copy-engine entries in the mask.
+  if (input->tuningMask & ~NCCL_TUNING_MASK_CE) {
+    if (tuningCeZeroRoute(input) || tuningCeAllGatherRoute(input)) input->tuningMask &= NCCL_TUNING_MASK_CE;
+    else input->tuningMask &= ~NCCL_TUNING_MASK_CE;
   }
 
   // Set tuning to Ring/Simple for single rank case
@@ -409,9 +430,11 @@ exit:
 /*
   Get the best tuning for the given input, honoring a per-call algorithm selection.
   NCCL_ALGO, NCCL_PROTO and NCCL_SYM_KERNEL win over the selection for the functions they force.
-  Otherwise tune within the selection first. A selection that nothing can satisfy is a possible
-  outcome, not necessarily an error: retune the automatic menu so a hard failure still surfaces,
-  then fail only when the caller forced the selection, and fall back otherwise.
+  Otherwise tune within the selection first. A selection that leaves out the copy engine wins over
+  the CTAPolicy ZERO route: the policy picks the copy engine only among the selected entries.
+  A selection that nothing can satisfy is a possible outcome, not necessarily an error: retune the
+  automatic menu so a hard failure still surfaces, then fail only when the caller forced the
+  selection, and fall back otherwise.
 */
 ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
   uint64_t selection = input->comm->tuningContext.forced[input->func] ? 0 : input->algSelection;

@@ -22,11 +22,17 @@
 #include "nccl_device/impl/lsa_barrier__types.h"
 #include "nccl_device/impl/gin_barrier__types.h"
 
-struct ncclDevComm;
-
 ////////////////////////////////////////////////////////////////////////////////
 // IR wrapper types
 ////////////////////////////////////////////////////////////////////////////////
+
+/**************************** DevComm storage ********************************/
+
+// Same-build opaque storage for a host-initialized ncclDevComm.
+// Must outlive GIN and barrier sessions that reference it.
+struct ncclIrDevComm {
+  uint64_t storage[31];
+};
 
 /****************************** Coop types ***********************************/
 
@@ -70,18 +76,18 @@ extern "C" {
 
 /******************************* Team APIs ************************************/
 
-__device__ ncclTeam ncclIrTeamWorld(ncclDevComm const* comm);
-__device__ ncclTeam ncclIrTeamLsa(ncclDevComm const* comm);
-__device__ ncclTeam ncclIrTeamCft(ncclDevComm const* comm, ncclCftTeamMode_t mode = NCCL_CFT_TEAM_FLAT);
-__device__ ncclTeam ncclIrTeamCftMultimem(ncclDevComm const* comm);
+__device__ ncclTeam ncclIrTeamWorld(ncclIrDevComm const* comm);
+__device__ ncclTeam ncclIrTeamLsa(ncclIrDevComm const* comm);
+__device__ ncclTeam ncclIrTeamCft(ncclIrDevComm const* comm, ncclCftTeamMode_t mode = NCCL_CFT_TEAM_FLAT);
+__device__ ncclTeam ncclIrTeamCftMultimem(ncclIrDevComm const* comm);
 __device__ bool ncclIrTeamRankIsMember(ncclTeam a, ncclTeam b, int bPeer);
 __device__ int ncclIrTeamRankToTeam(ncclTeam a, ncclTeam b, int bPeer);
-__device__ int ncclIrTeamRankToWorld(ncclDevComm const* comm, ncclTeam team, int rank);
-__device__ int ncclIrTeamRankToLsa(ncclDevComm const* comm, ncclTeam team, int rank);
+__device__ int ncclIrTeamRankToWorld(ncclIrDevComm const* comm, ncclTeam team, int rank);
+__device__ int ncclIrTeamRankToLsa(ncclIrDevComm const* comm, ncclTeam team, int rank);
 __device__ ncclTeam ncclIrTeamInnerFactor(ncclTeam parent, int innerSize);
 __device__ ncclTeam ncclIrTeamOuterFactor(ncclTeam parent, int innerSize);
 __device__ int ncclIrTeamRankInDifference(ncclTeam parent, ncclTeam subset, int index);
-__device__ ncclTeam ncclIrTeamRail(ncclDevComm const* comm);
+__device__ ncclTeam ncclIrTeamRail(ncclIrDevComm const* comm);
 
 /****************************** Window APIs ***********************************/
 
@@ -89,46 +95,40 @@ __device__ void* ncclIrGetLocalPointer(ncclWindow_t w, size_t offset);
 __device__ void* ncclIrGetLsaPointer(ncclWindow_t w, size_t offset, int peer);
 __device__ void* ncclIrGetPeerPointer(ncclWindow_t w, size_t offset, int peer);
 __device__ void* ncclIrGetMultimemPointer(ncclWindow_t w, size_t offset, ncclMultimemHandle mmHandle);
-__device__ void* ncclIrGetLsaMultimemPointer(ncclWindow_t w, size_t offset, ncclDevComm const* comm);
+__device__ void* ncclIrGetLsaMultimemPointer(ncclWindow_t w, size_t offset, ncclIrDevComm const* comm);
 __device__ void ncclIrGetCftLeInfo(ncclWindow_t w, size_t offset, int peerCft, ncclTeam cftTeam,
-                                   ncclDevComm const* comm, ncclCftLeId* leId, size_t* leOffset);
-__device__ void ncclIrGetPeerLeInfo(ncclWindow_t w, size_t offset, int peerWorld, ncclDevComm const* comm,
+                                   ncclIrDevComm const* comm, ncclCftLeId* leId, size_t* leOffset);
+__device__ void ncclIrGetPeerLeInfo(ncclWindow_t w, size_t offset, int peerWorld, ncclIrDevComm const* comm,
                                     ncclCftLeId* leId, size_t* leOffset);
-__device__ void ncclIrGetMultimemLeInfo(ncclWindow_t w, size_t offset, ncclDevComm const* comm, ncclCftLeId* leId,
+__device__ void ncclIrGetMultimemLeInfo(ncclWindow_t w, size_t offset, ncclIrDevComm const* comm, ncclCftLeId* leId,
                                         size_t* leOffset);
 
 /************************** Resource buffer APIs ******************************/
 
 __device__ size_t ncclIrGetResourceBufferOffset(ncclDevResourceHandle h);
-__device__ void* ncclIrGetResourceBufferLocalPointer(ncclDevComm const* comm, ncclDevResourceHandle h);
-__device__ void* ncclIrGetResourceBufferLsaPointer(ncclDevComm const* comm, ncclDevResourceHandle h, int peer);
-__device__ void* ncclIrGetResourceBufferPeerPointer(ncclDevComm const* comm, ncclDevResourceHandle h, ncclTeam team,
+__device__ void ncclIrGetResourceBuffer(ncclIrDevComm const* comm, ncclDevResourceHandle h, ncclWindow_t* window,
+                                        size_t* offset);
+__device__ void* ncclIrGetResourceBufferLocalPointer(ncclIrDevComm const* comm, ncclDevResourceHandle h);
+__device__ void* ncclIrGetResourceBufferLsaPointer(ncclIrDevComm const* comm, ncclDevResourceHandle h, int peer);
+__device__ void* ncclIrGetResourceBufferPeerPointer(ncclIrDevComm const* comm, ncclDevResourceHandle h, ncclTeam team,
                                                     int peer);
-__device__ void* ncclIrGetResourceBufferMultimemPointer(ncclDevComm const* comm, ncclDevResourceHandle h,
+__device__ void* ncclIrGetResourceBufferMultimemPointer(ncclIrDevComm const* comm, ncclDevResourceHandle h,
                                                         ncclMultimemHandle mmHandle);
-__device__ void* ncclIrGetResourceBufferLsaMultimemPointer(ncclDevComm const* comm, ncclDevResourceHandle h);
-__device__ void ncclIrGetResourceBufferCftLeInfo(ncclDevComm const* comm, ncclDevResourceHandle h, int peerCft,
+__device__ void* ncclIrGetResourceBufferLsaMultimemPointer(ncclIrDevComm const* comm, ncclDevResourceHandle h);
+__device__ void ncclIrGetResourceBufferCftLeInfo(ncclIrDevComm const* comm, ncclDevResourceHandle h, int peerCft,
                                                  ncclCftLeId* leId, size_t* leOffset);
-__device__ void ncclIrGetResourceBufferPeerLeInfo(ncclDevComm const* comm, ncclDevResourceHandle h, int peerWorld,
+__device__ void ncclIrGetResourceBufferPeerLeInfo(ncclIrDevComm const* comm, ncclDevResourceHandle h, int peerWorld,
                                                   ncclCftLeId* leId, size_t* leOffset);
-__device__ void ncclIrGetResourceBufferMultimemLeInfo(ncclDevComm const* comm, ncclDevResourceHandle h,
+__device__ void ncclIrGetResourceBufferMultimemLeInfo(ncclIrDevComm const* comm, ncclDevResourceHandle h,
                                                       ncclCftLeId* leId, size_t* leOffset);
 
 /************************* ncclDevComm field accessors ***********************/
 
-/*
- * ncclDevComm is a public C struct, the following accessors are deprecated and will be removed.
- */
-__device__ int ncclIrDevCommRank(ncclDevComm const* comm);
-__device__ int ncclIrDevCommNRanks(ncclDevComm const* comm);
-__device__ int ncclIrDevCommLsaRank(ncclDevComm const* comm);
-__device__ int ncclIrDevCommLsaSize(ncclDevComm const* comm);
-__device__ ncclLsaBarrierHandle ncclIrDevCommLsaBarrier(ncclDevComm const* comm);
-__device__ ncclGinBarrierHandle ncclIrDevCommRailGinBarrier(ncclDevComm const* comm);
-__device__ ncclLsaBarrierHandle ncclIrDevCommHybridLsaBarrier(ncclDevComm const* comm);
-__device__ ncclGinBarrierHandle ncclIrDevCommHybridRailGinBarrier(ncclDevComm const* comm);
-__device__ ncclGinBarrierHandle ncclIrDevCommWorldGinBarrier(ncclDevComm const* comm);
-__device__ ncclMultimemHandle ncclIrDevCommLsaMultimem(ncclDevComm const* comm);
+__device__ int ncclIrDevCommRank(ncclIrDevComm const* comm);
+__device__ int ncclIrDevCommNRanks(ncclIrDevComm const* comm);
+__device__ int ncclIrDevCommLsaRank(ncclIrDevComm const* comm);
+__device__ int ncclIrDevCommLsaSize(ncclIrDevComm const* comm);
+__device__ uint32_t ncclIrDevCommGinContextCount(ncclIrDevComm const* comm);
 
 /****************************** Peer pointer API ******************************/
 __device__ void* ncclIrGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam tm, int peer);
@@ -155,7 +155,7 @@ __device__ void ncclIrCoopSync(ncclIrCoop* coop);
 /************************** GIN initialization APIs ***************************/
 
 // Construct a kernel-local GIN object in opaque storage; comm must outlive its use.
-__device__ void ncclIrGinInit(ncclIrGin* net, ncclDevComm const* comm, int contextIndex,
+__device__ void ncclIrGinInit(ncclIrGin* net, ncclIrDevComm const* comm, int contextIndex,
                               ncclGinResourceSharingMode resourceSharingMode = NCCL_GIN_RESOURCE_SHARING_GPU);
 
 /************************** GIN data movement APIs ****************************/
@@ -262,10 +262,10 @@ __device__ ncclResult_t ncclIrGinWaitTimeout(ncclIrGin const* net, ncclGinReques
 
 /************************* LSA Barrier Session APIs **************************/
 __device__ void ncclIrLsaBarrierSessionInit(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
-                                            ncclDevComm const* comm, ncclTeam team, ncclLsaBarrierHandle handle,
+                                            ncclIrDevComm const* comm, ncclTeam team, ncclLsaBarrierHandle handle,
                                             uint32_t index, bool multimem = false, ncclMultimemHandle mmHandle = {});
 __device__ void ncclIrLsaBarrierSessionInitLsa(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
-                                               ncclDevComm const* comm, uint32_t index, bool multimem);
+                                               ncclIrDevComm const* comm, uint32_t index, bool multimem);
 __device__ void ncclIrLsaBarrierSessionArrive(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                               cuda::memory_order order);
 __device__ void ncclIrLsaBarrierSessionWait(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
@@ -288,13 +288,13 @@ __device__ void ncclIrGinBarrierSessionInitWorld(ncclIrGinBarrierSession* sessio
 // All-contexts variant of session-init: rail/world/etc. signal/wait happens on context 0,
 // fence iterates every GIN context on the comm.
 __device__ void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
-                                                       ncclDevComm const* comm, ncclTeam team,
+                                                       ncclIrDevComm const* comm, ncclTeam team,
                                                        ncclGinBarrierHandle handle, uint32_t index);
 
 __device__ void ncclIrGinBarrierSessionInitAllContextsRail(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
-                                                           ncclDevComm const* comm, uint32_t index);
+                                                           ncclIrDevComm const* comm, uint32_t index);
 __device__ void ncclIrGinBarrierSessionInitAllContextsWorld(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
-                                                            ncclDevComm const* comm, uint32_t index);
+                                                            ncclIrDevComm const* comm, uint32_t index);
 __device__ void ncclIrGinBarrierSessionSync(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
                                             cuda::memory_order order,
                                             ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
@@ -311,7 +311,7 @@ __device__ void ncclIrBarrierSessionInit(ncclIrBarrierSession* session, ncclIrCo
 __device__ void ncclIrBarrierSessionInitWorld(ncclIrBarrierSession* session, ncclIrCoop const* coop,
                                               ncclIrGin const* net, uint32_t index, bool multimem);
 __device__ void ncclIrBarrierSessionInitLsa(ncclIrBarrierSession* session, ncclIrCoop const* coop,
-                                            ncclDevComm const* comm, uint32_t index, bool multimem);
+                                            ncclIrDevComm const* comm, uint32_t index, bool multimem);
 __device__ void ncclIrBarrierSessionInitRail(ncclIrBarrierSession* session, ncclIrCoop const* coop,
                                              ncclIrGin const* net, uint32_t index);
 __device__ void ncclIrBarrierSessionSync(ncclIrBarrierSession* session, ncclIrCoop const* coop,

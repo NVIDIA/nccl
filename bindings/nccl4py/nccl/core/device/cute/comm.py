@@ -1,10 +1,9 @@
 """Pythonic wrappers for ``ncclDevComm`` and ``ncclTeam``.
 
 :class:`DevComm` is an explicit CuTeDSL view over a host-side
-``DevCommResource``. Its JIT protocol passes a :py:class:`DevCommValue`
-native struct by value and reconstructs the same public type in value mode
-while tracing. Pointer storage is materialized lazily for device APIs whose
-FFI ABI requires a pointer or reference.
+``DevCommResource``. Its JIT protocol passes opaque :py:class:`ncclIrDevComm`
+storage by value and reconstructs the same public type while tracing.
+Pointer storage is materialized lazily for IR calls.
 """
 
 import cutlass
@@ -14,14 +13,19 @@ from cutlass.cutlass_dsl import dsl_user_op
 
 from ...resources import DevCommResource
 from . import _bindings
-from ._helpers import _alloca_cft_le_info, _alloca_struct, _load_cft_le_info, _to_value
+from ._helpers import (
+    _alloca_cft_le_info,
+    _alloca_struct,
+    _load_cft_le_info,
+    _to_value,
+)
 from ._structs import (
-    DevCommValue,
+    ncclIrDevComm,
     ncclIrGin,
     ncclTeam as Team,
 )
 from .gin import Gin
-from .handles import GinBarrierHandle, LsaBarrierHandle, MultimemHandle
+from .handles import MultimemHandle
 from .types import CftLeInfo, CftTeamMode, GinResourceSharingMode
 
 
@@ -48,7 +52,7 @@ def _materialize_dev_comm(value, *, loc=None, ip=None) -> ir.Value:
     # ip is not forwarded: the alloca must land at entry-block begin so the
     # pointer dominates every use, not at the caller's position.
     with ir.InsertionPoint.at_block_begin(entry_block):
-        ptr = _alloca_struct(DevCommValue, alignment=8, loc=loc)
+        ptr = _alloca_struct(ncclIrDevComm, loc=loc)
 
     # The store has to follow both operands. The struct is a block argument
     # while it stays within one block, and then it already dominates the
@@ -67,9 +71,10 @@ class DevComm:
 
     ``DevComm(resource)`` creates a host-mode JIT argument that keeps the
     resource alive. CuTeDSL reconstructs value-mode instances without calling
-    ``__init__``. The native struct is exposed as ``value`` for field reads
-    while tracing; mutating it is unsupported. ``ptr`` is materialized once,
-    on demand, and is never included in the JIT or kernel ABI.
+    ``__init__``. ``value`` is opaque storage; fields are queried through IR
+    accessors. ``ptr`` is materialized once, on demand, and
+    is never included in the JIT or kernel ABI. The host bindings and device
+    IR must come from the same NCCL build.
     """
 
     def __init__(self, resource: DevCommResource):
@@ -92,7 +97,7 @@ class DevComm:
 
     @staticmethod
     def __get_mlir_types__():
-        return DevCommValue.__get_mlir_types__()
+        return ncclIrDevComm.__get_mlir_types__()
 
     def __extract_mlir_values__(self):
         return self.value.__extract_mlir_values__()
@@ -100,16 +105,16 @@ class DevComm:
     def __new_from_mlir_values__(self, values):
         obj = object.__new__(type(self))
         obj._resource = None
-        obj._value = DevCommValue(values[0])
+        obj._value = ncclIrDevComm(values[0])
         obj._materialized_ptr = None
         return obj
 
     @property
-    def value(self) -> DevCommValue:
-        """Value-mode native struct backing the field reads."""
+    def value(self) -> ncclIrDevComm:
+        """Opaque, by-value communicator storage available while tracing."""
         if self._value is None:
             raise cutlass.DSLRuntimeError(
-                "DevComm fields are only available while tracing CuTeDSL code"
+                "DevComm storage is only available while tracing CuTeDSL code"
             )
         return self._value
 
@@ -124,50 +129,23 @@ class DevComm:
 
     @property
     def rank(self) -> cutlass.Int32:
-        return self.value.rank
+        return _bindings.nccl_dev_comm_rank(self.ptr)
 
     @property
     def n_ranks(self) -> cutlass.Int32:
-        return self.value.n_ranks
+        return _bindings.nccl_dev_comm_n_ranks(self.ptr)
 
     @property
     def lsa_rank(self) -> cutlass.Int32:
-        return self.value.lsa_rank
+        return _bindings.nccl_dev_comm_lsa_rank(self.ptr)
 
     @property
     def lsa_size(self) -> cutlass.Int32:
-        return self.value.lsa_size
-
-    # === Embedded barrier handles ===
-
-    # Wrapped so an embedded handle and a host-passed one are the same type.
+        return _bindings.nccl_dev_comm_lsa_size(self.ptr)
 
     @property
-    def lsa_barrier(self) -> LsaBarrierHandle:
-        return LsaBarrierHandle.from_native_struct(self.value.lsa_barrier)
-
-    @property
-    def rail_gin_barrier(self) -> GinBarrierHandle:
-        return GinBarrierHandle.from_native_struct(self.value.rail_gin_barrier)
-
-    @property
-    def hybrid_lsa_barrier(self) -> LsaBarrierHandle:
-        return LsaBarrierHandle.from_native_struct(
-            self.value.hybrid_lsa_barrier)
-
-    @property
-    def hybrid_rail_gin_barrier(self) -> GinBarrierHandle:
-        return GinBarrierHandle.from_native_struct(
-            self.value.hybrid_rail_gin_barrier)
-
-    @property
-    def world_gin_barrier(self) -> GinBarrierHandle:
-        return GinBarrierHandle.from_native_struct(
-            self.value.world_gin_barrier)
-
-    @property
-    def lsa_multimem(self) -> MultimemHandle:
-        return MultimemHandle.from_native_struct(self.value.lsa_multimem)
+    def gin_context_count(self) -> cutlass.Uint32:
+        return _bindings.nccl_dev_comm_gin_context_count(self.ptr)
 
     # === Team factories ===
 
@@ -278,9 +256,9 @@ class DevComm:
 
         Args:
             handle: ``ncclDevResourceHandle`` from ``DevCommResource``.
-            mm_handle: Multimem handle covering the resource window --
-                :py:attr:`lsa_multimem`, or one passed in from the host for
-                a non-LSA team.
+            mm_handle: host-passed multimem handle covering the resource
+                window. For the built-in LSA mapping, use
+                :meth:`resource_buffer_lsa_multimem_pointer` instead.
 
         Returns:
             ``!llvm.ptr`` MLIR value.
@@ -383,9 +361,7 @@ class DevComm:
         _bindings.nccl_ir_gin_init(
             storage, self.ptr,
             cutlass.Int32(context_id), cutlass.Uint8(int(resource_sharing_mode)))
-        return Gin(
-            ptr=storage,
-            _legacy_signal_is_strong=cutlass.Boolean(self.value.gin_strong_legacy_signals))
+        return Gin(ptr=storage)
 
 
 @cutlass.register_jit_arg_adapter(DevCommResource)

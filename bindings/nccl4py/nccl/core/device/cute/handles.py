@@ -8,8 +8,8 @@
 Each view marshals its handle struct by value into a kernel and registers
 a JIT arg adapter, so the host-side handles from :mod:`nccl.core.resources`
 can be passed as ``@cute.jit`` arguments directly.
-:meth:`_Handle.from_native_struct` wraps the copies embedded in
-:class:`DevComm`, so both sources present one type per handle.
+Explicit handles are passed from the host; built-in communicator resources
+are selected by semantic IR entry points.
 """
 
 import cutlass
@@ -74,8 +74,7 @@ class _Handle:
         """Wrap an already-traced native struct in this view.
 
         Args:
-            struct: value-mode ``_struct_cls`` instance, such as the one
-                behind :py:attr:`DevComm.lsa_barrier`.
+            struct: value-mode ``_struct_cls`` instance, of this handle type.
 
         Returns:
             Value-mode view over ``struct``.
@@ -106,7 +105,7 @@ class MultimemHandle(_Handle):
 
     Pass one to :py:meth:`Window.multimem_pointer` or
     :py:meth:`DevComm.resource_buffer_multimem_pointer` to address a team
-    other than LSA; for the LSA team use :py:attr:`DevComm.lsa_multimem`.
+    other than LSA; for the LSA team use :py:meth:`Window.lsa_multimem_pointer`.
     """
 
     _struct_cls = ncclMultimemHandle

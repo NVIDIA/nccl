@@ -10,9 +10,10 @@
 static_assert(sizeof(ncclIrGin) == sizeof(ncclGin), "GIN storage size mismatch");
 static_assert(alignof(ncclIrGin) == alignof(ncclGin), "GIN storage alignment mismatch");
 
-NCCL_IR_DEVICE_INLINE void ncclIrGinInit(ncclIrGin* net, ncclDevComm const* comm, int contextIndex,
+NCCL_IR_DEVICE_INLINE void ncclIrGinInit(ncclIrGin* net, ncclIrDevComm const* comm, int contextIndex,
                                          ncclGinResourceSharingMode resourceSharingMode) {
-  ::new (net) ncclGin(*comm, contextIndex, resourceSharingMode);
+  auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
+  ::new (net) ncclGin(commImpl, contextIndex, resourceSharingMode);
 }
 
 // Runtime C ABI arguments adapt to the native method's template parameters.

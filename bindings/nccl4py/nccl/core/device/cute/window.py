@@ -125,9 +125,9 @@ class Window:
 
         Args:
             offset: Byte offset within the window.
-            mm_handle: Multimem handle covering this window --
-                :py:attr:`DevComm.lsa_multimem`, or one passed in from the
-                host for a non-LSA team.
+            mm_handle: host-passed multimem handle covering this window.
+                For the built-in LSA mapping, use
+                :meth:`lsa_multimem_pointer` instead.
 
         Returns:
             ``!llvm.ptr`` MLIR value.

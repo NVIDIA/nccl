@@ -110,6 +110,7 @@ def test_nccl_put_kernel(
                 send_win, send,   # source window + tensor (local)
                 coop,
                 is_signal=True,
+                is_strong=False,  # Completion covers only this put.
                 signal_id=signal_id,
                 signal_op=0,
                 signal_op_arg=1,

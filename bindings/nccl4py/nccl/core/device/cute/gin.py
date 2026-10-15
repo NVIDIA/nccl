@@ -25,11 +25,14 @@ class Gin:
     """Wraps a ``ncclIrGin*`` (pointer to opaque kernel-local GIN storage).
 
     Instances must be produced through :meth:`DevComm.gin`.
+
+    Signal strength is selected explicitly per operation. A strong signal
+    orders preceding puts; a weak signal only covers its bundled put.
+    Strong signals require ``gin_strong_signals_required=True`` in the host
+    DevComm requirements. Strength is ignored when ``is_signal=False``.
     """
 
     ptr: _LLVMPtrType
-    # Preserve the indexed-signal policy of the Python API; the IR ABI takes it explicitly.
-    _legacy_signal_is_strong: cutlass.Boolean
 
     def put(
         self,
@@ -41,6 +44,7 @@ class Gin:
         src,
         coop: Coop,
         *,
+        is_strong: bool,
         is_signal: bool = False,
         signal_id: int = 0,
         signal_op: int = 0,
@@ -67,6 +71,8 @@ class Gin:
             src_win: source :class:`Window` (local).
             src: source ``cute.Tensor`` inside ``src_win``.
             coop: cooperative group issuing the put.
+            is_strong: select strong (``True``) or weak (``False``) signals.
+                Ignored when ``is_signal=False``. See :class:`Gin`.
             is_signal: write ``signal_id`` after the transfer completes.
             signal_id: signal slot id (when ``is_signal``).
             signal_op: signal op code per the C ABI (when ``is_signal``).
@@ -95,7 +101,7 @@ class Gin:
             src_win.ptr, cutlass.Int64(src_offset),
             cutlass.Int64(size),
             cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
-            cutlass.Int32(signal_id), self._legacy_signal_is_strong,
+            cutlass.Int32(signal_id), cutlass.Boolean(is_strong),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             cutlass.Boolean(is_counter), cutlass.Int32(counter_id),
             _to_coop_ptr(coop),
@@ -113,6 +119,7 @@ class Gin:
         value: int,
         coop: Coop,
         *,
+        is_strong: bool,
         is_signal: bool = False,
         signal_id: int = 0,
         signal_op: int = 0,
@@ -135,6 +142,8 @@ class Gin:
             dst: destination ``cute.Tensor`` inside ``dst_win``.
             value: scalar value to transfer using ``dst``'s element size.
             coop: cooperative group issuing the put.
+            is_strong: select strong (``True``) or weak (``False``) signals.
+                Ignored when ``is_signal=False``. See :class:`Gin`.
             is_signal: write ``signal_id`` after the transfer completes.
             signal_id: signal slot id (when ``is_signal``).
             signal_op: signal op code per the C ABI (when ``is_signal``).
@@ -158,7 +167,7 @@ class Gin:
             dst_win.ptr, cutlass.Int64(dst_offset),
             cutlass.Int64(value), cutlass.Int64(size),
             cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
-            cutlass.Int32(signal_id), self._legacy_signal_is_strong,
+            cutlass.Int32(signal_id), cutlass.Boolean(is_strong),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
@@ -224,6 +233,7 @@ class Gin:
         signal_op_arg: int,
         coop: Coop,
         *,
+        is_strong: bool,
         is_descriptor: bool = False,
         descriptor_ptr=0,
         given_release: ThreadScope = ThreadScope.THREAD,
@@ -240,6 +250,8 @@ class Gin:
             signal_op: signal op code per the C ABI (when ``is_signal``).
             signal_op_arg: argument to ``signal_op`` (when ``is_signal``).
             coop: cooperative group issuing the signal.
+            is_strong: select strong (``True``) or weak (``False``) signals.
+                Ignored when ``is_signal=False``. See :class:`Gin`.
             is_descriptor: ``descriptor_ptr`` carries an external descriptor.
             descriptor_ptr: descriptor pointer (when ``is_descriptor``).
             given_release: ``cuda::thread_scope`` released by the caller;
@@ -251,7 +263,7 @@ class Gin:
         _bindings.nccl_gin_signal(
             self.ptr, _to_value(team), cutlass.Int32(peer),
             cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
-            cutlass.Int32(signal_id), self._legacy_signal_is_strong,
+            cutlass.Int32(signal_id), cutlass.Boolean(is_strong),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),

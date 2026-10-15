@@ -397,8 +397,15 @@ ncclResult_t ncclTopoCheckP2p(struct ncclComm* comm, struct ncclTopoSystem* syst
   // Use parent pointer comparison to handle multi-rank-per-GPU case:
   // Different topology indices (g1 != g2) may point to the same physical GPU
   // when multiple ranks share one device. Skip NVML P2P validation for same device.
+  // MLOPart siblings have distinct DEV parents but share GPU memory and can directly address
+  // each other's memory without enabling P2P. NVML's physical-GPU self-P2P status does not
+  // describe that capability. See https://docs.nvidia.com/deploy/mps/595/when-to-use-mps.html#p2p-with-mlopart.
+  bool mloPartSameGPU = gpu1->gpu.mloPart != NCCL_TOPO_UNDEF &&
+                        system->nodes[GPU].nodes[g2].gpu.mloPart != NCCL_TOPO_UNDEF &&
+                        NCCL_TOPO_ID_SYSTEM_ID(gpu1->id) == NCCL_TOPO_ID_SYSTEM_ID(system->nodes[GPU].nodes[g2].id) &&
+                        gpu1->gpu.dev == system->nodes[GPU].nodes[g2].gpu.dev; // NVML device index
   bool checkNvml =
-    (ncclParamIgnoreDisabledP2p() != 2 &&
+    (ncclParamIgnoreDisabledP2p() != 2 && !mloPartSameGPU &&
      system->nodes[GPU].nodes[g1].gpu.parent != system->nodes[GPU].nodes[g2].gpu.parent &&
      (comm == NULL || (info1->hostHash == comm->peerInfo[comm->rank].hostHash && info1->hostHash == info2->hostHash)));
   if (*p2p == 1) {

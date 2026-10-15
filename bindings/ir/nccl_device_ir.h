@@ -8,53 +8,8 @@
 #define _NCCL_DEVICE_IR_H_
 
 /*
- * NCCL Device API C-style wrapper functions
+ * NCCL Device API C ABI for LLVM bitcode and NVCC LTO IR
  */
-
-/*
- * Declaration/type-only view of the NCCL Device API for LLVM IR users.
- *
- * This header intentionally excludes nccl_device/impl/xxx__funcs.h so user IR
- * bitcode can resolve NCCL Device API implementations from libnccl_device.bc.
- */
-
-/*
- * Emit __activemask() as inline asm, like CUDA's sm_30_intrinsics.hpp does.
- * Clang's version returns __nvvm_activemask(), which libNVVM 13.3.27 fails to
- * lower: the PTX calls an .extern llvm.nvvm.activemask that ptxas rejects.
- *
- * Must precede the NCCL and cooperative_groups includes below so all call sites
- * expand. Device pass only: CUDA declares __activemask in the host pass.
- */
- #if defined(__clang__) && defined(__CUDA_ARCH__)
- __attribute__((device)) __attribute__((always_inline)) static unsigned ncclIrActivemask() {
-   unsigned _nccl_activemask_ret;
-   asm volatile("activemask.b32 %0;" : "=r"(_nccl_activemask_ret));
-   return _nccl_activemask_ret;
- }
- #undef __activemask
- #define __activemask ncclIrActivemask
- #endif 
-
-/*
- * Production's __forceinline__ (__inline__ __attribute__((always_inline))) is
- * linkonce_odr and emits no symbol. Drop __inline__ so the device API has
- * external linkage: the bitcode lib emits symbols that consumers resolve from
- * libnccl_device.bc. Must precede the API includes below.
- */
-#include "nccl_device/utility.h"
-#undef NCCL_DEVICE_INLINE
-#undef NCCL_HOST_DEVICE_INLINE
-
-#if defined(__NCCL_DEVICE_LTOIR_LIB__)
-#define NCCL_DEVICE_INLINE __device__ __inline_hint__
-#define NCCL_HOST_DEVICE_INLINE __host__ __device__ __inline_hint__
-#elif defined(__clang_llvm_bitcode_lib__)
-#define NCCL_DEVICE_INLINE __device__ __attribute__((always_inline))
-#define NCCL_HOST_DEVICE_INLINE __host__ __device__ __attribute__((always_inline))
-#else
-#error "nccl_device_ir.h requires __NCCL_DEVICE_LTOIR_LIB__ or __clang_llvm_bitcode_lib__"
-#endif
 
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
@@ -205,7 +160,6 @@ __device__ void ncclIrGinInit(ncclIrGin* net, ncclDevComm const* comm, int conte
 
 /************************** GIN data movement APIs ****************************/
 
-// C API counterpart of ncclGin::put with indexed/VA, strong/weak signals and segment type selection.
 __device__ void ncclIrGinPut(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
                              ncclWindow_t srcWin, size_t srcOffset, size_t bytes, ncclGinSignalType signalType,
                              ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
@@ -214,7 +168,6 @@ __device__ void ncclIrGinPut(ncclIrGin const* net, ncclTeam team, int peer, nccl
                              ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                              cuda::thread_scope requiredRelease, uint32_t optFlags, ncclGinSegmentType_t segmentType);
 
-// Full C API counterpart of ncclGin::putValue with explicit indexed/VA and strong/weak signal selection.
 __device__ void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin, size_t dstOffset,
                                   uint64_t value, size_t size, ncclGinSignalType signalType, ncclWindow_t signalWin,
                                   size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
@@ -222,7 +175,6 @@ __device__ void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam team, int peer,
                                   bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                                   cuda::thread_scope requiredRelease, uint32_t optFlags);
 
-// Full C API counterpart of ncclGin::get with explicit segment type selection.
 __device__ void ncclIrGinGet(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
                              ncclWindow_t localWnd, size_t localOffset, size_t bytes, ncclIrCoop const* coop,
                              bool isDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags,
@@ -230,7 +182,6 @@ __device__ void ncclIrGinGet(ncclIrGin const* net, ncclTeam team, int peer, nccl
 
 /***************************** GIN signaling APIs *****************************/
 
-// Full C API counterpart of ncclGin::signal with explicit indexed/VA and strong/weak signal selection.
 __device__ void ncclIrGinSignal(ncclIrGin const* net, ncclTeam team, int peer, ncclGinSignalType signalType,
                                 ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
                                 ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
@@ -346,8 +297,7 @@ __device__ void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarrierSession* 
 __device__ void ncclIrGinBarrierSessionSync(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
                                             cuda::memory_order order,
                                             ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
-// Finalize the placement-new object. Currently a no-op -- the underlying destructor is
-// empty -- but required for lifetime symmetry with Init. Does not free storage.
+// Finalize the placement-new object without freeing storage.
 __device__ void ncclIrGinBarrierSessionDestroy(ncclIrGinBarrierSession* session);
 
 /*************************** Barrier Session APIs ****************************/

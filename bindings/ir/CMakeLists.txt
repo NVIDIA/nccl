@@ -76,7 +76,6 @@ set(COMMON_CLANG_FLAGS
     --cuda-gpu-arch=${BITCODE_LIB_ARCH}
     ${NCCL_INCLUDES}
     ${CUDA_INCLUDES}
-    -D__clang_llvm_bitcode_lib__
     -D__CUDACC_EXTENDED_LAMBDA__
     ${NCCL_DEVICE_DEFINES}
 )
@@ -184,7 +183,6 @@ add_custom_command(
         ${NCCL_INCLUDES}
         ${CUDA_INCLUDES}
         ${NCCL_DEVICE_DEFINES}
-        -D__NCCL_DEVICE_LTOIR_LIB__
         -o ${FINAL_LTO_IR}
         ${LLVM_SRC}
     DEPENDS ${LLVM_SRC} ${LLVM_IMPL_HEADERS} ${IR_HEADER}

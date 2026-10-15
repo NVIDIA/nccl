@@ -4,9 +4,6 @@
  *
  * See LICENSE.txt for more license information
  ************************************************************************/
-#ifndef _NCCL_DEVICE_WRAPPER_IMPL_COOP_H_
-#define _NCCL_DEVICE_WRAPPER_IMPL_COOP_H_
-
 // Internal implementation fragment; include only from nccl_device_ir.cu
 // after its prerequisite headers.
 
@@ -71,33 +68,31 @@ struct ncclCoopAny {
 static_assert(sizeof(ncclIrCoop) == sizeof(ncclCoopAny), "Coop storage size mismatch");
 static_assert(alignof(ncclIrCoop) == alignof(ncclCoopAny), "Coop storage alignment mismatch");
 
-NCCL_DEVICE_INLINE void ncclIrCoopInitThread(ncclIrCoop* coop) {
+NCCL_IR_DEVICE_INLINE void ncclIrCoopInitThread(ncclIrCoop* coop) {
   ::new (coop) ncclCoopAny(ncclCoopThread());
 }
-NCCL_DEVICE_INLINE void ncclIrCoopInitWarp(ncclIrCoop* coop) {
+NCCL_IR_DEVICE_INLINE void ncclIrCoopInitWarp(ncclIrCoop* coop) {
   ::new (coop) ncclCoopAny(ncclCoopWarp());
 }
-NCCL_DEVICE_INLINE void ncclIrCoopInitLanes(ncclIrCoop* coop, uint32_t lane_mask) {
+NCCL_IR_DEVICE_INLINE void ncclIrCoopInitLanes(ncclIrCoop* coop, uint32_t lane_mask) {
   ::new (coop) ncclCoopAny(ncclCoopLanes(lane_mask));
 }
-NCCL_DEVICE_INLINE void ncclIrCoopInitWarpSpan(ncclIrCoop* coop, int warp0, int nWarps, int id) {
+NCCL_IR_DEVICE_INLINE void ncclIrCoopInitWarpSpan(ncclIrCoop* coop, int warp0, int nWarps, int id) {
   ::new (coop) ncclCoopAny(ncclCoopWarpSpan(warp0, nWarps, id));
 }
-NCCL_DEVICE_INLINE void ncclIrCoopInitCta(ncclIrCoop* coop) {
+NCCL_IR_DEVICE_INLINE void ncclIrCoopInitCta(ncclIrCoop* coop) {
   ::new (coop) ncclCoopAny(ncclCoopCta());
 }
 
-NCCL_DEVICE_INLINE int ncclIrCoopThreadRank(ncclIrCoop const* coop) {
+NCCL_IR_DEVICE_INLINE int ncclIrCoopThreadRank(ncclIrCoop const* coop) {
   return reinterpret_cast<ncclCoopAny const*>(coop)->thread_rank();
 }
-NCCL_DEVICE_INLINE int ncclIrCoopSize(ncclIrCoop const* coop) {
+NCCL_IR_DEVICE_INLINE int ncclIrCoopSize(ncclIrCoop const* coop) {
   return reinterpret_cast<ncclCoopAny const*>(coop)->size();
 }
-NCCL_DEVICE_INLINE int ncclIrCoopNumThreads(ncclIrCoop const* coop) {
+NCCL_IR_DEVICE_INLINE int ncclIrCoopNumThreads(ncclIrCoop const* coop) {
   return reinterpret_cast<ncclCoopAny const*>(coop)->num_threads();
 }
-NCCL_DEVICE_INLINE void ncclIrCoopSync(ncclIrCoop* coop) {
+NCCL_IR_DEVICE_INLINE void ncclIrCoopSync(ncclIrCoop* coop) {
   reinterpret_cast<ncclCoopAny*>(coop)->sync();
 }
-
-#endif // _NCCL_DEVICE_WRAPPER_IMPL_COOP_H_

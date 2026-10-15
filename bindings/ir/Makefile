@@ -56,7 +56,6 @@ COMMON_CLANG_FLAGS := -std=$(BITCODE_CXX_STD) -x cuda \
                       --cuda-path=$(CUDA_HOME) --cuda-device-only \
                       --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
                       $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
-                      -D__clang_llvm_bitcode_lib__ \
                       -D__CUDACC_EXTENDED_LAMBDA__ \
                       $(NCCL_DEVICE_DEFINES)
 
@@ -118,7 +117,6 @@ $(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER) util.h
 	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
 		$(NCCL_INCLUDES) $(CUDA_INCLUDES) \
 		$(NCCL_DEVICE_DEFINES) \
-		-D__NCCL_DEVICE_LTOIR_LIB__ \
 		-o $@ $(LLVM_SRC)
 
 ltoir: $(FINAL_LTO_IR)

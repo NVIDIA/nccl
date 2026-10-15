@@ -35,22 +35,30 @@ NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionInit(ncclIrLsaBarrierSession* 
                                                        ncclLsaBarrierHandle handle, uint32_t index, bool multimem,
                                                        ncclMultimemHandle mmHandle) {
   using Session = ncclLsaBarrierSession<ncclCoopAny>;
-  ::new (session) Session(*reinterpret_cast<ncclCoopAny const*>(coop), *comm, team, handle, index, multimem, mmHandle);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  auto const& commImpl = *comm;
+  ::new (session) Session(coopImpl, commImpl, team, handle, index, multimem, mmHandle);
 }
 NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionArrive(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                                          cuda::memory_order order) {
-  reinterpret_cast<ncclLsaBarrierSession<ncclCoopAny>*>(session)->arrive(*reinterpret_cast<ncclCoopAny const*>(coop),
-                                                                         order);
+  using Session = ncclLsaBarrierSession<ncclCoopAny>;
+  auto& sessionImpl = *reinterpret_cast<Session*>(session);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  sessionImpl.arrive(coopImpl, order);
 }
 NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionWait(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                                        cuda::memory_order order) {
-  reinterpret_cast<ncclLsaBarrierSession<ncclCoopAny>*>(session)->wait(*reinterpret_cast<ncclCoopAny const*>(coop),
-                                                                       order);
+  using Session = ncclLsaBarrierSession<ncclCoopAny>;
+  auto& sessionImpl = *reinterpret_cast<Session*>(session);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  sessionImpl.wait(coopImpl, order);
 }
 NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionSync(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                                        cuda::memory_order order) {
-  reinterpret_cast<ncclLsaBarrierSession<ncclCoopAny>*>(session)->sync(*reinterpret_cast<ncclCoopAny const*>(coop),
-                                                                       order);
+  using Session = ncclLsaBarrierSession<ncclCoopAny>;
+  auto& sessionImpl = *reinterpret_cast<Session*>(session);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  sessionImpl.sync(coopImpl, order);
 }
 NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionDestroy(ncclIrLsaBarrierSession* session) {
   using Session = ncclLsaBarrierSession<ncclCoopAny>;
@@ -61,8 +69,9 @@ NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInit(ncclIrGinBarrierSession* 
                                                        ncclIrGin const* net, ncclTeam team, ncclGinBarrierHandle handle,
                                                        uint32_t index) {
   using Session = ncclGinBarrierSession<ncclCoopAny>;
-  ::new (session)
-    Session(*reinterpret_cast<ncclCoopAny const*>(coop), *reinterpret_cast<ncclGin const*>(net), team, handle, index);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  auto const& netImpl = *reinterpret_cast<ncclGin const*>(net);
+  ::new (session) Session(coopImpl, netImpl, team, handle, index);
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarrierSession* session,
@@ -70,13 +79,17 @@ NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarri
                                                                   ncclTeam team, ncclGinBarrierHandle handle,
                                                                   uint32_t index) {
   using Session = ncclGinBarrierSession<ncclCoopAny>;
-  ::new (session) Session(*reinterpret_cast<ncclCoopAny const*>(coop), ncclGinAllContexts(*comm), team, handle, index);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  auto const& commImpl = *comm;
+  ::new (session) Session(coopImpl, ncclGinAllContexts(commImpl), team, handle, index);
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionSync(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
                                                        cuda::memory_order order, ncclGinFenceLevel fence) {
-  reinterpret_cast<ncclGinBarrierSession<ncclCoopAny>*>(session)->sync(*reinterpret_cast<ncclCoopAny const*>(coop),
-                                                                       order, fence);
+  using Session = ncclGinBarrierSession<ncclCoopAny>;
+  auto& sessionImpl = *reinterpret_cast<Session*>(session);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  sessionImpl.sync(coopImpl, order, fence);
 }
 NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionDestroy(ncclIrGinBarrierSession* session) {
   using Session = ncclGinBarrierSession<ncclCoopAny>;
@@ -89,15 +102,18 @@ NCCL_IR_DEVICE_INLINE void ncclIrBarrierSessionInit(ncclIrBarrierSession* sessio
                                                     ncclGinBarrierHandle const outerBarHandle, uint32_t index,
                                                     bool multimem, ncclMultimemHandle const innerMmHandle) {
   using Session = ncclBarrierSession<ncclCoopAny>;
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  auto const& netImpl = *reinterpret_cast<ncclGin const*>(net);
   ::new (session)
-    Session(*reinterpret_cast<ncclCoopAny const*>(coop), innerTeam, outerTeam, *reinterpret_cast<ncclGin const*>(net),
-            innerBarHandle, outerBarHandle, index, multimem, innerMmHandle);
+    Session(coopImpl, innerTeam, outerTeam, netImpl, innerBarHandle, outerBarHandle, index, multimem, innerMmHandle);
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrBarrierSessionSync(ncclIrBarrierSession* session, ncclIrCoop const* coop,
                                                     cuda::memory_order order, ncclGinFenceLevel fence) {
-  reinterpret_cast<ncclBarrierSession<ncclCoopAny>*>(session)->sync(*reinterpret_cast<ncclCoopAny const*>(coop), order,
-                                                                    fence);
+  using Session = ncclBarrierSession<ncclCoopAny>;
+  auto& sessionImpl = *reinterpret_cast<Session*>(session);
+  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
+  sessionImpl.sync(coopImpl, order, fence);
 }
 NCCL_IR_DEVICE_INLINE void ncclIrBarrierSessionDestroy(ncclIrBarrierSession* session) {
   using Session = ncclBarrierSession<ncclCoopAny>;

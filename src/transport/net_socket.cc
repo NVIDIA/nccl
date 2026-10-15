@@ -445,6 +445,14 @@ ncclResult_t ncclNetSocketGetRequest(struct ncclNetSocketComm* comm, int op, voi
   return ncclInternalError;
 }
 
+static ncclResult_t ncclNetSocketHelperThreadCreate(struct ncclNetSocketComm* comm, int tid, int op) {
+  struct ncclNetSocketThreadResources* res = comm->threadResources + tid;
+  STDTHREADCREATE(comm->helperThread[tid], persistentSocketThread, res);
+  ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev, tid,
+                    comm->cudaDev);
+  return ncclSuccess;
+}
+
 ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclProfilerInfo* pInfo, int op, void* data,
                                   int size, struct ncclNetSocketTask** req) {
   int tid = comm->nextSock % comm->nThreads;
@@ -462,9 +470,13 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
 #ifdef NCCL_ENABLE_NET_PROFILING
     res->pInfo = pInfo;
 #endif
-    comm->helperThread[tid] = std::thread(persistentSocketThread, res);
-    ncclSetThreadName(comm->helperThread[tid], "NCCL Sock%c%1u%2u%2u", op == NCCL_SOCKET_SEND ? 'S' : 'R', comm->dev,
-                      tid, comm->cudaDev);
+    if (ncclNetSocketHelperThreadCreate(comm, tid, op) != ncclSuccess) {
+      // Leave the queue unallocated so that the next call retries the thread creation instead of queuing work
+      // for a thread that does not exist.
+      free(queue->tasks);
+      queue->tasks = NULL;
+      return ncclSystemError;
+    }
   }
   struct ncclNetSocketTask* r = queue->tasks + queue->next;
   if (r->used == 0) {

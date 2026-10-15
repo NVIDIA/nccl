@@ -237,14 +237,14 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 #define STDTHREADCREATE_IMPL(var, func, error_action, ...) \
   do { \
     try { \
-      (var) = std::thread(func, __VA_ARGS__); \
+      (var) = std::thread(func, ##__VA_ARGS__); \
     } catch (const std::exception& e) { \
       WARN("Thread creation failed: %s", e.what()); \
       error_action; \
     } \
   } while (0)
 
-#define STDTHREADCREATE(var, func, ...) STDTHREADCREATE_IMPL(var, func, return ncclSystemError, __VA_ARGS__)
+#define STDTHREADCREATE(var, func, ...) STDTHREADCREATE_IMPL(var, func, return ncclSystemError, ##__VA_ARGS__)
 
 #define STDTHREADCREATE_GOTO(var, func, RES, label, ...) \
   STDTHREADCREATE_IMPL( \
@@ -253,7 +253,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
       RES = ncclSystemError; \
       goto label; \
     } while (0), \
-    __VA_ARGS__)
+    ##__VA_ARGS__)
 
 #define NEW_NOTHROW(var, x) \
   do { \

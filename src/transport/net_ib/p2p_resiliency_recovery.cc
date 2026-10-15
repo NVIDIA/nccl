@@ -1468,6 +1468,7 @@ ncclResult_t ncclIbPortRecoveryClose(struct ncclIbResiliency* resCtx) {
 }
 
 ncclResult_t ncclIbPortRecoveryThreadStart() {
+  ncclResult_t ret = ncclSuccess;
   if (ncclParamIbResiliencyPortRecovery() == 0) {
     return ncclSuccess;
   }
@@ -1481,10 +1482,14 @@ ncclResult_t ncclIbPortRecoveryThreadStart() {
   }
 
   INFO(NCCL_NET, "NET/IB: %s: Starting port recovery async thread", __func__);
-  ncclIbPortRecoveryAsyncThread = std::thread(ncclIbPortRecoveryAsyncThreadMain);
+  STDTHREADCREATE_GOTO(ncclIbPortRecoveryAsyncThread, ncclIbPortRecoveryAsyncThreadMain, ret, fail);
   ncclSetThreadName(ncclIbPortRecoveryAsyncThread, "NCCL IbPortRec");
 
   return ncclSuccess;
+fail:
+  ncclIbPortRecoveryThreadActive.store(false);
+  ncclIbPortRecoveryRefCount--;
+  return ret;
 }
 
 ncclResult_t ncclIbPortRecoveryThreadStop() {

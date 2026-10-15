@@ -1105,6 +1105,7 @@ static void* ncclProfilerThreadFunc(void* arg) {
 }
 
 ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* parent) {
+  ncclResult_t ret = ncclSuccess;
   if (!ncclProfilerPluginLoaded()) return ncclSuccess;
   if (parent && parent->shareResources && parent->profiler.profilerThread) {
     comm->profiler.profilerThread = parent->profiler.profilerThread;
@@ -1129,9 +1130,12 @@ ncclResult_t ncclProfilerThreadCreate(struct ncclComm* comm, struct ncclComm* pa
   pt->maxInflight = NCCL_PROFILER_DEFAULT_MAX_INFLIGHT;
   ncclMemoryStackConstruct(&pt->opStack);
   ncclMemoryPoolConstruct(&pt->opPool);
-  pt->thread = std::thread(ncclProfilerThreadFunc, pt);
+  STDTHREADCREATE_GOTO(pt->thread, ncclProfilerThreadFunc, ret, fail, pt);
   comm->profiler.profilerThread = pt;
   return ncclSuccess;
+fail:
+  delete pt;
+  return ret;
 }
 
 // Splice out and recycle every op referencing `ctx`; returns new list tail.

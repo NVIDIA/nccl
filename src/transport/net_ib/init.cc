@@ -599,7 +599,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
                  ncclIbDevs[ncclNIbDevs].speed, context, ncclIbDevs[ncclNIbDevs].pciPath, ncclIbDevs[ncclNIbDevs].ar,
                  ncclIbDevs[ncclNIbDevs].oooRqSize);
 
-            ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + ncclNIbDevs);
+            STDTHREADCREATE_GOTO(ncclIbAsyncThread, ncclIbAsyncThreadMain, ret, fail, ncclIbDevs + ncclNIbDevs);
             ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", ncclNIbDevs);
             ncclIbAsyncThread.detach();
 

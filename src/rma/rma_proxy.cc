@@ -484,7 +484,7 @@ ncclResult_t ncclRmaProxyConnectOnce(struct ncclComm* comm) {
 
   // Start / wake up the progress thread.
   rmaProxyState->rmaProgress = 1;
-  rmaProxyState->thread = std::thread(ncclRmaProxyProgressThread, rmaProxyState);
+  STDTHREADCREATE_GOTO(rmaProxyState->thread, ncclRmaProxyProgressThread, ret, fail, rmaProxyState);
   ncclSetThreadName(rmaProxyState->thread, "NCCL RMA PPrg%2d", comm->cudaDev);
 
   INFO(NCCL_INIT, "Rank %d ncclRmaProxyConnectOnce: rmaCommCount %d rmaProxyCtxCount:%d", comm->rank, rmaCommCount,

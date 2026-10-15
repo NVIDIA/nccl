@@ -853,7 +853,7 @@ static ncclResult_t symMemoryObtain(struct ncclComm* comm, CUmemGenericAllocatio
       ret = ncclSuccess;
 
       if (comm->nvlsSupport && comm->gpuCftMulticastSupport) {
-        NOWARN(ret = symTeamObtain(comm, mcTeam, /*multimem=*/false, /*counted=*/false, /*uc=*/false, /*mc=*/true,
+        NOWARN(ret = symTeamObtain(comm, mcTeam, /*multimem=*/false, counted, /*uc=*/false, /*mc=*/true,
                                    /*outTeam=*/nullptr, /*needBarrier=*/nullptr),
                NCCL_INIT);
         if (ret != ncclSuccess && comm->config.hostCftMode == ncclHostCftEnable) {

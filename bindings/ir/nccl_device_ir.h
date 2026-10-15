@@ -119,8 +119,13 @@ __device__ ncclTeam ncclIrTeamWorld(ncclDevComm const* comm);
 __device__ ncclTeam ncclIrTeamLsa(ncclDevComm const* comm);
 __device__ ncclTeam ncclIrTeamCft(ncclDevComm const* comm, ncclCftTeamMode_t mode = NCCL_CFT_TEAM_FLAT);
 __device__ ncclTeam ncclIrTeamCftMultimem(ncclDevComm const* comm);
+__device__ bool ncclIrTeamRankIsMember(ncclTeam a, ncclTeam b, int bPeer);
+__device__ int ncclIrTeamRankToTeam(ncclTeam a, ncclTeam b, int bPeer);
 __device__ int ncclIrTeamRankToWorld(ncclDevComm const* comm, ncclTeam team, int rank);
 __device__ int ncclIrTeamRankToLsa(ncclDevComm const* comm, ncclTeam team, int rank);
+__device__ ncclTeam ncclIrTeamInnerFactor(ncclTeam parent, int innerSize);
+__device__ ncclTeam ncclIrTeamOuterFactor(ncclTeam parent, int innerSize);
+__device__ int ncclIrTeamRankInDifference(ncclTeam parent, ncclTeam subset, int index);
 __device__ ncclTeam ncclIrTeamRail(ncclDevComm const* comm);
 
 /****************************** Window APIs ***********************************/
@@ -139,6 +144,7 @@ __device__ void ncclIrGetMultimemLeInfo(ncclWindow_t w, size_t offset, ncclDevCo
 
 /************************** Resource buffer APIs ******************************/
 
+__device__ size_t ncclIrGetResourceBufferOffset(ncclDevResourceHandle h);
 __device__ void* ncclIrGetResourceBufferLocalPointer(ncclDevComm const* comm, ncclDevResourceHandle h);
 __device__ void* ncclIrGetResourceBufferLsaPointer(ncclDevComm const* comm, ncclDevResourceHandle h, int peer);
 __device__ void* ncclIrGetResourceBufferPeerPointer(ncclDevComm const* comm, ncclDevResourceHandle h, ncclTeam team,

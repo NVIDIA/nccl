@@ -23,11 +23,26 @@ NCCL_DEVICE_INLINE ncclTeam ncclIrTeamCft(ncclDevComm const* comm, ncclCftTeamMo
 NCCL_DEVICE_INLINE ncclTeam ncclIrTeamCftMultimem(ncclDevComm const* comm) {
   return ncclTeamCftMultimem(*comm);
 }
+NCCL_DEVICE_INLINE bool ncclIrTeamRankIsMember(ncclTeam a, ncclTeam b, int bPeer) {
+  return ncclTeamRankIsMember(a, b, bPeer);
+}
+NCCL_DEVICE_INLINE int ncclIrTeamRankToTeam(ncclTeam a, ncclTeam b, int bPeer) {
+  return ncclTeamRankToTeam(a, b, bPeer);
+}
 NCCL_DEVICE_INLINE int ncclIrTeamRankToWorld(ncclDevComm const* comm, ncclTeam team, int rank) {
   return ncclTeamRankToWorld(*comm, team, rank);
 }
 NCCL_DEVICE_INLINE int ncclIrTeamRankToLsa(ncclDevComm const* comm, ncclTeam team, int rank) {
   return ncclTeamRankToLsa(*comm, team, rank);
+}
+NCCL_DEVICE_INLINE ncclTeam ncclIrTeamInnerFactor(ncclTeam parent, int innerSize) {
+  return ncclTeamInnerFactor(parent, innerSize);
+}
+NCCL_DEVICE_INLINE ncclTeam ncclIrTeamOuterFactor(ncclTeam parent, int innerSize) {
+  return ncclTeamOuterFactor(parent, innerSize);
+}
+NCCL_DEVICE_INLINE int ncclIrTeamRankInDifference(ncclTeam parent, ncclTeam subset, int index) {
+  return ncclTeamRankInDifference(parent, subset, index);
 }
 NCCL_DEVICE_INLINE ncclTeam ncclIrTeamRail(ncclDevComm const* comm) {
   return ncclTeamRail(*comm);
@@ -63,6 +78,9 @@ NCCL_DEVICE_INLINE void ncclIrGetMultimemLeInfo(ncclWindow_t w, size_t offset, n
 }
 
 /* Resource buffer APIs */
+NCCL_DEVICE_INLINE size_t ncclIrGetResourceBufferOffset(ncclDevResourceHandle h) {
+  return ncclGetResourceBufferOffset(h);
+}
 NCCL_DEVICE_INLINE void* ncclIrGetResourceBufferLocalPointer(ncclDevComm const* comm, ncclDevResourceHandle h) {
   return ncclGetResourceBufferLocalPointer(*comm, h);
 }

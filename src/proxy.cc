@@ -1030,7 +1030,7 @@ ncclResult_t ncclProxyStart(struct ncclComm* comm) {
 static ncclResult_t ncclProxyProgressCreate(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
   if (!state->thread.joinable()) {
-    state->thread = std::thread(ncclProxyProgress, proxyState);
+    STDTHREADCREATE(state->thread, ncclProxyProgress, proxyState);
     ncclSetThreadName(state->thread, "NCCL Progress%2d", proxyState->tpLocalnRanks);
   }
   return ncclSuccess;
@@ -2154,12 +2154,12 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     proxyState->directMode = comm->directMode;
     memcpy(proxyState->buffSizes, comm->buffSizes, sizeof(comm->buffSizes));
 
-    comm->proxyState->thread = std::thread(ncclProxyService, comm->proxyState);
+    STDTHREADCREATE(comm->proxyState->thread, ncclProxyService, comm->proxyState);
     ncclSetThreadName(comm->proxyState->thread, "NCCL Service %2d", comm->cudaDev);
 
     // UDS support
     INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d", comm, comm->rank);
-    comm->proxyState->threadUDS = std::thread(ncclProxyServiceUDS, comm->proxyState);
+    STDTHREADCREATE(comm->proxyState->threadUDS, ncclProxyServiceUDS, comm->proxyState);
     ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Svc%2d", comm->cudaDev);
   }
   return ncclSuccess;

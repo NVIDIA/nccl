@@ -371,6 +371,17 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
   {
     bool needsStart = needsProxyProgress && !ginState->proxyThreadsCreated;
 
+    // Start the progress threads before linking the devComm, so that a failed thread creation leaves nothing in
+    // the list for the threads already running and the error path can free the devComm.
+    if (needsStart) {
+      ginState->cpuAffinity = comm->cpuAffinity;
+      ginState->proxyThreadsCreated = true;
+      for (int t = 0; t < ginState->proxyNthreads; t++) {
+        STDTHREADCREATE_GOTO(ginState->thread[t], ncclGinProgress, ret, failThreads, ginState, t);
+        ncclSetThreadName(ginState->thread[t], "NCCL GIN P%d-%d", comm->cudaDev, t);
+      }
+    }
+
     if (ginState->proxyThreadsCreated) ginProgressWriteLock(ginState);
     struct ncclGinStateDevComm* last = ginState->devComms;
     if (last) {
@@ -380,15 +391,6 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
       ginState->devComms = ginStateDevComm;
     }
     if (ginState->proxyThreadsCreated) ginProgressWriteUnlock(ginState);
-
-    if (needsStart) {
-      ginState->cpuAffinity = comm->cpuAffinity;
-      ginState->proxyThreadsCreated = true;
-      for (int t = 0; t < ginState->proxyNthreads; t++) {
-        ginState->thread[t] = std::thread([ginState, t] { ncclGinProgress(ginState, t); });
-        ncclSetThreadName(ginState->thread[t], "NCCL GIN P%d-%d", comm->cudaDev, t);
-      }
-    }
   }
 
 end:
@@ -407,6 +409,15 @@ end:
     memset(devComm->ginHandles, 0, sizeof(devComm->ginHandles));
   }
   return ret;
+failThreads:
+  // Stop the threads that did start and forget them, so that a later setup retries the creation.
+  ginState->proxyThreadStopSignal.store(true);
+  for (int t = 0; t < ginState->proxyNthreads; t++) {
+    if (ginState->thread[t].joinable()) ginState->thread[t].join();
+  }
+  ginState->proxyThreadStopSignal.store(false);
+  ginState->proxyThreadsCreated = false;
+  goto end;
 }
 
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,

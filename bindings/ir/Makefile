@@ -63,7 +63,7 @@ CLANG_FLAGS := -c -emit-llvm -O1 $(COMMON_CLANG_FLAGS)
 
 # Optimization passes
 OPT_PASSES := --passes='internalize,inline,globaldce' \
-              -internalize-public-api-list='*nccl*'
+              -internalize-public-api-list='ncclIr*'
 
 # Build rules
 IR_HEADER := $(BUILDDIR)/include/nccl_device_ir.h

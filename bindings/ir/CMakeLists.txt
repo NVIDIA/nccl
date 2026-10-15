@@ -112,7 +112,7 @@ add_custom_command(
     OUTPUT ${OPTIMIZED_BC}
     COMMAND ${OPT_EXECUTABLE}
         --passes=internalize,inline,globaldce
-        -internalize-public-api-list=*nccl*
+        -internalize-public-api-list=ncclIr*
         ${UNOPTIMIZED_BC} -o ${OPTIMIZED_BC}
     DEPENDS ${UNOPTIMIZED_BC}
     COMMENT "Optimizing LLVM bitcode..."

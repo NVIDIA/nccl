@@ -16,7 +16,7 @@ Construct via the module-level factories:
         sess = barrier.hybrid_session(coop, inner_team, outer_team, gin,
                                        lsa_handle, gin_handle, index=0)
 
-  * DevComm-derived -- team and handle pulled from ``dev_comm``::
+  * DevComm-derived -- use the communicator's built-in teams and barriers::
 
         sess = barrier.lsa_default(coop, dev_comm, index=0)
         sess = barrier.world_gin(coop, gin, dev_comm, index=0)
@@ -38,15 +38,15 @@ hanging.
 
 import cutlass
 import cutlass.cute as cute
-from cutlass.cutlass_dsl import ir
-from cutlass._mlir.dialects import llvm
-from cutlass.cutlass_dsl import dsl_user_op
 
 from . import _bindings
 from .coop import Coop
-from ._helpers import _to_ptr, _to_coop_ptr, _to_value
+from ._helpers import _alloca_struct, _to_coop_ptr, _to_value, _to_ptr
 from ._structs import (
     _LLVMPtrType,
+    ncclIrLsaBarrierSession,
+    ncclIrGinBarrierSession,
+    ncclIrBarrierSession,
     ncclTeam,
     ncclMultimemHandle,
 )
@@ -58,33 +58,6 @@ from .handles import (
     MultimemHandle,
 )
 from .types import MemoryOrder, GinFenceLevel
-
-
-# Conservative alignment for opaque barrier session storage.
-_SESSION_ALIGN = 16
-
-
-@dsl_user_op
-def _alloca_session(size_value, *, loc=None, ip=None) -> ir.Value:
-    """Allocate ``size_value`` bytes of stack storage, 16-byte aligned.
-
-    Args:
-        size_value: Int64 from a session size getter, such as
-            ``_bindings.nccl_lsa_barrier_session_size()``
-            (``sizeof(ncclIrLsaBarrierSession)`` on the C++ side).
-
-    Returns:
-        ``!llvm.ptr`` ir.Value to the storage.
-    """
-    i8 = ir.IntegerType.get_signless(8)
-    return llvm.alloca(
-        res=ir.Type.parse("!llvm.ptr"),
-        array_size=size_value.ir_value(),
-        elem_type=i8,
-        alignment=_SESSION_ALIGN,
-        loc=loc,
-        ip=ip,
-    )
 
 
 def _zero_multimem_handle() -> ncclMultimemHandle:
@@ -157,7 +130,7 @@ def lsa_session(
         coop: cooperative group running the session.
         dev_comm: owning :class:`DevComm`.
         team: team participating in the barrier.
-        handle: LSA barrier handle (typically ``dev_comm.lsa_barrier``).
+        handle: LSA barrier handle requested from the host.
         index: barrier slot index.
         multimem: use multimem stores for the arrive phase.
         mm_handle: multimem handle; required when ``multimem=True``.
@@ -165,7 +138,7 @@ def lsa_session(
     Returns:
         Initialized :class:`LsaBarrierSession`.
     """
-    storage = _alloca_session(cutlass.Int64(_bindings.nccl_lsa_barrier_session_size()))
+    storage = _alloca_struct(ncclIrLsaBarrierSession)
     _bindings.nccl_lsa_barrier_session_init(
         storage, _to_coop_ptr(coop), dev_comm.ptr, _to_value(team),
         _to_value(handle), cutlass.Uint32(index), cutlass.Boolean(multimem),
@@ -233,14 +206,13 @@ def gin_session(
         dev_comm: owning :class:`DevComm`; unused unless ``gin`` is
             :data:`GIN_ALL_CONTEXTS`.
         team: team participating in the barrier.
-        handle: GIN barrier handle (typically
-            ``dev_comm.rail_gin_barrier`` or ``dev_comm.world_gin_barrier``).
+        handle: GIN barrier handle requested from the host.
         index: barrier slot index.
 
     Returns:
         Initialized :class:`GinBarrierSession`.
     """
-    storage = _alloca_session(cutlass.Int64(_bindings.nccl_gin_barrier_session_size()))
+    storage = _alloca_struct(ncclIrGinBarrierSession)
     if isinstance(gin, _GinAllContexts):
         _bindings.nccl_gin_barrier_session_init_all_contexts(
             storage, _to_coop_ptr(coop), dev_comm.ptr, _to_value(team),
@@ -313,20 +285,19 @@ def hybrid_session(
     Returns:
         Initialized :class:`BarrierSession`.
     """
-    storage = _alloca_session(cutlass.Int64(_bindings.nccl_barrier_session_size()))
+    storage = _alloca_struct(ncclIrBarrierSession)
     _bindings.nccl_barrier_session_init(
         storage, _to_coop_ptr(coop), _to_value(inner_team), _to_value(outer_team),
         gin.ptr, _to_value(inner_handle), _to_value(outer_handle),
         cutlass.Uint32(index), cutlass.Boolean(multimem),
-        _to_value(inner_mm_handle if inner_mm_handle is not None
-                  else _zero_multimem_handle()),
+        _to_value(
+            inner_mm_handle if inner_mm_handle is not None else _zero_multimem_handle()),
     )
     return BarrierSession(ptr=storage)
 
 
 # === Convenience factories ===
-# Pull the right team and handle from a DevComm so the user doesn't have to
-# wire them up manually.
+# Use native constructors for the communicator's built-in teams and barriers.
 
 def lsa_default(
     coop: Coop,
@@ -334,22 +305,24 @@ def lsa_default(
     index: int,
     *,
     multimem: bool = False,
-    mm_handle: MultimemHandle | None = None,
 ) -> "LsaBarrierSession":
-    """LSA barrier on the default LSA team using ``dev_comm.lsa_barrier``.
+    """LSA barrier using the communicator's built-in LSA team and resources.
 
     Args:
         coop: cooperative group running the session.
         dev_comm: owning :class:`DevComm`.
         index: barrier slot index.
-        multimem: use multimem stores for the arrive phase.
-        mm_handle: multimem handle; required when ``multimem=True``.
+        multimem: use the communicator's LSA multimem mapping for arrive.
 
     Returns:
         Initialized :class:`LsaBarrierSession`.
     """
-    return lsa_session(coop, dev_comm, dev_comm.team_lsa, dev_comm.lsa_barrier,
-                       index, multimem=multimem, mm_handle=mm_handle)
+    storage = _alloca_struct(ncclIrLsaBarrierSession)
+    _bindings.nccl_lsa_barrier_session_init_lsa(
+        storage, _to_coop_ptr(coop), dev_comm.ptr, cutlass.Uint32(index),
+        cutlass.Boolean(multimem),
+    )
+    return LsaBarrierSession(ptr=storage)
 
 
 def world_gin(
@@ -358,20 +331,28 @@ def world_gin(
     dev_comm: DevComm,
     index: int,
 ) -> "GinBarrierSession":
-    """GIN barrier on the world team using ``dev_comm.world_gin_barrier``.
+    """GIN barrier using the communicator's built-in world-team resources.
 
     Args:
         coop: cooperative group running the session.
         gin: :class:`Gin`, or :data:`GIN_ALL_CONTEXTS`. See
             :func:`gin_session`.
-        dev_comm: owning :class:`DevComm`.
+        dev_comm: owning :class:`DevComm`; used for :data:`GIN_ALL_CONTEXTS`.
         index: barrier slot index.
 
     Returns:
         Initialized :class:`GinBarrierSession`.
     """
-    return gin_session(coop, gin, dev_comm, dev_comm.team_world,
-                       dev_comm.world_gin_barrier, index)
+    storage = _alloca_struct(ncclIrGinBarrierSession)
+    if isinstance(gin, _GinAllContexts):
+        _bindings.nccl_gin_barrier_session_init_all_contexts_world(
+            storage, _to_coop_ptr(coop), dev_comm.ptr, cutlass.Uint32(index),
+        )
+    else:
+        _bindings.nccl_gin_barrier_session_init_world(
+            storage, _to_coop_ptr(coop), gin.ptr, cutlass.Uint32(index),
+        )
+    return GinBarrierSession(ptr=storage)
 
 
 def rail_gin(
@@ -380,20 +361,28 @@ def rail_gin(
     dev_comm: DevComm,
     index: int,
 ) -> "GinBarrierSession":
-    """GIN barrier on the rail team using ``dev_comm.rail_gin_barrier``.
+    """GIN barrier using the communicator's built-in rail-team resources.
 
     Args:
         coop: cooperative group running the session.
         gin: :class:`Gin`, or :data:`GIN_ALL_CONTEXTS`. See
             :func:`gin_session`.
-        dev_comm: owning :class:`DevComm`.
+        dev_comm: owning :class:`DevComm`; used for :data:`GIN_ALL_CONTEXTS`.
         index: barrier slot index.
 
     Returns:
         Initialized :class:`GinBarrierSession`.
     """
-    return gin_session(coop, gin, dev_comm, dev_comm.team_rail,
-                       dev_comm.rail_gin_barrier, index)
+    storage = _alloca_struct(ncclIrGinBarrierSession)
+    if isinstance(gin, _GinAllContexts):
+        _bindings.nccl_gin_barrier_session_init_all_contexts_rail(
+            storage, _to_coop_ptr(coop), dev_comm.ptr, cutlass.Uint32(index),
+        )
+    else:
+        _bindings.nccl_gin_barrier_session_init_rail(
+            storage, _to_coop_ptr(coop), gin.ptr, cutlass.Uint32(index),
+        )
+    return GinBarrierSession(ptr=storage)
 
 
 def world_hybrid(
@@ -403,27 +392,26 @@ def world_hybrid(
     index: int,
     *,
     multimem: bool = False,
-    inner_mm_handle: MultimemHandle | None = None,
 ) -> "BarrierSession":
-    """Hybrid barrier (LSA + rail-GIN) using the embedded hybrid handles.
+    """World barrier using the communicator's built-in hybrid resources.
 
     Args:
         coop: cooperative group running the session.
         gin: :class:`Gin` for the outer GIN stage.
-        dev_comm: owning :class:`DevComm`; supplies the inner LSA and
-            outer rail-GIN handles via its embedded hybrid handles.
+        dev_comm: owning :class:`DevComm`; retained for call compatibility.
+            The session uses the communicator associated with ``gin``.
         index: barrier slot index.
-        multimem: use multimem stores in the inner arrive phase.
-        inner_mm_handle: inner multimem handle; required when
-            ``multimem=True``.
+        multimem: use the communicator's LSA multimem mapping for arrive.
 
     Returns:
         Initialized :class:`BarrierSession`.
     """
-    return hybrid_session(coop, dev_comm.team_lsa, dev_comm.team_world, gin,
-                     dev_comm.hybrid_lsa_barrier,
-                     dev_comm.hybrid_rail_gin_barrier, index,
-                     multimem=multimem, inner_mm_handle=inner_mm_handle)
+    storage = _alloca_struct(ncclIrBarrierSession)
+    _bindings.nccl_barrier_session_init_world(
+        storage, _to_coop_ptr(coop), gin.ptr, cutlass.Uint32(index),
+        cutlass.Boolean(multimem),
+    )
+    return BarrierSession(ptr=storage)
 
 
 __all__ = [

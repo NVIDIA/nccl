@@ -260,20 +260,12 @@ __device__ ncclResult_t ncclIrGinWaitTimeout(ncclIrGin const* net, ncclGinReques
 // Barrier APIs
 ////////////////////////////////////////////////////////////////////////////////
 
-/************************ Session struct size getters ***********************/
-
-/*
- * Used by the Python device API to allocate session storage with the correct
- * size via llvm.alloca, without duplicating the C++ struct layout in Python.
- */
-__device__ size_t ncclIrLsaBarrierSessionSize();
-__device__ size_t ncclIrGinBarrierSessionSize();
-__device__ size_t ncclIrBarrierSessionSize();
-
 /************************* LSA Barrier Session APIs **************************/
 __device__ void ncclIrLsaBarrierSessionInit(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                             ncclDevComm const* comm, ncclTeam team, ncclLsaBarrierHandle handle,
                                             uint32_t index, bool multimem = false, ncclMultimemHandle mmHandle = {});
+__device__ void ncclIrLsaBarrierSessionInitLsa(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
+                                               ncclDevComm const* comm, uint32_t index, bool multimem);
 __device__ void ncclIrLsaBarrierSessionArrive(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                               cuda::memory_order order);
 __device__ void ncclIrLsaBarrierSessionWait(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
@@ -288,12 +280,21 @@ __device__ void ncclIrGinBarrierSessionInit(ncclIrGinBarrierSession* session, nc
                                             ncclIrGin const* net, ncclTeam team, ncclGinBarrierHandle handle,
                                             uint32_t index);
 
+__device__ void ncclIrGinBarrierSessionInitRail(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
+                                                ncclIrGin const* net, uint32_t index);
+__device__ void ncclIrGinBarrierSessionInitWorld(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
+                                                 ncclIrGin const* net, uint32_t index);
+
 // All-contexts variant of session-init: rail/world/etc. signal/wait happens on context 0,
 // fence iterates every GIN context on the comm.
 __device__ void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
                                                        ncclDevComm const* comm, ncclTeam team,
                                                        ncclGinBarrierHandle handle, uint32_t index);
 
+__device__ void ncclIrGinBarrierSessionInitAllContextsRail(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
+                                                           ncclDevComm const* comm, uint32_t index);
+__device__ void ncclIrGinBarrierSessionInitAllContextsWorld(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
+                                                            ncclDevComm const* comm, uint32_t index);
 __device__ void ncclIrGinBarrierSessionSync(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
                                             cuda::memory_order order,
                                             ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);
@@ -307,6 +308,12 @@ __device__ void ncclIrBarrierSessionInit(ncclIrBarrierSession* session, ncclIrCo
                                          ncclGinBarrierHandle const outerBarHandle, uint32_t index,
                                          bool multimem = false, ncclMultimemHandle const innerMmHandle = {});
 
+__device__ void ncclIrBarrierSessionInitWorld(ncclIrBarrierSession* session, ncclIrCoop const* coop,
+                                              ncclIrGin const* net, uint32_t index, bool multimem);
+__device__ void ncclIrBarrierSessionInitLsa(ncclIrBarrierSession* session, ncclIrCoop const* coop,
+                                            ncclDevComm const* comm, uint32_t index, bool multimem);
+__device__ void ncclIrBarrierSessionInitRail(ncclIrBarrierSession* session, ncclIrCoop const* coop,
+                                             ncclIrGin const* net, uint32_t index);
 __device__ void ncclIrBarrierSessionSync(ncclIrBarrierSession* session, ncclIrCoop const* coop,
                                          cuda::memory_order order,
                                          ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get);

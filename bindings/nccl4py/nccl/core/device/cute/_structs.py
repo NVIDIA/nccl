@@ -198,3 +198,24 @@ class ncclIrGin:
     """Opaque 40-byte, 8-byte-aligned GIN storage from the IR wrapper header."""
 
     storage: _array_i64(5)
+
+
+@cute.native_struct
+class ncclIrLsaBarrierSession:
+    """Opaque LSA barrier session storage from the matching NCCL device IR build."""
+
+    storage: _array_i64(10)
+
+
+@cute.native_struct
+class ncclIrGinBarrierSession:
+    """Opaque GIN barrier session storage from the matching NCCL device IR build."""
+
+    storage: _array_i64(12)
+
+
+@cute.native_struct
+class ncclIrBarrierSession:
+    """Opaque hybrid barrier session storage from the matching NCCL device IR build."""
+
+    storage: _array_i64(46)

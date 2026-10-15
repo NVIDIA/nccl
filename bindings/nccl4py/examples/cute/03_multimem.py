@@ -8,9 +8,9 @@
 """Multimem handles, multimem window addresses and multimem barriers.
 
 A multimem (multicast) mapping lets one store reach every LSA peer's copy
-of a window. This requests one for the LSA team and shows the two places
-the handle comes from -- embedded in the devcomm, or returned to the host
-by ``create_dev_comm`` -- and the three places it is consumed.
+of a window. This requests one for the LSA team and demonstrates the
+communicator's default mapping alongside explicit handles returned to
+the host by ``create_dev_comm``.
 
 The CuTeDSL layer exposes multimem *addresses*; the multimem load-reduce
 and store instructions themselves are PTX and are not wrapped here.
@@ -55,6 +55,7 @@ def multimem_kernel(
     dev_comm: nccl_cute.DevComm,
     win: nccl_cute.Window,
     host_mm: nccl_cute.MultimemHandle,
+    lsa_handle: nccl_cute.LsaBarrierHandle,
 ):
     """Report multimem addresses and run a multimem-arrive LSA barrier.
 
@@ -62,19 +63,12 @@ def multimem_kernel(
         dev_comm: CuTeDSL view of the NCCL device communicator.
         win: registered window covered by the multimem mapping.
         host_mm: the LSA team's multimem handle, passed from the host.
+        lsa_handle: separately requested LSA barrier handle.
     """
     tidx, _, _ = cute.arch.thread_idx()
     coop = nccl_cute.cta()
 
-    # Two sources for the same mapping: the devcomm's embedded copy, and the
-    # handle the host got back from create_dev_comm.
-    embedded_mm = dev_comm.lsa_multimem
-
     if 0 == tidx:
-        embedded_mc = cute.make_ptr(cutlass.Int8, embedded_mm.mc_base_pointer).toint()
-        host_mc = cute.make_ptr(cutlass.Int8, host_mm.mc_base_pointer).toint()
-        cute.printf(f"mc_base embedded={embedded_mc} host={host_mc}")
-
         # multimem_pointer takes an explicit handle, so it addresses non-LSA
         # teams too; lsa_multimem_pointer is the LSA shorthand.
         via_handle = cute.make_ptr(cutlass.Int8, win.multimem_pointer(0, host_mm)).toint()
@@ -83,15 +77,15 @@ def multimem_kernel(
         cute.printf(f"window mm(handle)={via_handle} mm(lsa)={via_lsa} unicast={unicast}")
 
     # multimem=True publishes the barrier flag with one multicast store
-    # instead of one per peer; mm_handle must cover the barrier's team.
+    # instead of one per peer, using the communicator's default LSA mapping.
     bar = nccl_cute.lsa_default(
-        coop, dev_comm, index=BARRIER_INDEX, multimem=True, mm_handle=embedded_mm)
+        coop, dev_comm, index=BARRIER_INDEX, multimem=True)
     bar.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
     bar.destroy()
 
-    # Same barrier, with team and handle named by the caller.
+    # Explicit resources: mm_handle must cover the barrier's team.
     explicit = nccl_cute.lsa_session(
-        coop, dev_comm, dev_comm.team_lsa, dev_comm.lsa_barrier,
+        coop, dev_comm, dev_comm.team_lsa, lsa_handle,
         index=BARRIER_INDEX, multimem=True, mm_handle=host_mm)
     explicit.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
     explicit.destroy()
@@ -105,6 +99,7 @@ def multimem_demo(
     dev_comm: nccl_cute.DevComm,
     win: nccl_cute.Window,
     host_mm: nccl_cute.MultimemHandle,
+    lsa_handle: nccl_cute.LsaBarrierHandle,
 ):
     """Launch :func:`multimem_kernel` on a single CTA.
 
@@ -112,8 +107,9 @@ def multimem_demo(
         dev_comm: CuTeDSL view of the NCCL device communicator.
         win: registered window covered by the multimem mapping.
         host_mm: the LSA team's multimem handle.
+        lsa_handle: separately requested LSA barrier handle.
     """
-    multimem_kernel(dev_comm, win, host_mm).launch(
+    multimem_kernel(dev_comm, win, host_mm, lsa_handle).launch(
         grid=[1, 1, 1],
         block=[THREADS, 1, 1],
         cooperative=True,
@@ -168,22 +164,24 @@ def main():
     device.sync()
     win_resource = nccl_comm.register_window(buf)
 
-    # lsa_multimem populates DevComm.lsa_multimem; the TeamRequirement is what
-    # makes the handle retrievable host-side.
+    # Request the default LSA mapping plus explicit host-side handles.
     reqs = nccl.NCCLDevCommRequirements(
         lsa_multimem=True,
         lsa_barrier_count=1,
         teams=(nccl.TeamRequirement(team=nccl_comm.team_lsa, multimem=True),),
+        resources=(nccl.LsaBarrierRequirement(team=nccl_comm.team_lsa, n_barriers=1),),
     )
     dev_comm_resource = nccl_comm.create_dev_comm(requirements=reqs)
 
     mm_handle = dev_comm_resource.multimem_handle(nccl_comm.team_lsa)
+    (lsa_handle,) = dev_comm_resource.resource_handles
     print(f"[rank {rank}] host mc_base_pointer=0x{mm_handle.mc_base_pointer:x}")
 
     multimem_demo(
         nccl_cute.DevComm(dev_comm_resource),
         nccl_cute.Window(win_resource),
         nccl_cute.MultimemHandle(mm_handle),
+        nccl_cute.LsaBarrierHandle(lsa_handle),
     )
     device.sync()
 

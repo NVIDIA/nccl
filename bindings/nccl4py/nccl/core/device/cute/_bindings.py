@@ -575,6 +575,12 @@ def nccl_lsa_barrier_session_init(
     multimem: cutlass.Boolean, mm_handle: ncclMultimemHandle,
 ) -> None: ...
 
+@cute.extern(name="ncclIrLsaBarrierSessionInitLsa", source=_BC)
+def nccl_lsa_barrier_session_init_lsa(
+    session: _LLVMPtrType, coop: _LLVMPtrType, dev_comm: _LLVMPtrType,
+    index: cutlass.Uint32, multimem: cutlass.Boolean,
+) -> None: ...
+
 @cute.extern(name="ncclIrLsaBarrierSessionArrive", source=_BC)
 def nccl_lsa_barrier_session_arrive(
     session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
@@ -608,6 +614,30 @@ def nccl_gin_barrier_session_init_all_contexts(
     team: ncclTeam, handle: ncclGinBarrierHandle, index: cutlass.Uint32,
 ) -> None: ...
 
+@cute.extern(name="ncclIrGinBarrierSessionInitRail", source=_BC)
+def nccl_gin_barrier_session_init_rail(
+    session: _LLVMPtrType, coop: _LLVMPtrType, gin: _LLVMPtrType,
+    index: cutlass.Uint32,
+) -> None: ...
+
+@cute.extern(name="ncclIrGinBarrierSessionInitWorld", source=_BC)
+def nccl_gin_barrier_session_init_world(
+    session: _LLVMPtrType, coop: _LLVMPtrType, gin: _LLVMPtrType,
+    index: cutlass.Uint32,
+) -> None: ...
+
+@cute.extern(name="ncclIrGinBarrierSessionInitAllContextsRail", source=_BC)
+def nccl_gin_barrier_session_init_all_contexts_rail(
+    session: _LLVMPtrType, coop: _LLVMPtrType, dev_comm: _LLVMPtrType,
+    index: cutlass.Uint32,
+) -> None: ...
+
+@cute.extern(name="ncclIrGinBarrierSessionInitAllContextsWorld", source=_BC)
+def nccl_gin_barrier_session_init_all_contexts_world(
+    session: _LLVMPtrType, coop: _LLVMPtrType, dev_comm: _LLVMPtrType,
+    index: cutlass.Uint32,
+) -> None: ...
+
 @cute.extern(name="ncclIrGinBarrierSessionSync", source=_BC)
 def nccl_gin_barrier_session_sync(
     session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
@@ -628,6 +658,24 @@ def nccl_barrier_session_init(
     multimem: cutlass.Boolean, inner_mm_handle: ncclMultimemHandle,
 ) -> None: ...
 
+@cute.extern(name="ncclIrBarrierSessionInitWorld", source=_BC)
+def nccl_barrier_session_init_world(
+    session: _LLVMPtrType, coop: _LLVMPtrType, gin: _LLVMPtrType,
+    index: cutlass.Uint32, multimem: cutlass.Boolean,
+) -> None: ...
+
+@cute.extern(name="ncclIrBarrierSessionInitLsa", source=_BC)
+def nccl_barrier_session_init_lsa(
+    session: _LLVMPtrType, coop: _LLVMPtrType, dev_comm: _LLVMPtrType,
+    index: cutlass.Uint32, multimem: cutlass.Boolean,
+) -> None: ...
+
+@cute.extern(name="ncclIrBarrierSessionInitRail", source=_BC)
+def nccl_barrier_session_init_rail(
+    session: _LLVMPtrType, coop: _LLVMPtrType, gin: _LLVMPtrType,
+    index: cutlass.Uint32,
+) -> None: ...
+
 @cute.extern(name="ncclIrBarrierSessionSync", source=_BC)
 def nccl_barrier_session_sync(
     session: _LLVMPtrType, coop: _LLVMPtrType, order: cutlass.Int32,
@@ -636,15 +684,3 @@ def nccl_barrier_session_sync(
 
 @cute.extern(name="ncclIrBarrierSessionDestroy", source=_BC)
 def nccl_barrier_session_destroy(session: _LLVMPtrType) -> None: ...
-
-
-# === Session size getters ===
-
-@cute.extern(name="ncclIrLsaBarrierSessionSize", source=_BC)
-def nccl_lsa_barrier_session_size() -> cutlass.Int64: ...
-
-@cute.extern(name="ncclIrGinBarrierSessionSize", source=_BC)
-def nccl_gin_barrier_session_size() -> cutlass.Int64: ...
-
-@cute.extern(name="ncclIrBarrierSessionSize", source=_BC)
-def nccl_barrier_session_size() -> cutlass.Int64: ...

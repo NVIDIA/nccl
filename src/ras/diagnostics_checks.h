@@ -76,7 +76,7 @@ ncclResult_t rasDiagnosticsNetDeviceSummarize(
 // across ranks that all failed to read them.
 struct rasDiagnosticsNetDeviceData {
   uint64_t hostHash; // reporting rank's node identity, for counting nodes per device group
-  int speed;         // the port's rate now, falling back to what the plugin reported at open
+  int speed;         // Mbps, from the network plugin
   int port;
   int8_t netDeviceType;
   int8_t linkLayer; // RAS_DIAG_NET_LINK_*

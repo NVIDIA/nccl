@@ -89,13 +89,6 @@ void rasDiagnosticsNetReadPortAttrs(struct rasDiagnosticsNetDeviceData* netData,
   netData->portState = (int8_t)strtol(value, nullptr, 10);
   (void)ncclOsTopoGetStrFromSys(path, "phys_state", value, sizeof(value));
   netData->physState = (int8_t)strtol(value, nullptr, 10);
-
-  // Rate reads e.g. "400 Gb/sec (4X NDR)" or "2.5 Gb/sec (1X SDR)"; parsed digit-wise, strtod being locale-dependent.
-  char* end = nullptr;
-  (void)ncclOsTopoGetStrFromSys(path, "rate", value, sizeof(value));
-  const long rate = strtol(value, &end, 10);
-  const int tenths = (*end == '.' && end[1] >= '0' && end[1] <= '9') ? end[1] - '0' : 0;
-  if (rate > 0) netData->speed = (int)rate * 1000 + tenths * 100;
 }
 
 static bool rasDiagnosticsNetDeviceSeen(const char* records, size_t recordStride, int count, const char* name,

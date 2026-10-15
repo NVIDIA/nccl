@@ -19,6 +19,7 @@
 #include "graph/topo.h"
 #include "ras_internal.h"
 #include "transport.h"
+#include "transport/net_ib/common.h"
 
 // Matches a known verbs plugin name (InfiniBand or RoCE) exactly or followed by a delimiter, rejecting
 // prefix-sharing names. Only these plugins name their devices the way sysfs does.
@@ -80,6 +81,18 @@ static ncclResult_t rasDiagnosticsFillLocalRecord(char* record, const struct ras
   return ncclSuccess;
 }
 
+// The plugin reports the speed a port had when it was opened. The built-in IB plugin also tracks the
+// current speed, so use that where it is available.
+static void rasDiagnosticsNetApplyLiveSpeed(struct rasDiagnosticsCommSnapshot* snapshot) {
+  for (int d = 0; d < snapshot->nNetProps; d++) {
+    struct ncclTopoNetPropertiesSnapshot* props = snapshot->netProps + d;
+    const int ibDev = props->vProps.ndevs == 1 ? props->vProps.devs[0] : -1;
+    if (!props->propertiesValid || ibDev < 0 || ibDev >= ncclNIbDevs) continue;
+    const uint64_t speed = COMPILER_ATOMIC_LOAD(&ncclIbDevs[ibDev].currSpeed, std::memory_order_relaxed);
+    if (speed > 0 && speed <= (uint64_t)INT_MAX) props->speed = (int)speed;
+  }
+}
+
 ncclResult_t rasDiagnosticsCollectCommSnapshots(const struct rasDiagnosticsContext* ctx, bool collectNetDevices,
                                                 struct rasDiagnosticsCommSnapshot** snapshots, int* nSnapshots) {
   ncclUniquePtr<struct rasDiagnosticsCommSnapshot> result;
@@ -106,6 +119,7 @@ ncclResult_t rasDiagnosticsCollectCommSnapshots(const struct rasDiagnosticsConte
       if (collectNetDevices && snapshot->netIbVerbs) {
         (void)ncclTopoGetNetPropertiesSnapshot(comm, /*requireCommInitialized=*/!ctx->hasCommFilter,
                                                &snapshot->netProps, &snapshot->nNetProps);
+        if (comm->ncclNet == &ncclNetIb) rasDiagnosticsNetApplyLiveSpeed(snapshot);
       }
     }
   }

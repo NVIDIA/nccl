@@ -268,7 +268,7 @@ static void ncclDebugInit() {
 #if defined(NCCL_OS_LINUX)
         setlinebuf(file); // disable block buffering
 #elif defined(NCCL_OS_WINDOWS)
-        setvbuf(file, NULL, _IOLBF, 0); // disable block buffering
+        setvbuf(file, NULL, _IONBF, 0); // disable buffering
 #endif
         ncclDebugFile = file;
       }

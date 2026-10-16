@@ -56,7 +56,7 @@ from nccl.core.typing import (
     NcclInvalid,
     NcclCommMemStat,
 )
-from nccl.core.utils import UniqueId
+from nccl.core.utils import UniqueId, require_compatible_nccl
 
 _Result = _nccl_bindings.Result
 
@@ -1490,6 +1490,7 @@ class Communicator:
         return self._rank
 
     @property
+    @require_compatible_nccl
     def properties(self) -> NCCLCommProperties:
         """All properties NCCL reports for this communicator.
 

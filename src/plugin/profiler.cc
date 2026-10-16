@@ -249,25 +249,6 @@ static inline uint64_t profilerMonoNow(void) {
   return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
 }
 
-// Stop a host-side (CPU-timed) event, stamping the current CPU clock. Used for
-// all host-thread, proxy-thread, net and CE stops.
-// stopEvent reuses the start descriptor type, so only its timestamp fields
-// carry meaning; everything else is zeroed and the event is identified by
-// eHandle. Host-sampled stops are exact, so the uncertainty stays 0.
-static inline void profilerStopEventHost(void* eHandle) {
-  ncclProfilerEventDescr_t sd = {};
-  sd.tsCpu = profilerCpuNow(profilerTsModeGet());
-  ncclProfiler->stopEvent(eHandle, &sd);
-}
-
-// Stop with no NCCL timestamps (zeroed descriptor). Used for CE events,
-// whose completion is tracked by the plugin's own CUDA events rather than by a
-// host clock at the API boundary, so NCCL deliberately does not stamp them.
-static inline void profilerStopEventNone(void* eHandle) {
-  ncclProfilerEventDescr_t sd = {};
-  ncclProfiler->stopEvent(eHandle, &sd);
-}
-
 // ---------------------------------------------------------------------------
 // GPU->CPU time calibration (profiler-thread local).
 // ---------------------------------------------------------------------------
@@ -400,54 +381,6 @@ static inline void profilerMapGpuToCpu(uint64_t tsGpu, uint64_t* tsCpu, uint64_t
   int64_t d = (int64_t)tsGpu - (int64_t)c->gpuRef;
   *tsCpu = (uint64_t)((int64_t)c->cpuRef + (int64_t)(c->slope * (double)d));
   *tsCpuUncertainty = c->uncertainty;
-}
-
-// Start a host-side (CPU-timed) event, stamping the current CPU clock into the
-// descriptor. Used for all app-thread / proxy-thread starts.
-static inline void profilerStartEventHost(void* ctx, void** eHandle, ncclProfilerEventDescr_t* d) {
-  d->tsCpu = profilerCpuNow(profilerTsModeGet());
-  ncclProfiler->startEvent(ctx, eHandle, d);
-}
-
-// Start a GPU-timed event (KernelCh, KernelPhase). The raw globaltimer value
-// already travels in the descriptor's pTimer field; here we additionally map
-// it onto the configured CPU clock, which only happens if the plugin asked for
-// gpuClockSync.
-static inline void profilerStartEventGpu(void* ctx, void** eHandle, ncclProfilerEventDescr_t* d, uint64_t tsGpu) {
-  if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
-    profilerMapGpuToCpu(tsGpu, &d->tsCpu, &d->tsCpuUncertainty);
-  }
-  ncclProfiler->startEvent(ctx, eHandle, d);
-}
-
-// Stop a GPU-timed event. The raw globaltimer stop value reaches the plugin
-// through recordEventState's pTimer; this adds the mapped CPU clock.
-static inline void profilerStopEventGpu(void* eHandle, uint64_t tsGpu) {
-  ncclProfilerEventDescr_t sd = {};
-  if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
-    profilerMapGpuToCpu(tsGpu, &sd.tsCpu, &sd.tsCpuUncertainty);
-  }
-  ncclProfiler->stopEvent(eHandle, &sd);
-}
-
-// Record a host-timed state transition, stamping the current CPU clock. The
-// caller fills the union member for eState; this only adds the timestamp.
-static inline void profilerRecordEventStateHost(void* eHandle, ncclProfilerEventState_t eState,
-                                                ncclProfilerEventStateArgs_t* a) {
-  a->tsCpu = profilerCpuNow(profilerTsModeGet());
-  ncclProfiler->recordEventState(eHandle, eState, a);
-}
-
-// Record a GPU-timed state transition (the KernelCh and KernelPhase stops).
-// tsGpu is the raw globaltimer the caller already puts in kernelCh.pTimer;
-// here it additionally lands on the configured CPU clock, so the transition
-// and the stopEvent that follows report the same instant.
-static inline void profilerRecordEventStateGpu(void* eHandle, ncclProfilerEventState_t eState,
-                                               ncclProfilerEventStateArgs_t* a, uint64_t tsGpu) {
-  if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
-    profilerMapGpuToCpu(tsGpu, &a->tsCpu, &a->tsCpuUncertainty);
-  }
-  ncclProfiler->recordEventState(eHandle, eState, a);
 }
 
 extern thread_local int ncclGroupDepth;

@@ -14,8 +14,21 @@
 #include "device.h"
 #include "alloc.h"
 #include <cfloat>
+#include <cstring>
 
 NCCL_PARAM(SymNoWinEnable, "SYM_NOWIN_ENABLE", 0);
+NCCL_PARAM(SymCeThreshold, "SYM_CE_THRESHOLD", 8 * 1024 * 1024);
+
+// Higher CE threshold for AllGather since TMA kernels continue to perform better till higher message sizes.
+int64_t ncclSymCeAllGatherThreshold(struct ncclComm* comm) {
+  int64_t threshold = ncclParamSymCeThreshold();
+  const char* env = ncclGetEnv("NCCL_SYM_CE_THRESHOLD");
+  if (env == nullptr || strlen(env) == 0) {
+    bool useMcSync = comm->symkState.hasLsaMultimem;
+    if (!useMcSync && comm->minCompCap >= 100 && ncclSymkTmaAvailable(comm)) threshold *= 4;
+  }
+  return threshold;
+}
 
 void ncclTuningResultListFree(struct ncclTuningResultList_t* list) {
   struct ncclTuningResultListNode* node = list->head;

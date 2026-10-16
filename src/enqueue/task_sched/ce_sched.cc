@@ -125,7 +125,7 @@ static ncclResult_t ceSchedCollArgsFromTuningInfo(struct ncclComm* comm, struct 
   args->recvBuff = (uint8_t*)raw->recvbuff;
   args->apiEventHandle = tInfo->raw->profiler.apiEventHandle;
   args->userTag = tInfo->raw->profiler.userTag;
-  args->ceCollProfHandle = nullptr;
+  args->ceCollProfHandle = {};
   return ncclSuccess;
 }
 
@@ -1761,15 +1761,17 @@ ncclResult_t ncclSchedLaunchCeTasks(struct ncclComm* comm,
     cudaStream_t launchStream = streamPlan->stream;
     cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
     cudaStream_t acqDepStream;
+    // Capture with graphStreamOrdering=0 runs on the user stream. The application orders that work.
+    bool disableGraphStreamOrder = streamPlan->captured && comm->config.graphStreamOrdering == 0;
 
-    if (depStream) {
+    if (depStream && !disableGraphStreamOrder) {
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &acqDepStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, acqDepStream, finishedEvent), ret, fail);
     }
 
     NCCLCHECKGOTO(launchCeStreamPlan(comm, streamPlan), ret, fail);
 
-    if (depStream) {
+    if (depStream && !disableGraphStreamOrder) {
       CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, acqDepStream, finishedEvent), ret, fail);
       NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, depStream, false), ret, fail);

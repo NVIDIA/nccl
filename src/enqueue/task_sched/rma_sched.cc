@@ -5,13 +5,14 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
+#include <functional>
+#include <map>
 #include <thread>
 
 #include "comm.h"
 #include "alloc.h"
 #include "checks.h"
 #include "compiler.h"
-#include "profiler.h"
 #include "strongstream.h"
 #include "cudawrap.h"
 #include "ce_coll.h"
@@ -22,15 +23,16 @@
 #include "enqueue/task_sched.h"
 
 struct ncclRmaSchedCtxPlan {
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> waitSignalCE;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> waitSignalProxy;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> putSignalCE;
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> putSignalProxy;
+  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> ce;
+  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> proxy;
 };
 
+// Put and signal tasks share a stream plan. Its func is ncclFuncPutSignal.
+// A wait plan's func is ncclFuncWaitSignal.
 struct ncclRmaSchedStreamPlan {
   struct ncclRmaSchedStreamPlan* next;
   cudaStream_t stream;
+  ncclFunc_t func;
   bool captured;
   struct ncclCudaGraph graph;
   // Set while a captured launch owns proxy descriptors. Moved to the graph
@@ -44,6 +46,20 @@ struct ncclRmaSchedStreamPlan {
 struct ncclRmaSchedPlan {
   struct ncclIntruQueue<struct ncclRmaSchedStreamPlan, &ncclRmaSchedStreamPlan::next> streamPlans;
 };
+
+struct ncclRmaSchedWaitKey {
+  int peer;
+  int ctx;
+  cudaStream_t stream;
+
+  bool operator<(const struct ncclRmaSchedWaitKey& other) const {
+    if (peer != other.peer) return peer < other.peer;
+    if (ctx != other.ctx) return ctx < other.ctx;
+    return std::less<cudaStream_t>()(stream, other.stream);
+  }
+};
+
+typedef ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> ncclRmaSchedTaskQueue;
 
 static bool isLsaAccessible(struct ncclComm* comm, int rank) {
   for (int i = 0; i < comm->devrState.lsaTeamSize; i++) {
@@ -104,51 +120,9 @@ static ncclResult_t rmaSchedInitStreamPlan(struct ncclComm* comm, struct ncclRma
   int nRmaCtx = comm->config.numRmaCtx;
   streamPlan->ctxPlans = ncclMemoryStackAlloc<struct ncclRmaSchedCtxPlan>(&comm->memScoped, nRmaCtx);
   for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    ncclIntruQueueConstruct(&streamPlan->ctxPlans[ctx].waitSignalCE);
-    ncclIntruQueueConstruct(&streamPlan->ctxPlans[ctx].waitSignalProxy);
-    ncclIntruQueueConstruct(&streamPlan->ctxPlans[ctx].putSignalCE);
-    ncclIntruQueueConstruct(&streamPlan->ctxPlans[ctx].putSignalProxy);
+    ncclIntruQueueConstruct(&streamPlan->ctxPlans[ctx].ce);
+    ncclIntruQueueConstruct(&streamPlan->ctxPlans[ctx].proxy);
   }
-  return ncclSuccess;
-}
-
-static struct ncclRmaSchedStreamPlan* rmaSchedFindStreamPlan(struct ncclRmaSchedPlan* rmaPlan, cudaStream_t stream,
-                                                             bool captured) {
-  for (struct ncclRmaSchedStreamPlan* plan = ncclIntruQueueHead(&rmaPlan->streamPlans); plan != nullptr;
-       plan = plan->next) {
-    if (plan->stream == stream && plan->captured == captured) return plan;
-  }
-  return nullptr;
-}
-
-// Captured stream plans stay ahead of non-captured ones.
-static void rmaSchedEnqueueStreamPlan(struct ncclRmaSchedPlan* rmaPlan, struct ncclRmaSchedStreamPlan* streamPlan) {
-  if (streamPlan->captured) {
-    ncclIntruQueueEnqueueFront(&rmaPlan->streamPlans, streamPlan);
-  } else {
-    ncclIntruQueueEnqueue(&rmaPlan->streamPlans, streamPlan);
-  }
-}
-
-static ncclResult_t rmaSchedGetStreamPlan(struct ncclComm* comm, struct ncclRmaSchedPlan* rmaPlan, cudaStream_t stream,
-                                          bool captured, const struct ncclCudaGraph& graph,
-                                          struct ncclRmaSchedStreamPlan** streamPlanOut) {
-  struct ncclRmaSchedStreamPlan* streamPlan = rmaSchedFindStreamPlan(rmaPlan, stream, captured);
-  if (streamPlan != nullptr) {
-    *streamPlanOut = streamPlan;
-    return ncclSuccess;
-  }
-
-  streamPlan = ncclMemoryStackAlloc<struct ncclRmaSchedStreamPlan>(&comm->memScoped);
-  streamPlan->stream = stream;
-  streamPlan->captured = captured;
-  streamPlan->graph = graph;
-  streamPlan->reclaimToken = nullptr;
-  streamPlan->acqDepStream = nullptr;
-  streamPlan->next = nullptr;
-  rmaSchedEnqueueStreamPlan(rmaPlan, streamPlan);
-  NCCLCHECK(rmaSchedInitStreamPlan(comm, streamPlan));
-  *streamPlanOut = streamPlan;
   return ncclSuccess;
 }
 
@@ -159,10 +133,38 @@ static ncclResult_t rmaSchedStreamCaptured(struct ncclComm* comm, cudaStream_t s
   return ncclSuccess;
 }
 
+// Plans are appended in the order they must run. A stream can own several plans.
+static ncclResult_t rmaSchedAppendStreamPlan(struct ncclComm* comm, struct ncclRmaSchedPlan* rmaPlan,
+                                             cudaStream_t stream, ncclFunc_t func,
+                                             struct ncclRmaSchedStreamPlan** streamPlanOut) {
+  bool captured = false;
+  struct ncclCudaGraph graph = {};
+  struct ncclRmaSchedStreamPlan* streamPlan = nullptr;
+
+  NCCLCHECK(rmaSchedStreamCaptured(comm, stream, &captured, &graph));
+  streamPlan = ncclMemoryStackAlloc<struct ncclRmaSchedStreamPlan>(&comm->memScoped);
+  streamPlan->stream = stream;
+  streamPlan->func = func;
+  streamPlan->captured = captured;
+  streamPlan->graph = graph;
+  ncclIntruQueueEnqueue(&rmaPlan->streamPlans, streamPlan);
+  NCCLCHECK(rmaSchedInitStreamPlan(comm, streamPlan));
+  *streamPlanOut = streamPlan;
+  return ncclSuccess;
+}
+
+static void rmaSchedEnqueueCtxTask(struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan,
+                                   struct ncclTaskTuningInfo* taskInfo) {
+  struct ncclRmaSchedCtxPlan* ctxPlan = &streamPlan->ctxPlans[rmaTuningInfoCtx(taskInfo)];
+  if (isLsaAccessible(comm, rmaTuningInfoPeer(taskInfo))) {
+    ncclIntruQueueEnqueue(&ctxPlan->ce, taskInfo);
+  } else {
+    ncclIntruQueueEnqueue(&ctxPlan->proxy, taskInfo);
+  }
+}
+
 static bool rmaCtxPlanHasTasks(struct ncclRmaSchedCtxPlan* ctxPlan) {
-  return ctxPlan->waitSignalCE.nElems + ctxPlan->waitSignalProxy.nElems + ctxPlan->putSignalCE.nElems +
-           ctxPlan->putSignalProxy.nElems >
-         0;
+  return ctxPlan->ce.nElems + ctxPlan->proxy.nElems > 0;
 }
 
 static bool rmaStreamPlanHasTasks(struct ncclRmaSchedStreamPlan* streamPlan, int nRmaCtx) {
@@ -460,7 +462,7 @@ static ncclResult_t rmaSchedProxyPutLaunch(struct ncclComm* comm, struct ncclRma
   struct ncclRmaProxyCtx** descCtxs = nullptr;
   CUstreamBatchMemOpParams* batchParams = nullptr;
 
-  for (int ctx = 0; ctx < nRmaCtx; ctx++) nTasks += streamPlan->ctxPlans[ctx].putSignalProxy.nElems;
+  for (int ctx = 0; ctx < nRmaCtx; ctx++) nTasks += streamPlan->ctxPlans[ctx].proxy.nElems;
   if (nTasks == 0) return ncclSuccess;
 
   if (!comm->rmaState.rmaProxyState.connected) {
@@ -476,7 +478,7 @@ static ncclResult_t rmaSchedProxyPutLaunch(struct ncclComm* comm, struct ncclRma
     // before bucketing them into one launch.
     for (int ctx = 0; ctx < nRmaCtx; ctx++) {
       struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue =
-        &streamPlan->ctxPlans[ctx].putSignalProxy;
+        &streamPlan->ctxPlans[ctx].proxy;
       while (!ncclIntruQueueEmpty(queue)) tasks[n++] = ncclIntruQueueDequeue(queue);
     }
   }
@@ -586,36 +588,8 @@ fail:
   goto exit;
 }
 
-// Profiler args for one CE launch of RMA tasks. The CE batches it issues report as
-// ncclProfileCeBatch children of a ncclProfileCeColl event describing the whole launch,
-// parented to the API event of the first task. Wait launches carry no payload.
-static void rmaSchedCeCollArgsInit(ncclFunc_t func, struct ncclCeCollArgs* args) {
-  memset(args, 0, sizeof(*args));
-  args->func = func;
-  args->rootRank = -1;
-  args->datatype = ncclInt8;
-  args->eltSize = 1;
-}
-
-static void rmaSchedCeCollArgsAddQueue(
-  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue, struct ncclCeCollArgs* args) {
-  struct ncclTaskTuningInfo* head = ncclIntruQueueHead(queue);
-  if (head == nullptr) return;
-  if (args->apiEventHandle == nullptr) {
-    args->apiEventHandle = head->raw->profiler.apiEventHandle;
-    args->userTag = head->raw->profiler.userTag;
-    if (args->func == ncclFuncPutSignal) {
-      args->datatype = head->raw->rma.rmaOp.putSignal.datatype;
-      args->eltSize = ncclTypeSize(args->datatype);
-    }
-  }
-  for (struct ncclTaskTuningInfo* t = head; t != nullptr; t = t->next) {
-    args->nElts += args->func == ncclFuncPutSignal ? t->raw->rma.rmaOp.putSignal.count : 1;
-  }
-}
-
 static ncclResult_t rmaSchedCePutLaunchPersist(struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan,
-                                               cudaStream_t stream, struct ncclCeCollArgs* profArgs) {
+                                               cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   int nRmaCtx = comm->config.numRmaCtx;
   int nRmaTasksCe = 0;
@@ -627,15 +601,14 @@ static ncclResult_t rmaSchedCePutLaunchPersist(struct ncclComm* comm, struct ncc
   struct ncclCeBatchOpsParams dataParams = {};
   struct ncclCeBatchOpsParams signalParams = {};
 
-  for (int ctx = 0; ctx < nRmaCtx; ctx++) nRmaTasksCe += streamPlan->ctxPlans[ctx].putSignalCE.nElems;
+  for (int ctx = 0; ctx < nRmaCtx; ctx++) nRmaTasksCe += streamPlan->ctxPlans[ctx].ce.nElems;
   if (nRmaTasksCe == 0) return ncclSuccess;
 
   NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&dataParams, 1), ret, fail);
   NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&signalParams, 1), ret, fail);
 
   for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue =
-      &streamPlan->ctxPlans[ctx].putSignalCE;
+    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue = &streamPlan->ctxPlans[ctx].ce;
     while (!ncclIntruQueueEmpty(queue)) {
       struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
       struct rmaSchedPutFields fields = {};
@@ -709,8 +682,8 @@ static ncclResult_t rmaSchedCePutLaunchPersist(struct ncclComm* comm, struct ncc
           signalParams.numOps++;
         }
 
-        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream, profArgs), ret, fail);
-        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream, profArgs), ret, fail);
+        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream), ret, fail);
+        NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream), ret, fail);
       }
     }
   }
@@ -737,7 +710,7 @@ struct rmaSchedCeOp {
 };
 
 static ncclResult_t rmaSchedCePutLaunchNonPersist(struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan,
-                                                  cudaStream_t stream, struct ncclCeCollArgs* profArgs) {
+                                                  cudaStream_t stream) {
   ncclResult_t ret = ncclSuccess;
   int nRmaCtx = comm->config.numRmaCtx;
   int lsaSize = comm->devrState.lsaTeamSize;
@@ -758,8 +731,7 @@ static ncclResult_t rmaSchedCePutLaunchNonPersist(struct ncclComm* comm, struct 
   int selfPeer = -1;
 
   for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue =
-      &streamPlan->ctxPlans[ctx].putSignalCE;
+    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue = &streamPlan->ctxPlans[ctx].ce;
     for (struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueHead(queue); taskInfo != nullptr;
          taskInfo = taskInfo->next) {
       struct rmaSchedPutFields fields = {};
@@ -777,8 +749,7 @@ static ncclResult_t rmaSchedCePutLaunchNonPersist(struct ncclComm* comm, struct 
   NCCLCHECKGOTO(ncclCalloc(&seqStageOps, comm->nRanks), ret, fail);
 
   for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue =
-      &streamPlan->ctxPlans[ctx].putSignalCE;
+    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue = &streamPlan->ctxPlans[ctx].ce;
     while (!ncclIntruQueueEmpty(queue)) {
       struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
       struct rmaSchedPutFields fields = {};
@@ -911,8 +882,8 @@ static ncclResult_t rmaSchedCePutLaunchNonPersist(struct ncclComm* comm, struct 
     if (nSeqStageOps > 0) {
       NCCLCHECKGOTO(ncclCuStreamBatchMemOp(stream, nSeqStageOps, seqStageOps), ret, fail);
     }
-    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream, profArgs), ret, fail);
-    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream, profArgs), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &dataParams, stream), ret, fail);
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &signalParams, stream), ret, fail);
     nActivePeers = nNextActivePeers;
   }
 
@@ -926,8 +897,7 @@ exit:
   return ret;
 fail:
   for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue =
-      &streamPlan->ctxPlans[ctx].putSignalCE;
+    struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue = &streamPlan->ctxPlans[ctx].ce;
     while (!ncclIntruQueueEmpty(queue)) {
       struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
       rmaSchedFreeTuningInfoRaw(comm, taskInfo);
@@ -941,7 +911,7 @@ static ncclResult_t rmaSchedCePutLaunch(struct ncclComm* comm, struct ncclRmaSch
   int nRmaCtx = comm->config.numRmaCtx;
   int nTasks = 0;
 
-  for (int ctx = 0; ctx < nRmaCtx; ctx++) nTasks += streamPlan->ctxPlans[ctx].putSignalCE.nElems;
+  for (int ctx = 0; ctx < nRmaCtx; ctx++) nTasks += streamPlan->ctxPlans[ctx].ce.nElems;
   if (nTasks == 0) return ncclSuccess;
 
   if (!comm->rmaState.rmaCeState.initialized) {
@@ -950,16 +920,11 @@ static ncclResult_t rmaSchedCePutLaunch(struct ncclComm* comm, struct ncclRmaSch
   }
 
   ncclResult_t ret = ncclSuccess;
-  struct ncclCeCollArgs profArgs;
-  rmaSchedCeCollArgsInit(ncclFuncPutSignal, &profArgs);
-  for (int ctx = 0; ctx < nRmaCtx; ctx++) rmaSchedCeCollArgsAddQueue(&streamPlan->ctxPlans[ctx].putSignalCE, &profArgs);
-  NCCLCHECK(ncclProfilerStartCeCollEvent(comm, &profArgs, stream));
   if (streamPlan->captured) {
-    ret = rmaSchedCePutLaunchPersist(comm, streamPlan, stream, &profArgs);
+    ret = rmaSchedCePutLaunchPersist(comm, streamPlan, stream);
   } else {
-    ret = rmaSchedCePutLaunchNonPersist(comm, streamPlan, stream, &profArgs);
+    ret = rmaSchedCePutLaunchNonPersist(comm, streamPlan, stream);
   }
-  ncclProfilerStopCeCollEvent(comm, &profArgs, stream);
   return ret;
 }
 
@@ -969,7 +934,6 @@ static ncclResult_t rmaSchedCeWaitLaunch(
   ncclResult_t ret = ncclSuccess;
   CUstreamBatchMemOpParams* batchParams = nullptr;
   struct ncclCeBatchOpsParams ceParams = {};
-  struct ncclCeCollArgs profArgs;
   int nElems = queue->nElems;
   cudaStream_t stream = streamPlan->stream;
   bool captured = streamPlan->captured;
@@ -980,10 +944,6 @@ static ncclResult_t rmaSchedCeWaitLaunch(
     WARN("RMA CE is not initialized");
     return ncclInternalError;
   }
-
-  rmaSchedCeCollArgsInit(ncclFuncWaitSignal, &profArgs);
-  rmaSchedCeCollArgsAddQueue(queue, &profArgs);
-  NCCLCHECK(ncclProfilerStartCeCollEvent(comm, &profArgs, stream));
 
   struct ncclRmaCeCtx* ceCtx = (struct ncclRmaCeCtx*)comm->rmaState.rmaCeState.rmaCeCtxs[ctx];
   int lsaSize = comm->devrState.lsaTeamSize;
@@ -1055,14 +1015,13 @@ static ncclResult_t rmaSchedCeWaitLaunch(
           ceParams.dsts[ceParams.numOps] = peerAck;
           ceParams.sizes[ceParams.numOps] = sizeof(uint64_t);
           ceParams.numOps++;
-          NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &ceParams, stream, &profArgs), ret, fail);
+          NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &ceParams, stream), ret, fail);
         }
       }
     }
   }
 
 exit:
-  ncclProfilerStopCeCollEvent(comm, &profArgs, stream);
   if (batchParams) free(batchParams);
   ncclCeFreeBatchOpsParams(&ceParams);
   return ret;
@@ -1079,8 +1038,8 @@ static ncclResult_t rmaPutLaunch(struct ncclComm* comm, struct ncclRmaSchedStrea
   int nCe = 0;
 
   for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    nProxy += streamPlan->ctxPlans[ctx].putSignalProxy.nElems;
-    nCe += streamPlan->ctxPlans[ctx].putSignalCE.nElems;
+    nProxy += streamPlan->ctxPlans[ctx].proxy.nElems;
+    nCe += streamPlan->ctxPlans[ctx].ce.nElems;
   }
   if (nProxy == 0 && nCe == 0) return ncclSuccess;
 
@@ -1107,16 +1066,29 @@ fail:
   goto exit;
 }
 
-static ncclResult_t rmaWaitSignalLaunch(struct ncclComm* comm, int ctx, struct ncclRmaSchedStreamPlan* streamPlan) {
-  struct ncclRmaSchedCtxPlan* ctxPlan = &streamPlan->ctxPlans[ctx];
+static ncclResult_t rmaWaitSignalLaunch(struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan) {
+  int nRmaCtx = comm->config.numRmaCtx;
 
-  if (ctxPlan->waitSignalCE.nElems + ctxPlan->waitSignalProxy.nElems == 0) return ncclSuccess;
+  for (int ctx = 0; ctx < nRmaCtx; ctx++) {
+    struct ncclRmaSchedCtxPlan* ctxPlan = &streamPlan->ctxPlans[ctx];
 
-  if (ctxPlan->waitSignalProxy.nElems > 0) {
-    NCCLCHECK(rmaSchedProxyWaitLaunch(comm, ctx, &ctxPlan->waitSignalProxy, streamPlan));
+    if (ctxPlan->ce.nElems + ctxPlan->proxy.nElems == 0) continue;
+
+    if (ctxPlan->proxy.nElems > 0) {
+      NCCLCHECK(rmaSchedProxyWaitLaunch(comm, ctx, &ctxPlan->proxy, streamPlan));
+    }
+    if (ctxPlan->ce.nElems > 0) {
+      NCCLCHECK(rmaSchedCeWaitLaunch(comm, ctx, &ctxPlan->ce, streamPlan));
+    }
   }
-  if (ctxPlan->waitSignalCE.nElems > 0) {
-    NCCLCHECK(rmaSchedCeWaitLaunch(comm, ctx, &ctxPlan->waitSignalCE, streamPlan));
+  return ncclSuccess;
+}
+
+static ncclResult_t rmaPlanLaunch(struct ncclComm* comm, struct ncclRmaSchedStreamPlan* streamPlan) {
+  if (streamPlan->func == ncclFuncWaitSignal) {
+    NCCLCHECK(rmaWaitSignalLaunch(comm, streamPlan));
+  } else {
+    NCCLCHECK(rmaPutLaunch(comm, streamPlan));
   }
   return ncclSuccess;
 }
@@ -1132,63 +1104,77 @@ static void CUDART_CB rmaSchedStreamPlanDestructor(void* cb_) {
   ncclIntruQueueMpscEnqueue(&token->comm->schedCallbackQueue, cb);
 }
 
+static ncclResult_t rmaSchedRoundStreamPlan(struct ncclComm* comm, struct ncclRmaSchedPlan* rmaPlan,
+                                            cudaStream_t stream, ncclFunc_t func,
+                                            std::map<cudaStream_t, struct ncclRmaSchedStreamPlan*>* plans,
+                                            struct ncclRmaSchedStreamPlan** streamPlanOut) {
+  std::map<cudaStream_t, struct ncclRmaSchedStreamPlan*>::iterator found = plans->find(stream);
+  if (found == plans->end()) {
+    NCCLCHECK(rmaSchedAppendStreamPlan(comm, rmaPlan, stream, func, streamPlanOut));
+    (*plans)[stream] = *streamPlanOut;
+  } else {
+    *streamPlanOut = found->second;
+  }
+  return ncclSuccess;
+}
+
+// Each round parks one wait per peer, context, and stream. A later wait for that
+// key, or a put or signal for it, stays queued. Other puts and signals are drained
+// into put plans, then the parked waits become wait plans. Signal ops share the put plan.
 static ncclResult_t scheduleRmaTasks(struct ncclComm* comm,
                                      struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* queue,
                                      struct ncclRmaSchedPlan* rmaPlanOut) {
   ncclIntruQueueConstruct(&rmaPlanOut->streamPlans);
 
   while (!ncclIntruQueueEmpty(queue)) {
-    struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
-    cudaStream_t stream = rmaTuningInfoStream(taskInfo);
-    int ctx = rmaTuningInfoCtx(taskInfo);
-    struct ncclRmaSchedStreamPlan* streamPlan = nullptr;
-    struct ncclRmaSchedCtxPlan* ctxPlan = nullptr;
-    bool captured = false;
-    struct ncclCudaGraph graph = {};
-    bool lsaAccessible = isLsaAccessible(comm, rmaTuningInfoPeer(taskInfo));
+    std::map<struct ncclRmaSchedWaitKey, struct ncclTaskTuningInfo*> waitMap;
+    std::map<cudaStream_t, struct ncclRmaSchedStreamPlan*> putPlans;
+    ncclRmaSchedTaskQueue deferred;
 
-    NCCLCHECK(rmaSchedStreamCaptured(comm, stream, &captured, &graph));
-    NCCLCHECK(rmaSchedGetStreamPlan(comm, rmaPlanOut, stream, captured, graph, &streamPlan));
-    ctxPlan = &streamPlan->ctxPlans[ctx];
+    ncclIntruQueueConstruct(&deferred);
+    while (!ncclIntruQueueEmpty(queue)) {
+      struct ncclTaskTuningInfo* taskInfo = ncclIntruQueueDequeue(queue);
+      ncclFunc_t func = rmaTuningInfoFunc(taskInfo);
+      struct ncclRmaSchedWaitKey key = {rmaTuningInfoPeer(taskInfo), rmaTuningInfoCtx(taskInfo),
+                                        rmaTuningInfoStream(taskInfo)};
 
-    switch (rmaTuningInfoFunc(taskInfo)) {
-    case ncclFuncWaitSignal:
-      if (lsaAccessible) {
-        ncclIntruQueueEnqueue(&ctxPlan->waitSignalCE, taskInfo);
-      } else {
-        ncclIntruQueueEnqueue(&ctxPlan->waitSignalProxy, taskInfo);
+      if (func == ncclFuncWaitSignal) {
+        if (waitMap.find(key) != waitMap.end()) {
+          ncclIntruQueueEnqueue(&deferred, taskInfo);
+          continue;
+        }
+        waitMap[key] = taskInfo;
+        continue;
       }
-      break;
-    case ncclFuncPutSignal:
-    case ncclFuncSignal:
-      if (lsaAccessible) {
-        ncclIntruQueueEnqueue(&ctxPlan->putSignalCE, taskInfo);
-      } else {
-        ncclIntruQueueEnqueue(&ctxPlan->putSignalProxy, taskInfo);
+      if (func == ncclFuncPutSignal || func == ncclFuncSignal) {
+        if (waitMap.find(key) != waitMap.end()) {
+          ncclIntruQueueEnqueue(&deferred, taskInfo);
+          continue;
+        }
+        struct ncclRmaSchedStreamPlan* streamPlan = nullptr;
+        NCCLCHECK(rmaSchedRoundStreamPlan(comm, rmaPlanOut, key.stream, ncclFuncPutSignal, &putPlans, &streamPlan));
+        rmaSchedEnqueueCtxTask(comm, streamPlan, taskInfo);
+        continue;
       }
-      break;
-    default:
-      continue;
     }
+
+    std::map<cudaStream_t, struct ncclRmaSchedStreamPlan*> waitPlans;
+    for (std::map<struct ncclRmaSchedWaitKey, struct ncclTaskTuningInfo*>::iterator it = waitMap.begin();
+         it != waitMap.end(); ++it) {
+      struct ncclRmaSchedStreamPlan* streamPlan = nullptr;
+      NCCLCHECK(rmaSchedRoundStreamPlan(comm, rmaPlanOut, it->first.stream, ncclFuncWaitSignal, &waitPlans,
+                                        &streamPlan));
+      rmaSchedEnqueueCtxTask(comm, streamPlan, it->second);
+    }
+
+    if (!ncclIntruQueueEmpty(queue)) {
+      WARN("RMA scheduler left tasks in the queue");
+      return ncclInternalError;
+    }
+    ncclIntruQueueTransfer(queue, &deferred);
   }
 
   return ncclSuccess;
-}
-
-static int rmaStreamPlanPutNElems(struct ncclRmaSchedStreamPlan* streamPlan, int nRmaCtx) {
-  int nElems = 0;
-  for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    nElems += streamPlan->ctxPlans[ctx].putSignalProxy.nElems + streamPlan->ctxPlans[ctx].putSignalCE.nElems;
-  }
-  return nElems;
-}
-
-static int rmaStreamPlanWaitNElems(struct ncclRmaSchedStreamPlan* streamPlan, int nRmaCtx) {
-  int nElems = 0;
-  for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-    nElems += streamPlan->ctxPlans[ctx].waitSignalProxy.nElems + streamPlan->ctxPlans[ctx].waitSignalCE.nElems;
-  }
-  return nElems;
 }
 
 ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
@@ -1199,7 +1185,6 @@ ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
 
   struct ncclRmaSchedPlan rmaPlan = {};
   struct ncclRmaSchedStreamPlan* streamPlan = nullptr;
-  int nRmaCtx = comm->config.numRmaCtx;
   struct ncclSchedCallback* cb = nullptr;
   // Set while depStream is acquired for streamPlan, so a failure releases it exactly once.
   bool depAcquired = false;
@@ -1207,47 +1192,23 @@ ncclResult_t ncclSchedLaunchRmaTasks(struct ncclComm* comm,
 
   NCCLCHECKGOTO(scheduleRmaTasks(comm, queue, &rmaPlan), ret, fail);
 
-  // Puts and signals from every stream go out before any wait, so a wait cannot
-  // run ahead of a put that was still queued on another stream.
+  // Plans were appended in group order, so a later op on a stream cannot run before
+  // an earlier one. Puts taken in a round are launched before that round's waits.
   for (streamPlan = ncclIntruQueueHead(&rmaPlan.streamPlans); streamPlan != nullptr; streamPlan = streamPlan->next) {
     cudaStream_t launchStream = streamPlan->stream;
     cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
+    // Capture with graphStreamOrdering=0 runs on the user stream. The application orders that work.
+    bool disableGraphStreamOrder = streamPlan->captured && comm->config.graphStreamOrdering == 0;
 
-    if (rmaStreamPlanPutNElems(streamPlan, nRmaCtx) == 0) continue;
-
-    if (depStream) {
+    if (depStream && !disableGraphStreamOrder) {
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &streamPlan->acqDepStream), ret, fail);
       depAcquired = true;
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, streamPlan->acqDepStream, finishedEvent), ret, fail);
     }
 
-    NCCLCHECKGOTO(rmaPutLaunch(comm, streamPlan), ret, fail);
+    NCCLCHECKGOTO(rmaPlanLaunch(comm, streamPlan), ret, fail);
 
-    if (depStream) {
-      CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
-      NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, streamPlan->acqDepStream, finishedEvent), ret, fail);
-      depAcquired = false;
-      NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, depStream, false), ret, fail);
-    }
-  }
-
-  for (streamPlan = ncclIntruQueueHead(&rmaPlan.streamPlans); streamPlan != nullptr; streamPlan = streamPlan->next) {
-    cudaStream_t launchStream = streamPlan->stream;
-    cudaEvent_t finishedEvent = comm->sharedRes->scratchEvent;
-
-    if (rmaStreamPlanWaitNElems(streamPlan, nRmaCtx) == 0) continue;
-
-    if (depStream) {
-      NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &streamPlan->acqDepStream), ret, fail);
-      depAcquired = true;
-      NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, streamPlan->acqDepStream, finishedEvent), ret, fail);
-    }
-
-    for (int ctx = 0; ctx < nRmaCtx; ctx++) {
-      NCCLCHECKGOTO(rmaWaitSignalLaunch(comm, ctx, streamPlan), ret, fail);
-    }
-
-    if (depStream) {
+    if (depStream && !disableGraphStreamOrder) {
       CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, streamPlan->acqDepStream, finishedEvent), ret, fail);
       depAcquired = false;

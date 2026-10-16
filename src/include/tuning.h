@@ -135,6 +135,9 @@ ncclResult_t ncclTuningInit(struct ncclComm* comm);
 ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result);
 ncclResult_t ncclTuningFinalize(struct ncclComm* comm);
 
+// Higher CE threshold for AllGather since TMA kernels continue to perform better till higher message sizes.
+int64_t ncclSymCeAllGatherThreshold(struct ncclComm* comm);
+
 // Symm Kernel Model Helper Functions
 double ncclTuningGetLsaBw(struct ncclComm* comm);
 double ncclTuningGetGinLat(struct ncclComm* comm);

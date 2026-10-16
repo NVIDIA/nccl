@@ -32,7 +32,6 @@
 NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 NCCL_PARAM(AllgathervEnable, "ALLGATHERV_ENABLE", 1);
 NCCL_PARAM(EnqueueRearchEnable, "ENQUEUE_REARCH_ENABLE", 0);
-NCCL_PARAM(SymCeThreshold, "SYM_CE_THRESHOLD", 8 * 1024 * 1024);
 NCCL_PARAM(P2pPerChannelRegNetBw, "P2P_PER_CHANNEL_REG_NET_BW", /*GB/s*/ -1); // -1 = full network bw
 
 // NCCL params accessed in per-call config values resolving.
@@ -40,17 +39,6 @@ int64_t ncclParamMinCTAs();
 int64_t ncclParamMaxCTAs();
 int64_t ncclParamNvlsChannels();
 int64_t ncclParamCGAClusterSize();
-
-// Higher CE threshold for AllGather since TMA kernels continue to perform better till higher message sizes.
-static int64_t symCeAllGatherThreshold(struct ncclComm* comm) {
-  int64_t threshold = ncclParamSymCeThreshold();
-  const char* env = ncclGetEnv("NCCL_SYM_CE_THRESHOLD");
-  if (env == nullptr || strlen(env) == 0) {
-    bool useMcSync = comm->symkState.hasLsaMultimem;
-    if (!useMcSync && comm->minCompCap >= 100 && ncclSymkTmaAvailable(comm)) threshold *= 4;
-  }
-  return threshold;
-}
 
 // Returns maximum kernel stack size of all CUDA kernels
 ncclResult_t ncclInitKernelsForDevice(int cudaArch, int maxSharedMem, size_t* maxStackSize) {
@@ -3182,58 +3170,6 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
   return ncclSuccess;
 }
 
-// Starts and stops one ncclProfileP2pApi event for a send or recv that a collective lowers to,
-// recording its handle so the lowered task can be parented to it.
-static ncclResult_t rawTaskP2pApiEvent(struct ncclInfo* info, ncclFunc_t func, bool isGraphCaptured,
-                                       struct ncclProfilerEventRef* handle) {
-  info->coll = func;
-  NCCLCHECK(ncclProfilerStartP2pApiEvent(info, isGraphCaptured));
-  *handle = ncclProfilerApiState.p2pApiEventHandle;
-  NCCLCHECK(ncclProfilerStopP2pApiEvent());
-  return ncclSuccess;
-}
-
-// AlltoAll, Scatter and Gather are lowered to send/recv tasks by task classification, which may
-// run on another thread. The legacy path emits one ncclProfileP2pApi event per lowered task at
-// API time; do the same here and keep the handles on the raw task, in the order classification
-// lowers the tasks (see classifyCollToP2pTasks), so each lowered task gets its own parent.
-static ncclResult_t rawTaskP2pApiEvents(struct ncclComm* comm, struct ncclInfo* info, struct ncclRawTask* t) {
-  t->coll.p2pApiEventHandles = nullptr;
-  t->coll.nP2pApiEvents = 0;
-  if (!ncclProfilerPluginLoaded()) return ncclSuccess;
-
-  ncclFunc_t collAPI = info->coll;
-  int nRanks = comm->nRanks;
-  bool isRoot = comm->rank == info->root;
-  int n = collAPI == ncclFuncAlltoAll ? 2 * nRanks : (isRoot ? nRanks + 1 : 1);
-  bool isGraphCaptured = ncclCudaGraphValid(comm->planner.capturingGraph);
-  struct ncclProfilerEventRef* handles = ncclMemoryStackAlloc<struct ncclProfilerEventRef>(&comm->memScoped, n);
-  int i = 0;
-  ncclResult_t ret = ncclSuccess;
-
-  if (collAPI == ncclFuncAlltoAll) {
-    for (int r = 0; r < nRanks && ret == ncclSuccess; r++) {
-      ret = rawTaskP2pApiEvent(info, ncclFuncSend, isGraphCaptured, &handles[i++]);
-      if (ret == ncclSuccess) ret = rawTaskP2pApiEvent(info, ncclFuncRecv, isGraphCaptured, &handles[i++]);
-    }
-  } else if (collAPI == ncclFuncGather) {
-    ret = rawTaskP2pApiEvent(info, ncclFuncSend, isGraphCaptured, &handles[i++]);
-    for (int r = 0; isRoot && r < nRanks && ret == ncclSuccess; r++) {
-      ret = rawTaskP2pApiEvent(info, ncclFuncRecv, isGraphCaptured, &handles[i++]);
-    }
-  } else { // Scatter
-    for (int r = 0; isRoot && r < nRanks && ret == ncclSuccess; r++) {
-      ret = rawTaskP2pApiEvent(info, ncclFuncSend, isGraphCaptured, &handles[i++]);
-    }
-    if (ret == ncclSuccess) ret = rawTaskP2pApiEvent(info, ncclFuncRecv, isGraphCaptured, &handles[i++]);
-  }
-  info->coll = collAPI;
-  NCCLCHECK(ret);
-  t->coll.p2pApiEventHandles = handles;
-  t->coll.nP2pApiEvents = i;
-  return ncclSuccess;
-}
-
 // TODO(raw task): move this raw task capture implementation into raw_task.cc
 // once the remaining enqueue-local profiler and red-op dependencies are split.
 // Only a plain or profiler-tag-only Broadcast is merged into an AllGatherV, and never when that
@@ -3461,11 +3397,6 @@ static ncclResult_t rawTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     t->coll.opDev = opDev;
     t->coll.stream = info->stream;
     t->coll.algMask = algMask;
-    t->coll.p2pApiEventHandles = nullptr;
-    t->coll.nP2pApiEvents = 0;
-    if (info->coll == ncclFuncAlltoAll || info->coll == ncclFuncScatter || info->coll == ncclFuncGather) {
-      NCCLCHECK(rawTaskP2pApiEvents(comm, info, t));
-    }
     if (info->coll == ncclFuncBroadcast && rawBcastCanMerge(comm, info)) {
       ncclIntruQueueEnqueue(&(*rtq->bcastQueue)[info->root], t);
     } else {
@@ -3626,7 +3557,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
           NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncRecv, collAPI, (void*)info->recvbuff, info->count, info->datatype,
                                   info->root, allowUB));
         } else if (!ncclCollConfigHasAlgSelection(&info->collConfig) && ceAvailable && comm->symmetricSupport &&
-                   info->coll == ncclFuncAllGather && info->count > symCeAllGatherThreshold(comm) &&
+                   info->coll == ncclFuncAllGather && info->count > ncclSymCeAllGatherThreshold(comm) &&
                    comm->minCompCap >= 100 && !RUBIN_AND_LATER(comm->minCompCap) && comm->isAllDirectNvlink) {
           // Use CE for AllGather on Blackwell when size exceeds sym CE threshold. Skip this automatic
           // route on Rubin and when the user passed an algorithm selection so the selection is honored.

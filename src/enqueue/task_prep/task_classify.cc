@@ -13,14 +13,10 @@
 static ncclResult_t enqueueP2pTask(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* p2pTaskQueue,
   ncclFunc_t func, ncclFunc_t collAPI, void* buff, size_t count, ncclDataType_t datatype, int peer, cudaStream_t stream,
-  cudaEvent_t launchCompletionEvent, bool allowUB, const struct ncclProfilerApiCtx& profiler,
-  struct ncclProfilerEventRef p2pApiEventHandle) {
+  cudaEvent_t launchCompletionEvent, bool allowUB, const struct ncclProfilerApiCtx& profiler) {
   struct ncclRawTask* raw = ncclMemoryPoolAlloc<struct ncclRawTask>(&comm->memPool_ncclRawTask, &comm->memPermanent);
   raw->kind = ncclTaskKindSendRecv;
-  // Same group and mask as the originating call; parented to the P2pApi event emitted for this
-  // lowered task at API time (see rawTaskP2pApiEvents), like the legacy path.
   raw->profiler = profiler;
-  raw->profiler.apiEventHandle = p2pApiEventHandle;
   raw->sendRecv.func = func;
   raw->sendRecv.collAPI = collAPI;
   raw->sendRecv.buff = buff;
@@ -38,13 +34,6 @@ static ncclResult_t enqueueP2pTask(
   return ncclSuccess;
 }
 
-// Next P2pApi handle for a collective lowered to p2p tasks, in lowering order; nullptr once the
-// handles run out (or when no profiler plugin is loaded and none were emitted).
-static void* nextP2pApi(const struct ncclRawTaskColl* coll, int* idx) {
-  if (*idx >= coll->nP2pApiEvents) return {};
-  return coll->p2pApiEventHandles[(*idx)++];
-}
-
 static ncclResult_t collToP2pTasks(
   struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo,
   struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* p2pTaskQueue) {
@@ -53,8 +42,6 @@ static ncclResult_t collToP2pTasks(
   size_t elemSize = ncclTypeSize(coll->datatype);
   cudaStream_t stream = coll->stream;
   cudaEvent_t launchCompletionEvent = ncclCollConfigGetLaunchCompletionEvent(&tInfo->raw->collConfig);
-  // P2pApi handles were emitted in this lowering order; nullptr past the end or with no plugin.
-  int p2pApiIdx = 0;
   // Send/recv needs both buffers registered, so user-buffer registration is allowed under graph
   // capture, or for AlltoAll when both of its full buffers are locally registered.
   bool allowUB = tInfo->tuningIn.captured;
@@ -76,23 +63,19 @@ static ncclResult_t collToP2pTasks(
       void* sendBuff = (void*)((char*)coll->sendbuff + r * coll->count * elemSize);
       void* recvBuff = (void*)((char*)coll->recvbuff + r * coll->count * elemSize);
       NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, sendBuff, coll->count, coll->datatype, r,
-                               stream, launchCompletionEvent, allowUB, tInfo->raw->profiler,
-                               nextP2pApi(coll, &p2pApiIdx)));
+                               stream, launchCompletionEvent, allowUB, tInfo->raw->profiler));
       NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, recvBuff, coll->count, coll->datatype, r,
-                               stream, launchCompletionEvent, allowUB, tInfo->raw->profiler,
-                               nextP2pApi(coll, &p2pApiIdx)));
+                               stream, launchCompletionEvent, allowUB, tInfo->raw->profiler));
     }
   } else if (coll->func == ncclFuncGather) {
     NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, (void*)coll->sendbuff, coll->count,
-                             coll->datatype, coll->root, stream, launchCompletionEvent, allowUB, tInfo->raw->profiler,
-                             nextP2pApi(coll, &p2pApiIdx)));
+                             coll->datatype, coll->root, stream, launchCompletionEvent, allowUB, tInfo->raw->profiler));
     if (comm->rank == coll->root) {
       size_t offset = 0;
       for (int r = 0; r < comm->nRanks; r++) {
         void* buff = (void*)((char*)coll->recvbuff + offset);
         NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, buff, coll->count, coll->datatype, r,
-                                 stream, launchCompletionEvent, allowUB, tInfo->raw->profiler,
-                                 nextP2pApi(coll, &p2pApiIdx)));
+                                 stream, launchCompletionEvent, allowUB, tInfo->raw->profiler));
         offset += coll->count * elemSize;
       }
     }
@@ -102,14 +85,12 @@ static ncclResult_t collToP2pTasks(
       for (int r = 0; r < comm->nRanks; r++) {
         void* buff = (void*)((char*)coll->sendbuff + offset);
         NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncSend, collAPI, buff, coll->count, coll->datatype, r,
-                                 stream, launchCompletionEvent, allowUB, tInfo->raw->profiler,
-                                 nextP2pApi(coll, &p2pApiIdx)));
+                                 stream, launchCompletionEvent, allowUB, tInfo->raw->profiler));
         offset += coll->count * elemSize;
       }
     }
     NCCLCHECK(enqueueP2pTask(comm, p2pTaskQueue, ncclFuncRecv, collAPI, coll->recvbuff, coll->count, coll->datatype,
-                             coll->root, stream, launchCompletionEvent, allowUB, tInfo->raw->profiler,
-                             nextP2pApi(coll, &p2pApiIdx)));
+                             coll->root, stream, launchCompletionEvent, allowUB, tInfo->raw->profiler));
   } else {
     return ncclInternalError;
   }

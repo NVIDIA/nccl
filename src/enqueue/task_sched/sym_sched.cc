@@ -707,15 +707,17 @@ ncclResult_t ncclSchedLaunchSymTasks(struct ncclComm* comm,
     cudaStream_t acqLaunchOrderStream;
     cudaEvent_t ncclLaunchEvent = nullptr;
     enum ncclImplicitOrder implicitOrder;
+    // Capture with graphStreamOrdering=0 runs on the user stream. The application orders that work.
+    bool disableGraphStreamOrder = streamPlan->captured && comm->config.graphStreamOrdering == 0;
 
     NCCLCHECKGOTO(symSchedGetImplicitOrder(comm, &implicitOrder, streamPlan->captured), ret, fail);
 
-    if (depStream) {
+    if (depStream && !disableGraphStreamOrder) {
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, depStream, false, &acqDepStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamWaitStream(launchStream, acqDepStream, finishedEvent), ret, fail);
     }
 
-    if (launchOrderStream && implicitOrder != ncclImplicitOrderNone) {
+    if (launchOrderStream && implicitOrder != ncclImplicitOrderNone && !disableGraphStreamOrder) {
       // The launch-order stream is shared by every comm on the CUDA context, and comms launch
       // from their own threads. Captures must lock it; eager launches stay in program order.
       NCCLCHECKGOTO(ncclStrongStreamAcquire(streamPlan->graph, launchOrderStream, /*concurrent=*/streamPlan->captured,
@@ -740,12 +742,12 @@ ncclResult_t ncclSchedLaunchSymTasks(struct ncclComm* comm,
       ncclLaunchEvent = comm->sharedRes->scratchEvent;
     }
 
-    if (depStream) {
+    if (depStream && !disableGraphStreamOrder) {
       CUDACHECKGOTO(cudaEventRecord(finishedEvent, launchStream), ret, fail);
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, acqDepStream, finishedEvent), ret, fail);
       NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, depStream, false), ret, fail);
     }
-    if (launchOrderStream && implicitOrder != ncclImplicitOrderNone) {
+    if (launchOrderStream && implicitOrder != ncclImplicitOrderNone && !disableGraphStreamOrder) {
       NCCLCHECKGOTO(ncclStreamAdvanceToEvent(streamPlan->graph, acqLaunchOrderStream, ncclLaunchEvent), ret, fail);
       NCCLCHECKGOTO(ncclStrongStreamRelease(streamPlan->graph, launchOrderStream, /*concurrent=*/streamPlan->captured),
                     ret, fail);

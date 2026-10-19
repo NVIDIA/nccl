@@ -865,6 +865,7 @@ struct ncclComm {
   bool globalRmaProxySupport;
   bool hostRmaSupport;
   int childCount;
+  int childInitInFlight; // child inits (split, shrink) of this comm queued or running; at most one at a time
 
   struct ncclDevrState devrState; // The symmetric runtime state
   struct ncclSymkState symkState; // The symmetric kernels state (built on previous)

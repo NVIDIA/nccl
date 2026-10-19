@@ -3534,8 +3534,23 @@ fail:
 
 static void childCommCleanupJob(void* job) {
   struct ncclCommInitRankAsyncJob* initJob = (struct ncclCommInitRankAsyncJob*)job;
+  // split/shrink jobs are counted against their parent at launch; release the slot on every path (done, failed, aborted)
+  if (initJob->parent && !initJob->isGrow) ncclAtomicRefCountDecrement(&initJob->parent->childInitInFlight);
   if (initJob->excludeRanksList) free(initJob->excludeRanksList);
   delete initJob;
+}
+
+// Concurrent child inits of one parent share its bootstrap connections and corrupt each other's exchange: allow one.
+// Runs before the caller enters the group, so the rejection reaches that caller only and the rest of the group,
+// including the child init already queued on this parent, proceeds. An invalid comm is left to the caller's own checks.
+static ncclResult_t childInitCheckNoneInFlight(struct ncclComm* comm, ncclComm_t* newcomm, const char* caller) {
+  if (comm == NULL) return ncclSuccess;
+  if (COMPILER_ATOMIC_LOAD(&comm->childInitInFlight, std::memory_order_acquire) == 0) return ncclSuccess;
+  WARN("%s: comm %p already has a child communicator being created (ncclCommSplit or ncclCommShrink); "
+       "only one can be in flight per communicator, create them in separate group calls",
+       caller, comm);
+  if (newcomm) *newcomm = NCCL_COMM_NULL;
+  return ncclInvalidUsage;
 }
 
 // initializing a child communicator (for both split and shrink)
@@ -3624,6 +3639,8 @@ static ncclResult_t ncclCommInitChildComm(ncclComm_t comm, ncclComm_t* newcomm, 
   }
   job->cudaDev = comm->cudaDev;
   snprintf(job->funcName, NCCL_COMMINIT_FUNCNAME_LEN, "%s", caller);
+  // released by childCommCleanupJob, which also runs when the launch below is rejected
+  ncclAtomicRefCountIncrement(&comm->childInitInFlight);
   if (ncclParamEnqueueRearchEnable()) {
     NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, ncclCommInitRankFunc, childCommCleanupJob, comm), res,
                   fail);
@@ -3654,6 +3671,7 @@ ncclResult_t ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeR
                             ncclConfig_t* config, int shrinkFlags) {
   NVTX3_RANGE(NcclNvtxParamsCommShrink)
   ncclResult_t res = ncclSuccess;
+  NCCLCHECK(childInitCheckNoneInFlight(comm, newcomm, __func__));
   NCCLCHECK(ncclGroupStartInternal());
   // Handle error mode by setting abort flags and waiting for kernels to complete and unset the flags
   // to avoid bootstrap issues
@@ -3878,6 +3896,7 @@ ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t* newc
   NVTX3_RANGE(NcclNvtxParamsCommSplit)
 
   ncclResult_t res = ncclSuccess;
+  NCCLCHECK(childInitCheckNoneInFlight(comm, newcomm, __func__));
   NCCLCHECK(ncclGroupStartInternal());
   NCCLCHECKGOTO(ncclCommInitChildComm(comm, newcomm, /*isShrink=*/false, /*shrink mode=*/NCCL_SHRINK_DEFAULT, color,
                                       key, NULL, 0, config, __func__),

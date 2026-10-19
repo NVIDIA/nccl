@@ -503,7 +503,7 @@ ncclResult_t ncclTopoGetXmlFromCpu(struct ncclXmlNode* cpuNode, struct ncclXml* 
     // Fill CPU type / vendor / model
 #if defined(__PPC__)
     NCCLCHECK(xmlSetAttr(cpuNode, "arch", "ppc64"));
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
     NCCLCHECK(xmlSetAttr(cpuNode, "arch", "arm64"));
 #elif defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)
     NCCLCHECK(xmlSetAttr(cpuNode, "arch", "x86_64"));

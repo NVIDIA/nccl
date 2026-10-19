@@ -36,6 +36,9 @@ std::mutex& getGdrMutex();
 #if !defined(__CUDACC__)
 #if defined(__PPC__)
 static inline void wc_store_fence(void) { asm volatile("sync" : : : "memory"); }
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+#include <intrin.h>
+static inline void wc_store_fence(void) { __dsb(_ARM64_BARRIER_ST); }
 #elif defined(__x86_64__) || (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64)))
 #include <immintrin.h>
 static inline void wc_store_fence(void) { _mm_sfence(); }

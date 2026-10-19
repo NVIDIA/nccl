@@ -398,7 +398,9 @@ The report includes results for the following checks:
   links run at the same speed.
 * **Network-device consistency:** Checks that each network device the plugin exposes is present on every node, that its
   type, speed, link layer, port state and Data Direct use are consistent across ranks, that any port whose state can
-  be read is active, and that the devices used within one node are consistent with each other.
+  be read is active, and that the devices used within one node are consistent with each other. The report shows one
+  line per communicator when the check passes. Per-device details are available with ``NCCL_DEBUG=INFO`` and
+  ``NCCL_DEBUG_SUBSYS=DIAG``.
 * **NCCL environment:** Checks that ``NCCL_*`` environment-variable names and values are consistent across ranks.
 * **PCI configuration:** Runs ``rdma_topo check`` to validate the PCI topology and PCI Access Control Services (ACS)
   configuration used for GPUDirect RDMA.
@@ -517,8 +519,7 @@ For example, an on-demand report with no reported issues might look like:
   node042:12345 NCCL DIAG [OK]   rdma_topo check: passed on 8/8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   Xid/SXid: no events requiring immediate attention across 2 hosts
   node042:12345 NCCL DIAG [OK]   NVIDIA graphics driver version: 610.47.03 consistent across 8 ranks in comm 0x1234
-  node042:12345 NCCL DIAG [OK]   Net device mlx5_0:1: net device type=Host, speed=400000 Mbps, link layer=InfiniBand, state=ACTIVE/LinkUp across 2 nodes in comm 0x1234
-  node042:12345 NCCL DIAG [OK]   Net device: NIC configuration consistent within each node across 2 nodes in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   Net device: NIC configuration consistent across 2 nodes in comm 0x1234
   node042:12345 NCCL DIAG RAS diagnostics completed in 12.3 ms across 8 RAS peers
 
 .. note::

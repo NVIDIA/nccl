@@ -3534,8 +3534,21 @@ fail:
 
 static void childCommCleanupJob(void* job) {
   struct ncclCommInitRankAsyncJob* initJob = (struct ncclCommInitRankAsyncJob*)job;
+  // the job was counted against its parent when it was launched; release the slot on every path (done, failed, aborted)
+  if (initJob->parent) ncclAtomicRefCountDecrement(&initJob->parent->childInitInFlight);
   if (initJob->excludeRanksList) free(initJob->excludeRanksList);
   delete initJob;
+}
+
+// Concurrent child inits of one parent share its bootstrap connections and corrupt each other's exchange: allow one.
+static ncclResult_t childInitCheckNoneInFlight(struct ncclComm* comm, const char* caller) {
+  if (COMPILER_ATOMIC_LOAD(&comm->childInitInFlight, std::memory_order_acquire) != 0) {
+    WARN("%s: comm %p already has a child communicator being created (ncclCommSplit, ncclCommShrink or ncclCommGrow); "
+         "only one can be in flight per communicator, create them in separate group calls",
+         caller, comm);
+    return ncclInvalidUsage;
+  }
+  return ncclSuccess;
 }
 
 // initializing a child communicator (for both split and shrink)
@@ -3562,6 +3575,7 @@ static ncclResult_t ncclCommInitChildComm(ncclComm_t comm, ncclComm_t* newcomm, 
                   res, exit);
   }
   NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, exit);
+  NCCLCHECKGOTO(childInitCheckNoneInFlight(comm, caller), res, exit);
   CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), res, exit);
 
   /* *newcomm should be NCCL_COMM_NULL until comm split fully complete. */
@@ -3624,6 +3638,8 @@ static ncclResult_t ncclCommInitChildComm(ncclComm_t comm, ncclComm_t* newcomm, 
   }
   job->cudaDev = comm->cudaDev;
   snprintf(job->funcName, NCCL_COMMINIT_FUNCNAME_LEN, "%s", caller);
+  // released by childCommCleanupJob, which also runs when the launch below is rejected
+  ncclAtomicRefCountIncrement(&comm->childInitInFlight);
   if (ncclParamEnqueueRearchEnable()) {
     NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, ncclCommInitRankFunc, childCommCleanupJob, comm), res,
                   fail);
@@ -3724,6 +3740,7 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
   if (isExistingRank) {
     NCCLCHECKGOTO(CommCheck(comm, __func__, "comm"), res, exit);
     NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, exit);
+    NCCLCHECKGOTO(childInitCheckNoneInFlight(comm, __func__), res, exit);
     if (rank != -1) {
       WARN("ncclCommGrow: existing ranks must pass rank=-1, got %d", rank);
       res = ncclInvalidArgument;
@@ -3832,6 +3849,8 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
   job->isGrow = 1;
   job->color = 0;
   job->key = job->myrank;
+  // released by childCommCleanupJob, which also runs when the launch below is rejected
+  if (isExistingRank) ncclAtomicRefCountIncrement(&comm->childInitInFlight);
   if (ncclParamEnqueueRearchEnable()) {
     NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, ncclCommInitRankFunc, childCommCleanupJob, newComm),
                   res, fail);

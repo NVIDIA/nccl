@@ -17,7 +17,7 @@
 #include "gin_scratch.h"
 #endif
 
-#if defined(CUDART_VERSION) && CUDART_VERSION >= 13010
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13000
 #include <cuda/std/ranges>
 #endif
 

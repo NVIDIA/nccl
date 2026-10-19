@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.32.4. Do not modify it directly.
+# This code was automatically generated with version 2.32.5. Do not modify it directly.
 
 
 # <<<< PREAMBLE CONTENT >>>>
@@ -116,7 +116,7 @@ from libcpp.vector cimport vector
 from ._internal.utils cimport (nested_resource, nullable_unique_ptr,
                               get_resource_ptr, get_nested_resource_ptr)
 
-_version_span = "with version 2.32.4"
+_version_span = "with version 2.32.5"
 __version__ = _version_span.split()[-1]
 
 # NCCL_VERSION(X,Y,Z) = X*10000 + Y*100 + Z (NCCL >= 2.9).

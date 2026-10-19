@@ -679,7 +679,7 @@ static ncclResult_t gdakiCheckDeviceSupport(doca_gpu_t* gpuDev, doca_dev_t* netD
   if (docaStatus != DOCA_SUCCESS &&
       !(gpuDev->type == DOCA_GPU_LIB_TYPE_SDK && netDev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK &&
         docaStatus == DOCA_ERROR_NOT_SUPPORTED)) {
-    WARN("[%d] GIN/GDAKI: GPU memory UMEM is required but is not supported by the selected GPU/NIC pair: DOCA error %d",
+    ATTN("[%d] GIN/GDAKI: GPU memory UMEM is required but is not supported by the selected GPU/NIC pair: DOCA error %d",
          rank, docaStatus);
     return ncclInvalidUsage;
   }
@@ -689,7 +689,7 @@ static ncclResult_t gdakiCheckDeviceSupport(doca_gpu_t* gpuDev, doca_dev_t* netD
     if (docaStatus != DOCA_SUCCESS &&
         !(gpuDev->type == DOCA_GPU_LIB_TYPE_SDK && netDev->type == DOCA_VERBS_SDK_LIB_TYPE_SDK &&
           docaStatus == DOCA_ERROR_NOT_SUPPORTED)) {
-      WARN(
+      ATTN(
         "[%d] GIN/GDAKI: the requested GPU SM NIC handler is not supported by the selected GPU/NIC pair: DOCA error %d",
         rank, docaStatus);
       return ncclInvalidUsage;

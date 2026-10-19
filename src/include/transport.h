@@ -112,6 +112,7 @@ struct ncclNvlsSharedRes {
   int nChannels;
   int nHeads;
   int chunkSize;
+  int fifoLayout;
   int treeMaxChunkSize;
   struct ncclShmemCollBuff nvlsShmem;
   void* nvlsShmemHandle;

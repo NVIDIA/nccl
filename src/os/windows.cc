@@ -866,6 +866,17 @@ void ncclOsShmHandleInit(ncclShmDescriptor shmDesc, char* shmPath, size_t shmSiz
   }
 }
 
+static ncclResult_t ncclOsShmPathSubstituteRandomLetters(char* suffix) {
+  static const char randomChars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  unsigned char randBytes[sizeof("XXXXXX") - 1];
+
+  NCCLCHECK(getRandomData(randBytes, sizeof(randBytes)));
+  for (int i = 0; i < (int)sizeof(randBytes); i++) {
+    suffix[i] = randomChars[randBytes[i] % (sizeof(randomChars) - 1)];
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, void** shmPtr, void** devShmPtr,
                            int refcount, struct ncclShmHandleInternal** handle) {
   HANDLE hMapFile = NULL;
@@ -886,23 +897,45 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, vo
               fail);
 
   if (create) {
-    if (shmPath[0] == '\0') {
-      // Generate unique shared memory name using process ID and timestamp
-      uint64_t timestamp = clockNano();
-      snprintf(shmPath, shmPathSize, "Local\\nccl-shm-%llu-%llu", (unsigned long long)GetCurrentProcessId(),
-               (unsigned long long)timestamp);
+    bool randomPath = (shmPath[0] == '\0');
+    if (randomPath) {
+      if (shmPathSize < sizeof("Local\\nccl-shm-XXXXXX")) {
+        WARN("Error: shared memory path buffer too small, need %zu bytes but got %zu", sizeof("Local\\nccl-shm-XXXXXX"),
+             shmPathSize);
+        ret = ncclInvalidArgument;
+        goto fail;
+      }
+      snprintf(shmPath, shmPathSize, "Local\\nccl-shm-XXXXXX");
     }
 
-    // Create file mapping object
-    hMapFile = CreateFileMappingA(INVALID_HANDLE_VALUE,    // use paging file
-                                  NULL,                    // default security
-                                  PAGE_READWRITE,          // read/write access
-                                  (DWORD)((realShmSize >> 32) & 0xFFFFFFFF),  // high-order DWORD of size
-                                  (DWORD)(realShmSize & 0xFFFFFFFF),          // low-order DWORD of size
-                                  shmPath);                // name of mapping object
+    for (int attempt = 0; attempt < (randomPath ? 128 : 1); attempt++) {
+      if (randomPath) {
+        NCCLCHECKGOTO(ncclOsShmPathSubstituteRandomLetters(shmPath + sizeof("Local\\nccl-shm-") - 1), ret, fail);
+      }
+
+      SetLastError(ERROR_SUCCESS);
+      hMapFile = CreateFileMappingA(INVALID_HANDLE_VALUE,    // use paging file
+                                    NULL,                    // default security
+                                    PAGE_READWRITE,          // read/write access
+                                    (DWORD)((realShmSize >> 32) & 0xFFFFFFFF),  // high-order DWORD of size
+                                    (DWORD)(realShmSize & 0xFFFFFFFF),          // low-order DWORD of size
+                                    shmPath);                // name of mapping object
+      DWORD createError = GetLastError();
+      if (hMapFile == NULL) {
+        WARN("Error: failed to create shared memory mapping %s, error code: %lu", shmPath, createError);
+        ret = ncclSystemError;
+        goto fail;
+      }
+      if (!randomPath || createError != ERROR_ALREADY_EXISTS) {
+        break;
+      }
+
+      CloseHandle(hMapFile);
+      hMapFile = NULL;
+    }
 
     if (hMapFile == NULL) {
-      WARN("Error: failed to create shared memory mapping %s, error code: %lu", shmPath, GetLastError());
+      WARN("Error: failed to create unique shared memory mapping %s", shmPath);
       ret = ncclSystemError;
       goto fail;
     }

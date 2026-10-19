@@ -1,8 +1,8 @@
 """CuTeDSL bindings for C struct types declared in
-``bindings/ir/nccl_device_wrapper.h`` and ``src/include/nccl_device/``.
+``bindings/ir/nccl_device_ir.h`` and ``src/include/nccl_device/``.
 
 Codegen target -- each entry is 1:1 with a C struct definition.
-``_LLVMPtrType`` and ``_array_i8`` are MLIR-type adapters used as
+``_LLVMPtrType``, ``_array_i8`` and ``_array_i64`` are MLIR-type adapters used as
 ``@cute.native_struct`` field annotations.
 """
 
@@ -44,6 +44,17 @@ def _array_i8(n: int):
         @staticmethod
         def mlir_type():
             return ir.Type.parse(f"!llvm.array<{n} x i8>")
+
+    return T
+
+
+def _array_i64(n: int):
+    """Build a fixed-size, naturally 8-byte-aligned opaque storage array."""
+
+    class T:
+        @staticmethod
+        def mlir_type():
+            return ir.Type.parse(f"!llvm.array<{n} x i64>")
 
     return T
 
@@ -175,27 +186,15 @@ class DevCommValue:
     cft_multimem_barrier: ncclCftBarrierHandle
 
 
-class _CoopOpaqueStorage:
-    @staticmethod
-    def mlir_type():
-        return ir.Type.parse("!llvm.array<3 x i64>")
-
-
 @cute.native_struct
 class ncclIrCoop:
     """Opaque 24-byte, 8-byte-aligned coop storage from the IR wrapper header."""
 
-    storage: _CoopOpaqueStorage
-
-
-class _GinOpaqueStorage:
-    @staticmethod
-    def mlir_type():
-        return ir.Type.parse("!llvm.array<5 x i64>")
+    storage: _array_i64(3)
 
 
 @cute.native_struct
 class ncclIrGin:
     """Opaque 40-byte, 8-byte-aligned GIN storage from the IR wrapper header."""
 
-    storage: _GinOpaqueStorage
+    storage: _array_i64(5)

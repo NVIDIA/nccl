@@ -1071,8 +1071,24 @@ static void profilerStopNet(void** eHandle) {
   *eHandle = nullptr;
 }
 
+// A NULL eHandle is a net plugin one-off event (no prior start). It is forwarded to
+// every loaded plugin's recordEventState as a NULL handle, as before multi-plugin support;
+// plugins are responsible for ignoring or handling NULL handles
 static void profilerRecordNet(void* eHandle, ncclProfilerEventState_t eState, ncclProfilerEventStateArgs_t* args) {
-  if (!eHandle) return;
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return;
+  if (!eHandle) {
+    for (int slot = 0; slot < profilerPluginCount; slot++) {
+      ncclProfilerEventStateArgs_t slotArgs = *args;
+      uint32_t mode = profilerPluginCount <= 1 ?
+                        profilerTsModeGet() :
+                        COMPILER_ATOMIC_LOAD(&profilerPlugins[slot].tsMode, std::memory_order_relaxed);
+      profilerStampArgs(&slotArgs, mode, profilerTimestampHost, 0);
+      // profilerRecord expects a non-NULL eHandle (it drops events whose handle is not live),
+      // so call each plugin's recordEventState directly here.
+      profilerActivate(&profilerPlugins[slot])->recordEventState(nullptr, eState, &slotArgs);
+    }
+    return;
+  }
   if (profilerPluginCount <= 1) {
     struct ncclProfilerEventRef event = {};
     event.h[0] = eHandle;

@@ -674,6 +674,12 @@ class NCCLDevCommRequirements(LowppSpec, lowpp_cls=_nccl_bindings.DevCommRequire
     :py:attr:`NcclGinConnectionType.CUSTOM_STRIDE`, and must be a multiple of
     :py:attr:`NCCLCommProperties.gin_min_stride`. If unset, NCCL uses 1."""
 
+    gin_custom_peers: Sequence[int] | None = None
+    """World ranks to connect for GIN when :py:attr:`gin_connection_type` is
+    :py:attr:`NcclGinConnectionType.CUSTOM_ARRAY`. Order does not matter. Use
+    an empty sequence for no peer connections. Both ranks of each pair must
+    list each other. Ignored if gin_connection_type is not NcclGinConnectionType.CUSTOM_ARRAY."""
+
     gin_type: NcclGinType | None = None
     """GIN transport to require. If unset, NCCL uses
     :py:attr:`NcclGinType.NONE`, accepting any available transport."""
@@ -752,6 +758,23 @@ def _materialize_coll_config(
         cfg.ext = nodes[0].ptr
 
     return cfg, keepalive
+
+
+def _materialize_gin_custom_peers(
+    peers: Sequence[int] | None,
+) -> _np.ndarray | None:
+    """Build a contiguous ``int32`` peer-rank buffer for ``NCCL_GIN_CONNECTION_CUSTOM_ARRAY``.
+
+    Returns ``None`` when ``peers`` is unset or empty.
+    """
+    if peers is None:
+        return None
+    arr = _np.asarray(peers, dtype=_np.int32)
+    if arr.ndim != 1:
+        raise ValueError("gin_custom_peers must be a one-dimensional sequence of ranks")
+    if arr.size == 0:
+        return None
+    return arr
 
 
 def _materialize_team_requirements(
@@ -2717,6 +2740,12 @@ class Communicator:
         ) = None
 
         reqs = requirements._to_lowpp()
+        
+        if requirements.gin_connection_type == NcclGinConnectionType.CUSTOM_ARRAY:
+            peer_array = _materialize_gin_custom_peers(requirements.gin_custom_peers)
+            reqs.gin_custom_array = 0 if peer_array is None else int(peer_array.ctypes.data)
+            reqs.gin_custom_array_count = 0 if peer_array is None else int(peer_array.size)
+
         if requirements.teams:
             team_nodes, multimem_handles = _materialize_team_requirements(requirements.teams)
             reqs.team_requirements_list = team_nodes[0].ptr

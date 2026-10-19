@@ -4,18 +4,14 @@
  *
  * See LICENSE.txt for more license information
  ************************************************************************/
-#ifndef _NCCL_DEVICE_WRAPPER_IMPL_GIN_H_
-#define _NCCL_DEVICE_WRAPPER_IMPL_GIN_H_
-
-// Internal implementation fragment; include only from nccl_device_wrapper.cu
+// Internal implementation fragment; include only from nccl_device_ir.cu
 // after its prerequisite headers.
 
-// The C ABI stores a real, kernel-local ALL-mask ncclGin object.
 static_assert(sizeof(ncclIrGin) == sizeof(ncclGin), "GIN storage size mismatch");
 static_assert(alignof(ncclIrGin) == alignof(ncclGin), "GIN storage alignment mismatch");
 
-NCCL_DEVICE_INLINE void ncclIrGinInit(ncclIrGin* net, ncclDevComm const* comm, int contextIndex,
-                                      ncclGinResourceSharingMode resourceSharingMode) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinInit(ncclIrGin* net, ncclDevComm const* comm, int contextIndex,
+                                         ncclGinResourceSharingMode resourceSharingMode) {
   ::new (net) ncclGin(*comm, contextIndex, resourceSharingMode);
 }
 
@@ -71,14 +67,14 @@ static __device__ __forceinline__ bool ncclGin_isDeviceOnly(ncclIrGinSegment seg
   return segment.isDeviceOnly;
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinPut(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin,
-                                     size_t dstOffset, ncclWindow_t srcWin, size_t srcOffset, size_t bytes,
-                                     ncclGinSignalType signalType, ncclWindow_t signalWin, size_t signalOffset,
-                                     ncclGinSignal_t signalId, bool isStrong, ncclGinSignalOp_t signalOp,
-                                     uint64_t signalOpArg, bool isCounter, ncclGinCounter_t counterId,
-                                     ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                                     cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
-                                     uint32_t optFlags, ncclGinSegmentType_t segmentType) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinPut(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin,
+                                        size_t dstOffset, ncclWindow_t srcWin, size_t srcOffset, size_t bytes,
+                                        ncclGinSignalType signalType, ncclWindow_t signalWin, size_t signalOffset,
+                                        ncclGinSignal_t signalId, bool isStrong, ncclGinSignalOp_t signalOp,
+                                        uint64_t signalOpArg, bool isCounter, ncclGinCounter_t counterId,
+                                        ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
+                                        cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
+                                        uint32_t optFlags, ncclGinSegmentType_t segmentType) {
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   ncclGinSignalDescriptor signal{};
   signal.type = signalType;
@@ -99,13 +95,13 @@ NCCL_DEVICE_INLINE void ncclIrGinPut(ncclIrGin const* net, ncclTeam team, int pe
     requiredRelease, optFlags, ncclIrGinSegment{segmentType == ncclGinSegmentTypeDevice});
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin,
-                                          size_t dstOffset, uint64_t value, size_t size, ncclGinSignalType signalType,
-                                          ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId,
-                                          bool isStrong, ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
-                                          ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                                          cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
-                                          uint32_t optFlags) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t dstWin,
+                                             size_t dstOffset, uint64_t value, size_t size,
+                                             ncclGinSignalType signalType, ncclWindow_t signalWin, size_t signalOffset,
+                                             ncclGinSignal_t signalId, bool isStrong, ncclGinSignalOp_t signalOp,
+                                             uint64_t signalOpArg, ncclIrCoop const* coop, bool isDescriptor,
+                                             ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                             cuda::thread_scope requiredRelease, uint32_t optFlags) {
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   ncclGinSignalDescriptor signal{};
   signal.type = signalType;
@@ -120,7 +116,6 @@ NCCL_DEVICE_INLINE void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam team, i
     signal.vaSignal.ncclWindow = signalWin;
     signal.isStrong = isStrong;
   }
-  // Preserve the C ABI size-to-type conversion.
   switch (size) {
   case 1:
     reinterpret_cast<ncclGin const*>(net)->putValue(team, peer, dstWin, dstOffset, (uint8_t)value,
@@ -150,22 +145,22 @@ NCCL_DEVICE_INLINE void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam team, i
   }
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinGet(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t remoteWnd,
-                                     size_t remoteOffset, ncclWindow_t localWnd, size_t localOffset, size_t bytes,
-                                     ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                                     uint32_t optFlags, ncclGinSegmentType_t segmentType) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinGet(ncclIrGin const* net, ncclTeam team, int peer, ncclWindow_t remoteWnd,
+                                        size_t remoteOffset, ncclWindow_t localWnd, size_t localOffset, size_t bytes,
+                                        ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
+                                        uint32_t optFlags, ncclGinSegmentType_t segmentType) {
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   reinterpret_cast<ncclGin const*>(net)->get(team, peer, remoteWnd, remoteOffset, localWnd, localOffset, bytes,
                                              coopImpl, ncclIrGinDescriptor{isDescriptor, descriptor}, optFlags,
                                              ncclIrGinSegment{segmentType == ncclGinSegmentTypeDevice});
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinSignal(ncclIrGin const* net, ncclTeam team, int peer, ncclGinSignalType signalType,
-                                        ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId,
-                                        bool isStrong, ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
-                                        ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
-                                        cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
-                                        uint32_t optFlags) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinSignal(ncclIrGin const* net, ncclTeam team, int peer, ncclGinSignalType signalType,
+                                           ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId,
+                                           bool isStrong, ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
+                                           ncclIrCoop const* coop, bool isDescriptor, ncclGinDescriptorSmem* descriptor,
+                                           cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
+                                           uint32_t optFlags) {
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   ncclGinSignalDescriptor signal{};
   signal.type = signalType;
@@ -185,56 +180,58 @@ NCCL_DEVICE_INLINE void ncclIrGinSignal(ncclIrGin const* net, ncclTeam team, int
                                                 requiredRelease, optFlags);
 }
 
-NCCL_DEVICE_INLINE uint64_t ncclIrGinReadSignal(ncclIrGin const* net, ncclGinSignal_t signal, int bits,
-                                                cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE uint64_t ncclIrGinReadSignal(ncclIrGin const* net, ncclGinSignal_t signal, int bits,
+                                                   cuda::memory_order ord) {
   return reinterpret_cast<ncclGin const*>(net)->readSignal(signal, bits, ord);
 }
 
-NCCL_DEVICE_INLINE uint64_t ncclIrGinReadSignalVA(ncclIrGin const* net, ncclWindow_t signalWindow, size_t signalOffset,
-                                                  int bits, cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE uint64_t ncclIrGinReadSignalVA(ncclIrGin const* net, ncclWindow_t signalWindow,
+                                                     size_t signalOffset, int bits, cuda::memory_order ord) {
   return reinterpret_cast<ncclGin const*>(net)->readSignal(signalWindow, signalOffset, bits, ord);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinWaitSignal(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
-                                            uint64_t least, int bits, cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinWaitSignal(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinSignal_t signal,
+                                               uint64_t least, int bits, cuda::memory_order ord) {
   reinterpret_cast<ncclGin const*>(net)->waitSignal(*reinterpret_cast<ncclCoopAny const*>(coop), signal, least, bits,
                                                     ord);
 }
 
-NCCL_DEVICE_INLINE ncclResult_t ncclIrGinWaitSignalTimeout(ncclIrGin const* net, ncclIrCoop const* coop,
-                                                           ncclGinSignal_t signal, uint64_t least, int bits,
-                                                           cuda::memory_order ord, uint64_t timeoutCycles) {
+NCCL_IR_DEVICE_INLINE ncclResult_t ncclIrGinWaitSignalTimeout(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                              ncclGinSignal_t signal, uint64_t least, int bits,
+                                                              cuda::memory_order ord, uint64_t timeoutCycles) {
   return reinterpret_cast<ncclGin const*>(net)->waitSignal(*reinterpret_cast<ncclCoopAny const*>(coop), signal, least,
                                                            bits, ord, timeoutCycles);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinWaitSignalVA(ncclIrGin const* net, ncclIrCoop const* coop, ncclWindow_t signalWindow,
-                                              size_t signalOffset, uint64_t least, int bits, cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinWaitSignalVA(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                 ncclWindow_t signalWindow, size_t signalOffset, uint64_t least,
+                                                 int bits, cuda::memory_order ord) {
   reinterpret_cast<ncclGin const*>(net)->waitSignal(*reinterpret_cast<ncclCoopAny const*>(coop), signalWindow,
                                                     signalOffset, least, bits, ord);
 }
 
-NCCL_DEVICE_INLINE ncclResult_t ncclIrGinWaitSignalTimeoutVA(ncclIrGin const* net, ncclIrCoop const* coop,
-                                                             ncclWindow_t signalWindow, size_t signalOffset,
-                                                             uint64_t least, int bits, cuda::memory_order ord,
-                                                             uint64_t timeoutCycles) {
+NCCL_IR_DEVICE_INLINE ncclResult_t ncclIrGinWaitSignalTimeoutVA(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                                ncclWindow_t signalWindow, size_t signalOffset,
+                                                                uint64_t least, int bits, cuda::memory_order ord,
+                                                                uint64_t timeoutCycles) {
   return reinterpret_cast<ncclGin const*>(net)->waitSignal(*reinterpret_cast<ncclCoopAny const*>(coop), signalWindow,
                                                            signalOffset, least, bits, ord, timeoutCycles);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinIncreaseSignalShadow(ncclIrGin const* net, ncclGinSignal_t signal, uint64_t delta) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinIncreaseSignalShadow(ncclIrGin const* net, ncclGinSignal_t signal, uint64_t delta) {
   reinterpret_cast<ncclGin const*>(net)->increaseSignalShadow(signal, delta);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinWaitSignalMeetShadow(ncclIrGin const* net, ncclIrCoop const* coop,
-                                                      ncclGinSignal_t signal, int bits, cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinWaitSignalMeetShadow(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                         ncclGinSignal_t signal, int bits, cuda::memory_order ord) {
   reinterpret_cast<ncclGin const*>(net)->waitSignalMeetShadow(*reinterpret_cast<ncclCoopAny const*>(coop), signal, bits,
                                                               ord);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinWaitSignalFollowShadow(ncclIrGin const* net, ncclIrCoop const* coop,
-                                                        ncclGinSignal_t signal, uint64_t leastDelta, uint64_t* before,
-                                                        uint64_t* delta, int bits, cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinWaitSignalFollowShadow(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                           ncclGinSignal_t signal, uint64_t leastDelta,
+                                                           uint64_t* before, uint64_t* delta, int bits,
+                                                           cuda::memory_order ord) {
   ncclCoopAny const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   // Native broadcast requires the concrete coop type initialized in this storage.
   if (coopImpl.vtable == ncclCoopAny::get_vtable<ncclCoopThread>()) {
@@ -265,72 +262,71 @@ NCCL_DEVICE_INLINE void ncclIrGinWaitSignalFollowShadow(ncclIrGin const* net, nc
   __builtin_unreachable();
 }
 
-NCCL_DEVICE_INLINE uint64_t* ncclIrGinGetSignalShadowPtr(ncclIrGin const* net, ncclGinSignal_t signal) {
+NCCL_IR_DEVICE_INLINE uint64_t* ncclIrGinGetSignalShadowPtr(ncclIrGin const* net, ncclGinSignal_t signal) {
   return reinterpret_cast<ncclGin const*>(net)->getSignalShadowPtr(signal);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinResetSignal(ncclIrGin const* net, ncclGinSignal_t signal) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinResetSignal(ncclIrGin const* net, ncclGinSignal_t signal) {
   reinterpret_cast<ncclGin const*>(net)->resetSignal(signal);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinResetSignalVA(ncclIrGin const* net, ncclWindow_t signalWindow, size_t signalOffset) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinResetSignalVA(ncclIrGin const* net, ncclWindow_t signalWindow,
+                                                  size_t signalOffset) {
   reinterpret_cast<ncclGin const*>(net)->resetSignal(signalWindow, signalOffset);
 }
 
-NCCL_DEVICE_INLINE uint64_t ncclIrGinReadCounter(ncclIrGin const* net, ncclGinCounter_t counter, int bits,
-                                                 cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE uint64_t ncclIrGinReadCounter(ncclIrGin const* net, ncclGinCounter_t counter, int bits,
+                                                    cuda::memory_order ord) {
   return reinterpret_cast<ncclGin const*>(net)->readCounter(counter, bits, ord);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinWaitCounter(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinCounter_t counter,
-                                             uint64_t least, int bits, cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinWaitCounter(ncclIrGin const* net, ncclIrCoop const* coop, ncclGinCounter_t counter,
+                                                uint64_t least, int bits, cuda::memory_order ord) {
   reinterpret_cast<ncclGin const*>(net)->waitCounter(*reinterpret_cast<ncclCoopAny const*>(coop), counter, least, bits,
                                                      ord);
 }
 
-NCCL_DEVICE_INLINE ncclResult_t ncclIrGinWaitCounterTimeout(ncclIrGin const* net, ncclIrCoop const* coop,
-                                                            ncclGinCounter_t counter, uint64_t least, int bits,
-                                                            cuda::memory_order ord, uint64_t timeoutCycles) {
+NCCL_IR_DEVICE_INLINE ncclResult_t ncclIrGinWaitCounterTimeout(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                               ncclGinCounter_t counter, uint64_t least, int bits,
+                                                               cuda::memory_order ord, uint64_t timeoutCycles) {
   return reinterpret_cast<ncclGin const*>(net)->waitCounter(*reinterpret_cast<ncclCoopAny const*>(coop), counter, least,
                                                             bits, ord, timeoutCycles);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinResetCounter(ncclIrGin const* net, ncclGinCounter_t counter) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinResetCounter(ncclIrGin const* net, ncclGinCounter_t counter) {
   reinterpret_cast<ncclGin const*>(net)->resetCounter(counter);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinFlush(ncclIrGin const* net, ncclIrCoop const* coop, cuda::memory_order ord,
-                                       bool isDescriptor, ncclGinDescriptorSmem* descriptor) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinFlush(ncclIrGin const* net, ncclIrCoop const* coop, cuda::memory_order ord,
+                                          bool isDescriptor, ncclGinDescriptorSmem* descriptor) {
   reinterpret_cast<ncclGin const*>(net)->flush(*reinterpret_cast<ncclCoopAny const*>(coop), ord,
                                                ncclIrGinDescriptor{isDescriptor, descriptor});
 }
 
-NCCL_DEVICE_INLINE ncclResult_t ncclIrGinFlushTimeout(ncclIrGin const* net, ncclIrCoop const* coop,
-                                                      cuda::memory_order ord, bool isDescriptor,
-                                                      ncclGinDescriptorSmem* descriptor, uint64_t timeoutCycles) {
+NCCL_IR_DEVICE_INLINE ncclResult_t ncclIrGinFlushTimeout(ncclIrGin const* net, ncclIrCoop const* coop,
+                                                         cuda::memory_order ord, bool isDescriptor,
+                                                         ncclGinDescriptorSmem* descriptor, uint64_t timeoutCycles) {
   return reinterpret_cast<ncclGin const*>(net)->flush(*reinterpret_cast<ncclCoopAny const*>(coop), ord,
                                                       ncclIrGinDescriptor{isDescriptor, descriptor}, timeoutCycles);
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinFlushAsync(ncclIrGin const* net, ncclTeam team, uint32_t peer,
-                                            ncclGinRequest_t* outRequest, ncclIrCoop const* coop, uint32_t optFlags,
-                                            bool isDescriptor, ncclGinDescriptorSmem* descriptor) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinFlushAsync(ncclIrGin const* net, ncclTeam team, uint32_t peer,
+                                               ncclGinRequest_t* outRequest, ncclIrCoop const* coop, uint32_t optFlags,
+                                               bool isDescriptor, ncclGinDescriptorSmem* descriptor) {
   reinterpret_cast<ncclGin const*>(net)->flushAsync(team, peer, outRequest, *reinterpret_cast<ncclCoopAny const*>(coop),
                                                     optFlags, ncclIrGinDescriptor{isDescriptor, descriptor});
 }
 
-NCCL_DEVICE_INLINE void ncclIrGinWait(ncclIrGin const* net, ncclGinRequest_t* request, ncclIrCoop const* coop,
-                                      bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::memory_order ord) {
+NCCL_IR_DEVICE_INLINE void ncclIrGinWait(ncclIrGin const* net, ncclGinRequest_t* request, ncclIrCoop const* coop,
+                                         bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::memory_order ord) {
   reinterpret_cast<ncclGin const*>(net)->wait(*request, *reinterpret_cast<ncclCoopAny const*>(coop),
                                               ncclIrGinDescriptor{isDescriptor, descriptor}, ord);
 }
 
-NCCL_DEVICE_INLINE ncclResult_t ncclIrGinWaitTimeout(ncclIrGin const* net, ncclGinRequest_t* request,
-                                                     ncclIrCoop const* coop, bool isDescriptor,
-                                                     ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
-                                                     uint64_t timeoutCycles) {
+NCCL_IR_DEVICE_INLINE ncclResult_t ncclIrGinWaitTimeout(ncclIrGin const* net, ncclGinRequest_t* request,
+                                                        ncclIrCoop const* coop, bool isDescriptor,
+                                                        ncclGinDescriptorSmem* descriptor, cuda::memory_order ord,
+                                                        uint64_t timeoutCycles) {
   return reinterpret_cast<ncclGin const*>(net)->wait(*request, *reinterpret_cast<ncclCoopAny const*>(coop),
                                                      ncclIrGinDescriptor{isDescriptor, descriptor}, ord, timeoutCycles);
 }
-
-#endif // _NCCL_DEVICE_WRAPPER_IMPL_GIN_H_

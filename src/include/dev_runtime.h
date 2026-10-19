@@ -67,12 +67,19 @@ struct ncclDevrStateCftUc {
 };
 
 struct ncclDevrState {
-  // Like localRank/localRanks except "lsa" ranks must be consecutive in the world
-  // and all lsa subsets have the same number of ranks. If any condition is
+  // A complete set of LSA ranks (with pointer access via CUDA P2P), in ascending communicator-rank order.
+  // This is the local node normally, the MNNVL clique when MNNVL is active, and the full NVLink fabric domain when
+  // cross-clique P2P is enabled.
+  int lsaDomainSelf;
+  int lsaDomainSize;
+  int* lsaDomainRankList;
+
+  // Like lsaDomainSelf/lsaDomainSize except the team ranks must be consecutive in the world
+  // and all the lsa teams within a communicator have the same number of ranks. If any condition is
   // false then the lsa team is just the singleton of self.
-  int lsaSelf;
-  int lsaSize;
-  int* lsaRankList;
+  int lsaTeamSelf;
+  int lsaTeamSize;
+  int* lsaTeamRankList; // Part of lsaDomainRankList -- watch out when free()ing!
   int nLsaTeams;
 
   int cftSelf;
@@ -96,7 +103,7 @@ struct ncclDevrState {
   // local ranks. Empty on a comm that reuses a parent's NVLS resources instead of building the group.
   struct ncclMcPartition nvlsMcPartition;
   struct ncclSpace bigSpace; // allocates our big VA space.
-  void* lsaFlatBase; // base ptr for all local ranks big VA's concatenated together: size = localRanks*bigSize
+  void* lsaFlatBase; // base ptr for all LSA-domain ranks' big VAs: size = lsaDomainSize*bigSize
   struct ncclShadowPool shadows;
   struct ncclDevCommWindowTable* windowTable;
 
@@ -136,7 +143,7 @@ ncclResult_t ncclGinBarrierSizeRequirement(struct ncclComm* comm, struct ncclGin
 // Check if GIN resources have been requested as part of `reqs`.
 bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
 
-int computeLsaSize(struct ncclComm* comm);
+int computeLsaTeamSize(struct ncclComm* comm);
 // Compute the symmetric VA size (bigSize) from the comm's peer info without any side effects.
 size_t computeBigSize(struct ncclComm* comm);
 

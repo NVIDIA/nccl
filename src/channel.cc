@@ -136,7 +136,10 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   return ncclSuccess;
 }
 
-ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share) {
+// Set up the channel's NVLS peers, slots nRanks+1 .. nRanks+localRanks. With parentSlots NULL the channel
+// allocates its own peers; otherwise it reuses the parent's, with slot r backed by the parent's slot
+// parentSlots[r]. Slot h < nHeads is NVLS head h, so a child maps each head to the parent slot of the same GPU.
+ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, const int* parentSlots) {
   struct ncclChannel* channel = &comm->channels[channelId];
   struct ncclSharedResources* sharedRes = comm->sharedRes;
   cudaStream_t deviceStream;
@@ -150,11 +153,14 @@ ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclCo
 
   int nvlsRanks = comm->localRanks;
 
-  if (share) {
+  if (parentSlots != NULL) {
     channel->nvlsPeers = parent->channels[channelId].nvlsPeers;
     channel->nvlsDevPeers = parent->channels[channelId].nvlsDevPeers;
     for (int r = 0; r < nvlsRanks; ++r) {
-      int tr = comm->topParentLocalRanks[r];
+      // Index of parent slot parentSlots[r] in the resource owner's peer arrays. A parent that shares in turn may
+      // hold that slot at a remapped index, which the pointer difference follows.
+      int tr = (int)(parent->channels[channelId].peers[parent->nRanks + 1 + parentSlots[r]] -
+                     parent->channels[channelId].nvlsPeers);
       uintptr_t addr = (uintptr_t)(parent->channels[channelId].nvlsDevPeers + tr);
       channel->peers[comm->nRanks + 1 + r] = parent->channels[channelId].nvlsPeers + tr;
       NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + comm->nRanks + 1 + r), (uintptr_t*)&addr, 1,

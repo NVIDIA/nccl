@@ -107,7 +107,7 @@ ncclResult_t ncclTuningCeModelSim(struct ncclTuningInput_t* const input, struct 
                                   struct ncclTuningModelState* /*internal*/) {
   int method = result->id - NCCL_TUNING_CE_METHOD_ID_OFFSET;
   bool multicast = (method == ncclCeMethodId_AllGather_MC);
-  int nRanks = input->comm->devrState.lsaSize;
+  int nRanks = input->comm->devrState.lsaTeamSize;
   result->timeUs = ncclCeAgLatencyUs(input->comm, multicast, nRanks, input->nBytes, input->captured, input->inPlace);
   return ncclSuccess;
 }

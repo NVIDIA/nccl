@@ -309,7 +309,7 @@ static const bool ncclIbCpuArchAarch64 = false;
 
 static const uint32_t NCCL_IB_MLX_VENDOR_ID = 0x02c9;
 static const uint32_t NCCL_IB_CX9_PART_ID = 0x1025;
-static const uint32_t NCCL_IB_VF_PART_ID = 0x1023;
+static const uint32_t NCCL_IB_VF_PART_ID = 0x101e;
 static bool ncclIbIsCx9(const struct ncclIbDev* dev) {
   return dev->vendorId == NCCL_IB_MLX_VENDOR_ID &&
          (dev->vendorPartId == NCCL_IB_CX9_PART_ID || dev->vendorPartId == NCCL_IB_VF_PART_ID) &&

@@ -553,6 +553,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
     ncclAtomicRefCountIncrement(&parent->sharedRes->refCount);
     NCCLCHECK(ncclNetInitFromParent(comm, parent));
     NCCLCHECK(ncclRmaInitFromParent(comm, parent));
+    NCCLCHECK(ncclGinInitFromParent(comm, parent));
   }
 
   INFO(NCCL_INIT, "Using network %s", comm->ncclNet->name);
@@ -976,8 +977,8 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   NCCLCHECK(ncclTopoCheckCrossNicSupport(&info->crossNicSupport));
   NCCLCHECK(ncclCuMemGdrSupport(comm->cudaDev, &info->cuMemGdrSupport));
   info->supportedGinTypeBitMask = 0;
-  for (int i = 0; i < comm->sharedRes->ginState.numActiveBackends; i++) {
-    info->supportedGinTypeBitMask |= BIT(comm->sharedRes->ginState.backends[i].ginType);
+  for (int i = 0; i < comm->ginState.numActiveBackends; i++) {
+    info->supportedGinTypeBitMask |= BIT(comm->ginState.backends[i].ginType);
   }
   info->rmaPluginAvailable = (comm->rmaState.rmaProxyState.ncclRma != nullptr);
   info->rmaRankStride = (int)ncclParamRmaRankStride();
@@ -4083,16 +4084,16 @@ ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* asyncError) {
   }
 
   /* Check gin status */
-  if (*asyncError == ncclSuccess && comm->sharedRes && comm->sharedRes->ginState.connected) {
-    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  if (*asyncError == ncclSuccess && comm->ginState.connected) {
+    struct ncclGinState* ginState = &comm->ginState;
     // Gin progress thread status
     if (ginState->proxyThreadsCreated) {
-      *asyncError = COMPILER_ATOMIC_LOAD(&comm->sharedRes->ginState.asyncResult, std::memory_order_acquire);
+      *asyncError = COMPILER_ATOMIC_LOAD(&comm->ginState.asyncResult, std::memory_order_acquire);
     }
     // Gin side errors, also works when we have no GIN progress thread.
     if (*asyncError == ncclSuccess) {
       bool ginError;
-      NCCLCHECK(ncclGinQueryLastError(&comm->sharedRes->ginState, &ginError));
+      NCCLCHECK(ncclGinQueryLastError(&comm->ginState, &ginError));
       if (ginError) {
         WARN("GIN Error detected");
         *asyncError = ncclRemoteError;

@@ -2046,7 +2046,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   {
     std::lock_guard<std::mutex> lock(netMutex);
     INFO(NCCL_GRAPH, "TOPO/NET : Importing network plugins to topology");
-    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    struct ncclGinState* ginState = &comm->ginState;
     ncclGin_t* gin = ginState->supported ? ginState->backends[0].ncclGin : NULL;
     if (gin) {
       netInfo.net = 0;

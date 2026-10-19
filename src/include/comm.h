@@ -161,9 +161,6 @@ struct ncclSharedResources {
 
   /* proxy related shared res */
   struct ncclProxyState* proxyState;
-
-  // GIN state
-  struct ncclGinState ginState;
 };
 
 struct ncclChannel {
@@ -848,6 +845,9 @@ struct ncclComm {
   // RMA state
   struct ncclRmaState rmaState;
   struct ncclIntruQueue<struct ncclRmaCeInitTask, &ncclRmaCeInitTask::next> rmaCeInitTaskQueue;
+
+  // GIN state
+  struct ncclGinState ginState;
 
   // Debug check
   struct ncclIntruQueue<struct ncclArgsInfo, &ncclArgsInfo::next> argsInfoQueue;

@@ -142,6 +142,7 @@ ncclResult_t ncclGinSetDefaultBackend(struct ncclComm* comm, uint64_t globalBitm
 
 /* Internal GIN API (from include/gin.h); stubbed on Windows */
 ncclResult_t ncclGinInit(struct ncclComm* comm);
+ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclGinFinalize(struct ncclComm* comm);
 
 #endif

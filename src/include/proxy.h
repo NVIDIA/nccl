@@ -347,7 +347,6 @@ struct ncclProxyState {
   bool cuMemHostEnabled;
   ncclNet_t* ncclNet;
   ncclCollNet_t* ncclCollNet;
-  struct ncclGinState* ginState;
   uint32_t* abortFlag;
   bool directMode;
   struct ncclMemManager* memManager;  // Shared memory manager for proxy allocations

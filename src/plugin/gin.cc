@@ -173,7 +173,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     // NOTE: The following cast is valid because ncclGinType_t variant values
     // should match NCCL_NET_DEVICE_GIN_* values from `enum ncclNetDeviceType`.
     ncclGinType_t backendType = static_cast<ncclGinType_t>(props.netDeviceType);
-    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    struct ncclGinState* ginState = &comm->ginState;
     if (ginState->numActiveBackends >= NCCL_GIN_MAX_ACTIVE_BACKENDS) {
       WARN("GIN/Plugin: Max active backends reached, skipping plugin %s type %d", gin->name, props.netDeviceType);
       return ncclSuccess;
@@ -308,9 +308,22 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
+  struct ncclGinState* ginState = &comm->ginState;
+  struct ncclGinState* parentState = &parent->ginState;
+  ginState->supported = parentState->supported;
+  ginState->numActiveBackends = parentState->numActiveBackends;
+  for (int i = 0; i < parentState->numActiveBackends; i++) {
+    ginState->backends[i] = parentState->backends[i];
+    ginState->backends[i].ginCommCount = 0;
+    memset(ginState->backends[i].ginComms, 0, sizeof(ginState->backends[i].ginComms));
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
   std::lock_guard<std::mutex> lock(pluginMutex);
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
   for (int t = 0; t < ginState->numActiveBackends; t++) {
     NCCLCHECK(ncclGinPluginFinalize(comm, ginState->backends[t].pluginIndex, ginState->backends[t].ginInstance));
   }
@@ -360,7 +373,7 @@ static int ncclCompareBackendPriority(const void* a, const void* b) {
 }
 
 ncclResult_t ncclGinSetDefaultBackend(struct ncclComm* comm, uint64_t globalBitMask) {
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
   int initialNumActiveBackends = ginState->numActiveBackends;
   int currentNumActiveBackends = 0;
   std::lock_guard<std::mutex> lock(pluginMutex);

@@ -245,7 +245,7 @@ static bool ncclGenkGinAvailable(struct ncclComm* comm) {
 #if !defined(NCCL_OS_WINDOWS)
   if (comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL) return false;
 
-  struct ncclGinState const& ginState = comm->sharedRes->ginState;
+  struct ncclGinState const& ginState = comm->ginState;
   for (int i = 0; i < ginState.numActiveBackends; i++) {
     if (ginState.backends[i].ginType == NCCL_GIN_TYPE_PROXY) return true;
   }

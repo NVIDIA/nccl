@@ -499,6 +499,11 @@ Output Format
 
 Each report line starts with the host name and process ID of the NCCL process that initiated the request, followed by
 ``NCCL DIAG``. A report includes a header, result lines organized by check and communicator, and a completion line.
+These reports bypass ``NCCL_DEBUG`` and ``NCCL_DEBUG_SUBSYS`` filtering and are not redirected by
+``NCCL_DEBUG_FILE``. The DIAG debug subsystem covers detailed information from both active and RAS diagnostics;
+select it with ``NCCL_DEBUG=INFO`` (or ``TRACE``) and ``NCCL_DEBUG_SUBSYS=DIAG`` (or ``ALL``).
+General RAS subsystem debug messages use the RAS subsystem.
+
 For example, an on-demand report with no reported issues might look like:
 
 .. code::

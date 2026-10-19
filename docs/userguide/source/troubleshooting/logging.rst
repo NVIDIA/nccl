@@ -189,7 +189,7 @@ Available Subsystems
 | DESTROY   | Communicator destroy, abort, revoke, and plugin unload/close           |
 |           | operations                                                             |
 +-----------+------------------------------------------------------------------------+
-| DIAG      | Detailed information from active diagnostics                           |
+| DIAG      | Detailed information from active and RAS diagnostics                   |
 +-----------+------------------------------------------------------------------------+
 | ALL       | All subsystems                                                         |
 +-----------+------------------------------------------------------------------------+
@@ -341,7 +341,10 @@ The following examples show typical output for each subsystem (output is truncat
     node-01:631398:631465 [0] NCCL INFO Allocated shareable buffer 0x... size 2097152 ipcDesc 0x...
     node-01:631398:631398 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[1] via P2P/CUMEM
 
-**DIAG** - Shows detailed information from active diagnostics (with ``NCCL_RUN_DIAGNOSTICS=1``):
+**DIAG** - Shows detailed information from active and RAS diagnostics. Enable these debug logs with
+``NCCL_DEBUG=INFO`` (or ``TRACE``) and ``NCCL_DEBUG_SUBSYS=DIAG`` (or ``ALL``). Selecting DIAG does not
+run diagnostics; see :doc:`diagnostics` and :ref:`ras_diagnostics` for how to trigger them.
+The following example shows active P2P diagnostics with ``NCCL_RUN_DIAGNOSTICS=1``:
 
 .. code:: shell
 

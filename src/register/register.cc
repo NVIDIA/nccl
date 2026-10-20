@@ -153,7 +153,16 @@ ncclResult_t ncclCommRegister(const ncclComm_t comm, void* buff, size_t size, vo
     INFO(NCCL_REG, "Skipping registration for buffer %p size %zi (LocalRegister=%ld, P2pUsesMemcpy=%d)", buff, size,
          ncclParamLocalRegister(), ncclP2pUsesMemcpy());
   } else {
-    NCCLCHECK(ncclRegister(comm, buff, size, false, handle));
+    // ncclRegister issues driver calls (cuMemGetAddressRange, cuPointerGetAttribute) that resolve the buffer in the
+    // calling thread's current context. Run them on the communicator's device, as commDeregister and
+    // ncclCommWindowRegister already do, so registration does not depend on the caller's current device.
+    NCCLCHECK(CommCheck(comm, "ncclCommRegister", "comm"));
+    int saveDev;
+    CUDACHECK(cudaGetDevice(&saveDev));
+    CUDACHECK(cudaSetDevice(comm->cudaDev));
+    ncclResult_t ret = ncclRegister(comm, buff, size, false, handle);
+    CUDACHECK(cudaSetDevice(saveDev));
+    NCCLCHECK(ret);
   }
   return ncclSuccess;
 }

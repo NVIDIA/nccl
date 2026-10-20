@@ -2099,3 +2099,16 @@ Enable use of symmetric kernels that use GIN for network communication.
 Values accepted
 ^^^^^^^^^^^^^^^
 Default is 1 (enabled); set to 0 to disable
+
+NCCL_GIN_ERROR_QUERY_SEC
+------------------------
+(since 2.30.7)
+
+Minimum interval, in seconds, between two checks of the GDAKI GIN queue pairs for errors. The check is performed by
+the thread calling ``ncclCommGetAsyncError`` (there is no background thread), so an error is reported at the first
+``ncclCommGetAsyncError`` call made after the interval has elapsed. Once an error has been detected, it is reported by
+every later call. Each check can take a few hundred microseconds.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Integer number of seconds. Default is 10. Set to 0 to check on every call.

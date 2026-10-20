@@ -370,6 +370,10 @@ struct gdaki_context {
     CUmemGenericAllocationHandle mhandle;
   } sink_buffer;
   uint64_t last_error_query_time;
+  // Latched once a QP of this context has been seen in the error state. A QP in ERR does not
+  // recover without a reset, and in completion-channel mode the error event is consumed by the
+  // first query, so the result must be remembered to stay visible to later queries.
+  bool error_latched;
 
   uint64_t* last_issued_get;
   uint64_t* last_visible_get;
@@ -1421,6 +1425,11 @@ ncclResult_t ncclGinGdakiQueryLastError(void* ginCtx, bool* hasError) {
   struct gdaki_context* gdakiCtx = (struct gdaki_context*)ginCtx;
   bool hasError_ = false;
 
+  if (COMPILER_ATOMIC_LOAD(&gdakiCtx->error_latched, std::memory_order_acquire)) {
+    *hasError = true;
+    return ncclSuccess;
+  }
+
   // We throttle the frequency of these queries since they can easily take 250us.
   uint64_t now = clockNano();
   if ((now - gdakiCtx->last_error_query_time) / 1e9 < ncclParamGinErrorQuerySec()) {
@@ -1433,6 +1442,7 @@ ncclResult_t ncclGinGdakiQueryLastError(void* ginCtx, bool* hasError) {
   } else {
     NCCLCHECKGOTO(ncclGinGdakiQueryLastErrorPolling(gdakiCtx, &hasError_), status, exit);
   }
+  if (hasError_) COMPILER_ATOMIC_STORE(&gdakiCtx->error_latched, true, std::memory_order_release);
 
 exit:
   *hasError = hasError_;

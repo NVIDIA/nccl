@@ -728,8 +728,6 @@ ncclResult_t ncclGinGdakiCheckDeviceSupport(void* collComm) {
   int cudaDev;
   enum doca_gpu_dev_verbs_nic_handler nicHandler;
 
-  // Reject unsupported NCCL_GIN_GDAKI_NIC_HANDLER values before touching DOCA; the caller gathers this result from
-  // every rank, so an invalid value on any rank fails all of them.
   NCCLCHECK(gdakiGetNicHandler(&nicHandler, cComm->rank));
   CUDACHECK(cudaGetDevice(&cudaDev));
   CUDACHECK(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, cudaDev));

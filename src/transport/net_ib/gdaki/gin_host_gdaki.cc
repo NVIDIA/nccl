@@ -673,6 +673,26 @@ destroy_verbs_qp_attr:
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
 NCCL_PARAM(GinGdakiForceMcst, "GDAKI_FORCE_MCST", 0);
 
+// NCCL's GDAKI device code only submits through the generic DOCA dispatch, which handles these handlers. Other
+// values are either rejected by DOCA at QP creation or, for GPU_SM_BF, accepted but never submitted (no doorbell
+// is rung), so GIN operations hang. Validate the value here so that ncclGinIbGdakiValidateDeviceSupport fails all
+// ranks consistently before any context is created.
+static ncclResult_t gdakiGetNicHandler(enum doca_gpu_dev_verbs_nic_handler* handler, int rank) {
+  int64_t value = ncclParamGinGdakiNicHandler();
+  switch (value) {
+  case DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO:
+  case DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY:
+  case DOCA_GPUNETIO_VERBS_NIC_HANDLER_GPU_SM_DB:
+  case DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW:
+    *handler = (enum doca_gpu_dev_verbs_nic_handler)value;
+    return ncclSuccess;
+  default:
+    WARN("[%d] GIN/GDAKI: NCCL_GIN_GDAKI_NIC_HANDLER=%ld is not supported. Supported values: 0 (auto), 1 (CPU proxy), "
+         "2 (GPU SM doorbell), 17 (CPU proxy free flow).", rank, (long)value);
+    return ncclInvalidUsage;
+  }
+}
+
 static ncclResult_t gdakiCheckDeviceSupport(doca_gpu_t* gpuDev, doca_dev_t* netDev,
                                             enum doca_gpu_dev_verbs_nic_handler nicHandler, int rank) {
   doca_error_t docaStatus = doca_gpu_nic_cap_is_gpu_mem_umem_supported(gpuDev, netDev);
@@ -706,14 +726,16 @@ ncclResult_t ncclGinGdakiCheckDeviceSupport(void* collComm) {
   doca_dev_t* netDev = nullptr;
   char pciBusId[MAX_PCI_ADDRESS_LEN];
   int cudaDev;
+  enum doca_gpu_dev_verbs_nic_handler nicHandler;
 
+  // Reject unsupported NCCL_GIN_GDAKI_NIC_HANDLER values before touching DOCA; the caller gathers this result from
+  // every rank, so an invalid value on any rank fails all of them.
+  NCCLCHECK(gdakiGetNicHandler(&nicHandler, cComm->rank));
   CUDACHECK(cudaGetDevice(&cudaDev));
   CUDACHECK(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, cudaDev));
   DOCACHECKGOTO(doca_gpu_create(pciBusId, &gpuDev), status, out);
   DOCACHECKGOTO(doca_verbs_dev_open(cComm->ib.pd, &netDev), status, out);
-  NCCLCHECKGOTO(gdakiCheckDeviceSupport(
-                  gpuDev, netDev, (enum doca_gpu_dev_verbs_nic_handler)ncclParamGinGdakiNicHandler(), cComm->rank),
-                status, out);
+  NCCLCHECKGOTO(gdakiCheckDeviceSupport(gpuDev, netDev, nicHandler, cComm->rank), status, out);
 
 out:
   if (netDev) {
@@ -738,6 +760,9 @@ out:
 ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void** outGinCtx,
                                        ncclNetDeviceHandle_t** outDevHandle) {
   ncclResult_t status = ncclSuccess;
+  enum doca_gpu_dev_verbs_nic_handler nicHandler;
+  // Already validated collectively by ncclGinGdakiCheckDeviceSupport; re-read here to use the typed value.
+  NCCLCHECK(gdakiGetNicHandler(&nicHandler, ((struct ncclGinIbCollComm*)collComm)->rank));
 
   const int nSignals = config->nSignals;
   const int nCounters = config->nCounters;
@@ -950,7 +975,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   qp_init_attr.net_dev = gdaki_ctx->ndev;
   qp_init_attr.ibpd = cComm->ib.pd;
   qp_init_attr.sq_nwqe = gdaki_ctx->qp_sq_size;
-  qp_init_attr.nic_handler = (enum doca_gpu_dev_verbs_nic_handler)ncclParamGinGdakiNicHandler();
+  qp_init_attr.nic_handler = nicHandler;
   qp_init_attr.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
   if (ncclParamGinGdakiUseReliableDB())
     qp_init_attr.send_dbr_mode_ext = DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_HW;

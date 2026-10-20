@@ -16,9 +16,8 @@
 
 struct ncclTuningPipeline;
 
-typedef ncclResult_t (*ncclTuningGetAlgoStepFn_t)(struct ncclComm* comm, int proto, int algo, ncclFunc_t func,
-                                                  struct ncclTuningPipelineStep* intra,
-                                                  struct ncclTuningPipelineStep* inter);
+typedef ncclResult_t (*ncclTuningGetAlgoStepFn_t)(struct ncclTuningInput_t* const, struct ncclTuningResult_t*,
+                                                  struct ncclTuningPipeline*);
 
 typedef int (*ncclTuningIsValidFn_t)(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning);
 
@@ -27,12 +26,19 @@ typedef float (*ncclTuningMaxBusBw_t)(struct ncclTuningInput_t* const inputs, st
 typedef ncclResult_t (*ncclTuningPipelineCompute_t)(struct ncclTuningInput_t* const, struct ncclTuningResult_t*,
                                                     struct ncclTuningPipeline*);
 
+struct ncclTuningPipelineStep {
+  int stepCount;
+  float lat, busBw;
+};
+
 struct ncclTuningPipeline {
   size_t channelSize;
   size_t nominalChunkSize;
   size_t chunkSize;
   size_t sliceSize;
   size_t nSlices;
+  ncclTuningPipelineStep intraStep;
+  ncclTuningPipelineStep interStep;
 };
 
 struct ncclTuningPipelineState {
@@ -40,11 +46,6 @@ struct ncclTuningPipelineState {
   ncclTuningIsValidFn_t isValid;
   ncclTuningPipelineCompute_t computePipeline;
   ncclTuningMaxBusBw_t maxBusBw;
-};
-
-struct ncclTuningPipelineStep {
-  int stepCount;
-  float lat, busBw;
 };
 
 inline ncclResult_t ncclTuningPipelineComputeSliceSize(

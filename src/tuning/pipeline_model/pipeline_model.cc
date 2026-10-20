@@ -18,14 +18,15 @@
 // - T_first: the time for the first chunk to traverse the whole pipeline (intra.count + inter.count steps)
 // - T_delay: the time between 2 chunks at the bottleneck link in the pipeline.
 // The total time is T_first + (count - 1) * T_delay
-static float pipelineModel(size_t s, int count, struct ncclTuningPipelineStep intra,
-                           struct ncclTuningPipelineStep inter) {
+static float pipelineModel(struct ncclTuningPipeline* const pipeline) {
   // T_first
   float first =
-    intra.stepCount * (intra.lat * 0.5 + s / intra.busBw) + inter.stepCount * (inter.lat * 0.5 + s / inter.busBw);
+    pipeline->intraStep.stepCount * (pipeline->intraStep.lat * 0.5 + pipeline->sliceSize / pipeline->intraStep.busBw) +
+    pipeline->interStep.stepCount * (pipeline->interStep.lat * 0.5 + pipeline->sliceSize / pipeline->interStep.busBw);
   // T_delay: we assume s/min(bw) is the largest time
-  float delay = s * std::max((intra.stepCount > 0) / intra.busBw, (inter.stepCount > 0) / inter.busBw);
-  float totaltime = first + (count - 1) * delay;
+  float delay = pipeline->sliceSize * std::max((pipeline->intraStep.stepCount > 0) / pipeline->intraStep.busBw,
+                                               (pipeline->interStep.stepCount > 0) / pipeline->interStep.busBw);
+  float totaltime = first + (pipeline->nSlices - 1) * delay;
   return totaltime;
 }
 
@@ -70,11 +71,10 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
   NCCLCHECK(internal->pipeline.computePipeline(inputs, tuning, &pipeline));
   if (pipeline.sliceSize == 0 || pipeline.nSlices == 0) return ncclInternalError;
 
-  struct ncclTuningPipelineStep intra, inter;
   if (internal == nullptr || internal->pipeline.getAlgoStep == nullptr) return ncclInternalError;
-  NCCLCHECK(internal->pipeline.getAlgoStep(comm, tuning->proto, tuning->algo, inputs->func, &intra, &inter));
+  NCCLCHECK(internal->pipeline.getAlgoStep(inputs, tuning, &pipeline));
 
-  float pipelineTime = pipelineModel(pipeline.sliceSize, pipeline.nSlices, intra, inter);
+  float pipelineTime = pipelineModel(&pipeline);
   if (pipelineTime <= 0 || !std::isfinite(pipelineTime)) return ncclInternalError;
 
   // Convert the system bus bandwidth to algorithm bandwidth using algBw = busBw * nRanks / nSteps.

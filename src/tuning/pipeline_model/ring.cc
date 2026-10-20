@@ -22,9 +22,15 @@ static float ringMaxBusBw(struct ncclTuningInput_t* const inputs, struct ncclTun
   return (comm->nNodes > 1 ? interBw : intraBw) * graph->nChannels * graph->nCtasPerChannel;
 }
 
-static ncclResult_t ncclTuningPipelineRingGetAlgoStep(struct ncclComm* comm, int proto, int algo, ncclFunc_t func,
-                                                      /*output*/ struct ncclTuningPipelineStep* intra,
-                                                      struct ncclTuningPipelineStep* inter) {
+static ncclResult_t ncclTuningPipelineRingGetAlgoStep(struct ncclTuningInput_t* const inputs,
+                                                      struct ncclTuningResult_t* tuning,
+                                                      struct ncclTuningPipeline* pipeline /*output*/) {
+  struct ncclComm* comm = inputs->comm;
+  int proto = tuning->proto;
+  int algo = tuning->algo;
+  ncclFunc_t func = inputs->func;
+  struct ncclTuningPipelineStep* intra = &(pipeline->intraStep);
+  struct ncclTuningPipelineStep* inter = &(pipeline->interStep);
   const struct ncclTopoGraph* graph = &comm->graphs[algo];
   int nSteps = ncclTuningGetNsteps(func, comm->nRanks);
   int nInterSteps = (comm->nNodes == 1) ? 0 : (func == ncclFuncAllReduce) ? (2 * (comm->nNodes)) : comm->nNodes;

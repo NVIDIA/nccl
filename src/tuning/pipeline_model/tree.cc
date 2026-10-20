@@ -30,9 +30,15 @@ static float treeMaxBusBw(struct ncclTuningInput_t* const inputs, struct ncclTun
   return (comm->nNodes > 1 ? interBw : intraBw) * graph->nChannels * graph->nCtasPerChannel;
 }
 
-static ncclResult_t ncclTuningPipelineTreeGetAlgoStep(struct ncclComm* comm, int proto, int algo, ncclFunc_t func,
-                                                      /*output*/ struct ncclTuningPipelineStep* intra,
-                                                      struct ncclTuningPipelineStep* inter) {
+static ncclResult_t ncclTuningPipelineTreeGetAlgoStep(struct ncclTuningInput_t* const inputs,
+                                                      struct ncclTuningResult_t* tuning,
+                                                      struct ncclTuningPipeline* pipeline /*output*/) {
+  struct ncclComm* comm = inputs->comm;
+  int proto = tuning->proto;
+  int algo = tuning->algo;
+  ncclFunc_t func = inputs->func;
+  struct ncclTuningPipelineStep* intra = &(pipeline->intraStep);
+  struct ncclTuningPipelineStep* inter = &(pipeline->interStep);
   int nStepsInter, nStepsIntra;
   NCCLCHECK(getTreeNsteps(comm, func, &nStepsIntra, &nStepsInter));
   const struct ncclTopoGraph* graph = &comm->graphs[algo];

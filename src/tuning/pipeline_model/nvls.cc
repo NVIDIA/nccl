@@ -43,9 +43,16 @@ static int getNVLSSteps(int coll) {
   return coll == ncclFuncAllReduce ? 2 : 1;
 }
 
-static ncclResult_t ncclTuningPipelineNvlsGetAlgoStep(struct ncclComm* comm, int proto, int algo, ncclFunc_t func,
-                                                      /*output*/ struct ncclTuningPipelineStep* intra,
-                                                      struct ncclTuningPipelineStep* inter) {
+static ncclResult_t ncclTuningPipelineNvlsGetAlgoStep(struct ncclTuningInput_t* const inputs,
+                                                      struct ncclTuningResult_t* tuning,
+                                                      struct ncclTuningPipeline* pipeline /*output*/) {
+  struct ncclComm* comm = inputs->comm;
+  int proto = tuning->proto;
+  int algo = tuning->algo;
+  ncclFunc_t func = inputs->func;
+  struct ncclTuningPipelineStep* intra = &(pipeline->intraStep);
+  struct ncclTuningPipelineStep* inter = &(pipeline->interStep);
+
   int nSteps = getNVLSSteps(func);
 
   const struct ncclTopoGraph* graph = &comm->graphs[algo];
@@ -63,9 +70,16 @@ static ncclResult_t ncclTuningPipelineNvlsGetAlgoStep(struct ncclComm* comm, int
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTuningPipelineNvlsTreeGetAlgoStep(struct ncclComm* comm, int proto, int algo, ncclFunc_t func,
-                                                          /*output*/ struct ncclTuningPipelineStep* intra,
-                                                          struct ncclTuningPipelineStep* inter) {
+static ncclResult_t ncclTuningPipelineNvlsTreeGetAlgoStep(struct ncclTuningInput_t* const inputs,
+                                                          struct ncclTuningResult_t* tuning,
+                                                          struct ncclTuningPipeline* pipeline /*output*/) {
+  struct ncclComm* comm = inputs->comm;
+  int proto = tuning->proto;
+  int algo = tuning->algo;
+  ncclFunc_t func = inputs->func;
+  struct ncclTuningPipelineStep* intra = &(pipeline->intraStep);
+  struct ncclTuningPipelineStep* inter = &(pipeline->interStep);
+
   int nStepsNVLS = getNVLSSteps(func);
 
   const struct ncclTopoGraph* graph = &comm->graphs[algo];

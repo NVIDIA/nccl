@@ -6,7 +6,8 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclLsaBarrierHandle in
   int t = threadIdx.x;
 
   // Compute world team on device
-  ncclTeam world = ncclIrTeamWorld(&comm);
+  ncclTeam world;
+  ncclIrTeamWorld(&comm, &world);
 
   // Initialize the opaque CTA coop
   ncclIrCoop coop;
@@ -19,7 +20,6 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclLsaBarrierHandle in
   // Initialize Barrier session (LSA + GIN) via C-ABI
   ncclIrBarrierSession session;
 
-  ncclMultimemHandle mmHandle{}; // unused when multimem=false
   uint32_t* innerState =
       (uint32_t*)ncclIrGetResourceBufferLocalPointer(&comm, innerHandle.bufHandle);
   uint32_t initialInnerEpoch = innerState[innerHandle.nBarriers + blockIdx.x];
@@ -44,9 +44,13 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclLsaBarrierHandle in
   }
 
   // Reuse the same storage and slot after the nested LSA epoch was persisted.
+  ncclTeam lsa, rail;
+  ncclIrTeamLsa(&comm, &lsa);
+  ncclIrTeamRail(&comm, &rail);
+  // Omit the optional multimem arguments to exercise their defaults.
   ncclIrBarrierSessionInit(
-      &session, &coop, ncclIrTeamLsa(&comm), ncclIrTeamRail(&comm), &net,
-      innerHandle, outerHandle, blockIdx.x, /*multimem=*/false, mmHandle);
+      &session, &coop, &lsa, &rail, &net,
+      &innerHandle, &outerHandle, blockIdx.x);
   ncclIrBarrierSessionSync(
       &session, &coop, cuda::memory_order_relaxed, ncclGinFenceLevel::None);
   ncclIrBarrierSessionDestroy(&session);
@@ -56,7 +60,7 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclLsaBarrierHandle in
   // matching C-ABI destroy entrypoint.
   ncclIrGinBarrierSession ginSession;
   ncclIrGinBarrierSessionInit(
-      &ginSession, &coop, &net, ncclIrTeamRail(&comm), outerHandle, blockIdx.x);
+      &ginSession, &coop, &net, &rail, &outerHandle, blockIdx.x);
   ncclIrGinBarrierSessionDestroy(&ginSession);
 #endif
 }

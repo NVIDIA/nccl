@@ -5,7 +5,8 @@ constexpr bool Prints = true;
 extern "C" __global__ void runDevice(ncclIrDevComm comm) {
 #if __CUDA_ARCH__ >= 700
   int t = threadIdx.x;
-  ncclTeam world = ncclIrTeamWorld(&comm);
+  ncclTeam world;
+  ncclIrTeamWorld(&comm, &world);
 
   // Initialize the opaque CTA coop
   ncclIrCoop coop;
@@ -21,7 +22,7 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm) {
 
   for (int round=0; round < 10; round++) {
     if (t==0) {
-      ncclIrGinSignal(&net, world, (world.rank + 1) % world.nRanks,
+      ncclIrGinSignal(&net, &world, (world.rank + 1) % world.nRanks,
                     NCCL_GIN_SIGNAL_TYPE_INDEXED, /*signalWin=*/nullptr, /*signalOffset=*/0,
                     /*signalId=*/0, /*isStrong=*/true,
                     /*signalOp=*/ncclGinSignalAdd, /*signalOpArg=*/1,

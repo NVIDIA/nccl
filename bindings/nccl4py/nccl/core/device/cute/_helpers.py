@@ -1,7 +1,7 @@
 """Hand-written internal utilities for the CuTeDSL bindings.
 
 Holds the ``_alloca_*`` stack-storage helpers, ``_load_cft_le_info``, and the
-``_to_ptr`` / ``_to_coop_ptr`` / ``_to_value`` coercion helpers.
+``_to_ptr`` / ``_to_coop_ptr`` / ``_to_struct_ptr`` coercion helpers.
 Device bitcode discovery lives in :mod:`_bindings`, next to the
 ``@cute.extern`` stubs that link against it.
 """
@@ -14,17 +14,37 @@ from cutlass.cutlass_dsl import dsl_user_op
 from .types import CftLeInfo
 
 
+def _device_function_entry_block():
+    """Return the enclosing device function's entry block."""
+    op = ir.InsertionPoint.current.block.owner
+    while op is not None:
+        parent = op.parent
+        if parent is not None and parent.name == "gpu.module":
+            if len(op.regions) == 0 or len(op.regions[0].blocks) == 0:
+                break
+            return op.regions[0].blocks[0]
+        op = parent
+    raise cutlass.DSLRuntimeError(
+        "Unable to find the device function entry block for IR storage"
+    )
+
+
 @dsl_user_op
-def _alloca_struct(struct_cls, *, alignment=None, loc=None, ip=None) -> ir.Value:
+def _alloca_struct(struct_cls, *, alignment=None, at_entry=False, loc=None, ip=None) -> ir.Value:
     """Alloca uninitialized storage for a native struct on the kernel stack.
 
     Args:
         struct_cls: ``@cute.native_struct`` class supplying ``_struct_type``.
         alignment: explicit alignment in bytes; natural if ``None``.
+        at_entry: allocate at function entry, outside any runtime loops.
 
     Returns:
         ``!llvm.ptr`` ir.Value to the storage.
     """
+    if at_entry:
+        with ir.InsertionPoint.at_block_begin(_device_function_entry_block()):
+            # Do not forward ip: both the size constant and alloca belong at entry.
+            return _alloca_struct(struct_cls, alignment=alignment, loc=loc)
     return llvm.alloca(
         res=ir.Type.parse("!llvm.ptr"),
         array_size=cutlass.Int32(1).ir_value(),
@@ -116,22 +136,17 @@ def _to_coop_ptr(x, *, loc=None, ip=None):
     return _to_ptr(x.ptr if hasattr(x, "ptr") else x, loc=loc, ip=ip)
 
 
-def _to_value(x):
-    """Unwrap a by-value ``@cute.native_struct`` argument to its bare ir.Value.
-
-    ``@cute.extern`` matches a native struct only as a bare struct ir.Value
-    (a value-mode wrapper is rejected), so teams and barrier handles passed
-    by value -- which ``cute.ffi`` accepted as wrappers -- are unwrapped here.
-
-    Args:
-        x: a struct ir.Value (passthrough) or a value-mode native-struct
-            wrapper exposing ``__extract_mlir_values__``.
-
-    Returns:
-        The underlying struct ir.Value.
-    """
-    if isinstance(x, ir.Value):
-        return x
-    if hasattr(x, "__extract_mlir_values__"):
-        return x.__extract_mlir_values__()[0]
-    return x
+@dsl_user_op
+def _to_struct_ptr(x, *, loc=None, ip=None) -> ir.Value:
+    """Materialize a value-mode team or handle for a const-pointer IR call."""
+    value = x if isinstance(x, ir.Value) else x.__extract_mlir_values__()[0]
+    with ir.InsertionPoint.at_block_begin(_device_function_entry_block()):
+        # The value can be loop-dependent; hoist only its storage, not its store.
+        ptr = llvm.alloca(
+            res=ir.Type.parse("!llvm.ptr"),
+            array_size=cutlass.Int32(1).ir_value(),
+            elem_type=value.type,
+            loc=loc,
+        )
+    llvm.store(value, ptr, loc=loc, ip=ip)
+    return ptr

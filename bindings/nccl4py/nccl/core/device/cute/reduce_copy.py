@@ -11,7 +11,7 @@ from cutlass.base_dsl import Arch
 from cutlass.cutlass_dsl import BaseDSL
 
 from . import _bindings
-from ._helpers import _to_coop_ptr, _to_ptr, _to_value
+from ._helpers import _to_coop_ptr, _to_ptr, _to_struct_ptr
 
 
 def _tensor_ptr(tensor):
@@ -33,7 +33,7 @@ def lsa_reduce_sum(
         _window_offset(src_window, src),
         _tensor_ptr(dst),
         cutlass.Int64(count),
-        _to_value(team),
+        _to_struct_ptr(team),
         src.element_type,
     )
 
@@ -59,7 +59,7 @@ def lsa_copy(
         dst_window.ptr,
         _window_offset(dst_window, dst),
         cutlass.Int64(count),
-        _to_value(team),
+        _to_struct_ptr(team),
         src.element_type,
     )
 
@@ -90,7 +90,7 @@ def lsa_copy_tma(
         dst_window.ptr,
         _window_offset(dst_window, dst),
         cutlass.Int64(count),
-        _to_value(team),
+        _to_struct_ptr(team),
         _to_ptr(smem),
         cutlass.Int32(smem_bytes),
         src.element_type,
@@ -119,7 +119,7 @@ def lsa_reduce_sum_copy(
         dst_window.ptr,
         _window_offset(dst_window, dst),
         cutlass.Int64(count),
-        _to_value(team),
+        _to_struct_ptr(team),
         src.element_type,
     )
 

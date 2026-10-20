@@ -8,10 +8,10 @@
 // after its prerequisite headers.
 
 #define NCCL_IR_DEFINE_ncclIrLsaReduceSum(suffix, type) \
-  NCCL_IR_DEVICE_INLINE void ncclIrLsaReduceSum_##suffix(ncclIrCoop const* coop, ncclWindow_t srcWindow, \
-                                                         size_t srcOffset, type* dst, size_t count, ncclTeam team) { \
+  NCCL_IR_DEVICE_INLINE void ncclIrLsaReduceSum_##suffix( \
+    ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, type* dst, size_t count, ncclTeam const* team) { \
     auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop); \
-    ncclLsaReduceSum<type, ncclCoopAny, size_t>(coopImpl, srcWindow, srcOffset, dst, count, team); \
+    ncclLsaReduceSum<type, ncclCoopAny, size_t>(coopImpl, srcWindow, srcOffset, dst, count, *team); \
   }
 #define NCCL_IR_DEFINE_ncclIrMultimemReduceSum(suffix, type) \
   NCCL_IR_DEVICE_INLINE void ncclIrMultimemReduceSum_##suffix(ncclIrCoop const* coop, type* mcSrc, type* dst, \
@@ -21,9 +21,9 @@
   }
 #define NCCL_IR_DEFINE_ncclIrLsaCopy(suffix, type) \
   NCCL_IR_DEVICE_INLINE void ncclIrLsaCopy_##suffix(ncclIrCoop const* coop, type* src, ncclWindow_t dstWindow, \
-                                                    size_t dstOffset, size_t count, ncclTeam team) { \
+                                                    size_t dstOffset, size_t count, ncclTeam const* team) { \
     auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop); \
-    ncclLsaCopy<type, ncclCoopAny, size_t>(coopImpl, src, dstWindow, dstOffset, count, team); \
+    ncclLsaCopy<type, ncclCoopAny, size_t>(coopImpl, src, dstWindow, dstOffset, count, *team); \
   }
 #define NCCL_IR_DEFINE_ncclIrMultimemCopy(suffix, type) \
   NCCL_IR_DEVICE_INLINE void ncclIrMultimemCopy_##suffix(ncclIrCoop const* coop, type* src, type* mcDst, \
@@ -34,10 +34,10 @@
 #define NCCL_IR_DEFINE_ncclIrLsaReduceSumCopy(suffix, type) \
   NCCL_IR_DEVICE_INLINE void ncclIrLsaReduceSumCopy_##suffix(ncclIrCoop const* coop, ncclWindow_t srcWindow, \
                                                              size_t srcOffset, ncclWindow_t dstWindow, \
-                                                             size_t dstOffset, size_t count, ncclTeam team) { \
+                                                             size_t dstOffset, size_t count, ncclTeam const* team) { \
     auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop); \
     ncclLsaReduceSumCopy<type, ncclCoopAny, size_t>(coopImpl, srcWindow, srcOffset, dstWindow, dstOffset, count, \
-                                                    team); \
+                                                    *team); \
   }
 #define NCCL_IR_DEFINE_ncclIrMultimemReduceSumCopy(suffix, type) \
   NCCL_IR_DEVICE_INLINE void ncclIrMultimemReduceSumCopy_##suffix(ncclIrCoop const* coop, type* mcSrc, type* mcDst, \
@@ -55,18 +55,18 @@
   }
 #define NCCL_IR_DEFINE_ncclIrLsaCopyTma(suffix, type) \
   NCCL_IR_DEVICE_INLINE void ncclIrLsaCopyTma_##suffix(ncclIrCoop const* coop, type* src, ncclWindow_t dstWindow, \
-                                                       size_t dstOffset, size_t count, ncclTeam team, char* smemPtr, \
-                                                       int smemBytesTotal) { \
+                                                       size_t dstOffset, size_t count, ncclTeam const* team, \
+                                                       char* smemPtr, int smemBytesTotal) { \
     auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop); \
     if (coopImpl.vtable == ncclCoopAny::get_vtable<ncclCoopThread>()) { \
       ncclLsaCopyTma<type, ncclCoopThread, size_t>(*reinterpret_cast<ncclCoopThread const*>(&coopImpl.storage), src, \
-                                                   dstWindow, dstOffset, count, team, smemPtr, smemBytesTotal); \
+                                                   dstWindow, dstOffset, count, *team, smemPtr, smemBytesTotal); \
     } else if (coopImpl.vtable == ncclCoopAny::get_vtable<ncclCoopWarp>()) { \
       ncclLsaCopyTma<type, ncclCoopWarp, size_t>(*reinterpret_cast<ncclCoopWarp const*>(&coopImpl.storage), src, \
-                                                 dstWindow, dstOffset, count, team, smemPtr, smemBytesTotal); \
+                                                 dstWindow, dstOffset, count, *team, smemPtr, smemBytesTotal); \
     } else if (coopImpl.vtable == ncclCoopAny::get_vtable<ncclCoopCta>()) { \
       ncclLsaCopyTma<type, ncclCoopCta, size_t>(*reinterpret_cast<ncclCoopCta const*>(&coopImpl.storage), src, \
-                                                dstWindow, dstOffset, count, team, smemPtr, smemBytesTotal); \
+                                                dstWindow, dstOffset, count, *team, smemPtr, smemBytesTotal); \
     } else if (NCCL_DEVICE_DEBUG_CHECKS) { \
       assert(false && "ncclIrLsaCopyTma requires Thread, Warp, or CTA"); \
     } \

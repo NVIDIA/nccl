@@ -41,7 +41,7 @@ import cutlass.cute as cute
 
 from . import _bindings
 from .coop import Coop
-from ._helpers import _alloca_struct, _to_coop_ptr, _to_value, _to_ptr
+from ._helpers import _alloca_struct, _to_coop_ptr, _to_struct_ptr, _to_ptr
 from ._structs import (
     _LLVMPtrType,
     ncclIrLsaBarrierSession,
@@ -61,7 +61,7 @@ from .types import MemoryOrder, GinFenceLevel
 
 
 def _zero_multimem_handle() -> ncclMultimemHandle:
-    """Zero-initialized ``ncclMultimemHandle`` for the default-arg case.
+    """Zero-initialized ``ncclMultimemHandle`` when multimem is unused.
 
     Returns:
         ``ncclMultimemHandle`` with ``mcBasePtr=NULL``.
@@ -140,9 +140,9 @@ def lsa_session(
     """
     storage = _alloca_struct(ncclIrLsaBarrierSession)
     _bindings.nccl_lsa_barrier_session_init(
-        storage, _to_coop_ptr(coop), dev_comm.ptr, _to_value(team),
-        _to_value(handle), cutlass.Uint32(index), cutlass.Boolean(multimem),
-        _to_value(mm_handle if mm_handle is not None else _zero_multimem_handle()),
+        storage, _to_coop_ptr(coop), dev_comm.ptr, _to_struct_ptr(team),
+        _to_struct_ptr(handle), cutlass.Uint32(index), cutlass.Boolean(multimem),
+        _to_struct_ptr(mm_handle if mm_handle is not None else _zero_multimem_handle()),
     )
     return LsaBarrierSession(ptr=storage)
 
@@ -215,13 +215,13 @@ def gin_session(
     storage = _alloca_struct(ncclIrGinBarrierSession)
     if isinstance(gin, _GinAllContexts):
         _bindings.nccl_gin_barrier_session_init_all_contexts(
-            storage, _to_coop_ptr(coop), dev_comm.ptr, _to_value(team),
-            _to_value(handle), cutlass.Uint32(index),
+            storage, _to_coop_ptr(coop), dev_comm.ptr, _to_struct_ptr(team),
+            _to_struct_ptr(handle), cutlass.Uint32(index),
         )
     else:
         _bindings.nccl_gin_barrier_session_init(
-            storage, _to_coop_ptr(coop), gin.ptr, _to_value(team),
-            _to_value(handle), cutlass.Uint32(index),
+            storage, _to_coop_ptr(coop), gin.ptr, _to_struct_ptr(team),
+            _to_struct_ptr(handle), cutlass.Uint32(index),
         )
     return GinBarrierSession(ptr=storage)
 
@@ -287,10 +287,10 @@ def hybrid_session(
     """
     storage = _alloca_struct(ncclIrBarrierSession)
     _bindings.nccl_barrier_session_init(
-        storage, _to_coop_ptr(coop), _to_value(inner_team), _to_value(outer_team),
-        gin.ptr, _to_value(inner_handle), _to_value(outer_handle),
+        storage, _to_coop_ptr(coop), _to_struct_ptr(inner_team), _to_struct_ptr(outer_team),
+        gin.ptr, _to_struct_ptr(inner_handle), _to_struct_ptr(outer_handle),
         cutlass.Uint32(index), cutlass.Boolean(multimem),
-        _to_value(
+        _to_struct_ptr(
             inner_mm_handle if inner_mm_handle is not None else _zero_multimem_handle()),
     )
     return BarrierSession(ptr=storage)

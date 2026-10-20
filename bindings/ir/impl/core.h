@@ -14,48 +14,48 @@ static_assert(alignof(ncclIrDevComm) == alignof(ncclDevComm), "DevComm storage a
 static_assert(std::is_trivially_copyable<ncclDevComm>::value, "DevComm byte ABI requires a trivially copyable type");
 
 /* Team APIs */
-NCCL_IR_DEVICE_INLINE ncclTeam ncclIrTeamWorld(ncclIrDevComm const* comm) {
+NCCL_IR_DEVICE_INLINE void ncclIrTeamWorld(ncclIrDevComm const* comm, ncclTeam* outTeam) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclTeamWorld(commImpl);
+  *outTeam = ncclTeamWorld(commImpl);
 }
-NCCL_IR_DEVICE_INLINE ncclTeam ncclIrTeamLsa(ncclIrDevComm const* comm) {
+NCCL_IR_DEVICE_INLINE void ncclIrTeamLsa(ncclIrDevComm const* comm, ncclTeam* outTeam) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclTeamLsa(commImpl);
+  *outTeam = ncclTeamLsa(commImpl);
 }
-NCCL_IR_DEVICE_INLINE ncclTeam ncclIrTeamCft(ncclIrDevComm const* comm, ncclCftTeamMode_t mode) {
+NCCL_IR_DEVICE_INLINE void ncclIrTeamCft(ncclIrDevComm const* comm, ncclTeam* outTeam, ncclCftTeamMode_t mode) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclTeamCft(commImpl, mode);
+  *outTeam = ncclTeamCft(commImpl, mode);
 }
-NCCL_IR_DEVICE_INLINE ncclTeam ncclIrTeamCftMultimem(ncclIrDevComm const* comm) {
+NCCL_IR_DEVICE_INLINE void ncclIrTeamCftMultimem(ncclIrDevComm const* comm, ncclTeam* outTeam) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclTeamCftMultimem(commImpl);
+  *outTeam = ncclTeamCftMultimem(commImpl);
 }
-NCCL_IR_DEVICE_INLINE bool ncclIrTeamRankIsMember(ncclTeam a, ncclTeam b, int bPeer) {
-  return ncclTeamRankIsMember(a, b, bPeer);
+NCCL_IR_DEVICE_INLINE bool ncclIrTeamRankIsMember(ncclTeam const* a, ncclTeam const* b, int bPeer) {
+  return ncclTeamRankIsMember(*a, *b, bPeer);
 }
-NCCL_IR_DEVICE_INLINE int ncclIrTeamRankToTeam(ncclTeam a, ncclTeam b, int bPeer) {
-  return ncclTeamRankToTeam(a, b, bPeer);
+NCCL_IR_DEVICE_INLINE int ncclIrTeamRankToTeam(ncclTeam const* a, ncclTeam const* b, int bPeer) {
+  return ncclTeamRankToTeam(*a, *b, bPeer);
 }
-NCCL_IR_DEVICE_INLINE int ncclIrTeamRankToWorld(ncclIrDevComm const* comm, ncclTeam team, int rank) {
+NCCL_IR_DEVICE_INLINE int ncclIrTeamRankToWorld(ncclIrDevComm const* comm, ncclTeam const* team, int rank) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclTeamRankToWorld(commImpl, team, rank);
+  return ncclTeamRankToWorld(commImpl, *team, rank);
 }
-NCCL_IR_DEVICE_INLINE int ncclIrTeamRankToLsa(ncclIrDevComm const* comm, ncclTeam team, int rank) {
+NCCL_IR_DEVICE_INLINE int ncclIrTeamRankToLsa(ncclIrDevComm const* comm, ncclTeam const* team, int rank) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclTeamRankToLsa(commImpl, team, rank);
+  return ncclTeamRankToLsa(commImpl, *team, rank);
 }
-NCCL_IR_DEVICE_INLINE ncclTeam ncclIrTeamInnerFactor(ncclTeam parent, int innerSize) {
-  return ncclTeamInnerFactor(parent, innerSize);
+NCCL_IR_DEVICE_INLINE void ncclIrTeamInnerFactor(ncclTeam const* parent, int innerSize, ncclTeam* outTeam) {
+  *outTeam = ncclTeamInnerFactor(*parent, innerSize);
 }
-NCCL_IR_DEVICE_INLINE ncclTeam ncclIrTeamOuterFactor(ncclTeam parent, int innerSize) {
-  return ncclTeamOuterFactor(parent, innerSize);
+NCCL_IR_DEVICE_INLINE void ncclIrTeamOuterFactor(ncclTeam const* parent, int innerSize, ncclTeam* outTeam) {
+  *outTeam = ncclTeamOuterFactor(*parent, innerSize);
 }
-NCCL_IR_DEVICE_INLINE int ncclIrTeamRankInDifference(ncclTeam parent, ncclTeam subset, int index) {
-  return ncclTeamRankInDifference(parent, subset, index);
+NCCL_IR_DEVICE_INLINE int ncclIrTeamRankInDifference(ncclTeam const* parent, ncclTeam const* subset, int index) {
+  return ncclTeamRankInDifference(*parent, *subset, index);
 }
-NCCL_IR_DEVICE_INLINE ncclTeam ncclIrTeamRail(ncclIrDevComm const* comm) {
+NCCL_IR_DEVICE_INLINE void ncclIrTeamRail(ncclIrDevComm const* comm, ncclTeam* outTeam) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclTeamRail(commImpl);
+  *outTeam = ncclTeamRail(commImpl);
 }
 
 /* Window APIs */
@@ -68,17 +68,18 @@ NCCL_IR_DEVICE_INLINE void* ncclIrGetLsaPointer(ncclWindow_t w, size_t offset, i
 NCCL_IR_DEVICE_INLINE void* ncclIrGetPeerPointer(ncclWindow_t w, size_t offset, int peer) {
   return ncclGetPeerPointer(w, offset, peer);
 }
-NCCL_IR_DEVICE_INLINE void* ncclIrGetMultimemPointer(ncclWindow_t w, size_t offset, ncclMultimemHandle mmHandle) {
-  return ncclGetMultimemPointer(w, offset, mmHandle);
+NCCL_IR_DEVICE_INLINE void* ncclIrGetMultimemPointer(ncclWindow_t w, size_t offset,
+                                                     ncclMultimemHandle const* mmHandle) {
+  return ncclGetMultimemPointer(w, offset, *mmHandle);
 }
 NCCL_IR_DEVICE_INLINE void* ncclIrGetLsaMultimemPointer(ncclWindow_t w, size_t offset, ncclIrDevComm const* comm) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
   return ncclGetLsaMultimemPointer(w, offset, commImpl);
 }
-NCCL_IR_DEVICE_INLINE void ncclIrGetCftLeInfo(ncclWindow_t w, size_t offset, int peerCft, ncclTeam cftTeam,
+NCCL_IR_DEVICE_INLINE void ncclIrGetCftLeInfo(ncclWindow_t w, size_t offset, int peerCft, ncclTeam const* cftTeam,
                                               ncclIrDevComm const* comm, ncclCftLeId* leId, size_t* leOffset) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  ncclGetCftLeInfo(w, offset, peerCft, cftTeam, commImpl, leId, leOffset);
+  ncclGetCftLeInfo(w, offset, peerCft, *cftTeam, commImpl, leId, leOffset);
 }
 NCCL_IR_DEVICE_INLINE void ncclIrGetPeerLeInfo(ncclWindow_t w, size_t offset, int peerWorld, ncclIrDevComm const* comm,
                                                ncclCftLeId* leId, size_t* leOffset) {
@@ -111,14 +112,14 @@ NCCL_IR_DEVICE_INLINE void* ncclIrGetResourceBufferLsaPointer(ncclIrDevComm cons
   return ncclGetResourceBufferLsaPointer(commImpl, h, peer);
 }
 NCCL_IR_DEVICE_INLINE void* ncclIrGetResourceBufferPeerPointer(ncclIrDevComm const* comm, ncclDevResourceHandle h,
-                                                               ncclTeam team, int peer) {
+                                                               ncclTeam const* team, int peer) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclGetResourceBufferPeerPointer(commImpl, h, team, peer);
+  return ncclGetResourceBufferPeerPointer(commImpl, h, *team, peer);
 }
 NCCL_IR_DEVICE_INLINE void* ncclIrGetResourceBufferMultimemPointer(ncclIrDevComm const* comm, ncclDevResourceHandle h,
-                                                                   ncclMultimemHandle mmHandle) {
+                                                                   ncclMultimemHandle const* mmHandle) {
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  return ncclGetResourceBufferMultimemPointer(commImpl, h, mmHandle);
+  return ncclGetResourceBufferMultimemPointer(commImpl, h, *mmHandle);
 }
 NCCL_IR_DEVICE_INLINE void* ncclIrGetResourceBufferLsaMultimemPointer(ncclIrDevComm const* comm,
                                                                       ncclDevResourceHandle h) {
@@ -164,6 +165,6 @@ NCCL_IR_DEVICE_INLINE uint32_t ncclIrDevCommGinContextCount(ncclIrDevComm const*
   return commImpl.ginContextCount;
 }
 
-NCCL_IR_DEVICE_INLINE void* ncclIrGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam tm, int peer) {
-  return ncclGetPeerPointer(w, offset, tm, peer);
+NCCL_IR_DEVICE_INLINE void* ncclIrGetPeerPointerTeam(ncclWindow_t w, size_t offset, ncclTeam const* tm, int peer) {
+  return ncclGetPeerPointer(w, offset, *tm, peer);
 }

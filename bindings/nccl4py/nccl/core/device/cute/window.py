@@ -10,7 +10,7 @@ from cutlass.cutlass_dsl import ir
 
 from ...resources import RegisteredWindowHandle
 from . import _bindings
-from ._helpers import _alloca_cft_le_info, _load_cft_le_info, _to_value
+from ._helpers import _alloca_cft_le_info, _load_cft_le_info, _to_struct_ptr
 from ._structs import _LLVMPtrType, ncclTeam as Team
 from .handles import MultimemHandle
 from .types import CftLeInfo
@@ -116,7 +116,7 @@ class Window:
             return _bindings.nccl_get_peer_pointer(
                 self.ptr, cutlass.Int64(offset), cutlass.Int32(peer))
         return _bindings.nccl_get_peer_pointer_team(
-            self.ptr, cutlass.Int64(offset), _to_value(team), cutlass.Int32(peer))
+            self.ptr, cutlass.Int64(offset), _to_struct_ptr(team), cutlass.Int32(peer))
 
     def multimem_pointer(
         self, offset: int, mm_handle: MultimemHandle
@@ -133,7 +133,7 @@ class Window:
             ``!llvm.ptr`` MLIR value.
         """
         return _bindings.nccl_get_multimem_pointer(
-            self.ptr, cutlass.Int64(offset), _to_value(mm_handle))
+            self.ptr, cutlass.Int64(offset), _to_struct_ptr(mm_handle))
 
     def lsa_multimem_pointer(self, offset: int, dev_comm: DevComm) -> ir.Value:
         """Translate ``offset`` to the LSA multimem virtual address.
@@ -170,7 +170,7 @@ class Window:
         le_id_ptr, le_offset_ptr = _alloca_cft_le_info()
         _bindings.nccl_get_cft_le_info(
             self.ptr, cutlass.Int64(offset), cutlass.Int32(peer_cft),
-            _to_value(cft_team), dev_comm.ptr, le_id_ptr, le_offset_ptr)
+            _to_struct_ptr(cft_team), dev_comm.ptr, le_id_ptr, le_offset_ptr)
         return _load_cft_le_info(le_id_ptr, le_offset_ptr)
 
     def peer_le_info(

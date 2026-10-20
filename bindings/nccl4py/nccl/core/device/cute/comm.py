@@ -16,8 +16,9 @@ from . import _bindings
 from ._helpers import (
     _alloca_cft_le_info,
     _alloca_struct,
+    _device_function_entry_block,
     _load_cft_le_info,
-    _to_value,
+    _to_struct_ptr,
 )
 from ._structs import (
     ncclIrDevComm,
@@ -27,21 +28,6 @@ from ._structs import (
 from .gin import Gin
 from .handles import MultimemHandle
 from .types import CftLeInfo, CftTeamMode, GinResourceSharingMode
-
-
-def _device_function_entry_block():
-    """Return the enclosing device function's entry block."""
-    op = ir.InsertionPoint.current.block.owner
-    while op is not None:
-        parent = op.parent
-        if parent is not None and parent.name == "gpu.module":
-            if len(op.regions) == 0 or len(op.regions[0].blocks) == 0:
-                break
-            return op.regions[0].blocks[0]
-        op = parent
-    raise cutlass.DSLRuntimeError(
-        "Unable to find the device function entry block for DevComm.ptr"
-    )
 
 
 @dsl_user_op
@@ -151,29 +137,38 @@ class DevComm:
 
     @property
     def team_world(self) -> Team:
-        return Team(_bindings.nccl_team_world(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_world(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     @property
     def team_lsa(self) -> Team:
-        return Team(_bindings.nccl_team_lsa(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_lsa(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     @property
     def team_rail(self) -> Team:
-        return Team(_bindings.nccl_team_rail(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_rail(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     def team_cft(self, mode: CftTeamMode = CftTeamMode.FLAT) -> Team:
         """The CFT team, in the requested layout.
 
         Args:
-            mode: Team layout. Defaults to :py:attr:`CftTeamMode.FLAT`,
-                matching the C default argument.
+            mode: Team layout. Defaults to :py:attr:`CftTeamMode.FLAT`.
         """
-        return Team(_bindings.nccl_team_cft(self.ptr, cutlass.Int32(int(mode))))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_cft(self.ptr, out_team, cutlass.Int32(int(mode)))
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     @property
     def team_cft_multimem(self) -> Team:
         """The CFT multimem team."""
-        return Team(_bindings.nccl_team_cft_multimem(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_cft_multimem(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     def team_rank_to_world(self, team: Team, rank: int) -> cutlass.Int32:
         """Translate ``rank`` within ``team`` to its world rank.
@@ -186,7 +181,7 @@ class DevComm:
             Corresponding rank in the world team.
         """
         return cutlass.Int32(_bindings.nccl_team_rank_to_world(
-            self.ptr, _to_value(team), cutlass.Int32(rank)))
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(rank)))
 
     def team_rank_to_lsa(self, team: Team, rank: int) -> cutlass.Int32:
         """Translate ``rank`` within ``team`` to its LSA rank.
@@ -203,7 +198,7 @@ class DevComm:
             Corresponding rank in the LSA team.
         """
         return cutlass.Int32(_bindings.nccl_team_rank_to_lsa(
-            self.ptr, _to_value(team), cutlass.Int32(rank)))
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(rank)))
 
     # === Resource buffer pointers ===
 
@@ -246,7 +241,7 @@ class DevComm:
             ``!llvm.ptr`` MLIR value.
         """
         return _bindings.nccl_get_resource_buffer_peer_pointer(
-            self.ptr, cutlass.Uint32(handle), _to_value(team),
+            self.ptr, cutlass.Uint32(handle), _to_struct_ptr(team),
             cutlass.Int32(peer))
 
     def resource_buffer_multimem_pointer(
@@ -264,7 +259,7 @@ class DevComm:
             ``!llvm.ptr`` MLIR value.
         """
         return _bindings.nccl_get_resource_buffer_multimem_pointer(
-            self.ptr, cutlass.Uint32(handle), _to_value(mm_handle))
+            self.ptr, cutlass.Uint32(handle), _to_struct_ptr(mm_handle))
 
     def resource_buffer_lsa_multimem_pointer(self, handle: int) -> ir.Value:
         """Translate a resource handle to its LSA multimem buffer address.

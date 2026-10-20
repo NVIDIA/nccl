@@ -9,7 +9,8 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclDevResourceHandle h
 #if __CUDA_ARCH__ >= 700
   int t = threadIdx.x;
   int tn = blockDim.x;
-  ncclTeam world = ncclIrTeamWorld(&comm);
+  ncclTeam world;
+  ncclIrTeamWorld(&comm, &world);
   int b = world.rank*gridDim.x + blockIdx.x;
   int bn = world.nRanks*gridDim.x;
   int up_rank = (b+bn-1)%bn / gridDim.x;
@@ -63,7 +64,7 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclDevResourceHandle h
     __syncthreads();
 
     if (t==0) {
-      ncclIrGinSignal(&net, world, up_rank,
+      ncclIrGinSignal(&net, &world, up_rank,
                     NCCL_GIN_SIGNAL_TYPE_INDEXED, /*signalWin=*/nullptr, /*signalOffset=*/0,
                     /*signalId=*/sigFree0 + up_block, /*isStrong=*/true,
                     /*signalOp=*/ncclGinSignalInc, /*signalOpArg=*/1,
@@ -93,7 +94,7 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclDevResourceHandle h
       size_t srcOffset = bufBaseOffset + (blockIdx.x*BufElts + i*chunkElts) * sizeof(int);
       size_t bytes = min(chunkElts, BufElts - i*chunkElts) * sizeof(int);
 
-      ncclIrGinPut(&net, world, down_rank, dstWnd, dstOffset, srcWnd, srcOffset, bytes,
+      ncclIrGinPut(&net, &world, down_rank, dstWnd, dstOffset, srcWnd, srcOffset, bytes,
                  NCCL_GIN_SIGNAL_TYPE_INDEXED, /*signalWin=*/nullptr, /*signalOffset=*/0,
                  /*signalId=*/sigData0 + down_block, /*isStrong=*/true,
                  /*signalOp=*/ncclGinSignalInc, /*signalOpArg=*/1,

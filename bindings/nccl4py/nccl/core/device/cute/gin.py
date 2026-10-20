@@ -15,7 +15,7 @@ import cutlass.cute as cute
 
 from . import _bindings
 from .coop import Coop
-from ._helpers import _to_ptr, _to_coop_ptr, _to_value
+from ._helpers import _to_ptr, _to_coop_ptr, _to_struct_ptr
 from ._structs import _LLVMPtrType, ncclTeam
 from .types import MemoryOrder, ThreadScope
 
@@ -96,7 +96,7 @@ class Gin:
         src_offset = src.iterator.toint() - src_base.toint()
         size = (dst.element_type.width // 8) * cute.size(dst)
         _bindings.nccl_gin_put(
-            self.ptr, _to_value(team), cutlass.Int32(peer),
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(peer),
             dst_win.ptr, cutlass.Int64(dst_offset),
             src_win.ptr, cutlass.Int64(src_offset),
             cutlass.Int64(size),
@@ -163,7 +163,7 @@ class Gin:
         dst_offset = dst.iterator.toint() - dst_base.toint()
         size = dst.element_type.width // 8
         _bindings.nccl_gin_put_value(
-            self.ptr, _to_value(team), cutlass.Int32(peer),
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(peer),
             dst_win.ptr, cutlass.Int64(dst_offset),
             cutlass.Int64(value), cutlass.Int64(size),
             cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
@@ -215,7 +215,7 @@ class Gin:
         local_offset = local.iterator.toint() - local_base.toint()
         size = (local.element_type.width // 8) * cute.size(local)
         _bindings.nccl_gin_get(
-            self.ptr, _to_value(team), cutlass.Int32(peer),
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(peer),
             remote_win.ptr, cutlass.Int64(remote_offset),
             local_win.ptr, cutlass.Int64(local_offset),
             cutlass.Int64(size),
@@ -261,7 +261,7 @@ class Gin:
                 default ``DEVICE``.
         """
         _bindings.nccl_gin_signal(
-            self.ptr, _to_value(team), cutlass.Int32(peer),
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(peer),
             cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
             cutlass.Int32(signal_id), cutlass.Boolean(is_strong),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),

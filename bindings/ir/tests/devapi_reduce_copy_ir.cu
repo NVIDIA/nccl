@@ -22,7 +22,8 @@ extern "C" __global__ void runReduceCopyF32(
     float* src, float* mcSrc, ncclWindow_t dstWindow, size_t dstOffset,
     float* dst, float* mcDst, size_t displ, size_t count) {
 #if __CUDA_ARCH__ >= 900
-  ncclTeam team = ncclIrTeamLsa(&comm);
+  ncclTeam team;
+  ncclIrTeamLsa(&comm, &team);
   ncclIrCoop coop;
   ncclIrCoopInitCta(&coop);
 
@@ -35,21 +36,21 @@ extern "C" __global__ void runReduceCopyF32(
     switch (api) {
       case LsaReduceSum:
         ncclIrLsaReduceSum_F32(
-            &coop, srcWindow, srcOffset, dst, count, team);
+            &coop, srcWindow, srcOffset, dst, count, &team);
         break;
       case MultimemReduceSum:
         ncclIrMultimemReduceSum_F32(&coop, mcSrc, dst, count);
         break;
       case LsaCopy:
         ncclIrLsaCopy_F32(
-            &coop, src, dstWindow, dstOffset, count, team);
+            &coop, src, dstWindow, dstOffset, count, &team);
         break;
       case MultimemCopy:
         ncclIrMultimemCopy_F32(&coop, src, mcDst, count);
         break;
       case LsaReduceSumCopy:
         ncclIrLsaReduceSumCopy_F32(
-            &coop, srcWindow, srcOffset, dstWindow, dstOffset, count, team);
+            &coop, srcWindow, srcOffset, dstWindow, dstOffset, count, &team);
         break;
       case MultimemReduceSumCopy:
         ncclIrMultimemReduceSumCopy_F32(&coop, mcSrc, mcDst, count);

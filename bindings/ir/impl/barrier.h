@@ -21,13 +21,14 @@ static_assert(alignof(ncclIrBarrierSession) == alignof(ncclBarrierSession<ncclCo
               "ncclIrBarrierSession alignment must match ncclBarrierSession<ncclCoopAny>");
 
 NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionInit(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
-                                                       ncclIrDevComm const* comm, ncclTeam team,
-                                                       ncclLsaBarrierHandle handle, uint32_t index, bool multimem,
-                                                       ncclMultimemHandle mmHandle) {
+                                                       ncclIrDevComm const* comm, ncclTeam const* team,
+                                                       ncclLsaBarrierHandle const* handle, uint32_t index,
+                                                       bool multimem, ncclMultimemHandle const* mmHandle) {
   using Session = ncclLsaBarrierSession<ncclCoopAny>;
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  ::new (session) Session(coopImpl, commImpl, team, handle, index, multimem, mmHandle);
+  ::new (session)
+    Session(coopImpl, commImpl, *team, *handle, index, multimem, mmHandle ? *mmHandle : ncclMultimemHandle{});
 }
 NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionInitLsa(ncclIrLsaBarrierSession* session, ncclIrCoop const* coop,
                                                           ncclIrDevComm const* comm, uint32_t index, bool multimem) {
@@ -63,12 +64,12 @@ NCCL_IR_DEVICE_INLINE void ncclIrLsaBarrierSessionDestroy(ncclIrLsaBarrierSessio
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInit(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
-                                                       ncclIrGin const* net, ncclTeam team, ncclGinBarrierHandle handle,
-                                                       uint32_t index) {
+                                                       ncclIrGin const* net, ncclTeam const* team,
+                                                       ncclGinBarrierHandle const* handle, uint32_t index) {
   using Session = ncclGinBarrierSession<ncclCoopAny>;
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   auto const& netImpl = *reinterpret_cast<ncclGin const*>(net);
-  ::new (session) Session(coopImpl, netImpl, team, handle, index);
+  ::new (session) Session(coopImpl, netImpl, *team, *handle, index);
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInitRail(ncclIrGinBarrierSession* session, ncclIrCoop const* coop,
@@ -88,12 +89,12 @@ NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInitWorld(ncclIrGinBarrierSess
 
 NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInitAllContexts(ncclIrGinBarrierSession* session,
                                                                   ncclIrCoop const* coop, ncclIrDevComm const* comm,
-                                                                  ncclTeam team, ncclGinBarrierHandle handle,
-                                                                  uint32_t index) {
+                                                                  ncclTeam const* team,
+                                                                  ncclGinBarrierHandle const* handle, uint32_t index) {
   using Session = ncclGinBarrierSession<ncclCoopAny>;
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   auto const& commImpl = *reinterpret_cast<ncclDevComm const*>(comm);
-  ::new (session) Session(coopImpl, ncclGinAllContexts(commImpl), team, handle, index);
+  ::new (session) Session(coopImpl, ncclGinAllContexts(commImpl), *team, *handle, index);
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionInitAllContextsRail(
@@ -123,15 +124,15 @@ NCCL_IR_DEVICE_INLINE void ncclIrGinBarrierSessionDestroy(ncclIrGinBarrierSessio
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrBarrierSessionInit(ncclIrBarrierSession* session, ncclIrCoop const* coop,
-                                                    ncclTeam innerTeam, ncclTeam outerTeam, ncclIrGin const* net,
-                                                    ncclLsaBarrierHandle const innerBarHandle,
-                                                    ncclGinBarrierHandle const outerBarHandle, uint32_t index,
-                                                    bool multimem, ncclMultimemHandle const innerMmHandle) {
+                                                    ncclTeam const* innerTeam, ncclTeam const* outerTeam,
+                                                    ncclIrGin const* net, ncclLsaBarrierHandle const* innerBarHandle,
+                                                    ncclGinBarrierHandle const* outerBarHandle, uint32_t index,
+                                                    bool multimem, ncclMultimemHandle const* innerMmHandle) {
   using Session = ncclBarrierSession<ncclCoopAny>;
   auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
   auto const& netImpl = *reinterpret_cast<ncclGin const*>(net);
-  ::new (session)
-    Session(coopImpl, innerTeam, outerTeam, netImpl, innerBarHandle, outerBarHandle, index, multimem, innerMmHandle);
+  ::new (session) Session(coopImpl, *innerTeam, *outerTeam, netImpl, *innerBarHandle, *outerBarHandle, index, multimem,
+                          innerMmHandle ? *innerMmHandle : ncclMultimemHandle{});
 }
 
 NCCL_IR_DEVICE_INLINE void ncclIrBarrierSessionInitWorld(ncclIrBarrierSession* session, ncclIrCoop const* coop,

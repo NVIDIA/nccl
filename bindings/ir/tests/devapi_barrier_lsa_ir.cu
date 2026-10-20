@@ -5,7 +5,21 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclLsaBarrierHandle ha
     constexpr int kRounds = 10;
 
     // Compute LSA team on device
-    ncclTeam team = ncclIrTeamLsa(&comm);
+    ncclTeam team;
+    ncclIrTeamLsa(&comm, &team);
+
+    if (threadIdx.x == 0) {
+        // Check both const-pointer inputs and structure out-parameters.
+        ncclTeam const parent = {8, 5, 1};
+        ncclTeam inner, outer;
+        ncclIrTeamInnerFactor(&parent, 2, &inner);
+        ncclIrTeamOuterFactor(&parent, 2, &outer);
+        assert(inner.nRanks == 2 && inner.rank == 1 && inner.stride == 1);
+        assert(outer.nRanks == 4 && outer.rank == 2 && outer.stride == 2);
+        assert(ncclIrTeamRankIsMember(&parent, &outer, outer.rank));
+        assert(ncclIrTeamRankToTeam(&parent, &outer, outer.rank) == parent.rank);
+        assert(parent.nRanks == 8 && parent.rank == 5 && parent.stride == 1);
+    }
 
     // Initialize CTA coop
     ncclIrCoop coop;
@@ -14,7 +28,6 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclLsaBarrierHandle ha
     // Initialize LSA barrier session via C-ABI
     ncclIrLsaBarrierSession session;
 
-    ncclMultimemHandle mmHandle{}; // unused when multimem=false
     uint32_t* state =
         (uint32_t*)ncclIrGetResourceBufferLocalPointer(&comm, handle.bufHandle);
     uint32_t initialEpoch = state[handle.nBarriers + blockIdx.x];
@@ -42,9 +55,9 @@ extern "C" __global__ void runDevice(ncclIrDevComm comm, ncclLsaBarrierHandle ha
     }
 
     // Reuse the same storage and slot, now that the epoch has been persisted.
+    // Omit the optional multimem arguments to exercise their defaults.
     ncclIrLsaBarrierSessionInit(
-        &session, &coop, &comm, team, handle, blockIdx.x,
-        /*multimem=*/false, mmHandle);
+        &session, &coop, &comm, &team, &handle, blockIdx.x);
     ncclIrLsaBarrierSessionSync(&session, &coop, cuda::memory_order_relaxed);
     ncclIrLsaBarrierSessionDestroy(&session);
 #endif

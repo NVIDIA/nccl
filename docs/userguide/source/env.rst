@@ -2000,6 +2000,20 @@ Values accepted
 
 ``RAIL`` : Merge only the devices at the given merge level (see NCCL_NET_MERGE_LEVEL) that share the same rail assignment. All devices with undefined rail assignment (``railId == -1``) will not be merged.
 
+NCCL_TOPO_NET_SELECT_BY_DISTANCE
+--------------------------------
+(since 2.33)
+
+Controls how NCCL chooses the NICs local to each GPU. When selecting by bandwidth, NCCL keeps only the highest-bandwidth NICs. When selecting by distance, NCCL keeps the closest NICs regardless of their bandwidth.
+
+Values accepted
+^^^^^^^^^^^^^^^
+-1 (default): Select by distance on Vera Rubin and later, by bandwidth otherwise.
+
+0: Select by bandwidth.
+
+1: Select by distance.
+
 NCCL_MNNVL_ENABLE
 -----------------
 (since 2.21)

@@ -2190,6 +2190,18 @@ fail:
   goto exit;
 }
 
+NCCL_PARAM(TopoNetSelectByDistance, "TOPO_NET_SELECT_BY_DISTANCE", -1);
+
+// Select NICs by distance rather than bandwidth. Default on for VR and later.
+static bool ncclTopoNetSelectByDistance(struct ncclTopoSystem* system, int resultType) {
+  if (resultType != NET && resultType != GIN && resultType != RMA) return false;
+  int64_t param = ncclParamTopoNetSelectByDistance();
+  if (param != -1) return param != 0;
+  int ccMin;
+  if (ncclTopoGetCompCap(system, &ccMin, NULL) != ncclSuccess) return false;
+  return ncclTopoIsVeraRubin(ccMin, system->nodes[CPU].nodes[0].cpu.arch);
+}
+
 ncclResult_t ncclTopoGetLocal(struct ncclTopoSystem* system, int type, int index, int resultType,
                               int locals[NCCL_TOPO_MAX_NODES], int* localCount, int* pathType) {
   int minType = PATH_DIS;
@@ -2200,14 +2212,15 @@ ncclResult_t ncclTopoGetLocal(struct ncclTopoSystem* system, int type, int index
     *localCount = 0;
     return ncclSuccess;
   }
+  bool byDistance = ncclTopoNetSelectByDistance(system, resultType);
   for (int i = 0; i < system->nodes[resultType].count; i++) {
-    if (paths[i].bw > maxBw || (paths[i].bw == maxBw && paths[i].type < minType)) {
+    if ((!byDistance && paths[i].bw > maxBw) || ((byDistance || paths[i].bw == maxBw) && paths[i].type < minType)) {
       maxBw = paths[i].bw;
       minType = paths[i].type;
       if (pathType) *pathType = minType;
       count = 0;
     }
-    if (paths[i].bw == maxBw && paths[i].type == minType) {
+    if ((byDistance || paths[i].bw == maxBw) && paths[i].type == minType) {
       if (count == NCCL_TOPO_MAX_NODES) {
         WARN("Error : ran out of room to store found nodes in ncclTopoGetLocal."
              " Filled %d of type %d, starting from index %d of type %d.",

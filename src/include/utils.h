@@ -491,7 +491,7 @@ inline T* ncclIntruQueueTryDequeue(ncclIntruQueue<T, next>* me) {
 
 template <typename T, T* T::* next>
 void ncclIntruQueueTransfer(ncclIntruQueue<T, next>* dst, ncclIntruQueue<T, next>* src) {
-  (dst->tail ? dst->tail->next : dst->head) = src->head;
+  (dst->tail ? dst->tail->*next : dst->head) = src->head;
   if (src->tail) dst->tail = src->tail;
   dst->nElems += src->nElems;
   src->head = nullptr;

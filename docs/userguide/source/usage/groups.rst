@@ -4,7 +4,7 @@
 Group Calls
 ***********
 
-Group functions (ncclGroupStart/ncclGroupEnd) can be used to merge multiple calls into one. This is needed for
+Group functions (ncclGroupStart/ncclGroupEnd) can be used to submit multiple calls together. This is needed for
 three purposes: managing multiple GPUs from one thread (to avoid deadlocks), aggregating communication operations
 to improve performance, or merging multiple send/receive point-to-point operations (see :ref:`point-to-point`
 section). All three usages can be combined together, with one exception: calls to :c:func:`ncclCommInitRank`
@@ -25,7 +25,7 @@ This is because every NCCL call may have to block, waiting for other threads/ran
    ncclAllReduce(..., comm[i], stream[i]);
  }
 
-To define that these calls are part of the same collective operation, ncclGroupStart and ncclGroupEnd should be used:
+To allow all calls to be issued without blocking, ncclGroupStart and ncclGroupEnd should be used:
 
 .. code:: C
 
@@ -35,7 +35,7 @@ To define that these calls are part of the same collective operation, ncclGroupS
   }
   ncclGroupEnd();
 
-This will tell NCCL to treat all calls between ncclGroupStart and ncclGroupEnd as a single call to many devices.
+This tells NCCL to issue all calls between ncclGroupStart and ncclGroupEnd to their respective ranks without waiting.
 
 Caution: When called inside a group, stream operations (like ncclAllReduce) can return without having enqueued the
 operation on the stream. Stream operations like cudaStreamSynchronize can therefore be called only after ncclGroupEnd
@@ -80,6 +80,10 @@ In the following example, we launch one broadcast and two allReduce operations t
  ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm, stream);
  ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm, stream);
  ncclGroupEnd();
+
+As grouped collectives may be executed concurrently, they should not access overlapping memory
+unless all such accesses are reads.
+Failure to respect this requirement leads to a data race and undefined behavior.
 
 It is permitted to combine aggregation with multi-GPU launch and use different communicators in a group launch
 as shown in the Management Of Multiple GPUs From One Thread topic. When combining multi-GPU launch and aggregation,

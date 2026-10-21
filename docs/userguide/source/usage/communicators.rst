@@ -12,6 +12,10 @@ Given a static mapping of ranks to CUDA devices, the :c:func:`ncclCommInitRank`,
 :c:func:`ncclCommInitAll` functions will create communicator objects, each communicator object being associated to a
 fixed rank and CUDA device. Those objects will then be used to launch communication operations.
 
+A communicator clique comprises a set of ranks, each having a :c:type:`ncclComm_t` handle
+that is part of the same clique.
+A single rank may participate in, and have handles for, multiple cliques.
+
 Before calling :c:func:`ncclCommInitRank`, you need to first create a unique object which will be used by all processes
 and threads to synchronize and understand they are part of the same communicator. This is done by calling the
 :c:func:`ncclGetUniqueId` function.

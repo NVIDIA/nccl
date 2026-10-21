@@ -52,15 +52,16 @@ Each rank is associated to a CUDA device, which has to be set before calling
 ncclCommInitRank.
 ncclCommInitRank implicitly synchronizes with other ranks, hence it must be
 called by different threads/processes or used within ncclGroupStart/ncclGroupEnd.
+Returns a communicator handle for the current rank in *comm*.
 
 ncclCommInitAll
 ---------------
 
 .. c:function:: ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist)
 
-Creates a clique of communicators (single process version) in a blocking way.
-This is a convenience function to create a single-process communicator clique.
-Returns an array of *ndev* newly initialized communicators in *comms*.
+Creates a new communicator (single process version) in a blocking way.
+This is a convenience function to create a communicator clique using a single process.
+Returns an array of *ndev* newly initialized communicator handles for each rank in *comms*.
 *comms* should be pre-allocated with size at least ndev*sizeof(:c:type:`ncclComm_t`).
 *devlist* defines the CUDA devices associated with each rank. If *devlist* is NULL,
 the first *ndev* CUDA devices are used, in order.

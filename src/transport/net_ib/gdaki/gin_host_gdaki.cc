@@ -673,10 +673,6 @@ destroy_verbs_qp_attr:
 NCCL_PARAM(GinGdakiUseReliableDB, "GDAKI_USE_RELIABLE_DB", 0);
 NCCL_PARAM(GinGdakiForceMcst, "GDAKI_FORCE_MCST", 0);
 
-// NCCL's GDAKI device code only submits through the generic DOCA dispatch, which handles these handlers. Other
-// values are either rejected by DOCA at QP creation or, for GPU_SM_BF, accepted but never submitted (no doorbell
-// is rung), so GIN operations hang. Validate the value here so that ncclGinIbGdakiValidateDeviceSupport fails all
-// ranks consistently before any context is created.
 static ncclResult_t gdakiGetNicHandler(enum doca_gpu_dev_verbs_nic_handler* handler, int rank) {
   int64_t value = ncclParamGinGdakiNicHandler();
   switch (value) {
@@ -687,8 +683,7 @@ static ncclResult_t gdakiGetNicHandler(enum doca_gpu_dev_verbs_nic_handler* hand
     *handler = (enum doca_gpu_dev_verbs_nic_handler)value;
     return ncclSuccess;
   default:
-    WARN("[%d] GIN/GDAKI: NCCL_GIN_GDAKI_NIC_HANDLER=%ld is not supported. Supported values: 0 (auto), 1 (CPU proxy), "
-         "2 (GPU SM doorbell), 17 (CPU proxy free flow).", rank, (long)value);
+    WARN("[%d] GIN/GDAKI: NCCL_GIN_GDAKI_NIC_HANDLER=%ld is not supported.", rank, (long)value);
     return ncclInvalidUsage;
   }
 }
@@ -759,7 +754,6 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
                                        ncclNetDeviceHandle_t** outDevHandle) {
   ncclResult_t status = ncclSuccess;
   enum doca_gpu_dev_verbs_nic_handler nicHandler;
-  // Already validated collectively by ncclGinGdakiCheckDeviceSupport; re-read here to use the typed value.
   NCCLCHECK(gdakiGetNicHandler(&nicHandler, ((struct ncclGinIbCollComm*)collComm)->rank));
 
   const int nSignals = config->nSignals;

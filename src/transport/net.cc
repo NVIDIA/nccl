@@ -1248,7 +1248,7 @@ static ncclResult_t sendProxyFree(struct ncclProxyConnection* connection, struct
         NCCLCHECK(ncclP2pFreeShareableBuffer(&mems[NCCL_NET_MAP_DEVMEM].ipcDesc));
       }
     }
-    if (mems[NCCL_NET_MAP_GDCMEM].cpuPtr) NCCLCHECK(ncclGdrCudaFree(resources->gdrDesc, proxyState->memManager));
+    NCCLCHECK(ncclGdrCudaFree(resources->gdrDesc, proxyState->memManager));
     if (resources->shared) {
       NCCLCHECK(sharedNetBuffersDestroy(proxyState, resources->tpLocalRank, 0, connection));
       if (resources->maxRecvs > 1 && ncclParamNetSharedComms()) {
@@ -1299,7 +1299,7 @@ static ncclResult_t recvProxyFree(struct ncclProxyConnection* connection, struct
         NCCLCHECK(ncclP2pFreeShareableBuffer(&mems[NCCL_NET_MAP_DEVMEM].ipcDesc));
       }
     }
-    if (mems[NCCL_NET_MAP_GDCMEM].cpuPtr) NCCLCHECK(ncclGdrCudaFree(resources->gdrDesc, proxyState->memManager));
+    NCCLCHECK(ncclGdrCudaFree(resources->gdrDesc, proxyState->memManager));
     if (resources->shared) {
       NCCLCHECK(sharedNetBuffersDestroy(proxyState, resources->tpLocalRank, 1, connection));
       if (resources->maxRecvs > 1 && ncclParamNetSharedComms()) {

@@ -263,7 +263,8 @@ static int symSchedCountKernelBatch(struct ncclComm* comm, ncclSymSchedTaskQueue
   size_t workArgsBytes = comm->workArgsBytes;
 
   auto fits = [&](int nWorks) {
-    return ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(maxChannels, nWorks, ncclProfilerPluginLoaded()) <= workArgsBytes;
+    return ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(maxChannels, nWorks, ncclProfilerPluginLoaded()) <=
+           workArgsBytes;
   };
 
   if (fits(nElems)) return nElems;
@@ -358,7 +359,8 @@ static ncclResult_t symSchedBuildKernelPlan(struct ncclComm* comm, struct ncclSy
                              ncclSymkKernelListProfile[kernelIndex] :
                              ncclSymkKernelList[kernelIndex];
     kernelPlan->kernelDynSmem = (1 & ncclSymkDynamicSmemKernelMask() >> (int)kernelId) ? maxDynamicSmem : 0;
-    kernelPlan->kernelArgsSize = ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(totalChannels, nWorks, profileKernelChEnabled);
+    kernelPlan->kernelArgsSize =
+      ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(totalChannels, nWorks, profileKernelChEnabled);
     NCCLCHECKGOTO(ncclCalloc((char**)&argsBuf, kernelPlan->kernelArgsSize), ret, fail);
     kernelPlan->kernelSymArgs = argsBuf;
     kernelPlan->profiler = nullptr;
@@ -691,7 +693,8 @@ ncclResult_t ncclSchedLaunchSymTasks(struct ncclComm* comm,
                                      struct ncclStrongStream* depStream, struct ncclStrongStream* launchOrderStream) {
   if (ncclIntruQueueEmpty(queue)) return ncclSuccess;
 
-  assert(comm->workArgsBytes >= ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(MAXCHANNELS, 1, ncclProfilerPluginLoaded()));
+  assert(comm->workArgsBytes >=
+         ncclSymkDevWorkArgsSize<ncclSymkDevWorkArgs>(MAXCHANNELS, 1, ncclProfilerPluginLoaded()));
 
   struct ncclSymSchedPlan symPlan = {};
   struct ncclSymSchedKernelPlan* kernelPlan = nullptr;

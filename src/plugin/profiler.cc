@@ -2272,10 +2272,9 @@ static void profilerSchedStartCollEvent(struct ncclSchedProfilerLaunch* launch, 
   // comm->seqNumber also feeds RAS, so it advances even without a plugin. Graph-captured
   // collectives are excluded for the same reason as in ncclProfilerStartTaskEvents, unless
   // KernelCh events keep every rank's count consistent.
-  if (!launch->captured ||
-      (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-       (profilerLive(&launch->groupEventHandle) || profilerLive(&t->api.apiEventHandle)) &&
-       (t->api.eActivationMask & ncclProfileKernelCh)))
+  if (!launch->captured || (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
+                            (profilerLive(&launch->groupEventHandle) || profilerLive(&t->api.apiEventHandle)) &&
+                            (t->api.eActivationMask & ncclProfileKernelCh)))
     COMPILER_ATOMIC_FETCH_ADD(&comm->seqNumber[t->func], 1ULL, std::memory_order_relaxed);
 }
 

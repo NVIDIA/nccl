@@ -253,6 +253,7 @@ fail:
     importedCount--;
   }
   for (struct ncclDevrMemory* mem = devr->memHead; mem != nullptr && bindCount > 0; mem = mem->next) {
+    if ((bool)(mem->winFlags & NCCL_WIN_CFT_COUNTED) != counted) continue;
     NCCLCHECKIGNORE(symUnbindTeamLe(comm, mem, leUcSelf), ret);
     bindCount--;
   }

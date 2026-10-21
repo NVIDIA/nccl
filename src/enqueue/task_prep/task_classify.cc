@@ -141,6 +141,8 @@ ncclResult_t ncclTaskClassification(struct ncclComm* comm, struct ncclTaskTuning
       outQueue = &ctq->queues[ncclTaskQueueRma];
     } else if (isCeKernel(tInfo)) {
       outQueue = &ctq->queues[ncclTaskQueueCe];
+    } else if (ncclTaskUsesLegacySymSched(tInfo)) {
+      outQueue = &ctq->queues[ncclTaskQueueLegacy];
     } else if (isSymKernel(tInfo)) {
       outQueue = &ctq->queues[ncclTaskQueueSym];
     } else if (isTaskAllGatherV(tInfo)) {

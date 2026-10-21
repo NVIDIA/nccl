@@ -48,8 +48,10 @@ ncclResult_t ncclTaskSchedLaunch(struct ncclComm* comm, struct ncclClassifiedTas
   launchOrderStream = &comm->context->launchOrder;
   // Post-tuning has already drained the classified queues into the planner, so the planner's
   // task counts -- not the queues -- tell us whether the legacy launcher has work. RMA, sym and
-  // CE tasks are owned by the schedulers below and are deliberately not counted here.
-  if (comm->planner.nTasksColl + comm->planner.nTasksP2p + comm->planner.nTasksBcast != 0) {
+  // CE tasks are owned by the schedulers below and are deliberately not counted here. General
+  // kernels and AlltoAll LL fall back to the legacy symmetric queue, which the task counts leave out.
+  if (comm->planner.nTasksColl + comm->planner.nTasksP2p + comm->planner.nTasksBcast != 0 ||
+      !ncclIntruQueueEmpty(&comm->planner.collSymTaskQueue)) {
     NCCLCHECK(doLaunches(comm));
   }
   for (int type = ncclTaskQueueSym; type <= ncclTaskQueueCe; type++) {

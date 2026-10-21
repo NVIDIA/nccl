@@ -2238,8 +2238,7 @@ static void profilerSchedReserveSymCounters(struct ncclSchedProfilerLaunch* laun
 static void profilerSchedStartCollEvent(struct ncclSchedProfilerLaunch* launch, struct ncclSchedProfilerTask* t,
                                         bool headTask) {
   struct ncclComm* comm = launch->comm;
-  int enable = t->api.eActivationMask & (ncclProfileColl | ncclProfileProxyOp | ncclProfileProxyStep |
-                                         ncclProfileKernelCh | ncclProfileNetPlugin);
+  int enable = t->api.eActivationMask & profilerEventGate(ncclProfileColl);
   if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && enable) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileColl;
@@ -2273,19 +2272,17 @@ static void profilerSchedStartCollEvent(struct ncclSchedProfilerLaunch* launch, 
   // comm->seqNumber also feeds RAS, so it advances even without a plugin. Graph-captured
   // collectives are excluded for the same reason as in ncclProfilerStartTaskEvents, unless
   // KernelCh events keep every rank's count consistent.
-  if (!launch->captured || (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-                            (profilerLive(&launch->groupEventHandle) || profilerLive(&t->api.apiEventHandle)) &&
-                            (t->api.eActivationMask & ncclProfileKernelCh)))
+  if (!launch->captured ||
+      (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
+       (profilerLive(&launch->groupEventHandle) || profilerLive(&t->api.apiEventHandle)) &&
+       (t->api.eActivationMask & ncclProfileKernelCh)))
     COMPILER_ATOMIC_FETCH_ADD(&comm->seqNumber[t->func], 1ULL, std::memory_order_relaxed);
 }
 
 // Group event, collective events and the KernelCh work posts for one launch.
 static ncclResult_t profilerSchedStartTaskEvents(struct ncclSchedProfilerLaunch* launch) {
   struct ncclComm* comm = launch->comm;
-  int groupMask = ncclProfileGroup | ncclProfileColl | ncclProfileP2p | ncclProfileProxyOp | ncclProfileProxyStep |
-                  ncclProfileKernelCh | ncclProfileNetPlugin;
-
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (launch->eActivationMask & groupMask)) {
+  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (launch->eActivationMask & profilerEventGate(ncclProfileGroup))) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileGroup;
     profilerStart(comm->profilerContext, &launch->groupEventHandle, &eDescr, nullptr, nullptr);

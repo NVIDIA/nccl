@@ -73,8 +73,9 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
   if (sendWin != nullptr || recvWin != nullptr) {
     NCCLCHECK(ncclGetSymRegType(sendWin, recvWin, &in->winRegType));
   }
-  // Symmetric kernels do not support windows that contain host-backed segments.
-  if (ncclDevrWindowHasSysmemSegment(sendWin) || ncclDevrWindowHasSysmemSegment(recvWin)) {
+  // Symmetric kernels do not support windows that contain host-backed segments, nor
+  // communicators that span NVLink cliques.
+  if (comm->p2pCrossClique || ncclDevrWindowHasSysmemSegment(sendWin) || ncclDevrWindowHasSysmemSegment(recvWin)) {
     in->tuningMask &= ~NCCL_TUNING_MASK_SYM_KERNELS;
   }
   // The copy-engine models do not check availability themselves, so keep their entries out of the

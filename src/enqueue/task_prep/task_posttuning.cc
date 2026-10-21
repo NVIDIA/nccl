@@ -355,11 +355,54 @@ static ncclResult_t recordAlgoNeedConnect(struct ncclComm* comm, int algorithm, 
   return ncclSuccess;
 }
 
+// The legacy symmetric scheduler launches planner->collSymTaskQueue and finishes the genk
+// initialization started here.
+static ncclResult_t preSchedLegacySymTask(struct ncclComm* comm, struct ncclTaskTuningInfo* tInfo) {
+  struct ncclKernelPlanner* planner = &comm->planner;
+  struct ncclTaskColl* task =
+    ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
+  ncclSymkKernelMask kernelBit = 1ull << tInfo->tuningOut.symKernelId;
+
+  NCCLCHECK(fillCollTaskFromRaw(comm, tInfo, task));
+  NCCLCHECK(ncclDevrFindWindow(comm, task->sendbuff, &task->sendWin));
+  NCCLCHECK(ncclDevrFindWindow(comm, task->recvbuff, &task->recvWin));
+  NCCLCHECK(ncclGetSymRegType(task->sendWin, task->recvWin, &task->winRegType));
+  if (kernelBit & ncclGenkKernelMask()) {
+    NCCLCHECK(ncclGenkInitStart(comm, /*needGenkDevComm=*/nullptr));
+  } else if ((kernelBit & ncclSymkLLKernelMask()) && task->winRegType == ncclSymSendNonregRecvNonreg) {
+    // LL kernels need the symmetric device communicator even without registered windows.
+    NCCLCHECK(ncclSymkInitOnce(comm));
+  }
+  task->devFuncId = (uint32_t)tInfo->tuningOut.symKernelId;
+  task->nMaxChannels = tInfo->tuningOut.nChannels;
+  task->nWarps = tInfo->tuningOut.nWarps;
+  task->minChunkPayloadBytes = tInfo->tuningOut.minChunkPayloadBytes;
+  task->isSymLast = 1;
+  convertSymTaskDevOp(comm, task);
+  ncclIntruQueueEnqueue(&planner->collSymTaskQueue, task);
+  NCCLCHECK(freeRaw(comm, tInfo));
+  return ncclSuccess;
+}
+
 static ncclResult_t preSchedLegacyTasks(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next>* legacyTaskQueue) {
   bool needConnect = false;
   bool algoNeedConnect[NCCL_NUM_ALGORITHMS];
   struct ncclKernelPlanner* planner = &comm->planner;
+  struct ncclIntruQueue<struct ncclTaskTuningInfo, &ncclTaskTuningInfo::next> remainTasks;
+
+  // Symmetric fallback tasks leave the queue here, so the algorithm passes below only see
+  // general-algorithm tasks.
+  ncclIntruQueueConstruct(&remainTasks);
+  while (!ncclIntruQueueEmpty(legacyTaskQueue)) {
+    struct ncclTaskTuningInfo* tInfo = ncclIntruQueueDequeue(legacyTaskQueue);
+    if (ncclTaskUsesLegacySymSched(tInfo)) {
+      NCCLCHECK(preSchedLegacySymTask(comm, tInfo));
+    } else {
+      ncclIntruQueueEnqueue(&remainTasks, tInfo);
+    }
+  }
+  ncclIntruQueueTransfer(legacyTaskQueue, &remainTasks);
 
   // Buffer registration below gates graph registration on planner->persistent, so establish it
   // here; the legacy launcher only sets it later in ncclLaunchPrepare.

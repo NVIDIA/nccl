@@ -30,7 +30,7 @@ struct ncclSchedProfilerTask {
   uint8_t nChannels;
   uint8_t nWarps;
   struct ncclProfilerApiCtx api; // mask, parent events and user tag of the API call
-  struct ncclProfilerEventRef eventHandle;             // ncclProfileColl event for this task
+  struct ncclProfilerEventRef eventHandle; // ncclProfileColl event for this task
 };
 
 // Profiler state for one device launch by a rearch scheduler: the tasks it covers and the

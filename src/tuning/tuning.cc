@@ -437,7 +437,9 @@ exit:
   selection, and fall back otherwise.
 */
 ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result) {
-  uint64_t selection = input->comm->tuningContext.forced[input->func] ? 0 : input->algSelection;
+  int tuningFunc = ncclTuningFuncIndex(input->func);
+  bool envForced = tuningFunc >= 0 && input->comm->tuningContext.forced[tuningFunc];
+  uint64_t selection = envForced ? 0 : input->algSelection;
   if (selection == 0) return tuningComputeForMask(input, result);
 
   // A selection disjoint from the automatic menu goes straight to the automatic retune.

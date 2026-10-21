@@ -9,7 +9,7 @@ ncclComm_t
 
 .. c:type:: ncclComm_t
 
- NCCL communicator. Points to an opaque structure inside NCCL.
+ Communicator handle for one rank in a clique. Points to an opaque structure inside NCCL.
 
 ncclResult_t
 ------------

@@ -439,6 +439,9 @@ private:
                                                                         ncclShmem.groups[group].redOpArgs, false, 1,
                                                                         &src0, 1, ncclShmem.groups[group].dsts + i,
                                                                         realPeerSize);
+              // The peer reduces this NCCL-owned buffer with multimem.ld_reduce: zero the lanes after the data
+              // (NVIDIA/nccl#2479). Not for direct sends into a user buffer.
+              if (!DirectSend) zeroPadTo16B<T>(tid, (T*)ncclShmem.groups[group].dsts[i], realPeerSize);
               // Mark for threadfence at the end
               fenceNeeded |= true;
             }

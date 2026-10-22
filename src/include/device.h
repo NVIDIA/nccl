@@ -123,6 +123,7 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 #define NCCL_P2P_WRITE 0x01
 #define NCCL_P2P_READ 0x02
 #define NCCL_DIRECT_NIC 0x04
+#define NCCL_NET_CUDA_COPY 0x08
 #define NCCL_NVLS_MIN_POLL 0x80
 
 // Number of named barriers supported by CUDA

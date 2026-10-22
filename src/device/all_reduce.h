@@ -35,7 +35,9 @@ __device__ __forceinline__ void runRing(int tid, int nthreads, struct ncclDevWor
     ssize_t remCount = channelCount - elemOffset;
     ssize_t chunkOffset;
 
-    if (remCount < loopCount) chunkCount = ncclElementAlignedDivUp(remCount, nranks, (ssize_t)sizeof(T), (ssize_t)16);
+    if (remCount < loopCount)
+      chunkCount =
+        ncclElementAlignedDivUp(remCount, nranks, (ssize_t)sizeof(T), (ssize_t)ncclRingAllReduceMinShardingSize);
 
     auto modRanks = [&] __device__(int r) -> int { return r - (r >= nranks ? nranks : 0); };
 
@@ -413,7 +415,8 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
                       &channelCount, &chunkSize);
       const ssize_t loopCount = nvls->nHeads * chunkSize;
       int remCount = channelCount % (nvls->nHeads * chunkSize);
-      int lastChunkSize = ncclElementAlignedDivUp(remCount, nvls->nHeads, (int)sizeof(T), 16384);
+      int lastChunkSize =
+        ncclElementAlignedDivUp(remCount, nvls->nHeads, (int)sizeof(T), ncclNVLSAllReduceMinShardingSize);
 
       if (tid < tidEndScatter) {
         // Scatter
@@ -543,7 +546,8 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS_TREE, NCCL_PROTO_
     ssize_t offset;
     int nelem;
     int remCount = channelCount % (nvls->nHeads * chunkCount);
-    int lastChunkCount = ncclElementAlignedDivUp(remCount, nvls->nHeads, (int)sizeof(T), 16);
+    int lastChunkCount =
+      ncclElementAlignedDivUp(remCount, nvls->nHeads, (int)sizeof(T), ncclNVLSTreeAllReduceMinShardingSize);
 
     const int nThreadsScatter = scatterWarps * WARP_SIZE;
     const int nThreadsGather = gatherWarps * WARP_SIZE;

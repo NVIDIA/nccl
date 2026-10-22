@@ -142,4 +142,8 @@ __host__ __device__ inline Int ncclElementAlignedDivUp(Int elements, int divider
   return alignedRankElements;
 }
 
+static constexpr int ncclNVLSAllReduceMinShardingSize = 16384;
+static constexpr int ncclNVLSTreeAllReduceMinShardingSize = 16;
+static constexpr int ncclRingAllReduceMinShardingSize = 16;
+
 #endif // NCCL_COLL_SIZES_H_

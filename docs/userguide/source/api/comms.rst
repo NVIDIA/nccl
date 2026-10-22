@@ -14,6 +14,18 @@ Note: The error is not cleared by calling this function.
 Please note that the string returned by ncclGetLastError could be unrelated to the current call
 and can be a result of previously launched asynchronous operations, if any.
 
+ncclGetLastErrorCode
+--------------------
+
+.. c:function:: ncclResult_t ncclGetLastErrorCode(ncclComm_t comm)
+
+Returns the result code that accompanied the error reported by :c:func:`ncclGetLastError`. Like the
+message, it describes the last error raised anywhere in the process, so the two are a best-effort pair
+rather than an atomic snapshot. Returns ``ncclSuccess`` if no error has been recorded, or if the error
+came from a call site that did not name its result code.
+The code is a diagnostic hint and is not a substitute for the value returned by the failing call.
+Available since 2.33.
+
 ncclGetErrorString
 ------------------
 

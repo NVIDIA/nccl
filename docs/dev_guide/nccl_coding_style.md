@@ -25,7 +25,8 @@
 - Use public helpers like `CommCheck` and `PtrCheck` to check function arguments.
 
 ## Logging
-- Use `WARN()` only for a real error that is returned to the caller. It records `ncclLastError` and can enable additional INFO diagnostics.
+- Use `ERR(code, ...)` at the site where an error originates, passing the `ncclResult_t` that will be returned. It records `ncclLastError` along with the code, and logs at `ERROR`, which `NCCL_DEBUG=WARN` includes.
+- Use `WARN()` only for a real error that is returned to the caller, where the error was raised further down and is being re-reported. It records `ncclLastError` and can enable additional INFO diagnostics.
 - Use `ATTN()` for a non-fatal, actionable notice, such as a configuration fallback. It does not set `ncclLastError` or enable additional diagnostics.
 - Use `INFO()` for normal debug information. Select the narrowest applicable subsystem flag.
 - Use `INFO_LOC()` when INFO output needs the file, line, and function. `WARN()` and `ATTN()` already include this context.

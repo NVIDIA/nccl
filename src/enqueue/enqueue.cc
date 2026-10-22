@@ -32,7 +32,7 @@
 
 NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 NCCL_PARAM(AllgathervEnable, "ALLGATHERV_ENABLE", 1);
-NCCL_PARAM(EnqueueRearchEnable, "ENQUEUE_REARCH_ENABLE", 0);
+NCCL_PARAM(EnqueueRearchEnable, "ENQUEUE_REARCH_ENABLE", 1);
 NCCL_PARAM(P2pPerChannelRegNetBw, "P2P_PER_CHANNEL_REG_NET_BW", /*GB/s*/ -1); // -1 = full network bw
 
 // NCCL params accessed in per-call config values resolving.

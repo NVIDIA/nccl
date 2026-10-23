@@ -239,7 +239,21 @@ NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymkLLScratchSize, "SYMK_LL_SCRATCH_SIZE", 256 << 10)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 1)
+#ifdef SYM_GENK
 NCCL_PARAM(SymGenkEnable, "SYM_GENK_ENABLE", 0)
+#else
+NCCL_PARAM(SymGenkEnableRequested, "SYM_GENK_ENABLE", 0)
+int64_t ncclParamSymGenkEnable() {
+  static bool warned = false;
+  if (!warned) {
+    warned = true;
+    if (ncclParamSymGenkEnableRequested() != 0) {
+      ATTN("NCCL_SYM_GENK_ENABLE is set but NCCL was built without GENK kernels (SYM_GENK=0)");
+    }
+  }
+  return 0;
+}
+#endif
 
 static bool ncclGenkGinAvailable(struct ncclComm* comm) {
 #if !defined(NCCL_OS_WINDOWS)

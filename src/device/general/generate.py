@@ -86,6 +86,8 @@ ty_to_ncclDataType = {
 
 
 def enumerate_kernels():
+  if os.environ.get("SYM_GENK", "0").upper() not in ("1", "ON"):
+    return
   for algo in ["Ring_Simple", "Ring_LL", "Ring_LL128"]:
     yield kernel(coll="Broadcast", algo=algo)
     yield kernel(coll="AllGather", algo=algo)
@@ -255,20 +257,21 @@ def generate(gensrc):
     emitln(f, 'nullptr};')
     emitln(f, '')
 
-    emitln(f, 'int ncclGenkKernelRequirements[] = {')
+    emitln(f, 'int ncclGenkKernelRequirements[%d] = {' % max(len(kernels), 1))
     for index,k in enumerate(kernels):
       cudart, _ = required_cuda(k)
       emitln(f, '  %7d, /*%4d %s*/' % (cudart, index, kernel_cname(k)))
     emitln(f, '};')
     emitln(f, '')
 
-    emitln(f, 'int ncclGenkKernelMaxDynamicSmem[%d];' % len(kernels))
+    emitln(f, 'int ncclGenkKernelMaxDynamicSmem[%d];' % max(len(kernels), 1))
     emitln(f, '')
 
     emitln(f, 'int ncclGenkGetKernelIndex(ncclSymkKernelId id, int red, ncclDataType_t ty) {')
     indents += 1
-    emitln(f, 'switch (id) {')
-    emitln(f, 'default: WARN("ncclGenkGetKernelIndex: unknown kernel id %d", (int)id); return -1;')
+    if kernels:
+      emitln(f, 'switch (id) {')
+      emitln(f, 'default: WARN("ncclGenkGetKernelIndex: unknown kernel id %d", (int)id); return -1;')
     for (coll, algo), coll_algo_ks in partition(kernels, lambda k: (k.coll, k.algo)).items():
       emitln(f, 'case ncclSymkKernelId_'+coll+'_'+algo+':')
       indents += 1
@@ -289,7 +292,11 @@ def generate(gensrc):
           indents -= 1
         emitln(f, '}')
       indents -= 1
-    emitln(f, '}')
+    if kernels:
+      emitln(f, '}')
+    else:
+      emitln(f, 'WARN("ncclGenkGetKernelIndex: unknown kernel id %d", (int)id);')
+      emitln(f, 'return -1;')
     indents -= 1
     emitln(f, '}')
 

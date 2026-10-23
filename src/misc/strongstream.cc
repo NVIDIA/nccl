@@ -72,7 +72,7 @@ ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out, int launchOrderI
   }
 leave:
   *out = p;
-  return ncclSuccess;
+  return result;
 }
 
 void ncclCudaContextDrop(struct ncclCudaContext* cxt) {

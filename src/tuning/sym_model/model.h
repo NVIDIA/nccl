@@ -22,10 +22,12 @@ struct ncclSymkLsaEstimate {
   float selectionTimeUs;
 };
 
+// *maxBlocks, when requested, is the largest CTA count the kernel may run with for this call; it is never
+// below *nBlocks.
 ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                              float* timeUs, int* nBlocks);
+                              float* timeUs, int* nBlocks, int* maxBlocks = nullptr);
 ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                              float* timeUs, float* selectionTimeUs, int* nBlocks);
+                              float* timeUs, float* selectionTimeUs, int* nBlocks, int* maxBlocks = nullptr);
 ncclResult_t ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
                                   int nBlocks, struct ncclSymkLsaEstimate* estimate, bool* modeled);
 

@@ -33,18 +33,23 @@ static ncclResult_t evaluateLsaEstimate(struct ncclTuningInput_t* input, enum nc
 
 // Select the CTA count with the shared policy using either the A2A or base model.
 ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                              float* timeUs, float* selectionTimeUs, int* nBlocks) {
+                              float* timeUs, float* selectionTimeUs, int* nBlocks, int* maxBlocks) {
   struct ncclComm* comm = input->comm;
   int nMaxBlocks = std::min<int>(ncclSymkMaxBlocks, input->maxCTAs);
   int nMinBlocks = std::min(input->minCTAs, nMaxBlocks);
 
   *timeUs = FLT_MAX;
   *nBlocks = 0;
+  if (maxBlocks) *maxBlocks = 0;
 
   // minCTAs/maxCTAs are resolved (env > per-call > comm) at task-append time.
   // NCCL_SYM_CTAS is an explicit override of the resolved bounds.
   int nUserCTAs = ncclSymkModelCtasEnvOverride();
   if (nUserCTAs > 0) nMinBlocks = nMaxBlocks = nUserCTAs;
+  // nLimitBlocks is a loose limit for functional correctness: the largest CTA count the kernel may
+  // run with, reported as maxBlocks so grouped launches stay within it. The even-count rounding and
+  // TMA eligibility below tighten nMaxBlocks for performance and only shape the tuned count.
+  int nLimitBlocks = nMaxBlocks;
 
   // Even CTA counts are preferred for optimal performance, except for when CTAs==1.
   if (nMinBlocks != nMaxBlocks) {
@@ -108,5 +113,6 @@ ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   }
   *timeUs = candidates[*nBlocks].timeUs;
   *selectionTimeUs = candidates[*nBlocks].selectionTimeUs;
+  if (maxBlocks) *maxBlocks = std::max(nLimitBlocks, *nBlocks);
   return ncclSuccess;
 }

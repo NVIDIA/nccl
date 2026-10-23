@@ -241,19 +241,17 @@ static ncclResult_t symSchedEnqueueKernelTask(struct ncclComm* comm, struct nccl
   return ncclSuccess;
 }
 
-// The group budget is the sum of the tasks' tuned CTA counts. Like a single symmetric tuning, it
-// is bounded by the symmetric block limit and maxCTAs, not by comm->nChannels, and never drops
-// below one task's own tuned count (which NCCL_SYM_CTAS may set above maxCTAs).
+// The group budget is the sum of the tasks' tuned CTA counts, bounded by the smallest per-task
+// maxChannels the tuning model reports. That bound covers maxCTAs, NCCL_SYM_CTAS and the kernel's
+// per-block resources, and is never below a task's own tuned count.
 static int symSchedGroupMaxChannels(ncclSymSchedTaskQueue* tasks) {
   int sumChannels = 0;
-  int maxTaskChannels = 0;
-  int maxCTAs = ncclSymkMaxBlocks;
+  int maxChannels = ncclSymkMaxBlocks;
   for (struct ncclTaskTuningInfo* task = ncclIntruQueueHead(tasks); task != nullptr; task = task->next) {
     sumChannels += task->tuningOut.nChannels;
-    maxTaskChannels = std::max(maxTaskChannels, task->tuningOut.nChannels);
-    maxCTAs = std::min(maxCTAs, task->tuningIn.maxCTAs);
+    if (task->tuningOut.maxChannels > 0) maxChannels = std::min(maxChannels, task->tuningOut.maxChannels);
   }
-  return std::min(sumChannels, std::max(maxCTAs, maxTaskChannels));
+  return std::min(sumChannels, maxChannels);
 }
 
 static int symSchedCountKernelBatch(struct ncclComm* comm, ncclSymSchedTaskQueue* tasks, int maxChannels) {

@@ -157,7 +157,7 @@ int ncclTuningCalcSatBlocksReduceScatterRailA2A(struct ncclComm* comm, bool ldmc
 }
 
 ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                              float* timeUs, int* nBlocks) {
+                              float* timeUs, int* nBlocks, int* maxBlocks) {
   struct ncclComm* comm = input->comm;
   struct ncclSymkState* symk = &comm->symkState;
   // ncclTeam world = ncclTeamWorld(comm);
@@ -185,9 +185,15 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     }
   }
 
+  // nLimitBlocks is a loose limit for functional correctness: the largest CTA count the kernel's
+  // resources allow, reported as maxBlocks so grouped launches stay within them. nMaxBlocks may be
+  // tightened further for performance (e.g. bandwidth saturation), which only shapes the tuned count.
+  int nLimitBlocks = nMaxBlocks;
+
   bool applySmPenalty = true;
   *timeUs = FLT_MAX;
   *nBlocks = 0;
+  if (maxBlocks) *maxBlocks = 0;
   switch (kernelId) {
   case ncclSymkKernelId_AlltoAll_LL:
     {
@@ -228,7 +234,9 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC:
     {
       bool ldmc = kernelId == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLDMC;
+      // Per-block GIN inbox, outbox and accumulation slots exist for maxGinInboxBlocks CTAs only.
       nMaxBlocks = std::min(nMaxBlocks, symk->maxGinInboxBlocks);
+      nLimitBlocks = nMaxBlocks;
       nMaxBlocks = std::min(nMaxBlocks, ncclTuningCalcSatBlocksReduceScatterRailA2A(comm, ldmc));
       size_t chunkSize = ncclSymkRsGinChunkBytes();
       double smBw = getSmBw_ReduceScatter_RailA2A(comm, ldmc);
@@ -255,5 +263,6 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   if (applySmPenalty && *nBlocks > 0 && std::isfinite(*timeUs)) {
     *timeUs *= 1.0f + ncclTuningGetSmPenalty(comm, kernelId) * (*nBlocks);
   }
+  if (maxBlocks && *nBlocks > 0) *maxBlocks = std::max(nLimitBlocks, *nBlocks);
   return ncclSuccess;
 }

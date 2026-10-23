@@ -201,9 +201,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       input.redOp = headTask->opHost;
       input.devRedOp = symkOp;
       input.datatype = headTask->datatype;
-      // AlltoAll count is per peer; tuning nBytes is the total send/receive span.
-      input.nBytes =
-        (headTask->func == ncclFuncAlltoAll ? comm->nRanks : 1) * countTotal * ncclTypeSize(headTask->datatype);
+      input.nBytes = countTotal * ncclTypeSize(headTask->datatype);
       input.numPipeOps = divUp(nWorks, comm->nChannels);
       input.count = headTask->count;
       input.countMax = countMax;

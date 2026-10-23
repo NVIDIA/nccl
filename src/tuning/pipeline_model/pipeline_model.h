@@ -79,7 +79,8 @@ inline ncclResult_t ncclTuningPipelineComputeChunkSize(struct ncclTuningInput_t*
   int chunkSteps = inputs->chunkSteps;
   chunkSteps = ncclGetChunkSteps(protocol, tuning->algo, chunkSteps);
   size_t stepSize = comm->buffSizes[protocol] / NCCL_STEPS;
-  pipeline->channelSize = ncclSizePerChannel(inputs->nBytes, tuning->nChannels);
+  size_t nBytes = ncclTuningGeneralBytes(inputs);
+  pipeline->channelSize = ncclSizePerChannel(nBytes, tuning->nChannels);
   pipeline->nominalChunkSize = ncclGetChunkSize(protocol, stepSize, chunkSteps);
   pipeline->chunkSize = std::min(pipeline->nominalChunkSize, pipeline->channelSize);
 

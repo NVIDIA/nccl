@@ -74,7 +74,8 @@ ncclResult_t ncclTuningTreeModelSim(struct ncclTuningInput_t* const inputs, stru
     tuning->timeUs = -1.0;
     return ret;
   }
-  int logSize = log2i(inputs->nBytes >> 6);
+  size_t nBytes = ncclTuningGeneralBytes(inputs);
+  int logSize = log2i(nBytes >> 6);
   float bw = inputs->comm->tuningContext.generalBandwidths[inputs->func][tuning->algo][tuning->proto];
   float lat = inputs->comm->tuningContext.generalLatencies[inputs->func][tuning->algo][tuning->proto];
   if (inputs->func == ncclFuncAllReduce && logSize >= 0 && logSize < 23)

@@ -63,7 +63,7 @@ static ncclResult_t fillCollTuningInput(struct ncclComm* comm, struct ncclRawTas
     in->datatype = ncclInt8;
     in->countMax = in->count;
   }
-  in->nBytes = ncclTypeSize(in->datatype) * ncclFuncMaxSendRecvCount(in->func, comm->nRanks, in->count);
+  in->nBytes = ncclTypeSize(in->datatype) * in->count;
 
   NCCLCHECK(ncclGetCollNetSupport(comm, raw, &in->collNetSupport));
 

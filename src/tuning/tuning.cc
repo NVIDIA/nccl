@@ -134,6 +134,13 @@ fail:
   goto exit;
 }
 
+size_t ncclTuningGeneralBytes(const struct ncclTuningInput_t* input) {
+  if (input->func == ncclFuncAllGather || input->func == ncclFuncReduceScatter || input->func == ncclFuncAlltoAll) {
+    return input->nBytes * input->comm->nRanks;
+  }
+  return input->nBytes;
+}
+
 /*
   Get all valid tunings for the given input.
 */
@@ -290,9 +297,10 @@ static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
       }
       node = tunings.head;
       int nMaxChannels = 0;
-      NCCLCHECKGOTO(input->comm->tuner->getCollInfo(input->comm->tunerContext, input->func, input->nBytes,
-                                                    input->numPipeOps, (float**)generalTable, NCCL_NUM_ALGORITHMS,
-                                                    NCCL_NUM_PROTOCOLS, input->regBuff, &nMaxChannels),
+      size_t nBytes = ncclTuningGeneralBytes(input);
+      NCCLCHECKGOTO(input->comm->tuner->getCollInfo(input->comm->tunerContext, input->func, nBytes, input->numPipeOps,
+                                                    (float**)generalTable, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                                                    input->regBuff, &nMaxChannels),
                     ret, exit);
       while (node != nullptr) {
         struct ncclTuningResult_t& tuning = node->result;

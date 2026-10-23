@@ -39,7 +39,8 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
     tuning->valid = 0;
     tuning->timeUs = -1.0;
     TRACE(NCCL_TUNING, "pipeline a/p/c/s/n %s/%s/%s/%ld/%d is not valid", ncclAlgoToString(tuning->algo),
-          ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func), inputs->nBytes, inputs->comm->nRanks);
+          ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func), ncclTuningGeneralBytes(inputs),
+          inputs->comm->nRanks);
     return ncclSuccess;
   }
 
@@ -56,14 +57,15 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
     tuning->valid = 0;
     tuning->timeUs = -1.0;
     TRACE(NCCL_TUNING, "a/p/c/s/n %s/%s/%s/%ld/%d pipeline has 0 channels", ncclAlgoToString(tuning->algo),
-          ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func), inputs->nBytes, inputs->comm->nRanks);
+          ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func), ncclTuningGeneralBytes(inputs),
+          inputs->comm->nRanks);
     return ret;
   }
 
   TRACE(NCCL_TUNING, "a/p/c/s/n %s/%s/%s/%ld/%d topology info graph={.bwIntra=%f, .bwInter=%f .nChannels=%d}",
         ncclAlgoToString(tuning->algo), ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func),
-        inputs->nBytes, inputs->comm->nRanks, comm->graphs[tuning->algo].bwIntra, comm->graphs[tuning->algo].bwInter,
-        comm->graphs[tuning->algo].nChannels);
+        ncclTuningGeneralBytes(inputs), inputs->comm->nRanks, comm->graphs[tuning->algo].bwIntra,
+        comm->graphs[tuning->algo].bwInter, comm->graphs[tuning->algo].nChannels);
 
   // Get one channel time using pipeline model
   struct ncclTuningPipeline pipeline;
@@ -93,8 +95,9 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
   TRACE(
     NCCL_TUNING,
     "a/p/c/s/n %s/%s/%s/%ld/%d maxBusBw %f, maxAlgBw %f, channelAlgBw %f * %d channels [%d warps] = algBw %f timeUs=%f",
-    ncclAlgoToString(tuning->algo), ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func), inputs->nBytes,
-    inputs->comm->nRanks, maxBusBw, maxAlgBw, channelAlgBw, nChannels, tuning->nWarps, algBw, tuning->timeUs);
+    ncclAlgoToString(tuning->algo), ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func),
+    ncclTuningGeneralBytes(inputs), inputs->comm->nRanks, maxBusBw, maxAlgBw, channelAlgBw, nChannels, tuning->nWarps,
+    algBw, tuning->timeUs);
 
   return ret;
 }

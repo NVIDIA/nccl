@@ -152,7 +152,8 @@ ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, stru
     return ret;
   }
 
-  int logSize = log2i(inputs->nBytes >> 6);
+  size_t nBytes = ncclTuningGeneralBytes(inputs);
+  int logSize = log2i(nBytes >> 6);
   bool nvlsTreeCorrection = tuning->algo == NCCL_ALGO_NVLS_TREE && inputs->func == ncclFuncAllReduce && logSize >= 0 &&
                             logSize < 24 && inputs->comm->minCompCap >= 100;
   // On two-node ARM systems, apply the correction below 64 MiB, or below 512 MiB for PIX.
@@ -160,8 +161,8 @@ ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, stru
       (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_X86 ||
        (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && inputs->comm->minNetBw >= 96.0f &&
         inputs->comm->minLocalRanks == 4 && inputs->comm->maxLocalRanks == 4 &&
-        (inputs->nBytes < 64 * 1024 * 1024 || inputs->comm->nNodes > 2 ||
-         (inputs->comm->graphs[tuning->algo].typeInter == PATH_PIX && inputs->nBytes < 512 * 1024 * 1024)))))
+        (nBytes < 64 * 1024 * 1024 || inputs->comm->nNodes > 2 ||
+         (inputs->comm->graphs[tuning->algo].typeInter == PATH_PIX && nBytes < 512 * 1024 * 1024)))))
     bw *= treeCorrectionFactor[tuning->proto][logSize];
   tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, lat, bw);
   return ret;

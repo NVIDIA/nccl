@@ -68,8 +68,9 @@ float ncclTuningGetTime(struct ncclTuningInput_t* const inputs, int a, float lat
     }
   }
 
+  size_t nBytes = ncclTuningGeneralBytes(inputs);
   float time = lat * latCount * precision_ratio;
-  if (bw > 0) time += inputs->nBytes / (1000 * bw) * precision_ratio;
+  if (bw > 0) time += nBytes / (1000 * bw) * precision_ratio;
   return time;
 }
 
@@ -153,12 +154,13 @@ ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct
   ncclTuningPlatformChannelTuning(input, result, &nc);
   int nt = input->comm->tuningContext.maxThreads[result->algo][result->proto];
   int threadThreshold = input->comm->tuningContext.threadThresholds[result->algo][result->proto];
+  size_t nBytes = ncclTuningGeneralBytes(input);
   if (result->algo == NCCL_ALGO_COLLNET_DIRECT) {
     // CollNet channel tuning
     int ncSwitch = 16;
     bool flag = true;
     while (ncSwitch >= 1 && flag) {
-      while ((flag = input->nBytes < nc * nt * input->comm->channels[0].collnetDirect.nHeads * threadThreshold) &&
+      while ((flag = nBytes < nc * nt * input->comm->channels[0].collnetDirect.nHeads * threadThreshold) &&
              nc > ncSwitch) {
         if (nc == ncSwitch + ncSwitch / 2) threadThreshold /= 2;
         nc--;
@@ -177,7 +179,7 @@ ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct
     nc = input->comm->nvlsChannels;
   } else {
     // Ring/Tree/one-RPN PAT channel tuning
-    while (input->nBytes < nc * nt * threadThreshold) {
+    while (nBytes < nc * nt * threadThreshold) {
       if (nc >= 2) nc--;
       else break;
     }
@@ -185,7 +187,7 @@ ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct
 
   if (result->algo != NCCL_ALGO_NVLS && result->algo != NCCL_ALGO_NVLS_TREE &&
       result->algo != NCCL_ALGO_COLLNET_DIRECT) {
-    while (input->nBytes < nc * nt * threadThreshold) {
+    while (nBytes < nc * nt * threadThreshold) {
       if (nt % 128 == 0) nt /= 2;
       else break;
     }

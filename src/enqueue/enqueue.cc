@@ -2221,7 +2221,7 @@ ncclResult_t ncclGetAlgoInfo(struct ncclComm* comm, struct ncclTaskColl* info, i
                              int numPipeOps, ncclSimInfo_t* simInfo /* = NULL*/
 ) {
   size_t elementSize = ncclTypeSize(info->datatype);
-  size_t nBytes = elementSize * ncclFuncMaxSendRecvCount(info->func, comm->nRanks, info->count);
+  size_t nBytes = elementSize * info->count;
   info->algorithm = NCCL_ALGO_UNDEF;
   info->protocol = NCCL_PROTO_UNDEF;
   struct ncclTuningInput_t input = {};

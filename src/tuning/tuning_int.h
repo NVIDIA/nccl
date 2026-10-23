@@ -31,6 +31,9 @@ ncclResult_t ncclTuningComputeTuning(int id, struct ncclTuningInput_t* const inp
 
 ncclResult_t ncclTuningExpandId(int tuningId, int* algo, int* proto, int* symKernelId, int* ceMethodId);
 
+// The total send/receive span of the input's per-rank nBytes, which legacy kernel models size their work from.
+size_t ncclTuningGeneralBytes(const struct ncclTuningInput_t* input);
+
 ncclResult_t ncclTuningSetThreadThresholds(struct ncclComm* comm);
 ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* result,
                                    bool forceMaxTreeThreads);

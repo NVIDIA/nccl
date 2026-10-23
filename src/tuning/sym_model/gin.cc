@@ -193,9 +193,9 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     {
       // AlltoAll_LL is opt-in. Report it unavailable unless forced.
       if (!ncclSymkAlltoAllLLForced(comm)) break;
-      // Tuning nBytes is the total AlltoAll send/receive span. The kernel's
-      // chunk and scratch formulas consume the payload sent to each peer.
-      size_t payloadBytes = nBytes / comm->nRanks;
+      // nBytes is the payload sent to each peer, as the kernel's chunk and
+      // scratch formulas consume it.
+      size_t payloadBytes = nBytes;
       int lsaRanks = ncclTeamLsa(comm).nRanks;
       int lsaPeerCount = std::max(0, lsaRanks - 1);
       int ginPeerCount = comm->nRanks - lsaRanks;

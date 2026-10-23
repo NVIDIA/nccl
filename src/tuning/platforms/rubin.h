@@ -120,7 +120,7 @@ static ncclResult_t ncclTuningRubinChannelTuning(struct ncclTuningInput_t* const
                                                  const struct ncclTuningResult_t* result, int* maxChannels) {
   struct ncclComm* comm = input->comm;
   size_t cutoff = 2ul * 1024 * 1024 * 1024;
-  if (comm->nNodes > 1 && input->nBytes <= cutoff && result->algo == NCCL_ALGO_RING) {
+  if (comm->nNodes > 1 && ncclTuningGeneralBytes(input) <= cutoff && result->algo == NCCL_ALGO_RING) {
     if (comm->minLocalRanks >= 56) *maxChannels = std::min(*maxChannels, 24);
     if (*maxChannels < input->minCTAs) *maxChannels = input->minCTAs;
   }

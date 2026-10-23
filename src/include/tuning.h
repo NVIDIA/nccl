@@ -96,6 +96,8 @@ struct ncclTuningInput_t {
   ncclRedOp_t redOp;
   ncclDevRedOp_t devRedOp;
   ncclDataType_t datatype;
+  // Per-rank bytes: count * typeSize.
+  // ncclTuningGeneralBytes gives the total send/receive span legacy kernel models are tuned on.
   size_t nBytes;
   int numPipeOps;
   size_t count;

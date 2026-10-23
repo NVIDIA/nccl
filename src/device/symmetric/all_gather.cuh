@@ -194,9 +194,13 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
   // of data per block for every rank (excluding the leading non-256B-aligned part).
   uint32_t nTmaPreBytes = (256 - output.offset) % 256;
   bool useTma256 =
+#if __CUDA_ARCH__ == 1070
     alignment % 16 == 0 &&
     (alignment % 256 == 0 || nBytes >= nTmaPreBytes + size_t(ncclSymkAlign256BDeepBytePerChunk) * nBlocks);
+#else
+    alignment % 256 == 0;
 #endif
+#endif // __CUDA_ARCH__ >= 1000
   uint32_t nPreBytes =
 #if __CUDA_ARCH__ >= 1000
     EnableTma && useTma256 ? nTmaPreBytes :

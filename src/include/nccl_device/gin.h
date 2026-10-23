@@ -415,6 +415,11 @@ struct ncclGin_BackendMask {
 
   // All source buffers from put's from any thread in this coop will be safe to reuse.
   // Flush does not guarantee that data has settled in remote memory.
+  // GDAKI: once a poll of a peer's QP has seen an error CQE, no further operations are posted on that QP (other
+  // peers are not affected). Without abort flag, a flush, and a wait on a request that flushAsync returned after that
+  // point, return at once for that QP without the operations being complete: the timeoutCycles variants return
+  // ncclTimeout, as when they wait on a failed QP until the deadline. A wait on a request returned before that point
+  // still polls. With an abort flag (NCCL's own kernels), they keep spinning until the abort or the deadline.
   template <typename Coop, typename DescriptorSmem = ncclGin_None>
   NCCL_DEVICE_INLINE void flush(Coop coop, cuda::memory_order ord = cuda::memory_order_acquire,
                                 DescriptorSmem descriptor = ncclGin_None{}) const;

@@ -235,6 +235,7 @@ struct ncclProxyOps {
 };
 
 struct ncclProxySharedP2p {
+  struct netSharedStaging* staging;
   int refcount;
   ssize_t size;
   char* cudaBuff;

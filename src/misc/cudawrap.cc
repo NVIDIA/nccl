@@ -199,7 +199,10 @@ bool ncclCudaLaunchBlocking = false;
 
 #if CUDART_VERSION >= 11030
 
-#if CUDART_VERSION >= 13000
+// Match the requested ABI as soon as the versioned runtime API is available.
+// In particular CUDA 12.8's unversioned lookup returns cuCtxCreate_v4, which
+// cannot be called through our PFN_cuCtxCreate_v11040 (v3) declaration.
+#if CUDART_VERSION >= 12050
 #define LOAD_SYM(symbol, version, ignore) \
   do { \
     cudaDriverEntryPointQueryResult driverStatus = cudaDriverEntryPointSymbolNotFound; \

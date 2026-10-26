@@ -29,6 +29,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   struct ncclConnInfo* recvConn = NULL;
   volatile uint64_t* recvConnHeadPtr = NULL;
   uint64_t recvConnHead;
+  volatile uint64_t* recvConnTailPtr = NULL;
+  bool recvCopy = false;
+  bool sendCopy = false;
+  volatile uint64_t* sendConnTailPtr = NULL;
 
   struct ncclConnInfo* sendConn = NULL;
   volatile struct ncclConnFifo* sendConnFifo = NULL;
@@ -86,6 +90,26 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       sendConnHead += 1;
     }
     barrier();
+  }
+
+  inline __device__ void waitRecvCopy() {
+    if (!recvCopy) return;
+    if (recvConnTailPtr) {
+      int spins = 0;
+      while (*recvConnTailPtr < recvConnHead + 1) {
+        if (checkAbort(abort, 1, spins)) break;
+      }
+    }
+    barrier();
+  }
+
+  inline __device__ void postSendCopy() {
+    if (!sendCopy) return;
+    // A copy engine cannot use LL's in-band flags to snapshot an unfinished
+    // slice. Publish completion only after all data and cleanup flags are stored.
+    __threadfence_system();
+    barrier();
+    if (sendConnTailPtr) *sendConnTailPtr = sendConnHead;
   }
 
   inline __device__ void incRecv(int i) {
@@ -251,6 +275,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
     // Always waitSend in case of cleanup
     nelem = nelem < 0 ? 0 : nelem;
     if (SEND) waitSend(divUp(nelem, EltPerLine) * sizeof(ncclLLFifoLine));
+    if (RECV) waitRecvCopy();
 
     nelem -= tid * EltPerLine;
     srcElts += tid * EltPerLine;
@@ -312,24 +337,28 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       // coverity[dead_error_line]
       for (int i = 1; i < MaxSend && i < fan.nsend(); i++) incSend(i, offset);
       incSend(0, offset);
+      postSendCopy();
     }
   }
 
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
     recvBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     recvStep[i] = conn->step;
+    recvCopy |= (conn->flags & NCCL_NET_CUDA_COPY) != 0;
     if (wid == i) recvConn = conn;
   }
   __device__ __forceinline__ void loadRecvSync() {
     if (tid >= nthreads - WARP_SIZE && wid < fan.nrecv()) {
       recvConnHeadPtr = recvConn->head;
       recvConnHead = recvConn->step;
+      if (recvConn->flags & NCCL_NET_CUDA_COPY) recvConnTailPtr = recvConn->tail;
     }
   }
 
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
     sendBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     sendStep[i] = conn->step;
+    sendCopy |= (conn->flags & NCCL_NET_CUDA_COPY) != 0;
     if (wid == i) sendConn = conn;
   }
   __device__ __forceinline__ void loadSendSync() {
@@ -338,6 +367,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       sendConnHeadCache = *sendConnHeadPtr;
       sendConnHead = sendConn->step;
       sendConnFifo = sendConn->connFifo;
+      if (sendConn->flags & NCCL_NET_CUDA_COPY) sendConnTailPtr = sendConn->tail;
     }
   }
 

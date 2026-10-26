@@ -18,6 +18,8 @@
 #include "shm.h"
 #include "compiler.h"
 #include "register_inline.h"
+#include "nvmlwrap.h"
+#include <mutex>
 
 static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too large");
 
@@ -71,6 +73,7 @@ struct connectMapMem {
 };
 
 struct connectMap {
+  int staged;
   int sameProcess;
   int shared;
   int cudaDev;
@@ -85,7 +88,228 @@ struct connectMap {
   } offsets;
 };
 
+// -1 selects the copy path for confidential-computing host transports.
+NCCL_PARAM(NetCcStaging, "NET_CC_STAGING", -1);
+
+static ncclResult_t netStagingEnabled(int sameProcess, int sameDevice, int useGdr, int* enabled) {
+  *enabled = 0;
+#if CUDART_VERSION >= 11030
+  if (!sameProcess || !sameDevice || useGdr || ncclParamNetCcStaging() == 0) return ncclSuccess;
+  if (ncclParamNetCcStaging() > 0) {
+    *enabled = 1;
+  } else {
+    struct ncclNvmlCCStatus status = {};
+    NCCLCHECK(ncclNvmlGetCCStatus(&status));
+    *enabled = status.CCEnabled || status.multiGpuProtectedPCIE || status.multiGpuNVLE;
+  }
+  if (*enabled &&
+      (CUPFN(cuCtxCreate) == nullptr || CUPFN(cuCtxDestroy) == nullptr || CUPFN(cuCtxGetCurrent) == nullptr ||
+       CUPFN(cuCtxSetCurrent) == nullptr || CUPFN(cuStreamWriteValue64) == nullptr)) {
+    INFO(NCCL_NET, "NET/CC copy context or stream memory operations unavailable, using host buffers");
+    *enabled = 0;
+  }
+#endif
+  return ncclSuccess;
+}
+
+// The application context can synchronize during module loading. Progress must
+// not need that context while an application kernel is waiting for the proxy.
+// VMM allocations are device-accessible across contexts; cudaMalloc allocations
+// are context-owned and cannot be used for this separation.
+struct netStagingContext {
+  struct netStagingContext* next;
+  CUcontext context;
+  int device;
+  int refs;
+};
+#if CUDART_VERSION >= 11030
+static std::mutex netStagingContextMutex;
+static struct netStagingContext* netStagingContexts;
+#endif
+
+struct netStagingContextGuard {
+  CUcontext saved = nullptr;
+  bool switched = false;
+  ncclResult_t enter(CUcontext context) {
+#if CUDART_VERSION >= 11030
+    CUCHECK(cuCtxGetCurrent(&saved));
+    if (saved != context) {
+      CUCHECK(cuCtxSetCurrent(context));
+      switched = true;
+    }
+    return ncclSuccess;
+#else
+    return ncclInternalError;
+#endif
+  }
+  ~netStagingContextGuard() {
+#if CUDART_VERSION >= 11030
+    if (switched) {
+      CUresult result = CUPFN(cuCtxSetCurrent)(saved);
+      if (result != CUDA_SUCCESS) WARN("NET/CC failed to restore CUDA context: %d", result);
+    }
+#endif
+  }
+};
+
+static ncclResult_t netStagingContextAcquire(int device, CUcontext* context) {
+#if CUDART_VERSION >= 11030
+  std::lock_guard<std::mutex> lock(netStagingContextMutex);
+  for (struct netStagingContext* entry = netStagingContexts; entry; entry = entry->next) {
+    if (entry->device == device) {
+      entry->refs++;
+      *context = entry->context;
+      return ncclSuccess;
+    }
+  }
+  ncclResult_t result = ncclSuccess;
+  CUcontext saved;
+  struct netStagingContext* entry;
+  CUCHECK(cuCtxGetCurrent(&saved));
+  NCCLCHECK(ncclCalloc(&entry, 1));
+  CUCHECKGOTO(cuCtxCreate(&entry->context, nullptr, 0, CU_CTX_SCHED_YIELD, device), result, fail);
+  CUCHECKGOTO(cuCtxSetCurrent(saved), result, fail);
+  entry->device = device;
+  entry->refs = 1;
+  entry->next = netStagingContexts;
+  netStagingContexts = entry;
+  *context = entry->context;
+  return ncclSuccess;
+fail:
+  CUCHECKIGNORE(cuCtxSetCurrent(saved));
+  if (entry->context) CUCHECKIGNORE(cuCtxDestroy(entry->context));
+  free(entry);
+  return result;
+#else
+  return ncclInternalError;
+#endif
+}
+
+static ncclResult_t netStagingContextRelease(int device) {
+#if CUDART_VERSION >= 11030
+  std::lock_guard<std::mutex> lock(netStagingContextMutex);
+  struct netStagingContext** link = &netStagingContexts;
+  while (*link && (*link)->device != device) link = &(*link)->next;
+  if (*link == nullptr) return ncclInternalError;
+  struct netStagingContext* entry = *link;
+  if (--entry->refs == 0) {
+    CUcontext context = entry->context;
+    *link = entry->next;
+    free(entry);
+    CUCHECK(cuCtxDestroy(context));
+  }
+  return ncclSuccess;
+#else
+  return ncclInternalError;
+#endif
+}
+
+struct netStaging {
+  CUcontext context;
+  int device;
+  CUdeviceptr mirror;
+  cudaStream_t stream;
+  cudaEvent_t event;
+  struct ncclRecvMem* observed;
+  cudaEvent_t controlEvent;
+  bool controlPending;
+  bool controlInvalid;
+  int phase;
+};
+
+static ncclResult_t netStagingHostAlloc(struct connectMap* map, struct netStaging* staging) {
+  auto* mem = &map->mems[NCCL_NET_MAP_HOSTMEM];
+  if (!map->staged) return ncclCudaHostCalloc(&mem->cpuPtr, mem->size);
+  CUDACHECK(cudaGetDevice(&staging->device));
+  NCCLCHECK(netStagingContextAcquire(staging->device, &staging->context));
+  ncclResult_t result;
+  {
+    netStagingContextGuard guard;
+    result = guard.enter(staging->context);
+    // Under CC this allocation can be managed memory. Its owning context must
+    // also be isolated, or a copy can still acquire the application's context.
+    if (result == ncclSuccess) result = ncclCudaHostCalloc(&mem->cpuPtr, mem->size);
+  }
+  if (result != ncclSuccess) {
+    (void)netStagingContextRelease(staging->device);
+    staging->context = nullptr;
+  }
+  return result;
+}
+
+static ncclResult_t netStagingFree(struct connectMap* map, struct netStaging* staging) {
+  if (!staging->context) return ncclSuccess;
+  ncclResult_t result = ncclSuccess;
+  // Attempt every release even after an error. All queued work is finite: no
+  // stream waits depend on an application kernel or on a remote peer.
+  {
+    netStagingContextGuard guard;
+    NCCLCHECK(guard.enter(staging->context));
+    auto check = [&](cudaError_t error) {
+      if (error != cudaSuccess) {
+        WARN("NET/CC cleanup failed: %s", cudaGetErrorString(error));
+        (void)cudaGetLastError();
+        result = ncclUnhandledCudaError;
+      }
+    };
+    if (staging->stream) check(cudaStreamSynchronize(staging->stream));
+    auto checkNccl = [&](ncclResult_t error) {
+      if (error != ncclSuccess) result = error;
+    };
+    checkNccl(ncclCudaHostFree(staging->observed));
+    if (staging->controlEvent) check(cudaEventDestroy(staging->controlEvent));
+    if (staging->event) check(cudaEventDestroy(staging->event));
+    if (staging->stream) check(cudaStreamDestroy(staging->stream));
+    checkNccl(ncclCuMemFree((void*)staging->mirror, nullptr));
+    checkNccl(ncclCudaHostFree(map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr));
+    map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr = nullptr;
+  }
+  ncclResult_t released = netStagingContextRelease(staging->device);
+  if (released != ncclSuccess) result = released;
+  memset(staging, 0, sizeof(*staging));
+  if (map->staged) map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
+  map->staged = 0;
+  return result;
+}
+
+static ncclResult_t netStagingInit(struct connectMap* map, struct netStaging* staging) {
+  if (!map->staged) return ncclSuccess;
+  ncclResult_t result = ncclSuccess;
+  cudaPointerAttributes attributes;
+  auto* mem = &map->mems[NCCL_NET_MAP_HOSTMEM];
+  auto* recvMem = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(map, cpu, recvMem);
+  for (int i = 0; i < NCCL_STEPS; i++) {
+    recvMem->connFifo[i].offset = -1;
+    recvMem->connFifo[i].mode = map->shared ? NCCL_MODE_OFFSET : NCCL_MODE_NORMAL;
+  }
+  CUDACHECKGOTO(cudaPointerGetAttributes(&attributes, mem->cpuPtr), result, fail);
+  if (!staging->context) return ncclInternalError;
+  {
+    netStagingContextGuard guard;
+    NCCLCHECKGOTO(guard.enter(staging->context), result, fail);
+    NCCLCHECKGOTO(ncclCuMemAlloc((void**)&staging->mirror, nullptr, (CUmemAllocationHandleType)0, mem->size, nullptr),
+                  result, fail);
+    CUDACHECKGOTO(cudaStreamCreateWithFlags(&staging->stream, cudaStreamNonBlocking), result, fail);
+    CUDACHECKGOTO(cudaEventCreateWithFlags(&staging->event, cudaEventDisableTiming), result, fail);
+    CUDACHECKGOTO(cudaEventCreateWithFlags(&staging->controlEvent, cudaEventDisableTiming), result, fail);
+    NCCLCHECKGOTO(ncclCudaHostCalloc(&staging->observed, 1), result, fail);
+    CUDACHECKGOTO(cudaMemcpyAsync((void*)staging->mirror, mem->cpuPtr, mem->size, cudaMemcpyHostToDevice,
+                                  staging->stream),
+                  result, fail);
+    CUDACHECKGOTO(cudaStreamSynchronize(staging->stream), result, fail);
+  }
+  mem->gpuPtr = (char*)staging->mirror;
+  map->staged = 1;
+  INFO(NCCL_NET, "NET/CC staging enabled, hostMemoryType=%d VMM mirror %zd bytes, isolated copy context",
+       attributes.type, mem->size);
+  return ncclSuccess;
+fail:
+  (void)netStagingFree(map, staging);
+  return result;
+}
+
 struct sendNetResources {
+  struct netStaging staging;
   struct connectMap map;
   void* netSendComm;
   struct ncclSendMem* sendMem;
@@ -116,6 +340,7 @@ struct sendNetResources {
 };
 
 struct recvNetResources {
+  struct netStaging staging;
   struct connectMap map;
   void* netListenComm;
   void* netRecvComm;
@@ -527,10 +752,11 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
 
   struct ncclRecvMem* recvMem = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(map, gpu, recvMem);
   send->conn.tail = &recvMem->tail;
+  if (map->staged) send->conn.flags |= NCCL_NET_CUDA_COPY;
   send->conn.stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
   send->conn.connFifo = recvMem->connFifo;
   // Only fuse P2P buffers, continue to allocate dedicated buffers for ring/tree
-  for (int i = 0; i < NCCL_STEPS; i++) {
+  for (int i = 0; !map->staged && i < NCCL_STEPS; i++) {
     send->conn.connFifo[i].offset = -1;
     recvMem->connFifo[i].mode = map->shared ? NCCL_MODE_OFFSET : NCCL_MODE_NORMAL;
   }
@@ -605,10 +831,11 @@ static ncclResult_t recvConnect(struct ncclComm* comm, struct ncclConnect* conne
   struct ncclRecvMem* recvMem = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(map, gpu, recvMem);
   void* gdcMem = map->mems[NCCL_NET_MAP_GDCMEM].gpuPtr;
   recv->conn.tail = gdcMem ? (uint64_t*)gdcMem : &recvMem->tail;
+  if (map->staged) recv->conn.flags |= NCCL_NET_CUDA_COPY;
   recv->conn.stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
   recv->conn.connFifo = recvMem->connFifo;
   // Only fuse P2P buffers, continue to allocate dedicated buffers for ring/tree
-  for (int i = 0; i < NCCL_STEPS; i++) {
+  for (int i = 0; !map->staged && i < NCCL_STEPS; i++) {
     recvMem->connFifo[i].mode = map->shared ? NCCL_MODE_OFFSET : NCCL_MODE_NORMAL;
   }
 
@@ -662,10 +889,16 @@ static ncclResult_t recvFree(struct ncclComm* comm, struct ncclConnector* recv) 
   return ncclSuccess;
 }
 
+struct netSharedStaging {
+  CUcontext context;
+  int device;
+  char* mirror;
+};
+
 #define NCCL_SHARED_STEPS 16
 static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int cuda, int tpLocalRank, int type,
                                          int sameProcess, int nChannels, char** gpuPtr, char** cpuPtr, ssize_t* size,
-                                         ncclIpcDesc* ipcDesc) {
+                                         ncclIpcDesc* ipcDesc, bool staged = false) {
   if (cuda == 0 && sameProcess == 0) {
     WARN("PXN should not use host buffers for data");
     return ncclInternalError;
@@ -695,10 +928,22 @@ static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int 
     }
   }
   if (!cuda && state->hostBuff == NULL) {
-    NCCLCHECK(ncclCudaHostCalloc(&state->hostBuff, state->size));
+    if (staged) {
+      NCCLCHECK(ncclCalloc(&state->staging, 1));
+      CUDACHECK(cudaGetDevice(&state->staging->device));
+      NCCLCHECK(netStagingContextAcquire(state->staging->device, &state->staging->context));
+      netStagingContextGuard guard;
+      NCCLCHECK(guard.enter(state->staging->context));
+      NCCLCHECK(ncclCudaHostCalloc(&state->hostBuff, state->size));
+      NCCLCHECK(ncclCuMemAlloc((void**)&state->staging->mirror, nullptr, (CUmemAllocationHandleType)0, state->size,
+                               nullptr));
+    } else {
+      NCCLCHECK(ncclCudaHostCalloc(&state->hostBuff, state->size));
+    }
   }
   if (cpuPtr) *cpuPtr = cuda ? state->cudaBuff : state->hostBuff;
   if (gpuPtr) *gpuPtr = (cpuPtr && sameProcess) ? *cpuPtr : NULL;
+  if (!cuda && state->staging && gpuPtr) *gpuPtr = state->staging->mirror;
   if (ipcDesc) memcpy(ipcDesc, &state->ipcDesc, sizeof(state->ipcDesc));
   return ncclSuccess;
 }
@@ -726,7 +971,18 @@ static ncclResult_t sharedNetBuffersDestroy(struct ncclProxyState* proxyState, i
       }
       NCCLCHECK(ncclCudaFree(state->cudaBuff, proxyState->memManager));
     }
-    if (state->hostBuff) NCCLCHECK(ncclCudaHostFree(state->hostBuff));
+    if (state->staging) {
+      {
+        netStagingContextGuard guard;
+        NCCLCHECK(guard.enter(state->staging->context));
+        NCCLCHECK(ncclCuMemFree(state->staging->mirror, nullptr));
+        NCCLCHECK(ncclCudaHostFree(state->hostBuff));
+      }
+      NCCLCHECK(netStagingContextRelease(state->staging->device));
+      free(state->staging);
+    } else if (state->hostBuff) {
+      NCCLCHECK(ncclCudaHostFree(state->hostBuff));
+    }
   }
 
   if (peer->send.refcount || peer->recv.refcount) return ncclSuccess;
@@ -928,6 +1184,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   struct connectMap* map = &resources->map;
   map->sameProcess = connection->sameProcess;
   map->shared = resources->shared;
+  NCCLCHECK(netStagingEnabled(map->sameProcess, resources->sameDevice, resources->useGdr, &map->staged));
   CUDACHECK(cudaGetDevice(&map->cudaDev));
 
   if (resources->shared == 0) {
@@ -943,7 +1200,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     struct connectMapMem* mapMem = map->mems + bank;
     NCCLCHECK(sharedNetBuffersInit(proxyState, resources->useGdr, resources->tpLocalRank, 0, map->sameProcess,
                                    proxyState->p2pnChannels, &mapMem->gpuPtr, &mapMem->cpuPtr, &mapMem->size,
-                                   &mapMem->ipcDesc));
+                                   &mapMem->ipcDesc, map->staged));
     resources->buffSizes[NCCL_PROTO_SIMPLE] = mapMem->size;
 
     if (proxyState->allocP2pNetLLBuffers) {
@@ -973,7 +1230,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     }
   }
   if (map->sameProcess) {
-    NCCLCHECK(ncclCudaHostCalloc(&map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, map->mems[NCCL_NET_MAP_HOSTMEM].size));
+    NCCLCHECK(netStagingHostAlloc(map, &resources->staging));
     map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
   } else {
     NCCLCHECK(netCreateShm(proxyState, map->mems + NCCL_NET_MAP_HOSTMEM));
@@ -982,7 +1239,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     memset(sendMem, 0, sizeof(struct ncclSendMem));
     memset(recvMem, 0, sizeof(struct ncclRecvMem));
   }
-  if (ncclGdrCopy && map->sameProcess && ncclParamGdrCopySyncEnable() && resources->sameDevice) {
+  if (!map->staged && ncclGdrCopy && map->sameProcess && ncclParamGdrCopySyncEnable() && resources->sameDevice) {
     uint64_t *cpuPtr, *gpuPtr;
     NCCLCHECK(ncclGdrCudaCalloc(&cpuPtr, &gpuPtr, 1, &resources->gdrDesc, proxyState->memManager));
 
@@ -1000,6 +1257,9 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   (resources->gdcSync ? *resources->gdcSync : resources->sendMem->head) = (map->shared ? -NCCL_STEPS : 0);
   if (resources->gdcSync) wc_store_fence(); // Flush out WC write
   for (int i = 0; i < NCCL_STEPS; i++) resources->recvMem->connFifo[i].size = -1;
+  // Finish CUDA initialization before registering host buffers with the network.
+  // On failure staging cleanup can then release memory without a live MR.
+  NCCLCHECK(netStagingInit(map, &resources->staging));
 
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
     resources->buffers[p] = NCCL_NET_MAP_GET_POINTER(map, cpu, buffs[p]);
@@ -1114,6 +1374,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   map->sameProcess = connection->sameProcess;
   if (map->sameProcess == 0) return ncclInternalError; // We don't support remote proxy for recv
   map->shared = resources->shared;
+  NCCLCHECK(netStagingEnabled(map->sameProcess, resources->sameDevice, resources->useGdr, &map->staged));
 
   if (resources->shared == 0) {
     // Only allocate dedicated buffers for ring/tree, not for p2p
@@ -1126,7 +1387,8 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
     int bank = resources->useGdr ? NCCL_NET_MAP_SHARED_DEVMEM : NCCL_NET_MAP_SHARED_HOSTMEM;
     struct connectMapMem* mapMem = map->mems + bank;
     NCCLCHECK(sharedNetBuffersInit(proxyState, resources->useGdr, resources->tpLocalRank, 1, 1,
-                                   proxyState->p2pnChannels, &mapMem->gpuPtr, &mapMem->cpuPtr, &mapMem->size, NULL));
+                                   proxyState->p2pnChannels, &mapMem->gpuPtr, &mapMem->cpuPtr, &mapMem->size, NULL,
+                                   map->staged));
     resources->buffSizes[NCCL_PROTO_SIMPLE] = mapMem->size;
     NCCL_NET_MAP_ADD_POINTER(map, 1, resources->useGdr ? 1 : 0, mapMem->size, buffs[NCCL_PROTO_SIMPLE]);
   }
@@ -1152,9 +1414,9 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
       map->mems[NCCL_NET_MAP_DEVMEM].cpuPtr = map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr;
     }
   }
-  NCCLCHECK(ncclCudaHostCalloc(&map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr, map->mems[NCCL_NET_MAP_HOSTMEM].size));
+  NCCLCHECK(netStagingHostAlloc(map, &resources->staging));
   map->mems[NCCL_NET_MAP_HOSTMEM].gpuPtr = map->mems[NCCL_NET_MAP_HOSTMEM].cpuPtr;
-  if (ncclGdrCopy && /*1==*/map->sameProcess && resources->sameDevice) {
+  if (!map->staged && ncclGdrCopy && /*1==*/map->sameProcess && resources->sameDevice) {
     uint64_t *cpuPtr, *gpuPtr;
     uint32_t gdcFlag = ncclGdcPinFlag(resources->needFlush);
     NCCLCHECK(ncclGdrCudaCalloc(&cpuPtr, &gpuPtr, 2, &resources->gdrDesc, proxyState->memManager, gdcFlag));
@@ -1174,6 +1436,9 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   resources->sendMem = (struct ncclSendMem*)NCCL_NET_MAP_GET_POINTER(map, cpu, sendMem);
   resources->recvMem = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(map, cpu, recvMem);
   for (int i = 0; i < NCCL_STEPS; i++) resources->recvMem->connFifo[i].size = -1;
+  // Finish CUDA initialization before registering host buffers with the network.
+  // On failure staging cleanup can then release memory without a live MR.
+  NCCLCHECK(netStagingInit(map, &resources->staging));
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
     resources->buffers[p] = NCCL_NET_MAP_GET_POINTER(map, cpu, buffs[p]);
     if (resources->buffers[p]) {
@@ -1233,6 +1498,7 @@ static ncclResult_t sendProxyFree(struct ncclProxyConnection* connection, struct
         NCCLCHECK(proxyState->ncclNet->deregMr(resources->netSendComm, resources->mhandles[p]));
       }
     }
+    NCCLCHECK(netStagingFree(&resources->map, &resources->staging));
     struct connectMapMem* mems = resources->map.mems;
     if (resources->map.sameProcess) {
       NCCLCHECK(ncclCudaHostFree(mems[NCCL_NET_MAP_HOSTMEM].cpuPtr));
@@ -1288,6 +1554,7 @@ static ncclResult_t recvProxyFree(struct ncclProxyConnection* connection, struct
         NCCLCHECK(proxyState->ncclNet->deregMr(resources->netRecvComm, resources->mhandles[p]));
       }
     }
+    NCCLCHECK(netStagingFree(&resources->map, &resources->staging));
     struct connectMapMem* mems = resources->map.mems;
     NCCLCHECK(ncclCudaHostFree(mems[NCCL_NET_MAP_HOSTMEM].cpuPtr));
     NCCLCHECK(ncclCudaFree(mems[NCCL_NET_MAP_DEVMEM].cpuPtr, proxyState->memManager));
@@ -1321,6 +1588,88 @@ static ncclResult_t recvProxyFree(struct ncclProxyConnection* connection, struct
 
 static_assert(NCCL_STEPS <= NCCL_NET_MAX_REQUESTS, "Not enough net requests to cover for steps");
 
+// Copy only GPU-owned control fields back to the proxy. Offsets and credits
+// remain CPU-owned, and must never be overwritten by an older device snapshot.
+template <bool IsSend, typename Resources>
+static ncclResult_t netStagingPoll(Resources* resources) {
+  if (!resources->map.staged) return ncclSuccess;
+  struct netStaging* staging = &resources->staging;
+  netStagingContextGuard guard;
+  NCCLCHECK(guard.enter(staging->context));
+  if (staging->controlPending) {
+    cudaError_t status = cudaEventQuery(staging->controlEvent);
+    if (status == cudaErrorNotReady) return ncclSuccess;
+    CUDACHECK(status);
+    if (IsSend && !staging->controlInvalid) {
+      resources->recvMem->tail = staging->observed->tail;
+      for (int i = 0; i < NCCL_STEPS; i++) resources->recvMem->connFifo[i].size = staging->observed->connFifo[i].size;
+    } else if (!IsSend) {
+      resources->sendMem->head = staging->observed->tail;
+    }
+    staging->controlPending = false;
+    staging->controlInvalid = false;
+  } else {
+    if (IsSend) {
+      void* dev = NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, recvMem);
+      CUDACHECK(cudaMemcpyAsync(staging->observed, dev, sizeof(*staging->observed), cudaMemcpyDeviceToHost,
+                                staging->stream));
+    } else {
+      auto* dev = (struct ncclSendMem*)NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, sendMem);
+      CUDACHECK(cudaMemcpyAsync(&staging->observed->tail, &dev->head, sizeof(uint64_t), cudaMemcpyDeviceToHost,
+                                staging->stream));
+    }
+    CUDACHECK(cudaEventRecord(staging->controlEvent, staging->stream));
+    staging->controlPending = true;
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t netStagingWrite(struct netStaging* staging, void* ptr, uint64_t value) {
+  netStagingContextGuard guard;
+  NCCLCHECK(guard.enter(staging->context));
+#if CUDART_VERSION >= 11030
+  CUCHECK(cuStreamWriteValue64(staging->stream, (CUdeviceptr)ptr, value, 0));
+#endif
+  return ncclSuccess;
+}
+
+static ncclResult_t netStagingSendCopy(struct sendNetResources* resources, char* host, size_t size, int protocol,
+                                       int* ready) {
+  struct netStaging* staging = &resources->staging;
+  netStagingContextGuard guard;
+  NCCLCHECK(guard.enter(staging->context));
+  *ready = 0;
+  if (staging->phase == 0) {
+    char* cpu = NCCL_NET_MAP_GET_POINTER(&resources->map, cpu, buffs[protocol]);
+    char* gpu = NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, buffs[protocol]);
+    CUDACHECK(cudaMemcpyAsync(host, gpu + (host - cpu), size, cudaMemcpyDeviceToHost, staging->stream));
+    CUDACHECK(cudaEventRecord(staging->event, staging->stream));
+    staging->phase = 1;
+  } else {
+    cudaError_t status = cudaEventQuery(staging->event);
+    if (status == cudaErrorNotReady) return ncclSuccess;
+    CUDACHECK(status);
+    *ready = 1;
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t netStagingRecvCopy(struct recvNetResources* resources, int slot, int size, int protocol) {
+  if (!resources->map.staged) return ncclSuccess;
+  struct netStaging* staging = &resources->staging;
+  netStagingContextGuard guard;
+  NCCLCHECK(guard.enter(staging->context));
+  ssize_t offset = resources->shared && protocol == NCCL_PROTO_SIMPLE ?
+                     resources->recvMem->connFifo[slot].offset :
+                     slot * (resources->buffSizes[protocol] / NCCL_STEPS);
+  char* cpu = NCCL_NET_MAP_GET_POINTER(&resources->map, cpu, buffs[protocol]);
+  char* gpu = NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, buffs[protocol]);
+  CUDACHECK(cudaMemcpyAsync(gpu + offset, cpu + offset, size, cudaMemcpyHostToDevice, staging->stream));
+  // The normal receive progression publishes tail on this same stream. The
+  // GPU's acknowledgement therefore also protects the host buffer from reuse.
+  return ncclSuccess;
+}
+
 static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct ncclProxyArgs* args) {
   int checkedNetAttr = 0;
   if (args->state == ncclProxyOpReady) {
@@ -1348,6 +1697,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
       int doneStepId = sub->done;
       if (sub->done == sub->nsteps) continue;
       struct sendNetResources* resources = (struct sendNetResources*)(sub->connection->transportResources);
+      NCCLCHECK(netStagingPoll<true>(resources));
       volatile struct ncclConnFifo* connFifo = (volatile struct ncclConnFifo*)resources->recvMem->connFifo;
       int stepSize = resources->buffSizes[p] / NCCL_STEPS;
       char* localBuff = NCCL_NET_MAP_GET_POINTER(&resources->map, cpu, buffs[p]);
@@ -1361,11 +1711,19 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             ssize_t offset;
             NCCLCHECK(sharedBuffersGet(proxyState, sub->channelId, sharedBuffSlot * args->nsubs + s, &offset, NULL));
             resources->recvMem->connFifo[buffSlot].offset = offset;
+            if (resources->map.staged) {
+              auto* dev = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, recvMem);
+              NCCLCHECK(netStagingWrite(&resources->staging, &dev->connFifo[buffSlot].offset, offset));
+            }
             std::atomic_thread_fence(std::memory_order_seq_cst);
           }
           volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
           sub->posted += args->sliceSteps;
           *sendHead = sub->base + sub->posted - NCCL_STEPS;
+          if (resources->map.staged) {
+            auto* dev = (struct ncclSendMem*)NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, sendMem);
+            NCCLCHECK(netStagingWrite(&resources->staging, &dev->head, *sendHead));
+          }
           if (resources->gdcSync) wc_store_fence(); // Flush out WC write
         } else {
           sub->posted += args->sliceSteps;
@@ -1379,14 +1737,14 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         int buffSlot = (sub->base + sub->transmitted) % NCCL_STEPS;
         volatile uint64_t* recvTail = &resources->recvMem->tail;
         uint64_t tail = sub->base + sub->transmitted;
-        if (connFifo[buffSlot].size != -1 && (*recvTail > tail || p == NCCL_PROTO_LL)) {
+        if (connFifo[buffSlot].size != -1 && (*recvTail > tail || (p == NCCL_PROTO_LL && !resources->map.staged))) {
           // We have something to receive, let's check if it's completely ready.
           int size = connFifo[buffSlot].size;
           bool shared = (p == NCCL_PROTO_SIMPLE) && resources->shared;
           char* buff = shared ? localBuff + connFifo[buffSlot].offset : localBuff + buffSlot * stepSize;
           int ready = 1;
           if (p == NCCL_PROTO_LL128) {
-            ready = resources->useGdr;
+            ready = resources->useGdr || resources->map.staged;
             if (!ready) {
               // When data is in sysmem, we need to wait until all flags are correct since the GPU only
               // called threadfence()
@@ -1401,7 +1759,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
                 }
               }
             }
-          } else if (p == NCCL_PROTO_LL) {
+          } else if (p == NCCL_PROTO_LL && !resources->map.staged) {
             uint32_t flag = NCCL_LL_FLAG(sub->base + sub->transmitted + 1);
             int nFifoLines = DIVUP(size, sizeof(union ncclLLFifoLine));
             union ncclLLFifoLine* lines = (union ncclLLFifoLine*)buff;
@@ -1426,6 +1784,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
               }
             }
           }
+          if (ready && resources->map.staged) NCCLCHECK(netStagingSendCopy(resources, buff, size, p, &ready));
           if (ready) {
             ncclProfilerRecordProxyStepEventState(s, args, transmittedStepId, ncclProfilerProxyStepSendPeerWait_v4);
             // Data is ready, try to send.
@@ -1437,6 +1796,7 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
             NCCLCHECK(proxyState->ncclNet->isend(resources->netSendComm, buff, size, resources->tpRank,
                                                  sub->sendMhandle, phandle, sub->requests + buffSlot));
             if (sub->requests[buffSlot] != NULL) {
+              resources->staging.phase = 0;
               TRACE(NCCL_NET,
                     "sendProxy [%ld/%d/%d] Isend posted, req %p, buff %p, size %d, proto %d, myRank %d, channelId %d, "
                     "mhandle %p",
@@ -1460,6 +1820,13 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         if (done) {
           // Make sure size is reset to -1 before we update the head.
           connFifo[buffSlot].size = -1;
+          if (resources->map.staged) {
+            auto* dev = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, recvMem);
+            NCCLCHECK(netStagingWrite(&resources->staging, &dev->connFifo[buffSlot].size, -1));
+            // An in-flight snapshot may still contain the previous occupant's
+            // size. Never restore it after releasing this slot (including size 0).
+            resources->staging.controlInvalid = resources->staging.controlPending;
+          }
           std::atomic_thread_fence(std::memory_order_seq_cst);
           TRACE(NCCL_NET, "sendProxy [%ld/%d/%d] request %p done", sub->done, buffSlot, sub->nsteps,
                 sub->requests[buffSlot]);
@@ -1469,6 +1836,10 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
           if (resources->shared == 0) {
             volatile uint64_t* sendHead = resources->gdcSync ? resources->gdcSync : &resources->sendMem->head;
             *sendHead = sub->base + sub->done;
+            if (resources->map.staged) {
+              auto* dev = (struct ncclSendMem*)NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, sendMem);
+              NCCLCHECK(netStagingWrite(&resources->staging, &dev->head, *sendHead));
+            }
             if (resources->gdcSync) wc_store_fence(); // Flush out WC write
           }
           args->idle = 0;
@@ -1577,6 +1948,10 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
                 NCCLCHECK(sharedBuffersGet(proxyState, sub->channelId, sharedBuffSlot * args->nsubs + s + i, &offset,
                                            sizes + subCount));
                 connFifo[buffSlot].offset = offset;
+                if (resources->map.staged) {
+                  auto* dev = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, recvMem);
+                  NCCLCHECK(netStagingWrite(&resources->staging, &dev->connFifo[buffSlot].offset, offset));
+                }
                 ptrs[subCount] = localBuff + offset;
               }
             } else {
@@ -1605,7 +1980,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         uint64_t step = subGroup->posted;
         struct recvNetResources* resources = (struct recvNetResources*)(subGroup->connection->transportResources);
         void** requestPtr = subGroup->requests + (step % NCCL_STEPS);
-        bool ignoreCompletion = ncclParamNetOptionalRecvCompletion() &&
+        bool ignoreCompletion = !resources->map.staged && ncclParamNetOptionalRecvCompletion() &&
                                 ((args->protocol == NCCL_PROTO_LL128) || (args->protocol == NCCL_PROTO_LL)) &&
                                 (subCount == 1);
         if (!checkedNetAttr++) setXferNetAttrs(proxyState, args, 0);
@@ -1653,6 +2028,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
             volatile struct ncclConnFifo* connFifo = (volatile struct ncclConnFifo*)resources->recvMem->connFifo;
             connFifo[buffSlot].size = -1;
             sub->transSize = sizes[i];
+            if (step < sub->nsteps) NCCLCHECK(netStagingRecvCopy(resources, buffSlot, sizes[i], p));
             sub->received += args->sliceSteps;
             ncclProfilerRecordProxyStepEventState(s + i, args, receivedStepId, ncclProfilerProxyStepRecvFlushWait);
             if (step < sub->nsteps) {
@@ -1733,6 +2109,10 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
               struct recvNetResources* resources = (struct recvNetResources*)(sub->connection->transportResources);
               volatile uint64_t* recvTail = resources->gdcSync ? resources->gdcSync : &resources->recvMem->tail;
               *recvTail = sub->base + sub->transmitted;
+              if (resources->map.staged) {
+                auto* dev = (struct ncclRecvMem*)NCCL_NET_MAP_GET_POINTER(&resources->map, gpu, recvMem);
+                NCCLCHECK(netStagingWrite(&resources->staging, &dev->tail, *recvTail));
+              }
               if (resources->gdcSync) wc_store_fence(); // Flush out WC write
             }
           }
@@ -1749,6 +2129,7 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
         if (sub->done == sub->nsteps) continue;
         if (sub->transmitted > sub->done) {
           struct recvNetResources* resources = (struct recvNetResources*)(sub->connection->transportResources);
+          NCCLCHECK(netStagingPoll<false>(resources));
           volatile uint64_t* sendHead = &resources->sendMem->head;
           uint64_t done = *sendHead;
           while (

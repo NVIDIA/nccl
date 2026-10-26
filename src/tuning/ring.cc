@@ -108,7 +108,7 @@ ncclResult_t ncclTuningRingModelSim(struct ncclTuningInput_t* const inputs, stru
     inputs->comm->minCompCap >= 100 && inputs->comm->graphs[NCCL_ALGO_RING].typeIntra == PATH_NVL;
   bool ringSimplePlateau =
     (inputs->comm->nNodes > 1 && inputs->func == ncclFuncAllReduce) ||
-    (inputs->comm->nNodes == 1 && isBlackwellNvLink &&
+    (inputs->comm->nNodes == 1 && isBlackwellNvLink && inputs->nvlsSupport &&
      (inputs->func == ncclFuncAllReduce || inputs->func == ncclFuncAllGather || inputs->func == ncclFuncReduceScatter));
   size_t bytesPerRankPerChannel = inputs->nBytes / (inputs->comm->nChannels * inputs->comm->nRanks);
 

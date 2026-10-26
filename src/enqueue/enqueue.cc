@@ -3533,6 +3533,17 @@ ncclResult_t ncclRedOpCreatePreMulSum(ncclRedOp_t* op, void* scalar, ncclDataTyp
   NCCLCHECK(CommCheck(comm, "ncclRedOpCreatePreMulSum", "comm"));
   /* join init thread before creating PreMulSum op. */
   NCCLCHECK(ncclCommEnsureReady(comm));
+  /* validate the arguments before taking a slot from the free list, so a rejected call does not leak it. */
+  NCCLCHECK(PtrCheck(op, "ncclRedOpCreatePreMulSum", "op"));
+  NCCLCHECK(PtrCheck(scalar, "ncclRedOpCreatePreMulSum", "scalar"));
+  if (datatype < 0 || datatype >= ncclNumTypes) {
+    WARN("ncclRedOpCreatePreMulSum : invalid type %d", datatype);
+    return ncclInvalidArgument;
+  }
+  if (residence != ncclScalarDevice && residence != ncclScalarHostImmediate) {
+    WARN("ncclRedOpCreatePreMulSum : invalid scalar residence %d", residence);
+    return ncclInvalidArgument;
+  }
 
   if (comm->userRedOpFreeHead == comm->userRedOpCapacity) {
     // double capacity and resize

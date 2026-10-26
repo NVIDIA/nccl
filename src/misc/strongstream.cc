@@ -70,9 +70,12 @@ ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out, int launchOrderI
     }
     p = p->next;
   }
-leave:
   *out = p;
   return ncclSuccess;
+leave:
+  cxtListHead = p->next;
+  delete p;
+  return result;
 }
 
 void ncclCudaContextDrop(struct ncclCudaContext* cxt) {
@@ -148,9 +151,15 @@ ncclResult_t ncclStrongStreamConstruct(struct ncclStrongStream* ss) {
 #if CUDART_VERSION >= 11030
   ss->everCaptured = false;
   ss->captureHead = nullptr;
-  CUDACHECK(cudaEventCreateWithFlags(&ss->serialEvent, cudaEventDisableTiming));
-#endif
+  ncclResult_t result = ncclSuccess;
+  CUDACHECKGOTO(cudaEventCreateWithFlags(&ss->serialEvent, cudaEventDisableTiming), result, fail);
   return ncclSuccess;
+fail:
+  CUDACHECKIGNORE(cudaStreamDestroy(ss->liveStream));
+  return result;
+#else
+  return ncclSuccess;
+#endif
 }
 
 ncclResult_t ncclStrongStreamDestruct(struct ncclStrongStream* ss) {

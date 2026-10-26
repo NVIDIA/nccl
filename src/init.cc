@@ -3669,6 +3669,8 @@ ncclResult_t ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeR
 exit:
   (void)ncclGroupErrCheck(res);
   NCCLCHECK(ncclGroupEndInternal());
+  // See ncclCommSplit.
+  if (res == ncclSuccess && !comm->config.blocking) (void)ncclCommGetAsyncError(comm, &res);
 
   if (newcomm && *newcomm) {
     NVTX3_RANGE_ADD_PAYLOAD(CommShrink, NcclNvtxParamsCommShrinkSchema,
@@ -3849,6 +3851,10 @@ exit:
   }
   (void)ncclGroupErrCheck(res);
   NCCLCHECK(ncclGroupEndInternal());
+  // Unlike split, the grow job runs on the new communicator: in nonblocking mode return its state (ncclInProgress
+  // while the init is running), like ncclCommInitRankConfig.
+  if (res == ncclSuccess && newcomm && *newcomm && !(*newcomm)->config.blocking)
+    (void)ncclCommGetAsyncError(*newcomm, &res);
   return res;
 
 fail:
@@ -3886,6 +3892,10 @@ ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t* newc
 exit:
   (void)ncclGroupErrCheck(res);
   NCCLCHECK(ncclGroupEndInternal());
+  // In nonblocking mode the child init runs as a background job of the parent, which stays ncclInProgress (and
+  // *newcomm stays NULL) until it completes. NCCLCHECK does not propagate ncclInProgress from the group end, so
+  // return the parent's state, as the nonblocking split example in the user guide polls it.
+  if (res == ncclSuccess && !comm->config.blocking) (void)ncclCommGetAsyncError(comm, &res);
 
   if (newcomm && *newcomm) {
     NVTX3_RANGE_ADD_PAYLOAD(CommSplit, NcclNvtxParamsCommSplitSchema,

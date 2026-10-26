@@ -1860,6 +1860,10 @@ ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, nc
 exit:
   ncclGroupErrCheck(ret);
   NCCLCHECK(ncclGroupEndInternal());
+  // In nonblocking mode the registration runs as a background job of comm, which stays ncclInProgress (and *win
+  // stays NULL) until it completes. NCCLCHECK does not propagate ncclInProgress from the group end, so return the
+  // comm's state, as ncclCommSuspend/ncclCommResume do.
+  if (ret == ncclSuccess && !comm->config.blocking) (void)ncclCommGetAsyncError(comm, &ret);
   cudaSetDevice(saveDev);
   return ret;
 fail:
@@ -2068,6 +2072,8 @@ ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements c
 exit:
   ncclGroupErrCheck(ret);
   NCCLCHECK(ncclGroupEndInternal());
+  // See ncclCommWindowRegister: *outDevComm is only filled once the background job completes.
+  if (ret == ncclSuccess && !comm->config.blocking) (void)ncclCommGetAsyncError(comm, &ret);
   cudaSetDevice(saveDev);
   return ret;
 fail:

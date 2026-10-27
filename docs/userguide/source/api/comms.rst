@@ -106,6 +106,15 @@ config to NULL will make the new communicator inherit the original communicator'
 When split, there should not be any outstanding NCCL operations on the *comm*. Otherwise, it might cause
 a deadlock.
 
+When the parent communicator is nonblocking, this operation is nonblocking: it
+returns while the new communicator's initialization is still in progress in the
+background, and the state to poll is the parent communicator's (see
+:c:func:`ncclCommGetAsyncError`). Until the parent reports *ncclSuccess*,
+*newcomm* is not yet assigned (it stays `NCCL_COMM_NULL`) and the parent
+communicator must not be used again. Ranks that passed *NCCL_SPLIT_NOCOLOR* must
+poll as well, since they take part in the split even though no new communicator
+is created for them.
+
 ncclCommShrink
 --------------
 
@@ -121,6 +130,13 @@ If the new communicator needs a special configuration, it can be passed as *conf
 The *shrinkFlags* parameter controls the behavior of the operation. Use *NCCL_SHRINK_DEFAULT* (or *0*) for normal operation, or *NCCL_SHRINK_ABORT* when shrinking after an error on the parent communicator.
 Specifically, when using *NCCL_SHRINK_DEFAULT*, there should not be any outstanding NCCL operations on the *comm* to avoid potential deadlocks. Further, if the parent communicator has the flag config.shrinkShare set to 1, NCCL will reuse the parent communicator resources.
 On the other hand, when using *NCCL_SHRINK_ABORT*, NCCL will automatically abort any outstanding operations on the parent communicator, and no resources will be shared between the parent and the newly created communicator.
+
+When the parent communicator is nonblocking, this operation is nonblocking: it
+returns while the new communicator's initialization is still in progress in the
+background, and the state to poll is the parent communicator's (see
+:c:func:`ncclCommGetAsyncError`). Until the parent reports *ncclSuccess*,
+*newcomm* is not yet assigned (it stays `NCCL_COMM_NULL`) and the parent
+communicator must not be used again.
 
 ncclCommGetUniqueId
 -------------------
@@ -160,6 +176,12 @@ If the new communicator needs a special configuration, it can be passed as *conf
 
 There should not be any outstanding NCCL operations on the parent communicator when calling this function to avoid potential deadlocks.
 After the grow operation completes, the parent communicator should be destroyed using *ncclCommDestroy* to free resources.
+
+When the parent communicator is nonblocking, this operation is nonblocking: it
+returns while the new communicator's initialization is still in progress in the
+background. Unlike *ncclCommSplit* and *ncclCommShrink*, *newcomm* is assigned
+before the function returns, and the state to poll is the new communicator's
+(see :c:func:`ncclCommGetAsyncError`), as with *ncclCommInitRankConfig*.
 
 **Example workflow:**
 
@@ -224,13 +246,20 @@ ncclCommGetAsyncError
 .. c:function:: ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* asyncError)
 
 Queries the progress and potential errors of asynchronous NCCL operations.
-Operations which do not require a stream argument (e.g. ncclCommFinalize) can be considered complete as soon
-as the function returns *ncclSuccess*; operations with a stream argument (e.g. ncclAllReduce) will return
-*ncclSuccess* as soon as the operation is posted on the stream but may also report errors through
-ncclCommGetAsyncError() until they are completed. If the return code of any NCCL function is *ncclInProgress*,
-it means the operation is in the process of being enqueued in the background, and users must query the states
-of the communicators until all the states become *ncclSuccess* before calling another NCCL function. Before the
-states change into *ncclSuccess*, users are not allowed to issue CUDA kernel to the streams being used by NCCL.
+Operations which do not require a stream argument (e.g. ncclCommFinalize, or a
+nonblocking ncclCommSplit/ncclCommShrink in nonblocking mode) may complete after
+the function has returned; therefore a return code of *ncclSuccess* does not, by
+itself, mean that no NCCL work related to the call remains in flight. Operations
+with a stream argument (e.g. ncclAllReduce) will return *ncclSuccess* as soon as
+the operation is posted on the stream but may also report errors through
+ncclCommGetAsyncError() until they are completed. If the return code of any NCCL
+function is *ncclInProgress*, it means the operation is in the process of being
+enqueued in the background. In either case, users must query the states of the
+communicators until all the states become *ncclSuccess* before calling another
+NCCL function. For a nonblocking ncclCommSplit or ncclCommShrink, the state to
+query is the one of the parent communicator; for a nonblocking ncclCommGrow, of
+the new communicator. Before the states change into *ncclSuccess*, users are not
+allowed to issue CUDA kernel to the streams being used by NCCL.
 If there has been an error on the communicator, user should destroy the communicator with :c:func:`ncclCommAbort`.
 If an error occurs on the communicator, nothing can be assumed about the completion or correctness of operations
 enqueued on that communicator.

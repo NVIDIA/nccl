@@ -2009,7 +2009,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
     if (comm->globalRmaProxySupport && comm->config.numRmaCtx > 0) {
       if (comm->rmaUserCtxStride <= 0 || comm->nRanks % comm->rmaUserCtxStride != 0 ||
-          comm->rmaUserCtxStride % comm->rmaBaseStride != 0) {
+          (envUserStride != NCCL_CONFIG_UNDEF_INT && comm->rmaUserCtxStride % comm->rmaBaseStride != 0)) {
         WARN("Invalid RMA user context stride %d (nRanks=%d, baseStride=%d)", comm->rmaUserCtxStride, comm->nRanks,
              comm->rmaBaseStride);
         ret = ncclInvalidArgument;
@@ -2026,9 +2026,15 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
           goto fail;
         }
       }
+
+      if (comm->rmaUserCtxStride % comm->rmaBaseStride != 0) {
+        INFO(NCCL_INIT, "Disabling network RMA: default user context stride %d is incompatible with base stride %d",
+             comm->rmaUserCtxStride, comm->rmaBaseStride);
+        comm->globalRmaProxySupport = false;
+      }
     }
 
-    // at this point in the code, we now have a validated Base Stride (comm->rmaBaseStride) and User/Context Stride (comm->rmaUserCtxStride)!
+    // Report the resolved strides and whether network RMA is supported.
     INFO(NCCL_INIT,
          "Rank %d RMA strides: baseStride %d userCtxStride %d defaultUserStride %d networkRmaSupport %d "
          "(crossNic %d contiguousRanksPerHost %d numRmaCtx %d)",

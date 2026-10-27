@@ -1179,12 +1179,15 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
                         ret, fail);
         }
         if (rmtRegAddr) {
-          NCCLCHECKGOTO(ncclCalloc(&newInfo, 1), ret, fail);
           if (regRecord->ipcInfos[peerIndex] != NULL) {
             WARN("IPC registration already exists for peerRank %d peerIndex %d", peerRank, peerIndex);
             ret = ncclInternalError;
             goto fail;
           }
+          if (regRecord->regIpcAddrs.hostPeerRmtAddrs == NULL) {
+            NCCLCHECKGOTO(ncclCalloc(&regRecord->regIpcAddrs.hostPeerRmtAddrs, ipcIndexSize), ret, fail);
+          }
+          NCCLCHECKGOTO(ncclCalloc(&newInfo, 1), ret, fail);
           regRecord->state |= IPC_REG_COMPLETE;
           newInfo->peerRank = peerRank;
           newInfo->baseAddr = baseAddr;
@@ -1194,9 +1197,7 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
           newInfo->impInfo.numSegments = numSegments;
           newInfo->ipcProxyconn = proxyConn;
           regRecord->ipcInfos[peerIndex] = newInfo;
-          if (regRecord->regIpcAddrs.hostPeerRmtAddrs == NULL) {
-            NCCLCHECKGOTO(ncclCalloc(&regRecord->regIpcAddrs.hostPeerRmtAddrs, ipcIndexSize), ret, fail);
-          }
+          newInfo = NULL;
           regRecord->regIpcAddrs.hostPeerRmtAddrs[peerIndex] = (uintptr_t)rmtRegAddr;
           needUpdate = true;
           *regBufFlag = 1;

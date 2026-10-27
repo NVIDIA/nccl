@@ -86,7 +86,7 @@ struct kernelPhase {
 };
 
 struct kernelCh {
-  uint8_t type;
+  uint64_t type;
   uint8_t channelId;
   struct taskEventBase* parent;
   double startTs;

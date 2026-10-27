@@ -26,34 +26,49 @@ NCCL_DEVICE_INLINE uint64_t ncclFlowLL128LoadDataWord(T* src, int nElts) {
   if (nElts <= 0) return 0;
   constexpr int EltPerWord = sizeof(uint64_t) / sizeof(T);
   ncclFlowLLDataLoader<T> loader;
-  loader.begin(src, nElts < EltPerWord ? nElts : EltPerWord, reinterpret_cast<uintptr_t>(src) % 4);
+  // Passing a dynamically calculated misalignment value was found to be detrimental to the overall performance of
+  // AllGather_Ring_LL128, even if that value happened to be 0.  It turns out to be better for the code generator
+  // in this case to assume misalignment (a value of 1) than to have to generate both branches.
+  loader.begin(src, nElts < EltPerWord ? nElts : EltPerWord, /*misalign4=*/(sizeof(T) < 4) ? 1 : 0);
   return loader.finish();
 }
 
 template <typename T>
 NCCL_DEVICE_INLINE void ncclFlowLL128LoadDataBegin(uint64_t (&data)[NCCL_LL128_SHMEM_ELEMS_PER_THREAD], T* src,
-                                                   int nElts, int lane, bool flagThread) {
+                                                   int nElts, int lane, bool flagThread, int misalign16) {
   constexpr int EltPerWord = sizeof(uint64_t) / sizeof(T);
   constexpr int EltPer128 = 2 * EltPerWord;
-  NVCC_PRAGMA_UNROLL_AUTO
-  for (int g = 0; g < NCCL_LL128_SHMEM_ELEMS_PER_THREAD / 2; g++) {
-    int const ix = g * 32 - 4 * (g / 2) + lane - (g % 2) * (lane / 8);
-    int const eltOffset = ix * EltPer128;
-    int const remaining = nElts - eltOffset;
-    if (!flagThread || g % 2 == 0) {
-      if (remaining <= 0) {
-        data[2 * g] = 0;
-        data[2 * g + 1] = 0;
-      } else if (remaining >= EltPer128 && reinterpret_cast<uintptr_t>(src + eltOffset) % 16 == 0) {
+  if (misalign16 == 0) {
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int g = 0; g < NCCL_LL128_SHMEM_ELEMS_PER_THREAD / 2; g++) {
+      int const ix = g * 32 - 4 * (g / 2) + lane - (g % 2) * (lane / 8);
+      int const eltOffset = ix * EltPer128;
+      int const remaining = nElts - eltOffset;
+      if ((!flagThread || g % 2 == 0) && remaining > 0) {
+        // This may over-read at the end of the source buffer, but we don't cross the alignment boundary, hence we also
+        // stay within the same page -- no fault possible.
         ncclFlowLL128Load128((uint64_t*)(src + eltOffset), data[2 * g], data[2 * g + 1]);
       } else {
+        // These stores should not be necessary for correctness but they help keep warps converged.
+        data[2 * g] = 0;
+        data[2 * g + 1] = 0;
+      }
+    }
+  } else {
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int g = 0; g < NCCL_LL128_SHMEM_ELEMS_PER_THREAD / 2; g++) {
+      int const ix = g * 32 - 4 * (g / 2) + lane - (g % 2) * (lane / 8);
+      int const eltOffset = ix * EltPer128;
+      int const remaining = nElts - eltOffset;
+      if ((!flagThread || g % 2 == 0) && remaining > 0) {
         data[2 * g] = ncclFlowLL128LoadDataWord(src + eltOffset, remaining);
         data[2 * g + 1] =
           remaining > EltPerWord ? ncclFlowLL128LoadDataWord(src + eltOffset + EltPerWord, remaining - EltPerWord) : 0;
+      } else {
+        // These stores should not be necessary for correctness but they help keep warps converged.
+        data[2 * g] = 0;
+        data[2 * g + 1] = 0;
       }
-    } else {
-      data[2 * g] = 0;
-      data[2 * g + 1] = 0;
     }
   }
 }
@@ -68,31 +83,40 @@ NCCL_DEVICE_INLINE void ncclFlowLL128LoadDataFinish(uint64_t (&data)[NCCL_LL128_
 
 template <typename T>
 NCCL_DEVICE_INLINE void ncclFlowLL128StoreData(T* dst, uint64_t (&data)[NCCL_LL128_SHMEM_ELEMS_PER_THREAD], int nElts,
-                                               int lane, bool flagThread) {
+                                               int lane, bool flagThread, int misalign16, int misalign4) {
   constexpr int EltPerWord = sizeof(uint64_t) / sizeof(T);
   constexpr int EltPer128 = 2 * EltPerWord;
   NVCC_PRAGMA_UNROLL_AUTO
   for (int g = 1; g < NCCL_LL128_SHMEM_ELEMS_PER_THREAD / 2; g += 2) {
     if (flagThread) data[2 * g - 1] = data[2 * g];
   }
-  NVCC_PRAGMA_UNROLL_AUTO
-  for (int g = 0; g < NCCL_LL128_SHMEM_ELEMS_PER_THREAD / 2; g++) {
-    int const ix = g * 32 - 4 * (g / 2) + lane - (g % 2) * (lane / 8);
-    int const eltOffset = ix * EltPer128;
-    int const remaining = nElts - eltOffset;
-    if (!flagThread || g % 2 == 0) {
-      if (remaining >= EltPer128 && reinterpret_cast<uintptr_t>(dst + eltOffset) % 16 == 0) {
+  if (misalign16 == 0 && nElts % EltPer128 == 0) {
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int g = 0; g < NCCL_LL128_SHMEM_ELEMS_PER_THREAD / 2; g++) {
+      int const ix = g * 32 - 4 * (g / 2) + lane - (g % 2) * (lane / 8);
+      int const eltOffset = ix * EltPer128;
+      int const remaining = nElts - eltOffset;
+      if ((!flagThread || g % 2 == 0) && remaining >= EltPer128) {
         ncclFlowLL128Store128((uint64_t*)(dst + eltOffset), data[2 * g], data[2 * g + 1]);
-      } else {
-        int const loElts = remaining < EltPerWord ? remaining : EltPerWord;
-        int const hiRemaining = remaining - EltPerWord;
-        int const hiElts = hiRemaining < EltPerWord ? hiRemaining : EltPerWord;
-        if (loElts > 0) {
-          ncclFlowLLStoreData(dst + eltOffset, data[2 * g], loElts, reinterpret_cast<uintptr_t>(dst + eltOffset) % 4);
-        }
-        if (hiElts > 0) {
-          ncclFlowLLStoreData(dst + eltOffset + EltPerWord, data[2 * g + 1], hiElts,
-                              reinterpret_cast<uintptr_t>(dst + eltOffset + EltPerWord) % 4);
+      }
+    }
+  } else {
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int g = 0; g < NCCL_LL128_SHMEM_ELEMS_PER_THREAD / 2; g++) {
+      int const ix = g * 32 - 4 * (g / 2) + lane - (g % 2) * (lane / 8);
+      int const eltOffset = ix * EltPer128;
+      int const remaining = nElts - eltOffset;
+      if (!flagThread || g % 2 == 0) {
+        if (remaining >= EltPer128 && misalign16 == 0) {
+          ncclFlowLL128Store128((uint64_t*)(dst + eltOffset), data[2 * g], data[2 * g + 1]);
+        } else {
+          int const loElts = remaining < EltPerWord ? remaining : EltPerWord;
+          int const hiRemaining = remaining - EltPerWord;
+          int const hiElts = hiRemaining < EltPerWord ? hiRemaining : EltPerWord;
+          if (loElts > 0) ncclFlowLLStoreData(dst + eltOffset, data[2 * g], loElts, misalign4);
+          if (hiElts > 0) {
+            ncclFlowLLStoreData(dst + eltOffset + EltPerWord, data[2 * g + 1], hiElts, misalign4);
+          }
         }
       }
     }
@@ -172,6 +196,15 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
     }
     workers.sync();
 
+    int srcMisalign16 = 0, dstMisalign16 = 0, dstMisalign4 = 0;
+    if (nSrc != 0) {
+      srcMisalign16 = reinterpret_cast<uintptr_t>(srcLambda(0)) % 16;
+    }
+    if (nDst != 0) {
+      dstMisalign16 = reinterpret_cast<uintptr_t>(dstLambda(0)) % 16;
+      if NCCL_IF_CONSTEXPR (sizeof(T) <= 4) dstMisalign4 = dstMisalign16 % 4;
+    }
+
     int const workerThread = workers.thread_rank();
     int const warp = workerThread / 32;
     int const lane = workerThread % 32;
@@ -185,7 +218,9 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
       uint64_t data[NCCL_LL128_SHMEM_ELEMS_PER_THREAD] = {};
       uint64_t peerData[NCCL_LL128_SHMEM_ELEMS_PER_THREAD];
       bool dataValid = nSrc != 0;
-      if (dataValid) ncclFlowLL128LoadDataBegin(data, srcLambda(0) + eltOffset, sliceElts, lane, flagThread);
+      if (dataValid) {
+        ncclFlowLL128LoadDataBegin(data, srcLambda(0) + eltOffset, sliceElts, lane, flagThread, srcMisalign16);
+      }
 
       for (int peer = 0; peer < chunkRecvPeers; peer++) {
         ncclFlowLL128LoadWire(peerData, (uint64_t*)shmem.recvBuf[peer] + wireOffset, shmem.recvFlag[peer], flagThread,
@@ -202,7 +237,10 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
       for (int peer = 0; peer < chunkSendPeers; peer++) {
         ncclFlowLL128StoreWire((uint64_t*)shmem.sendBuf[peer] + wireOffset, data, shmem.sendFlag[peer], flagThread);
       }
-      if (nDst != 0) ncclFlowLL128StoreData(dstLambda(0) + eltOffset, data, sliceElts, lane, flagThread);
+      if (nDst != 0) {
+        ncclFlowLL128StoreData(dstLambda(0) + eltOffset, data, sliceElts, lane, flagThread, dstMisalign16,
+                               dstMisalign4);
+      }
     }
   } else if (isPost) {
     backend.advanceStep();

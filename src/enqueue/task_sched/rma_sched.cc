@@ -1022,12 +1022,10 @@ static ncclResult_t rmaSchedCeWaitLaunch(
   }
 
 exit:
-  if (batchParams) free(batchParams);
+  free(batchParams);
   ncclCeFreeBatchOpsParams(&ceParams);
   return ret;
 fail:
-  if (batchParams) free(batchParams);
-  ncclCeFreeBatchOpsParams(&ceParams);
   goto exit;
 }
 

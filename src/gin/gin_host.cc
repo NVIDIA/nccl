@@ -252,6 +252,14 @@ ncclResult_t ncclGinValidateSignalRequest(struct ncclDevCommRequirements const* 
   return ncclSuccess;
 }
 
+static ncclResult_t ginValidateSpecializations(struct ncclDevCommRequirements const* reqs) {
+  const int invalidSpecializationMask = ~(NCCL_GIN_SPECIALIZATION_FAST_SUBMISSION);
+  if (reqs->ginSpecializations & invalidSpecializationMask) {
+    return ncclInvalidUsage;
+  }
+  return ncclSuccess;
+}
+
 // Sizes NCCL's own barrier requirements for `backend`, then assigns every requirement its first signal id.
 static ncclResult_t ginAssignSignals(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
                                      struct ncclDevResourceRequirements* resReqs,
@@ -439,6 +447,7 @@ static ncclResult_t ginDevCommSetupWithBackend(
     backendVersion,
     peerArray,
     peerArrayCount,
+    reqs->ginSpecializations,
   };
 
   for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
@@ -517,6 +526,11 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
 
   if (reqGinType >= NCCL_GIN_MAX_TYPES) {
     WARN("Invalid GIN type requested (%d)", reqGinType);
+    return ncclInvalidUsage;
+  }
+
+  if (ncclSuccess != ginValidateSpecializations(reqs)) {
+    WARN("Invalid GIN specializations requested");
     return ncclInvalidUsage;
   }
 

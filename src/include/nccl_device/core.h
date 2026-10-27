@@ -73,6 +73,13 @@ typedef enum {
 } ncclGinConnectionType_t;
 
 typedef enum {
+  NCCL_GIN_SPECIALIZATION_NONE = 0,
+
+    // Prioritize submission time, possibly at the expense of completion-time.
+  NCCL_GIN_SPECIALIZATION_FAST_SUBMISSION = 1,
+} ncclGinSpecialization_t;
+
+typedef enum {
   NCCL_GIN_TYPE_NONE = 0, // Sentinel: accept any available backend (used in ncclDevCommRequirements)
   NCCL_GIN_TYPE_PROXY = 2, // intentionally not 1. Must match NCCL_NET_DEVICE_GIN_PROXY for backward compatibility
   NCCL_GIN_TYPE_GDAKI = 3, // intentionally not 2. Must match NCCL_NET_DEVICE_GIN_GDAKI for backward compatibility

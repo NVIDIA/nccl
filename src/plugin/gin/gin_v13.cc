@@ -26,7 +26,7 @@ static ncclResult_t ncclGin_connect(void* ctx, void* handles[], int nranks, int 
   return ncclGin_v13->connect(ctx, handles, nranks, rank, listenComm, collComm);
 }
 
-static ncclResult_t ncclGin_createContext(void* collComm, ncclGinConfig_v15_t* config, void** ginCtx,
+static ncclResult_t ncclGin_createContext(void* collComm, ncclGinConfig_v16_t* config, void** ginCtx,
                                           ncclNetDeviceHandle_v11_t** devHandle) {
   ncclGinConfig_v13_t config_v13;
   memset(&config_v13, 0, sizeof(config_v13));

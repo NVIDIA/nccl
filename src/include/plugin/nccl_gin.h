@@ -30,12 +30,13 @@
 #include "gin/gin_v13.h"
 #include "gin/gin_v14.h"
 #include "gin/gin_v15.h"
+#include "gin/gin_v16.h"
 
-typedef ncclGin_v15_t ncclGin_t;
-typedef ncclGinConfig_v15_t ncclGinConfig_t;
-typedef ncclGinProperties_v15_t ncclGinProperties_t;
+typedef ncclGin_v16_t ncclGin_t;
+typedef ncclGinConfig_v16_t ncclGinConfig_t;
+typedef ncclGinProperties_v16_t ncclGinProperties_t;
 
-#define NCCL_GIN_PLUGIN_SYMBOL ncclGinPlugin_v15
+#define NCCL_GIN_PLUGIN_SYMBOL ncclGinPlugin_v16
 #endif
 
 #endif // end include guard

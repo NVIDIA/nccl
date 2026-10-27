@@ -82,6 +82,7 @@ typedef struct ncclDevCommRequirements {
   // appearing in rank i's ginCustomArray requires peer i to appear in rank j's ginCustomArray).
   int* ginCustomArray;
   int ginCustomArrayCount;
+  ncclGinSpecialization_t ginSpecializations;
 } ncclDevCommRequirements_t;
 
 // clang-format off: maintain hand-formatted code
@@ -115,6 +116,7 @@ typedef struct ncclDevCommRequirements {
     0,                                           /* cftBarrierCount */         \
     NULL,                                        /* ginCustomArray */         \
     0,                                           /* ginCustomArrayCount */    \
+    NCCL_GIN_SPECIALIZATION_NONE,                /* ginSpecializations */     \
 }
 // clang-format on
 

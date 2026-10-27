@@ -837,6 +837,11 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   int ib_gid_index = 0;
   uint32_t qpn, qpn_companion;
 
+  if (nicHandler == DOCA_GPUNETIO_VERBS_NIC_HANDLER_AUTO &&
+      config->specializations & NCCL_GIN_SPECIALIZATION_FAST_SUBMISSION) {
+    nicHandler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW;
+  }
+
   NCCLCHECK(cComm->getProperties(cComm->dev, &props));
 
   NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->allocate(ncontexts * NCCL_GIN_GDAKI_GPU_CONTEXT_MAX_SIZE), status, out);

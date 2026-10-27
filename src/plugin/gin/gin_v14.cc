@@ -30,7 +30,7 @@ static ncclResult_t ncclGin_v14_getGinProperties(ncclGinProperties_t* ginProps) 
   return ncclSuccess;
 }
 
-static ncclResult_t ncclGin_v14_createContext(void* collComm, ncclGinConfig_v15_t* config, void** ginCtx,
+static ncclResult_t ncclGin_v14_createContext(void* collComm, ncclGinConfig_v16_t* config, void** ginCtx,
                                               ncclNetDeviceHandle_v11_t** devHandle) {
   ncclGinConfig_v14_t config_v14;
   memset(&config_v14, 0, sizeof(config_v14));

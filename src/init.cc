@@ -1160,6 +1160,8 @@ cleanup:
   return ret;
 }
 
+// Net plugin name as exchanged across ranks; every rank truncates the same way, so the comparison stays exact.
+#define NCCL_NET_NAME_LEN 32
 static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* parent,
                                        uint64_t timers[TIMERS_INIT_COUNT]) {
   // We use 2 AllGathers
@@ -1203,6 +1205,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     float localNetBw;
     int localCollNetCount;
     int isAllNvlink;
+    char netName[NCCL_NET_NAME_LEN];
   };
 
   int nChannelsOrig;
@@ -1519,6 +1522,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   allGather3Data[rank].p2pMaxPeers = comm->p2pMaxPeers;
 
   allGather3Data[rank].localNetDeviceCount = localNetDeviceCount;
+  strncpy(allGather3Data[rank].netName, comm->ncclNet->name, sizeof(allGather3Data[rank].netName) - 1);
   allGather3Data[rank].localNetCountByBw = localNetCountByBw;
   allGather3Data[rank].localNetBw = localNetBw;
   allGather3Data[rank].localCollNetCount = localCollNetCount;
@@ -1567,6 +1571,19 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->minNetCount = std::min(comm->minNetCount, allGather3Data[r].localNetCountByBw);
     comm->minLocalNetBw = std::min(comm->minLocalNetBw, allGather3Data[r].localNetBw);
   }
+  // Ranks that fell back to a different net plugin can never connect to the others (the connect handles differ);
+  // refuse the communicator here instead of failing at the first collective with a generic network error.
+  if (comm->nNodes > 1) {
+    for (int r = 0; r < nranks; r++) {
+      if (strncmp(allGather3Data[r].netName, allGather3Data[rank].netName, sizeof(allGather3Data[r].netName)) != 0) {
+        WARN("Rank %d uses net plugin %s but rank %d uses %s; all ranks must use the same net plugin", rank,
+             allGather3Data[rank].netName, r, allGather3Data[r].netName);
+        ret = ncclSystemError;
+        goto fail;
+      }
+    }
+  }
+
   if (rank == 0) {
     INFO(NCCL_INIT, "Local Net device counts across ranks: min %d max %d", minLocalNetCount, maxLocalNetCount);
     INFO(NCCL_INIT, "Local CollNet device counts across ranks: min %d max %d", minLocalCollNetCount,

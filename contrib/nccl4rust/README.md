@@ -26,6 +26,7 @@ and does not inherit NCCL core's release-quality guarantees.
 | `shim/` | CUDA C++ C-ABI shim built exclusively from public `nccl.h` and `nccl_device.h` |
 | `tests/cuda-oxide-smoke` | Compile-and-link smoke kernels for the Rust/device-shim boundary |
 | `tests/runtime-smoke` | One-process, two-GPU host collective and device-kernel runtime validation |
+| `examples/allreduce` | Minimal multi-node host all-reduce launched with one process per GPU |
 
 The split is intentional. Host applications can use `nccl` without a Rust GPU
 compiler. CUDA-Oxide kernels use `nccl-device`; raw consumers can opt into the

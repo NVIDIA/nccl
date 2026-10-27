@@ -1,0 +1,24 @@
+[package]
+name = "nccl4rust-allreduce"
+description = "Minimal multi-node NCCL all-reduce example for nccl4rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+nccl = { path = "../../crates/nccl" }
+# Only the CUDA driver API (context, stream, memory); NCCL calls go through nccl4rust.
+cudarc = { version = "0.19.10", default-features = false, features = [
+    "std",
+    "driver",
+    "cuda-13000",
+    "dynamic-loading",
+] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"

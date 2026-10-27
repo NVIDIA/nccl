@@ -3041,7 +3041,7 @@ static ncclResult_t rmaTaskAppend(struct ncclComm* comm, struct ncclInfo* info) 
     }
   } else if (info->coll == ncclFuncWaitSignal) {
     // Check if signalDescs is valid
-    if (info->signalDescs == NULL || info->nDesc == 0) {
+    if (info->signalDescs == NULL || info->nDesc <= 0) {
       WARN("ncclWaitSignal: invalid arguments");
       return ncclInvalidArgument;
     }

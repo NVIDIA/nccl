@@ -271,6 +271,15 @@ static bool ncclGenkGinAvailable(struct ncclComm* comm) {
 
 extern int64_t ncclParamSymCTAs();
 
+static bool ncclSymkGinAvailable(struct ncclComm* comm) {
+  if (!ncclParamSymGinKernelsEnable() || comm->globalGinSupport == NCCL_GIN_CONNECTION_NONE) return false;
+
+  // Host-rail connectivity does not necessarily cover the LSA-derived device rail.
+  int connectedStride = comm->globalGinSupport == NCCL_GIN_CONNECTION_FULL ? 1 : comm->contiguousRanksPerHost;
+  int railStride = ncclTeamRail(comm).stride;
+  return connectedStride > 0 && railStride > 0 && railStride % connectedStride == 0;
+}
+
 bool ncclSymkTmaAvailable(struct ncclComm* comm) {
   // TMA requires up to (8KB data + 8B mbarrier + alignment) x 16 warps SMEM.
   // SMEM is partitioned across the 16 warps such that each warp gets ncclTmaShmemScratchWarpSize() bytes.
@@ -410,7 +419,7 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
     struct ncclDevResourceRequirements ginOutboxReq = {};
     struct ncclDevResourceRequirements rsGinAccumReq = {};
     struct ncclDevResourceRequirements railSignalReq = {};
-    if (ncclParamSymGinKernelsEnable() && lsaRanks < comm->nRanks) {
+    if (ncclSymkGinAvailable(comm) && lsaRanks < comm->nRanks) {
       ncclSymkKernelMask enabledGinKernels = kernelMask_GinOnly | kernelMask_A2A;
       bool needAlltoAllGin = (enabledGinKernels & kernelMask_A2A) != 0 &&
                              comm->globalGinSupport == NCCL_GIN_CONNECTION_FULL && symk->alltoAllLLProvisionBytes != 0;
@@ -593,7 +602,7 @@ ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   if (!comm->isAllDirectNvlink) kmask &= kernelMask_Genk;
   if (ncclParamSymGenkEnable() == 0 || comm->minCompCap < 90) kmask &= ~kernelMask_Genk;
 
-  bool const hasGin = ncclParamSymGinKernelsEnable() != 0;
+  bool const hasGin = ncclSymkGinAvailable(comm);
   bool const hasMultipleLsaTeams = ncclTeamLsa(comm).nRanks < comm->nRanks;
   if (hasMultipleLsaTeams) {
     kmask &= kernelMask_GinCapable | kernelMask_A2A;

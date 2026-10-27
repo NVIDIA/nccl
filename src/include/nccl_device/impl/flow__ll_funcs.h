@@ -129,7 +129,8 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
   bool const isWorker = role == RoleWorker || role == RoleSendWait || role == RoleRecvWait;
   int const chunkSendPeers = Send ? nSendPeers : 0;
   int const chunkRecvPeers = Recv ? nRecvPeers : 0;
-  bool const isPost = (Send && role == RoleSendPost) || (Recv && role == RoleRecvPost);
+  bool const isPostSend = (Send && role == RoleSendPost);
+  bool const isPostRecv = (Recv && role == RoleRecvPost);
   assert((stepSize * sliceSteps) % sizeof(ncclLLFifoLine) == 0);
   assert(0 <= nLines && nLines <= sliceLines);
   assert(0 <= nSrc && nSrc <= 1);
@@ -138,6 +139,9 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
   assert(0 < nDst + chunkSendPeers);
 
   if (isWorker) {
+    void* sendBuf[NCCL_FLOW_MAX_PEERS];
+    void* recvBuf[NCCL_FLOW_MAX_PEERS];
+    uint32_t sendFlag[NCCL_FLOW_MAX_PEERS], recvFlag[NCCL_FLOW_MAX_PEERS];
     if (Send && role == RoleSendWait) {
       shmem.sendBuf[rolePeer] = backend.waitSend();
       shmem.sendFlag[rolePeer] = backend.stepFlag();
@@ -147,6 +151,18 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
       shmem.recvFlag[rolePeer] = backend.stepFlag();
     }
     workers.sync();
+    if NCCL_IF_CONSTEXPR (Send) {
+      for (int peer = 0; peer < chunkSendPeers; peer++) {
+        sendBuf[peer] = shmem.sendBuf[peer];
+        sendFlag[peer] = (uint32_t)shmem.sendFlag[peer];
+      }
+    }
+    if NCCL_IF_CONSTEXPR (Recv) {
+      for (int peer = 0; peer < chunkRecvPeers; peer++) {
+        recvBuf[peer] = shmem.recvBuf[peer];
+        recvFlag[peer] = (uint32_t)shmem.recvFlag[peer];
+      }
+    }
 
     int srcMisalign4 = 0, dstMisalign4 = 0;
     if NCCL_IF_CONSTEXPR (sizeof(T) < 4) {
@@ -155,50 +171,62 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
     }
 
     int line = workers.thread_rank();
-    for (; line < nLines; line += workers.size()) {
-      int const eltOffset = line * EltPerLine;
-      int const remainingElts = (int)nElts - eltOffset;
+    int const eltOffset = line * EltPerLine;
+    int const eltIncrement = workers.size() * EltPerLine;
+    T* src;
+    if (nSrc != 0) src = srcLambda(0) + eltOffset;
+    T* dst;
+    if (nDst != 0) dst = dstLambda(0) + eltOffset;
+    for (int remainingElts = (int)nElts - eltOffset; remainingElts > 0;
+         remainingElts -= eltIncrement, line += workers.size()) {
       int const lineElts = EltPerLine < remainingElts ? EltPerLine : remainingElts;
-      uint64_t data = 0;
-      bool dataValid = false;
-      if (nSrc != 0) {
+      uint64_t data;
+      bool dataValid = (nSrc != 0);
+      if (dataValid) {
         ncclFlowLLDataLoader<T> loader;
-        loader.begin(srcLambda(0) + eltOffset, lineElts, srcMisalign4);
+        loader.begin(src, lineElts, srcMisalign4);
+        src += eltIncrement;
         data = loader.finish();
-        dataValid = true;
       }
-      for (int peer = 0; peer < chunkRecvPeers; peer++) {
-        uint64_t const peerData =
-          ncclFlowLLLoad((ncclLLFifoLine*)shmem.recvBuf[peer] + line, (uint32_t)shmem.recvFlag[peer], abortFlag);
-        data = dataValid ? backend.operations.reducePacked(redOp, peerData, data) : peerData;
-        dataValid = true;
+      if NCCL_IF_CONSTEXPR (Recv) {
+        for (int peer = 0; peer < chunkRecvPeers; peer++) {
+          uint64_t const peerData = ncclFlowLLLoad((ncclLLFifoLine*)recvBuf[peer] + line, recvFlag[peer], abortFlag);
+          data = dataValid ? backend.operations.reducePacked(redOp, peerData, data) : peerData;
+          dataValid = true;
+        }
       }
-      for (int peer = 0; peer < chunkSendPeers; peer++) {
-        ncclFlowLLStore((ncclLLFifoLine*)shmem.sendBuf[peer] + line, data, (uint32_t)shmem.sendFlag[peer]);
+      if NCCL_IF_CONSTEXPR (Send) {
+        for (int peer = 0; peer < chunkSendPeers; peer++) {
+          ncclFlowLLStore((ncclLLFifoLine*)sendBuf[peer] + line, data, sendFlag[peer]);
+        }
       }
-      if (nDst != 0) ncclFlowLLStoreData(dstLambda(0) + eltOffset, data, lineElts, dstMisalign4);
+      if (nDst != 0) {
+        ncclFlowLLStoreData(dst, data, lineElts, dstMisalign4);
+        dst += eltIncrement;
+      }
     }
 
-    for (int peer = 0; peer < chunkSendPeers; peer++) {
-      if (ncclFlowLLNeedsCleanup((uint32_t)shmem.sendFlag[peer], nSlices)) {
-        for (int cleanLine = line; cleanLine < sliceLines; cleanLine += workers.size()) {
-          ncclFlowLLStore((ncclLLFifoLine*)shmem.sendBuf[peer] + cleanLine, 0, (uint32_t)shmem.sendFlag[peer]);
+    if NCCL_IF_CONSTEXPR (Send) {
+      for (int peer = 0; peer < chunkSendPeers; peer++) {
+        if (ncclFlowLLNeedsCleanup(sendFlag[peer], nSlices)) {
+          for (int cleanLine = line; cleanLine < sliceLines; cleanLine += workers.size()) {
+            ncclFlowLLStore((ncclLLFifoLine*)sendBuf[peer] + cleanLine, 0, sendFlag[peer]);
+          }
         }
       }
     }
-  } else if (isPost) {
+  } else if (isPostSend || isPostRecv) {
     backend.advanceStep();
   }
   partThreads.sync();
-  if (isPost) {
-    if (role == RoleSendPost) {
-      size_t const sendBytes = ncclFlowLLNeedsCleanup((uint32_t)backend.stepFlag(), nSlices) ?
-                                 stepSize * sliceSteps :
-                                 (size_t)nLines * sizeof(ncclLLFifoLine);
-      backend.postSend(sendBytes);
-    } else {
-      backend.postRecv();
-    }
+  if (isPostSend) {
+    size_t const sendBytes = ncclFlowLLNeedsCleanup((uint32_t)backend.stepFlag(), nSlices) ?
+                               stepSize * sliceSteps :
+                               (size_t)nLines * sizeof(ncclLLFifoLine);
+    backend.postSend(sendBytes);
+  }
+  if (isPostRecv) {
+    backend.postRecv();
   }
 }
 #endif

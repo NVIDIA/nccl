@@ -174,10 +174,13 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
   bool const isWorker = role == RoleWorker || role == RoleSendWait || role == RoleRecvWait;
   int const chunkSendPeers = Send ? nSendPeers : 0;
   int const chunkRecvPeers = Recv ? nRecvPeers : 0;
-  bool const isPost = (Send && role == RoleSendPost) || (Recv && role == RoleRecvPost);
+  bool const isPostSend = (Send && role == RoleSendPost);
+  bool const isPostRecv = (Recv && role == RoleRecvPost);
   assert((size_t)nDataElts == nElts);
   assert(workers.size() % 32 == 0);
+#ifndef NDEBUG
   int const sliceSteps = ncclFlowFifoSlots / nSlices;
+#endif
   assert((stepSize * sliceSteps) % NCCL_LL128_LINESIZE == 0);
   assert(wireBytes <= stepSize * sliceSteps);
   assert(0 <= nSrc && nSrc <= 1);
@@ -186,6 +189,9 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
   assert(0 < nDst + chunkSendPeers);
 
   if (isWorker) {
+    void* sendBuf[NCCL_FLOW_MAX_PEERS];
+    void* recvBuf[NCCL_FLOW_MAX_PEERS];
+    uint32_t sendFlag[NCCL_FLOW_MAX_PEERS], recvFlag[NCCL_FLOW_MAX_PEERS];
     if (Send && role == RoleSendWait) {
       shmem.sendBuf[rolePeer] = backend.waitSend();
       shmem.sendFlag[rolePeer] = backend.stepFlag();
@@ -195,6 +201,18 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
       shmem.recvFlag[rolePeer] = backend.stepFlag();
     }
     workers.sync();
+    if NCCL_IF_CONSTEXPR (Send) {
+      for (int peer = 0; peer < chunkSendPeers; peer++) {
+        sendBuf[peer] = shmem.sendBuf[peer];
+        sendFlag[peer] = (uint32_t)shmem.sendFlag[peer];
+      }
+    }
+    if NCCL_IF_CONSTEXPR (Recv) {
+      for (int peer = 0; peer < chunkRecvPeers; peer++) {
+        recvBuf[peer] = shmem.recvBuf[peer];
+        recvFlag[peer] = (uint32_t)shmem.recvFlag[peer];
+      }
+    }
 
     int srcMisalign16 = 0, dstMisalign16 = 0, dstMisalign4 = 0;
     if (nSrc != 0) {
@@ -211,45 +229,53 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
     bool const flagThread = lane % (NCCL_LL128_LINEELEMS / 2) == NCCL_LL128_LINEELEMS / 2 - 1;
     int eltOffset = DataEltsPerWarp * warp;
     int wireOffset = WireWordsPerWarp * warp + 2 * lane;
-    for (; eltOffset < nDataElts;
-         eltOffset += DataEltsPerWarp * nWorkerWarps, wireOffset += WireWordsPerWarp * nWorkerWarps) {
-      int const remaining = nDataElts - eltOffset;
+    int const eltIncrement = DataEltsPerWarp * nWorkerWarps;
+    int const wireIncrement = WireWordsPerWarp * nWorkerWarps;
+    T* src;
+    if (nSrc != 0) src = srcLambda(0) + eltOffset;
+    T* dst;
+    if (nDst != 0) dst = dstLambda(0) + eltOffset;
+    for (int remaining = nDataElts - eltOffset; remaining > 0;
+         remaining -= eltIncrement, eltOffset += eltIncrement, wireOffset += wireIncrement) {
       int const sliceElts = remaining < DataEltsPerWarp ? remaining : DataEltsPerWarp;
-      uint64_t data[NCCL_LL128_SHMEM_ELEMS_PER_THREAD] = {};
+      uint64_t data[NCCL_LL128_SHMEM_ELEMS_PER_THREAD];
       uint64_t peerData[NCCL_LL128_SHMEM_ELEMS_PER_THREAD];
       bool dataValid = nSrc != 0;
       if (dataValid) {
-        ncclFlowLL128LoadDataBegin(data, srcLambda(0) + eltOffset, sliceElts, lane, flagThread, srcMisalign16);
+        ncclFlowLL128LoadDataBegin(data, src, sliceElts, lane, flagThread, srcMisalign16);
+        src += eltIncrement;
       }
 
-      for (int peer = 0; peer < chunkRecvPeers; peer++) {
-        ncclFlowLL128LoadWire(peerData, (uint64_t*)shmem.recvBuf[peer] + wireOffset, shmem.recvFlag[peer], flagThread,
-                              abortFlag);
-        if (peer == 0 && dataValid) ncclFlowLL128LoadDataFinish(data, flagThread);
-        NVCC_PRAGMA_UNROLL_AUTO
-        for (int u = 0; u < NCCL_LL128_SHMEM_ELEMS_PER_THREAD; u++) {
-          data[u] = dataValid ? backend.operations.reducePacked(redOp, peerData[u], data[u]) : peerData[u];
+      if NCCL_IF_CONSTEXPR (Recv) {
+        for (int peer = 0; peer < chunkRecvPeers; peer++) {
+          ncclFlowLL128LoadWire(peerData, (uint64_t*)recvBuf[peer] + wireOffset, recvFlag[peer], flagThread, abortFlag);
+          if (peer == 0 && dataValid) ncclFlowLL128LoadDataFinish(data, flagThread);
+          NVCC_PRAGMA_UNROLL_AUTO
+          for (int u = 0; u < NCCL_LL128_SHMEM_ELEMS_PER_THREAD; u++) {
+            data[u] = dataValid ? backend.operations.reducePacked(redOp, peerData[u], data[u]) : peerData[u];
+          }
+          dataValid = true;
         }
-        dataValid = true;
+      } else if (dataValid) {
+        ncclFlowLL128LoadDataFinish(data, flagThread);
       }
-      if (chunkRecvPeers == 0 && dataValid) ncclFlowLL128LoadDataFinish(data, flagThread);
 
-      for (int peer = 0; peer < chunkSendPeers; peer++) {
-        ncclFlowLL128StoreWire((uint64_t*)shmem.sendBuf[peer] + wireOffset, data, shmem.sendFlag[peer], flagThread);
+      if NCCL_IF_CONSTEXPR (Send) {
+        for (int peer = 0; peer < chunkSendPeers; peer++) {
+          ncclFlowLL128StoreWire((uint64_t*)sendBuf[peer] + wireOffset, data, sendFlag[peer], flagThread);
+        }
       }
       if (nDst != 0) {
-        ncclFlowLL128StoreData(dstLambda(0) + eltOffset, data, sliceElts, lane, flagThread, dstMisalign16,
-                               dstMisalign4);
+        ncclFlowLL128StoreData(dst, data, sliceElts, lane, flagThread, dstMisalign16, dstMisalign4);
+        dst += eltIncrement;
       }
     }
-  } else if (isPost) {
+  } else if (isPostSend || isPostRecv) {
     backend.advanceStep();
   }
   partThreads.sync();
-  if (isPost) {
-    if (role == RoleSendPost) backend.postSend(wireBytes);
-    else backend.postRecv();
-  }
+  if (isPostSend) backend.postSend(wireBytes);
+  if (isPostRecv) backend.postRecv();
 }
 #endif
 

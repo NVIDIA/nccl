@@ -57,7 +57,6 @@ option(SYM_GENK "Compile GENK kernels" OFF)
 option(NCCL_EXACT_KERNEL_NAMES "Use one CUDA kernel wrapper per NCCL device function" OFF)
 option(NCCL_EMIT_LTO_IR "Generate LTO IR for device APIs" OFF)
 option(BUILD_NCCL4PY "Enable nccl4py Python bindings targets" OFF)
-option(BUILD_NCCL_EP "Build NCCL EP contrib library" OFF)
 
 # CMAKE_BUILD_TYPE=Debug is equivalent to -DDEBUG=ON, and vice versa (case-insensitive).
 string(TOUPPER "${CMAKE_BUILD_TYPE}" _NCCL_BUILD_TYPE_UC)
@@ -368,10 +367,6 @@ endif()
 
 if(BUILD_NCCL4PY)
   add_subdirectory(bindings/nccl4py)
-endif()
-
-if(BUILD_NCCL_EP)
-  add_subdirectory(contrib/nccl_ep)
 endif()
 
 ###################### CMake package config for find_package(NCCL) ######################

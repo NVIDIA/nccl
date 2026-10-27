@@ -72,15 +72,18 @@ coverage are follow-on work.
 
 ## Requirements
 
-- Matching NCCL 2.31 headers and runtime. This prototype is developed against
-  NCCL 2.31.0 and directly initializes fields that differ in earlier NCCL
-  device-API versions.
+- Matching NCCL 2.32 headers and runtime. This prototype is developed against
+  NCCL 2.32 and directly initializes fields that differ in earlier NCCL
+  host- and device-API versions.
 - CUDA Toolkit 12.2 or newer for the Hopper flow. The optional `sm_100+`
   Blackwell flow requires CUDA 12.8 or newer; current checks use CUDA 13.2.
 - Rust 1.85+ for host crates.
 - A CUDA-Oxide-compatible nightly toolchain and LLVM 21+ (`llc`) for device
   kernels.
-- Clang/libclang for `bindgen`.
+- Clang/libclang for `bindgen`. libclang 19 is known to work. With libclang 18,
+  `bindgen` emits one-byte opaque types for complete public structures such as
+  `ncclTeam` and `ncclDevComm`, and the `nccl` crate does not compile; point
+  `LIBCLANG_PATH` at a newer libclang.
 - CMake and a C++17-capable host compiler for NCCL headers.
 
 Multimem requires appropriate Hopper-or-newer NVLink hardware. GIN will add
@@ -251,17 +254,17 @@ communicators do not require per-module registration.
 
 ## Validation status
 
-The public-header CUDA shim is compile-checked for `sm_90` with CUDA 13.2, and
+The public-header CUDA shim is compile-checked for `sm_90` with CUDA 13.0, and
 its output has the expected raw LTOIR magic (`ed 43 4e 7f`). CUDA-Oxide's Rust
 PTX and that shim LTOIR also link successfully into a native `sm_90` cubin. The
 link smoke verifies that all 16 shim identifiers survive code generation. Host
 binding and wrapper tests cover raw ABI signatures, public-structure layout,
 every initial device wrapper's argument mapping, and invalid or overflowing
 device-communicator requirements. They pass against matching freshly built
-NCCL 2.31 headers and `libnccl.so`, including a loaded-library version check.
+NCCL 2.32 headers and `libnccl.so`, including a loaded-library version check.
 
-The runtime smoke passes repeatedly on two directly connected H100 GPUs with
-NCCL 2.31.0 and CUDA 13.2. Both host and device reductions return `3.0` on
+The runtime smoke passes on two directly connected H100 GPUs with NCCL 2.32.6
+and CUDA 13.0. Both host and device reductions return `3.0` on
 both ranks; the kernels also validate scalar queries, world/LSA/rail teams and
 rank translation, local/LSA/world/team self-pointer mappings at two offsets,
 two reused LSA barrier epochs, a 17-element non-16-byte-aligned reduction tail,

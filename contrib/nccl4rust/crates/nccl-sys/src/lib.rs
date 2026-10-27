@@ -71,14 +71,14 @@ mod tests {
         assert_eq!(size_of::<ncclTeam_t>(), 12);
         assert_eq!(align_of::<ncclTeam_t>(), 4);
 
-        // The exact values below cover the NCCL 2.31.0 public ABI in this
+        // The exact values below cover the NCCL 2.32 public ABI in this
         // source tree. These checks also catch bindgen regressions that
         // accidentally turn complete public C++ structures into one-byte
         // opaque types.
-        if NCCL_VERSION_CODE == 23100 && cfg!(target_pointer_width = "64") {
-            assert_eq!(size_of::<ncclConfig_t>(), 112);
-            assert_eq!(size_of::<ncclDevCommRequirements_t>(), 120);
-            assert_eq!(size_of::<ncclCommProperties_t>(), 144);
+        if NCCL_VERSION_CODE / 100 == 232 && cfg!(target_pointer_width = "64") {
+            assert_eq!(size_of::<ncclConfig_t>(), 120);
+            assert_eq!(size_of::<ncclDevCommRequirements_t>(), 136);
+            assert_eq!(size_of::<ncclCommProperties_t>(), 152);
             assert_eq!(size_of::<ncclDevComm_t>(), 248);
         }
     }

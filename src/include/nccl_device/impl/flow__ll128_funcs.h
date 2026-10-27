@@ -26,7 +26,7 @@ NCCL_DEVICE_INLINE uint64_t ncclFlowLL128LoadDataWord(T* src, int nElts) {
   if (nElts <= 0) return 0;
   constexpr int EltPerWord = sizeof(uint64_t) / sizeof(T);
   ncclFlowLLDataLoader<T> loader;
-  loader.begin(src, nElts < EltPerWord ? nElts : EltPerWord);
+  loader.begin(src, nElts < EltPerWord ? nElts : EltPerWord, reinterpret_cast<uintptr_t>(src) % 4);
   return loader.finish();
 }
 
@@ -87,9 +87,12 @@ NCCL_DEVICE_INLINE void ncclFlowLL128StoreData(T* dst, uint64_t (&data)[NCCL_LL1
         int const loElts = remaining < EltPerWord ? remaining : EltPerWord;
         int const hiRemaining = remaining - EltPerWord;
         int const hiElts = hiRemaining < EltPerWord ? hiRemaining : EltPerWord;
-        if (loElts > 0) ncclFlowLLStoreData(dst + eltOffset, data[2 * g], loElts);
+        if (loElts > 0) {
+          ncclFlowLLStoreData(dst + eltOffset, data[2 * g], loElts, reinterpret_cast<uintptr_t>(dst + eltOffset) % 4);
+        }
         if (hiElts > 0) {
-          ncclFlowLLStoreData(dst + eltOffset + EltPerWord, data[2 * g + 1], hiElts);
+          ncclFlowLLStoreData(dst + eltOffset + EltPerWord, data[2 * g + 1], hiElts,
+                              reinterpret_cast<uintptr_t>(dst + eltOffset + EltPerWord) % 4);
         }
       }
     }

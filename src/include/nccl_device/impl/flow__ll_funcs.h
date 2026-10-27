@@ -61,40 +61,43 @@ NCCL_DEVICE_INLINE T ncclFlowLLLoadData(T* src) {
 template <typename T>
 struct ncclFlowLLDataLoader {
   static constexpr int EltPerLine = sizeof(uint64_t) / sizeof(T);
-  int misalign;
   union {
-    uint32_t u4[sizeof(T) <= 2 ? 3 : 2];
+    uint32_t u4[2];
     uint64_t u8;
     T elt[EltPerLine];
   };
 
-  NCCL_DEVICE_INLINE void begin(T* src, int nElts) {
-    if (sizeof(T) <= 2) {
-      misalign = reinterpret_cast<uintptr_t>(src) % 4;
-      uint32_t* ptr = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(src) & -uintptr_t(4));
-      u4[0] = ncclFlowLLLoadData(ptr + 0);
-      u4[1] = misalign + nElts * sizeof(T) > 4 ? ncclFlowLLLoadData(ptr + 1) : 0;
-      u4[sizeof(T) <= 2 ? 2 : 0] = misalign + nElts * sizeof(T) > 8 ? ncclFlowLLLoadData(ptr + 2) : 0;
-    } else {
-      NVCC_PRAGMA_UNROLL_AUTO
-      for (int i = 0; i < EltPerLine; i++) {
-        if (i == 0 || i < nElts) elt[i] = ncclFlowLLLoadData(src + i);
+  NCCL_DEVICE_INLINE void begin(T* src, int nElts, int misalign4) {
+    if NCCL_IF_CONSTEXPR (sizeof(T) < 4) {
+      if (misalign4 == 0) {
+        // This may over-read at the end of the source buffer, but we don't cross the alignment boundary, hence we also
+        // stay within the same page -- no fault possible.
+        u4[0] = ncclFlowLLLoadData((uint32_t*)src);
+        if (nElts * sizeof(T) > 4) u4[1] = ncclFlowLLLoadData((uint32_t*)src + 1);
+        return;
       }
+    }
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int i = 0; i < EltPerLine; i++) {
+      if (i == 0 || i < nElts) elt[i] = ncclFlowLLLoadData(src + i);
     }
   }
 
   NCCL_DEVICE_INLINE uint64_t finish() {
-    if (sizeof(T) <= 2) {
-      u4[0] = __funnelshift_r(u4[0], u4[1], 8 * misalign);
-      u4[1] = __funnelshift_r(u4[1], u4[sizeof(T) <= 2 ? 2 : 0], 8 * misalign);
-    }
     return u8;
   }
 };
 
 template <typename T>
-NCCL_DEVICE_INLINE void ncclFlowLLStoreData(T* dst, uint64_t data, int nElts) {
+NCCL_DEVICE_INLINE void ncclFlowLLStoreData(T* dst, uint64_t data, int nElts, int misalign4) {
   constexpr int EltPerLine = sizeof(uint64_t) / sizeof(T);
+  if NCCL_IF_CONSTEXPR (sizeof(T) < 4) {
+    if (nElts == EltPerLine && misalign4 == 0) {
+      ((uint32_t*)dst)[0] = (uint32_t)data;
+      ((uint32_t*)dst)[1] = (uint32_t)(data >> 32);
+      return;
+    }
+  }
   union {
     uint64_t u8;
     T elt[EltPerLine];
@@ -145,6 +148,12 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
     }
     workers.sync();
 
+    int srcMisalign4 = 0, dstMisalign4 = 0;
+    if NCCL_IF_CONSTEXPR (sizeof(T) < 4) {
+      if (nSrc != 0) srcMisalign4 = reinterpret_cast<uintptr_t>(srcLambda(0)) % 4;
+      if (nDst != 0) dstMisalign4 = reinterpret_cast<uintptr_t>(dstLambda(0)) % 4;
+    }
+
     int line = workers.thread_rank();
     for (; line < nLines; line += workers.size()) {
       int const eltOffset = line * EltPerLine;
@@ -154,7 +163,7 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
       bool dataValid = false;
       if (nSrc != 0) {
         ncclFlowLLDataLoader<T> loader;
-        loader.begin(srcLambda(0) + eltOffset, lineElts);
+        loader.begin(srcLambda(0) + eltOffset, lineElts, srcMisalign4);
         data = loader.finish();
         dataValid = true;
       }
@@ -167,7 +176,7 @@ NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process
       for (int peer = 0; peer < chunkSendPeers; peer++) {
         ncclFlowLLStore((ncclLLFifoLine*)shmem.sendBuf[peer] + line, data, (uint32_t)shmem.sendFlag[peer]);
       }
-      if (nDst != 0) ncclFlowLLStoreData(dstLambda(0) + eltOffset, data, lineElts);
+      if (nDst != 0) ncclFlowLLStoreData(dstLambda(0) + eltOffset, data, lineElts, dstMisalign4);
     }
 
     for (int peer = 0; peer < chunkSendPeers; peer++) {

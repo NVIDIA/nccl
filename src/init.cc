@@ -3152,7 +3152,7 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
              comm->commHash, comm->rank);
       }
     }
-    if (COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire) == 0) {
+    if (COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire) == 0 && !comm->shrinkAbortFlag) {
       int* hostRanks;
       int hostRank = 0;
       int nHostRanks = 0;
@@ -3658,6 +3658,7 @@ ncclResult_t ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeR
   // Handle error mode by setting abort flags and waiting for kernels to complete and unset the flags
   // to avoid bootstrap issues
   if (shrinkFlags & NCCL_SHRINK_ABORT) {
+    comm->shrinkAbortFlag = true;
     NCCLCHECKGOTO(setCommAbortFlags(comm, 1), res, exit);
     NCCLCHECKGOTO(ncclStrongStreamSynchronize(&comm->sharedRes->deviceStream), res, exit);
     NCCLCHECKGOTO(setCommAbortFlags(comm, 0), res, exit);

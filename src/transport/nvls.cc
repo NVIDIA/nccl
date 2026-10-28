@@ -16,6 +16,7 @@
 #include "transport.h"
 #include "register_inline.h"
 #include "dev_runtime.h"
+#include <limits.h>
 
 #if CUDART_VERSION >= 12010
 
@@ -62,13 +63,14 @@ NCCL_PARAM(NvlsTreeMaxChunkSize, "NVLSTREE_MAX_CHUNKSIZE", -2);
 //  -1: automatic (channel-major on Rubin and later within a single NVLink domain, default layout elsewhere)
 //   0: [head][dir][channel][slot]
 //   1: [channel][slot][head][dir]   (all streams of a channel at one step are contiguous)
+//   2: [slot][channel][head][dir]   (all streams of all channels at one step are contiguous)
 // Same allocation size and per-slot chunk size; only slot addressing changes.
 NCCL_PARAM(NvlsFifoLayout, "NVLS_FIFO_LAYOUT", -1);
 
 static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
   int64_t requested = ncclParamNvlsFifoLayout();
-  if (requested < -1 || requested > 1) {
-    WARN("NCCL_NVLS_FIFO_LAYOUT=%ld is invalid (expected -1, 0 or 1)", requested);
+  if (requested < -1 || requested > 2) {
+    WARN("NCCL_NVLS_FIFO_LAYOUT=%ld is invalid (expected -1, 0, 1 or 2)", requested);
     return ncclInvalidArgument;
   }
 
@@ -87,6 +89,26 @@ static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
     }
   }
   return ncclSuccess;
+}
+
+// Slot-to-slot stride of every NVLS staging FIFO: slot k of a stream lives at its offset + k * stride.
+static size_t ncclNvlsFifoSlotStride(int layout, int nHeads, int nChannels, int chunkSize) {
+  if (layout == 1) return (size_t)2 * nHeads * chunkSize;
+  if (layout == 2) return (size_t)nChannels * 2 * nHeads * chunkSize;
+  return (size_t)chunkSize;
+}
+
+// Byte offset of the first slot of stream (h, dir) on channel c.
+static size_t ncclNvlsFifoOffset(int layout, int nHeads, int nChannels, int chunkSize, int h, int dir, int c) {
+  if (layout == 1) return ((size_t)c * NCCL_STEPS * 2 * nHeads + (size_t)h * 2 + dir) * chunkSize;
+  if (layout == 2) return ((size_t)c * 2 * nHeads + (size_t)h * 2 + dir) * chunkSize;
+  return (((size_t)h * 2 + dir) * nChannels + c) * NCCL_STEPS * chunkSize;
+}
+
+static const char* ncclNvlsFifoLayoutName(int layout) {
+  if (layout == 1) return "channel-major [channel][slot][head][dir]";
+  if (layout == 2) return "step-major [slot][channel][head][dir]";
+  return "default [head][dir][channel][slot]";
 }
 
 // Returns optimal NVLSTree tuning parameters for VeraRubin multi-node configurations.
@@ -342,9 +364,9 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   nvlsPerRankSize = nChannels * 2 * buffSize;
   nvlsTotalSize = nvlsPerRankSize * nHeads;
   const int fifoLayout = resources->fifoLayout;
-  const size_t slotStride = fifoLayout ? (size_t)2 * nHeads * nvlsStepSize : (size_t)nvlsStepSize;
+  const size_t slotStride = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
   INFO(NCCL_INIT | NCCL_NVLS, "NVLS FIFO layout %d (%s) slotStride %zu", fifoLayout,
-       fifoLayout ? "channel-major [channel][slot][head][dir]" : "default [head][dir][channel][slot]", slotStride);
+       ncclNvlsFifoLayoutName(fifoLayout), slotStride);
 
   INFO(NCCL_INIT | NCCL_NVLS,
        "NVLS comm %p headRank %d nHeads %d nvlsRanks %d buffSize %zu nvlsPerRankSize %zu nvlsTotalSize %zu", comm,
@@ -371,10 +393,8 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
 
       // Byte offset of the first slot of stream (h, dir) on channel c. Slot k of the stream
       // then lives at offset + k * conn.stepSize (see ncclNvlsSetup for stepSize).
-      const size_t upOff = fifoLayout ? ((size_t)c * NCCL_STEPS * 2 * nHeads + (size_t)h * 2 + 0) * nvlsStepSize :
-                                        ((size_t)h * 2 * nChannels + c) * buffSize;
-      const size_t downOff = fifoLayout ? ((size_t)c * NCCL_STEPS * 2 * nHeads + (size_t)h * 2 + 1) * nvlsStepSize :
-                                          (((size_t)h * 2 + 1) * nChannels + c) * buffSize;
+      const size_t upOff = ncclNvlsFifoOffset(fifoLayout, nHeads, nChannels, nvlsStepSize, h, 0, c);
+      const size_t downOff = ncclNvlsFifoOffset(fifoLayout, nHeads, nChannels, nvlsStepSize, h, 1, c);
 
       // Reduce UC -> MC
       peer->send[1].conn.buffs[NCCL_PROTO_SIMPLE] = (char*)resources->dataUc.ptr + upOff;
@@ -504,9 +524,13 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     int nvlsStepSize = comm->nvlsChunkSize;
     int fifoLayout;
     NCCLCHECKGOTO(ncclNvlsGetFifoLayout(comm, &fifoLayout), res, fail);
-    // Slot-to-slot stride of every NVLS staging FIFO. Default: one chunk. Channel-major layout:
-    // one chunk for every (head, dir) stream, so slot k of a stream sits k rows away.
-    const int nvlsStepStride = fifoLayout ? (int)(2 * nHeads * nvlsStepSize) : nvlsStepSize;
+    const size_t nvlsStepStrideBytes = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
+    if (nvlsStepStrideBytes > (size_t)INT_MAX) {
+      WARN("NCCL_NVLS_FIFO_LAYOUT=%d slot stride %zu does not fit conn.stepSize", fifoLayout, nvlsStepStrideBytes);
+      res = ncclInvalidArgument;
+      goto fail;
+    }
+    const int nvlsStepStride = (int)nvlsStepStrideBytes;
 
     NCCLCHECKGOTO(ncclCalloc(&comm->nvlsResources, 1), res, fail);
     comm->nvlsResources->inited = false;

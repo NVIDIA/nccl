@@ -299,7 +299,7 @@ ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncc
         if (bestNonSymkTuning.algo != NCCL_ALGO_UNDEF && bestNonSymkTuning.proto != NCCL_PROTO_UNDEF &&
             bestNonSymkTuning.proto != NCCL_PROTO_LL) {
           // The best legacy result is not LL. Drop the symk LL result. The legacy one will be selected later.
-          bestTuning = NCCL_TUNING_RESULT_INIT;
+          bestTuning = bestNonSymkTuning;
         }
       }
     }

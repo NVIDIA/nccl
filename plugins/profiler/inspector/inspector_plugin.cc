@@ -331,7 +331,6 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
 
   collInfoPtr->commInfo = commInfo;
   collInfoPtr->collEvtTrk.sn = 0;
-  collInfoPtr->collEvtTrk.nChannels = collInfoPtr->nChannels;
   inspectorRecordEventTrace(collInfoPtr->collEvtTrk.evntTrace,
                             NCCL_INSP_EVT_TRK_OP_START, collInfoPtr);
 
@@ -364,7 +363,6 @@ static void inspectorPluginP2pInfoInit(struct inspectorP2pInfo **p2pInfo,
 
   p2pInfoPtr->commInfo = commInfo;
   p2pInfoPtr->sn = __atomic_add_fetch(&commInfo->p2pSeqNum, 1, __ATOMIC_RELAXED);
-  p2pInfoPtr->p2pEvtTrk.nChannels = p2pInfoPtr->nChannels;
   p2pInfoPtr->p2pEvtTrk.sn = p2pInfoPtr->sn;
   inspectorRecordP2pEventTrace(p2pInfoPtr->p2pEvtTrk.evntTrace,
                                NCCL_INSP_EVT_TRK_OP_START, p2pInfoPtr);
@@ -433,6 +431,7 @@ static void inspectorPluginKernelChInfoInitColl(struct inspectorKernelChInfo **k
     collInfo->tsStartUsec = kernelChInfoPtr->tsStartUsec;
   }
   collInfo->nKernelChStarted += 1;
+  collInfo->collEvtTrk.channelMask |= 1ULL << eDescr->kernelCh.channelId;
   inspectorPluginCollInfoRef(collInfo); //Pairs with Stop Kernel Event
 
   *kernelChInfo = kernelChInfoPtr;
@@ -463,6 +462,7 @@ static void inspectorPluginKernelChInfoInitP2p(struct inspectorKernelChInfo **ke
     p2pInfo->tsStartUsec = kernelChInfoPtr->tsStartUsec;
   }
   p2pInfo->nKernelChStarted += 1;
+  p2pInfo->p2pEvtTrk.channelMask |= 1ULL << eDescr->kernelCh.channelId;
   inspectorPluginP2pInfoRef(p2pInfo); //Pairs with Stop Kernel Event
 
   *kernelChInfo = kernelChInfoPtr;

@@ -103,7 +103,8 @@ static inline inspectorResult_t inspectorCompletedCollVerbose(jsonFileOutput* jf
 
     JSON_CHK(jsonKey(jfo, "kernel_events"));
     JSON_CHK(jsonStartList(jfo));
-    for (uint32_t ch = 0; ch < op->evtTrk.nChannels; ch++) {
+    for (uint32_t ch = 0; ch < MAX_CHANNELS; ch++) {
+      if (!(op->evtTrk.channelMask & (1ULL << ch))) continue;
       JSON_CHK(jsonStartObject(jfo));
       JSON_CHK(jsonKey(jfo, "channel_id")); JSON_CHK(jsonInt(jfo, ch));
       JSON_CHK(jsonKey(jfo, "kernel_start_sn")); JSON_CHK(jsonUint64(jfo, op->evtTrk.kernelCh[ch].evntTrace[NCCL_INSP_EVT_TRK_KERNEL_START].sn));
@@ -123,7 +124,8 @@ static inline inspectorResult_t inspectorCompletedCollVerbose(jsonFileOutput* jf
 
     JSON_CHK(jsonKey(jfo, "kernel_events"));
     JSON_CHK(jsonStartList(jfo));
-    for (uint32_t ch = 0; ch < op->evtTrk.nChannels; ch++) {
+    for (uint32_t ch = 0; ch < MAX_CHANNELS; ch++) {
+      if (!(op->evtTrk.channelMask & (1ULL << ch))) continue;
       JSON_CHK(jsonStartObject(jfo));
       JSON_CHK(jsonKey(jfo, "channel_id")); JSON_CHK(jsonInt(jfo, ch));
       JSON_CHK(jsonKey(jfo, "kernel_start_ts")); JSON_CHK(jsonUint64(jfo, op->evtTrk.kernelCh[ch].evntTrace[NCCL_INSP_EVT_TRK_KERNEL_START].ts));
@@ -148,7 +150,8 @@ static inline inspectorResult_t inspectorCompletedP2pVerbose(jsonFileOutput* jfo
 
     JSON_CHK(jsonKey(jfo, "kernel_events"));
     JSON_CHK(jsonStartList(jfo));
-    for (uint32_t ch = 0; ch < op->evtTrk.nChannels; ch++) {
+    for (uint32_t ch = 0; ch < MAX_CHANNELS; ch++) {
+      if (!(op->evtTrk.channelMask & (1ULL << ch))) continue;
       JSON_CHK(jsonStartObject(jfo));
       JSON_CHK(jsonKey(jfo, "channel_id")); JSON_CHK(jsonInt(jfo, ch));
       JSON_CHK(jsonKey(jfo, "kernel_start_sn")); JSON_CHK(jsonUint64(jfo, op->evtTrk.kernelCh[ch].evntTrace[NCCL_INSP_EVT_TRK_KERNEL_START].sn));
@@ -168,7 +171,8 @@ static inline inspectorResult_t inspectorCompletedP2pVerbose(jsonFileOutput* jfo
 
     JSON_CHK(jsonKey(jfo, "kernel_events"));
     JSON_CHK(jsonStartList(jfo));
-    for (uint32_t ch = 0; ch < op->evtTrk.nChannels; ch++) {
+    for (uint32_t ch = 0; ch < MAX_CHANNELS; ch++) {
+      if (!(op->evtTrk.channelMask & (1ULL << ch))) continue;
       JSON_CHK(jsonStartObject(jfo));
       JSON_CHK(jsonKey(jfo, "channel_id")); JSON_CHK(jsonInt(jfo, ch));
       JSON_CHK(jsonKey(jfo, "kernel_start_ts")); JSON_CHK(jsonUint64(jfo, op->evtTrk.kernelCh[ch].evntTrace[NCCL_INSP_EVT_TRK_KERNEL_START].ts));

@@ -133,10 +133,15 @@ struct inspectorEventTrkKernelInfo {
 // Unified event tracking for both collective and P2P operations.
 struct inspectorEventTrkOpInfo {
   int sn;
-  uint32_t nChannels;
+  // Bit c is set when channel c started a kernel for this operation.
+  // kernelCh[] is indexed by NCCL channel id, and an operation's channels
+  // need not be 0..nChannels-1: in a grouped launch, later operations start
+  // at a channel offset, and P2P channels start at a per-peer base.
+  uint64_t channelMask;
   struct inspectorEventTraceInfo evntTrace[NCCL_INSP_EVT_TRK_OP_NEVT];
   struct inspectorEventTrkKernelInfo kernelCh[MAX_CHANNELS];
 };
+static_assert(MAX_CHANNELS <= 64, "channelMask must hold one bit per channel");
 
 // Unified record stored in the completed ring buffer for both collective and
 // P2P operations.  The isP2p discriminator selects which op-type-specific

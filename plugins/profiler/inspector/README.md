@@ -390,6 +390,8 @@ export NCCL_INSPECTOR_DUMP_VERBOSE=1
 
 This will include additional event trace information in the JSON output, showing the sequence of callbacks and timestamps for each individual event.
 
+Each `kernel_events` entry describes one channel the operation ran on. `channel_id` is the NCCL channel id, so it does not always start at 0: in a grouped launch, later collectives start at a channel offset, and a Send or Recv starts at a channel base that depends on its peer.
+
 ```json
 {
   "header": {

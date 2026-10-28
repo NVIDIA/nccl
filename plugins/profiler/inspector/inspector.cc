@@ -1621,7 +1621,8 @@ static uint64_t calculateMaxKernelExecTimeUsecs(struct inspectorCollInfo *collIn
   uint64_t maxKernelExecTimeUsecs = 0;
   inspectorTimingSource_t bestTimingSource = inspectorTimingSourceCollectiveCpu;
 
-  for (uint32_t i = 0; i < collInfo->nChannels; i++) {
+  for (uint32_t i = 0; i < MAX_CHANNELS; i++) {
+    if (!(collInfo->collEvtTrk.channelMask & (1ULL << i))) continue;
     struct inspectorKernelChInfo *kernelCh = &collInfo->kernelCh[i];
     uint64_t gpuExecTimeUsecs = calculateKernelGpuExecTimeUsecs(kernelCh);
     if (gpuExecTimeUsecs > 0) {
@@ -1710,7 +1711,8 @@ static uint64_t calculateMaxKernelExecTimeUsecsP2p(struct inspectorP2pInfo *p2pI
   uint64_t maxExecTimeUsecs = 0;
   bool hasGpuTiming = false;
 
-  for (uint32_t i = 0; i < p2pInfo->nChannels; i++) {
+  for (uint32_t i = 0; i < MAX_CHANNELS; i++) {
+    if (!(p2pInfo->p2pEvtTrk.channelMask & (1ULL << i))) continue;
     struct inspectorKernelChInfo *kernelCh = &p2pInfo->kernelCh[i];
     uint64_t gpuExecTimeUsecs = calculateKernelGpuExecTimeUsecs(kernelCh);
 
@@ -1728,7 +1730,8 @@ static uint64_t calculateMaxKernelExecTimeUsecsP2p(struct inspectorP2pInfo *p2pI
   }
 
   // Fall back to CPU timestamps
-  for (uint32_t i = 0; i < p2pInfo->nChannels; i++) {
+  for (uint32_t i = 0; i < MAX_CHANNELS; i++) {
+    if (!(p2pInfo->p2pEvtTrk.channelMask & (1ULL << i))) continue;
     struct inspectorKernelChInfo *kernelCh = &p2pInfo->kernelCh[i];
     if (kernelCh->tsCompletedUsec > kernelCh->tsStartUsec) {
       uint64_t cpuExecTimeUsecs = kernelCh->tsCompletedUsec - kernelCh->tsStartUsec;

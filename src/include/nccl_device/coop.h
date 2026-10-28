@@ -68,7 +68,8 @@ struct ncclCoopLanes { // Some lanes of this warp.
 
 #ifdef __CUDACC__
 // A set of consecutive warps that the user has also supplied with a unique
-// id from [0..15]. It is an error for two different warp spans with the same
+// id from [0..14], mapped to barrier 1 + id (barrier 0 is used for CTA sync).
+// It is an error for two different warp spans with the same
 // id to be in a collective concurrently.
 struct ncclCoopWarpSpan {
   uint32_t warp0:8, nWarps:8, id:8;

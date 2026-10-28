@@ -1975,7 +1975,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     NCCLCHECKGOTO(ncclGinSetDefaultBackend(comm, globalGinTypeBitMask), ret, fail);
     if (globalCrossNicSupport) {
       comm->globalGinSupport = NCCL_GIN_CONNECTION_FULL;
-    } else if (comm->contiguousRanksPerHost != INT_MAX) {
+    } else if (comm->contiguousRanksPerHost != INT_MAX &&
+               computeLsaTeamSize(comm) % comm->contiguousRanksPerHost == 0) {
       comm->globalGinSupport = NCCL_GIN_CONNECTION_RAIL;
     }
   }

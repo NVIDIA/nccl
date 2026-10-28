@@ -380,13 +380,7 @@ NCCL_DEVICE_INLINE unsigned int lanemask_lt() {
 #endif
 
 #ifdef __CUDACC__
-#if !defined(__CUDACC_VER_MAJOR__) || !defined(__CUDACC_VER_MINOR__)
-#define NCCL_DEVICE_LOADCONST_USE_LDG 1
-#elif (__CUDACC_VER_MAJOR__ > 13) || ((__CUDACC_VER_MAJOR__ == 13) && (__CUDACC_VER_MINOR__ >= 4))
-#define NCCL_DEVICE_LOADCONST_USE_LDG 1
-#else
 #define NCCL_DEVICE_LOADCONST_USE_LDG 0
-#endif
 
 template <typename T>
 NCCL_DEVICE_INLINE T loadConstLdg(T const* p) {
@@ -438,7 +432,7 @@ NCCL_DEVICE_INLINE T loadConst(T const* p) {
   return *p;
 #endif
 }
-#endif
+#endif // __CUDACC__
 
 ////////////////////////////////////////////////////////////////////////////////
 // Optional<T>: Holds a T that may or may not be constructed. An Optional

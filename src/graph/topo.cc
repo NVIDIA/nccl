@@ -1016,6 +1016,9 @@ ncclResult_t ncclTopoAddPciLinks(struct ncclXmlNode* node, struct ncclTopoSystem
   return ncclSuccess;
 }
 
+NCCL_PARAM(TopoC2cMaxBw, "TOPO_C2C_MAX_BW", -1);
+#define NCCL_TOPO_RUBIN_C2C_MAX_BW 40600
+
 ncclResult_t ncclTopoAddC2c(struct ncclXmlNode* node, struct ncclTopoSystem* system, const char* parentBusId,
                             int systemId) {
   if (strcmp(node->name, "c2c") == 0) {
@@ -1034,6 +1037,9 @@ ncclResult_t ncclTopoAddC2c(struct ncclXmlNode* node, struct ncclTopoSystem* sys
     int linkCount = 0, bw = 0;
     NCCLCHECK(xmlGetAttrInt(node, "count", &linkCount));
     NCCLCHECK(xmlGetAttrInt(node, "bw", &bw));
+    int maxBw = ncclParamTopoC2cMaxBw();
+    if (maxBw <= 0) maxBw = RUBIN_AND_LATER(devNode->dev.cudaCompCap) ? NCCL_TOPO_RUBIN_C2C_MAX_BW : INT_MAX;
+    bw = std::min(bw, maxBw);
     float c2cBw = (bw * linkCount) / 1000.0;
     struct ncclTopoNode* cpu = NULL;
     NCCLCHECK(findLocalCpu(devNode, &cpu, NULL));

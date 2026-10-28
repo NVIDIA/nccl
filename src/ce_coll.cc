@@ -18,6 +18,9 @@
 // threshold decides multicast (sendSize <= threshold). -1 (unset) -> cost model.
 NCCL_PARAM(CeCollAgMulticastThreshold, "CE_COLL_AG_MULTICAST_THRESHOLD", -1);
 
+// Captured batch copies are opt-in until their performance benefits are fully understood.
+NCCL_PARAM(CeBatchCaptureEnable, "CE_BATCH_CAPTURE_ENABLE", 0);
+
 // Chunk size used when a cudaMemcpyBatchAsync CE data batch requests
 // round-robin chunking. Chunking is opt-in per batch.
 NCCL_PARAM(CeChunkSize, "CE_CHUNK_SIZE", 8 * 1024 * 1024);
@@ -510,15 +513,16 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
     NCCLCHECKGOTO(ncclCudaStreamIsLegacyNull(stream, &isLegacyStream), ret, fail);
   }
 
-  if (comm->rank == 0 && capturing && !isLegacyStream && CUDART_VERSION >= 12080 &&
+  if (comm->rank == 0 && capturing && ncclParamCeBatchCaptureEnable() && !isLegacyStream && CUDART_VERSION >= 12080 &&
       driverVersion >= CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION) {
     static int reported = 0;
     if (COMPILER_ATOMIC_EXCHANGE(&reported, 1, std::memory_order_relaxed) == 0)
       INFO(NCCL_INIT, "cudaMemcpyBatchAsync enabled under graph capture");
   }
 
-  // Fall back during capture on older drivers or with a legacy stream.
-  if ((capturing && (CUDART_VERSION < 12080 || driverVersion < CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION)) ||
+  // Fall back during capture unless batch copies are enabled and supported, or with a legacy stream.
+  if ((capturing && (!ncclParamCeBatchCaptureEnable() || CUDART_VERSION < 12080 ||
+                     driverVersion < CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION)) ||
       isLegacyStream) {
     for (int i = 0; i < params->numOps; i++) {
       CUDACHECKGOTO(cudaMemcpyAsync((void*)params->dsts[i], (void*)params->srcs[i], params->sizes[i],

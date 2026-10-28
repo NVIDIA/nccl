@@ -110,7 +110,7 @@ struct ncclConnInfo {
 
   int flags;          // Direct communication / other flags
   int shared;         // Buffers are shared
-  int stepSize;       // Step size for the SIMPLE buffer
+  uint32_t stepSize;  // Step size in bytes for the SIMPLE buffer
   void** ptrExchange; // Pointer exchange for direct communication
   uint64_t* redOpArgExchange; // PreOp scaler exchange for direct pull case
 

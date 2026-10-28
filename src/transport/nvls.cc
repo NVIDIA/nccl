@@ -16,7 +16,7 @@
 #include "transport.h"
 #include "register_inline.h"
 #include "dev_runtime.h"
-#include <limits.h>
+#include <stdint.h>
 
 #if CUDART_VERSION >= 12010
 
@@ -365,8 +365,8 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   nvlsTotalSize = nvlsPerRankSize * nHeads;
   const int fifoLayout = resources->fifoLayout;
   const size_t slotStride = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
-  INFO(NCCL_INIT | NCCL_NVLS, "NVLS FIFO layout %d (%s) slotStride %zu", fifoLayout,
-       ncclNvlsFifoLayoutName(fifoLayout), slotStride);
+  INFO(NCCL_INIT | NCCL_NVLS, "NVLS FIFO layout %d (%s) slotStride %zu", fifoLayout, ncclNvlsFifoLayoutName(fifoLayout),
+       slotStride);
 
   INFO(NCCL_INIT | NCCL_NVLS,
        "NVLS comm %p headRank %d nHeads %d nvlsRanks %d buffSize %zu nvlsPerRankSize %zu nvlsTotalSize %zu", comm,
@@ -525,12 +525,12 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     int fifoLayout;
     NCCLCHECKGOTO(ncclNvlsGetFifoLayout(comm, &fifoLayout), res, fail);
     const size_t nvlsStepStrideBytes = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
-    if (nvlsStepStrideBytes > (size_t)INT_MAX) {
+    if (nvlsStepStrideBytes > (size_t)UINT32_MAX) {
       WARN("NCCL_NVLS_FIFO_LAYOUT=%d slot stride %zu does not fit conn.stepSize", fifoLayout, nvlsStepStrideBytes);
       res = ncclInvalidArgument;
       goto fail;
     }
-    const int nvlsStepStride = (int)nvlsStepStrideBytes;
+    const uint32_t nvlsStepStride = (uint32_t)nvlsStepStrideBytes;
 
     NCCLCHECKGOTO(ncclCalloc(&comm->nvlsResources, 1), res, fail);
     comm->nvlsResources->inited = false;

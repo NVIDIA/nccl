@@ -42,7 +42,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
   T* directBuff = NULL;
   uint64_t* connStepPtr;
   uint64_t connStepCache; // Cache last seen value of (*connStepPtr)
-  int connStepSize; // Connection step size
+  uint32_t connStepSize; // Connection step size in elements
   void* netDeviceHandle;
   uint64_t accSize;
 

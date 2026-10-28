@@ -37,6 +37,8 @@ struct ncclTuningPipeline {
   size_t chunkSize;
   size_t sliceSize;
   size_t nSlices;
+  size_t fifoStepsNeeded;
+  float minFifoStepTime;
   ncclTuningPipelineStep intraStep;
   ncclTuningPipelineStep interStep;
 };

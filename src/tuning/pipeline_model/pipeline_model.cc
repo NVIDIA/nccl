@@ -27,7 +27,8 @@ static float pipelineModel(struct ncclTuningPipeline* const pipeline) {
   float delay = pipeline->sliceSize * std::max((pipeline->intraStep.stepCount > 0) / pipeline->intraStep.busBw,
                                                (pipeline->interStep.stepCount > 0) / pipeline->interStep.busBw);
   float totaltime = first + (pipeline->nSlices - 1) * delay;
-  return totaltime;
+  float ratelimit_time = pipeline->minFifoStepTime * pipeline->fifoStepsNeeded;
+  return std::max({totaltime, ratelimit_time});
 }
 
 ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
@@ -68,7 +69,7 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
         comm->graphs[tuning->algo].bwInter, comm->graphs[tuning->algo].nChannels);
 
   // Get one channel time using pipeline model
-  struct ncclTuningPipeline pipeline;
+  struct ncclTuningPipeline pipeline = {0};
   if (internal == nullptr || internal->pipeline.computePipeline == nullptr) return ncclInternalError;
   NCCLCHECK(internal->pipeline.computePipeline(inputs, tuning, &pipeline));
   if (pipeline.sliceSize == 0 || pipeline.nSlices == 0) return ncclInternalError;
@@ -95,11 +96,11 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
   TRACE(NCCL_TUNING,
         "a/p/c/s/n %s/%s/%s/%ld/%d pipelineTime %f pipeline was {.sliceSize=%ld .nSlices=%ld .intra={.stepCount=%d "
         ".lat=%f .busBw=%f} "
-        ".inter={.stepCount=%d .lat=%f .busBw=%f} }",
+        ".inter={.stepCount=%d .lat=%f .busBw=%f} fifoSteps=%ld, fifosteptime=%f}",
         ncclAlgoToString(tuning->algo), ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func),
         ncclTuningGeneralBytes(inputs), inputs->comm->nRanks, pipelineTime, pipeline.sliceSize, pipeline.nSlices,
         pipeline.intraStep.stepCount, pipeline.intraStep.lat, pipeline.intraStep.busBw, pipeline.interStep.stepCount,
-        pipeline.interStep.lat, pipeline.interStep.busBw);
+        pipeline.interStep.lat, pipeline.interStep.busBw, pipeline.fifoStepsNeeded, pipeline.minFifoStepTime);
 
   TRACE(
     NCCL_TUNING,

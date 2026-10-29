@@ -366,10 +366,8 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   const char* protoStr = ncclGetEnv("NCCL_PROTO");
   const char* algoStr = ncclGetEnv("NCCL_ALGO");
   const char* symKernelIdStr = ncclGetEnv("NCCL_SYM_KERNEL");
-  if ((algoStr && strlen(algoStr) > 0) || (symKernelIdStr && strlen(symKernelIdStr) > 0)) {
-    std::fill_n(algoEnable, NCCL_NUM_FUNCTIONS * NCCL_NUM_ALGORITHMS, 0);
-    std::fill_n(symKernelIdEnable, NCCL_NUM_TUNING_FUNCTIONS * ncclSymkKernelId_Count, 0);
-  }
+  // Functions named by NCCL_ALGO (an entry without a function prefix names all functions).
+  int algoForced[NCCL_NUM_FUNCTIONS] = {};
   if (protoStr) {
     INFO(NCCL_ENV, "NCCL_PROTO set by environment to %s", protoStr);
     NCCLCHECK(parseList(protoStr, ncclFuncStr, NCCL_NUM_FUNCTIONS, ncclProtoStr, NCCL_NUM_PROTOCOLS, protoEnable,
@@ -378,15 +376,24 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   if (algoStr) {
     INFO(NCCL_ENV, "NCCL_ALGO set by environment to %s", algoStr);
     NCCLCHECK(parseList(algoStr, ncclFuncStr, NCCL_NUM_FUNCTIONS, ncclAlgoStr, NCCL_NUM_ALGORITHMS, algoEnable,
-                        comm->tuningContext.forced));
+                        algoForced));
   }
   if (symKernelIdStr) {
     INFO(NCCL_ENV, "NCCL_SYM_KERNEL set by environment to %s", symKernelIdStr);
     NCCLCHECK(parseList(symKernelIdStr, tuningFuncStr, NCCL_NUM_TUNING_FUNCTIONS, ncclSymKernelStr,
                         ncclSymkKernelId_Count, symKernelIdEnable, symKernelForced));
   }
+  // parseList resets the list it fills for each function it names. For those functions, selecting algorithms also
+  // excludes symmetric kernels and vice versa; functions named by neither variable keep their default.
   for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
-    comm->tuningContext.forced[f] |= symKernelForced[f];
+    int algoNamed = f < NCCL_NUM_FUNCTIONS ? algoForced[f] : 0;
+    if (algoNamed && !symKernelForced[f]) {
+      std::fill_n(symKernelIdEnable + f * ncclSymkKernelId_Count, ncclSymkKernelId_Count, 0);
+    }
+    if (symKernelForced[f] && !algoNamed && f < NCCL_NUM_FUNCTIONS) {
+      std::fill_n(algoEnable + f * NCCL_NUM_ALGORITHMS, NCCL_NUM_ALGORITHMS, 0);
+    }
+    comm->tuningContext.forced[f] |= algoNamed | symKernelForced[f];
   }
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningModelEntry_t* model = nullptr;

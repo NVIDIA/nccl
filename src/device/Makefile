@@ -42,7 +42,7 @@ endif
 SAY = @bash -c 'path="$$2"; [[ "$$(realpath "$$2")" =~ ^$(subst .,\.,$(abspath $(NCCLDIR)))/(.*)$$ ]] && path="$${BASH_REMATCH[1]}"; printf "%-15s %s\n" "$$1" "$$path"' SAY
 
 COMPILE.cu = $(NVCC) $(NVCUFLAGS) -dc $2 -o $1
-COMPILE.kernel = $(NVCC) $(NVCUFLAGS) -dw $2 -o $1
+COMPILE.kernel = $(NVCC) $(NVCUFLAGS) -c --relocatable-device-code=false $2 -o $1
 COMPILE.cc = $(CXX) $(CXXFLAGS) -c $2 -o $1
 define COMPILE
 @$(SAY) "Compiling" $2;\
@@ -62,9 +62,9 @@ define COMPILE_SYM
 @$(SAY) "Compiling" $2;\
  mkdir -p $(dir $1);\
  if [[ -n "$3" ]]; then\
- $(NVCC) $(NVCUFLAGS_SYM) $3 -dw $2 -o $1;\
+ $(NVCC) $(NVCUFLAGS_SYM) $3 -c --relocatable-device-code=false $2 -o $1;\
  else\
- touch $2.empty.cu; $(NVCC) $(NVCUFLAGS_SYM) -dw $2.empty.cu -o $1; rm $2.empty.cu;\
+ touch $2.empty.cu; $(NVCC) $(NVCUFLAGS_SYM) -c --relocatable-device-code=false $2.empty.cu -o $1; rm $2.empty.cu;\
  fi
 endef
 
@@ -72,9 +72,9 @@ define COMPILE_GENK
 @$(SAY) "Compiling" $2;\
  mkdir -p $(dir $1);\
  if [[ -n "$3" ]]; then\
- $(NVCC) $(NVCUFLAGS_GENK) $3 -dw $2 -o $1;\
+ $(NVCC) $(NVCUFLAGS_GENK) $3 -c --relocatable-device-code=false $2 -o $1;\
  else\
- touch $2.empty.cu; $(NVCC) $(NVCUFLAGS_GENK) -dw $2.empty.cu -o $1; rm $2.empty.cu;\
+ touch $2.empty.cu; $(NVCC) $(NVCUFLAGS_GENK) -c --relocatable-device-code=false $2.empty.cu -o $1; rm $2.empty.cu;\
  fi
 endef
 

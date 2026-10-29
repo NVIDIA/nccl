@@ -58,10 +58,10 @@ else ifneq ($(strip $(TLS_BACKEND)),)
 $(error Unsupported TLS_BACKEND '$(TLS_BACKEND)'; expected OPENSSL3 or empty)
 endif
 NCCL_STATIC_DL_LIBS ?= -ldl
-CUDA_VERSION = $(strip $(shell which $(NVCC) >/dev/null && $(NVCC) --version | grep release | sed 's/.*release //' | sed 's/\,.*//'))
+CUDA_VERSION := $(strip $(shell which $(NVCC) >/dev/null && $(NVCC) --version | grep release | sed 's/.*release //' | sed 's/\,.*//'))
 #CUDA_VERSION ?= $(shell ls $(CUDA_LIB)/libcudart.so.* | head -1 | rev | cut -d "." -f -2 | rev)
-CUDA_MAJOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 1)
-CUDA_MINOR = $(shell echo $(CUDA_VERSION) | cut -d "." -f 2)
+CUDA_MAJOR := $(word 1,$(subst ., ,$(CUDA_VERSION)))
+CUDA_MINOR := $(word 2,$(subst ., ,$(CUDA_VERSION)))
 #$(info CUDA_VERSION ${CUDA_MAJOR}.${CUDA_MINOR})
 
 # You should define NVCC_GENCODE in your environment to the minimal set

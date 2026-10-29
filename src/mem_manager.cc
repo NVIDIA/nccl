@@ -564,6 +564,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
   int restoredLocalCount = 0;
   int restoredPeerCount = 0;
+  int failedPeerCount = 0;
   size_t restoredLocalBytes = 0;
   size_t restoredPeerBytes = 0;
 
@@ -838,6 +839,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
       if (matchedInfo == nullptr) {
         ATTN("MemManager: Could not find matching handle info for ptr=%p from rank %d", entry->ptr,
              entry->desc.imported.ownerRank);
+        failedPeerCount++;
         entry = entry->next;
         continue;
       }
@@ -854,6 +856,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
             comm->peerInfo[entry->desc.imported.ownerRank].hostHash != comm->peerInfo[comm->rank].hostHash) {
           ATTN("MemManager: Cannot re-import peer buffer from rank %d (different node) using POSIX FD - skipping",
                entry->desc.imported.ownerRank);
+          failedPeerCount++;
           entry = entry->next;
           continue;
         }
@@ -866,6 +869,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
         ret = ncclProxyClientGetFdBlocking(comm, entry->desc.imported.ownerRank, &matchedInfo->handleData, &fd);
         if (ret != ncclSuccess || fd < 0) {
           ATTN("MemManager: Failed to get FD from rank %d for ptr=%p", entry->desc.imported.ownerRank, entry->ptr);
+          failedPeerCount++;
           entry = entry->next;
           continue;
         }
@@ -879,12 +883,14 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
           CUPFN(cuMemImportFromShareableHandle(&newHandle, &matchedInfo->fabricHandle, CU_MEM_HANDLE_TYPE_FABRIC));
       } else {
         ATTN("MemManager: Unknown handle type %d for peer import", matchedInfo->handleType);
+        failedPeerCount++;
         entry = entry->next;
         continue;
       }
 
       if (curet != CUDA_SUCCESS) {
         ATTN("MemManager: cuMemImportFromShareableHandle failed for ptr=%p (curet=%d)", entry->ptr, curet);
+        failedPeerCount++;
         entry = entry->next;
         continue;
       }
@@ -895,6 +901,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
         CUCHECKIGNORE(cuMemRelease(newHandle));
         entry->handle = 0;
         ATTN("MemManager: ncclCuMemMapAndSetAccess failed for re-imported ptr=%p", entry->ptr);
+        failedPeerCount++;
         entry = entry->next;
         continue;
       }
@@ -932,6 +939,12 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
   if (localInfos) free(localInfos);
   if (allInfos) free(allInfos);
 
+  // A peer buffer left unmapped would fault or corrupt the next collective. Fail only after the barrier so
+  // that the other ranks are not left waiting in it.
+  if (failedPeerCount > 0) {
+    WARN("MemManager: rank %d could not restore %d peer buffers", comm->rank, failedPeerCount);
+    return ncclSystemError;
+  }
   return ncclSuccess;
 
 fail:

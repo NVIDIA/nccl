@@ -143,6 +143,9 @@ struct ncclTransportComm {
                                 void* reqBuff, int reqSize, void* respBuff, int respSize, int* done);
   ncclResult_t (*proxyDeregister)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState,
                                   void* reqBuff, int reqSize, int* done);
+  // Optional. Release and redo the NIC registrations of the connection buffers around ncclCommSuspend/Resume.
+  ncclResult_t (*proxySuspendRegs)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState);
+  ncclResult_t (*proxyResumeRegs)(struct ncclProxyConnection* connection, struct ncclProxyState* proxyState);
 };
 
 struct ncclTransport {
@@ -156,6 +159,8 @@ struct ncclTransport {
 ncclResult_t ncclTransportP2pConnect(struct ncclComm* comm, int channelId, int nrecv, int* peerRecv, int nsend,
                                      int* peerSend, int connIndex);
 ncclResult_t ncclTransportP2pSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex);
+// Release (suspend) or redo (resume) the NIC registrations of all connected NET buffers of the communicator.
+ncclResult_t ncclTransportNetRegs(struct ncclComm* comm, bool resume);
 ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP2p, bool* directMode,
                                        bool* isAllCudaP2p);
 bool ncclP2pUsesMemcpy();

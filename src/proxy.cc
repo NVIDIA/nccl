@@ -1365,7 +1365,8 @@ fail:
 }
 
 const char* ncclProxyMsgTypeStr[] = {"Unknown", "Init", "SharedInit", "Setup",   "Connect",  "Start",     "Close",
-                                     "Abort",   "Stop", "GetFd",      "QueryFd", "Register", "Deregister"};
+                                     "Abort",   "Stop", "GetFd",      "QueryFd", "Register", "Deregister",
+                                     "SuspendRegs", "ResumeRegs"};
 ncclResult_t ncclProxyCallAsync(struct ncclComm* comm, struct ncclProxyConnector* proxyConn, int type, void* reqBuff,
                                 int reqSize, int respSize, void* opId) {
   struct ncclSocket* sock;
@@ -1659,6 +1660,11 @@ static ncclResult_t proxyProgressAsync(struct ncclProxyAsyncOp* op, struct ncclP
           "proxyProgressAsync::ncclProxyMsgDeregister opId=%p op.reqBuff=%p, op->reqSize=%d, op->respSize=%d", op->opId,
           op->reqBuff, op->reqSize, op->respSize);
     res = op->connection->tcomm->proxyDeregister(op->connection, proxyState, op->reqBuff, op->reqSize, &done);
+  } else if (op->type == ncclProxyMsgSuspendRegs || op->type == ncclProxyMsgResumeRegs) {
+    TRACE(NCCL_PROXY, "proxyProgressAsync::%s opId=%p", ncclProxyMsgTypeStr[op->type], op->opId);
+    struct ncclTransportComm* tcomm = op->connection->tcomm;
+    auto fn = op->type == ncclProxyMsgSuspendRegs ? tcomm->proxySuspendRegs : tcomm->proxyResumeRegs;
+    res = fn ? fn(op->connection, proxyState) : ncclSuccess;
   } else {
     return ncclInternalError;
   }
@@ -1774,6 +1780,8 @@ static bool proxyMatchOpType(int type) {
   case ncclProxyMsgGetFd:
   case ncclProxyMsgRegister:
   case ncclProxyMsgDeregister:
+  case ncclProxyMsgSuspendRegs:
+  case ncclProxyMsgResumeRegs:
     return true;
   default:
     return false;

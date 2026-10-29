@@ -54,6 +54,11 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       cache->slots[slot].pages = pages;
       cache->slots[slot].refs = 1;
       cache->slots[slot].mr = mr;
+      cache->slots[slot].cuda = type == NCCL_PTR_CUDA;
+      cache->slots[slot].dmabuf = fd != -1;
+      cache->slots[slot].dataDirect = ncclIbDevs[base->ibDevN].capsProvider.mlx5.dataDirect;
+      cache->slots[slot].parked = false;
+      cache->slots[slot].access = flags;
       cache->population += 1;
       *mhandle = mr;
       return ncclSuccess;
@@ -63,6 +68,70 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       *mhandle = cache->slots[slot].mr;
       return ncclSuccess;
     }
+  }
+  return ncclSuccess;
+}
+
+// Park (resume=false) the registration of a GPU MR on a placeholder host page, so it no longer pins the GPU pages, or
+// register the range again on the pages that back it now (resume=true). The new registration is moved into the
+// existing ibv_mr, so every handle referencing it stays valid, including handles captured in CUDA graphs; NCCL reads
+// the keys from the ibv_mr on every post. An MR shared by several handles is moved once.
+static ncclResult_t ncclIbMrMove(ncclIbNetCommDevBase* base, ibv_mr* mr, bool resume, int dmabufFlags) {
+  static uintptr_t pageSize = sysconf(_SC_PAGESIZE);
+  static void* placeholder = [] {
+    void* page = nullptr;
+    return posix_memalign(&page, pageSize, pageSize) == 0 ? page : nullptr;
+  }();
+  struct ncclIbMrCache* cache = &ncclIbDevs[base->ibDevN].mrCache;
+  std::lock_guard<std::mutex> lock(ncclIbDevs[base->ibDevN].mutex);
+  struct ncclIbMr* slot = nullptr;
+  for (int i = 0; i < cache->population && slot == nullptr; i++) {
+    if (cache->slots[i].mr == mr) slot = cache->slots + i;
+  }
+  if (slot == nullptr) {
+    WARN("NET/IB: could not find mr %p inside cache of %d entries", mr, cache->population);
+    return ncclInternalError;
+  }
+  // Host memory keeps its pages; parking and resuming an MR twice is a no-op.
+  if (!slot->cuda || slot->parked != resume) return ncclSuccess;
+
+  struct ibv_mr* tmp;
+  size_t len = slot->pages * pageSize;
+  if (!resume) {
+    if (placeholder == nullptr) {
+      WARN("NET/IB: failed to allocate the placeholder page for parked MRs");
+      return ncclSystemError;
+    }
+    NCCLCHECK(wrap_ibv_reg_mr(&tmp, mr->pd, placeholder, pageSize, IBV_ACCESS_LOCAL_WRITE));
+  } else if (slot->dmabuf) {
+    int fd;
+    CUCHECK(cuMemGetHandleForAddressRange((void*)&fd, (CUdeviceptr)slot->addr, len, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
+                                          dmabufFlags));
+    ncclResult_t ret = slot->dataDirect
+                         ? wrap_mlx5dv_reg_dmabuf_mr(&tmp, mr->pd, 0, len, slot->addr, fd, slot->access,
+                                                     MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT)
+                         : wrap_ibv_reg_dmabuf_mr(&tmp, mr->pd, 0, len, slot->addr, fd, slot->access);
+    (void)close(fd);
+    NCCLCHECK(ret);
+  } else if (slot->access & IBV_ACCESS_RELAXED_ORDERING) {
+    NCCLCHECK(wrap_ibv_reg_mr_iova2(&tmp, mr->pd, (void*)slot->addr, len, slot->addr, slot->access));
+  } else {
+    NCCLCHECK(wrap_ibv_reg_mr(&tmp, mr->pd, (void*)slot->addr, len, slot->access));
+  }
+  std::swap(mr->handle, tmp->handle);
+  std::swap(mr->lkey, tmp->lkey);
+  std::swap(mr->rkey, tmp->rkey);
+  // tmp now holds the previous registration.
+  NCCLCHECK(wrap_ibv_dereg_mr(tmp));
+  slot->parked = !resume;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclIbMrHandleMove(void* comm, void* mhandle, bool resume, int dmabufFlags) {
+  struct ncclIbMrHandle* mhandleWrapper = (struct ncclIbMrHandle*)mhandle;
+  struct ncclIbNetCommBase* base = (struct ncclIbNetCommBase*)comm;
+  for (int i = 0; i < base->vProps.ndevs; i++) {
+    NCCLCHECK(ncclIbMrMove(ncclIbGetNetCommDevBase(base, i), mhandleWrapper->mrs[i], resume, dmabufFlags));
   }
   return ncclSuccess;
 }

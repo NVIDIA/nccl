@@ -57,13 +57,16 @@ struct ncclSymkLsaA2AKernelTuningParameters {
   bool peakRankEfficiency;
   double ctaTroughLatUs;
   double ctaTroughPeakBw;
+  double reduceScalarLatUs; // Per-scalar-iteration latency floor.
+  double reducePackedLatUs; // LDMC startup for nonempty packed work.
 };
 
 struct ncclSymkLsaA2AReduceScatterTuningParameters {
   struct ncclSymkLsaA2AKernelTuningParameters defaultParameters;
-  // Complete Sum rows; an empty row uses defaultParameters.
+  // Sum rows prefer their datatype specialization, then the shared row.
   struct ncclSymkLsaA2AKernelTuningParameters fp16Bf16SumParameters;
   struct ncclSymkLsaA2AKernelTuningParameters fp8SumParameters;
+  struct ncclSymkLsaA2AKernelTuningParameters sharedSumParameters;
 };
 
 enum ncclSymkLsaA2AArch {
@@ -81,9 +84,11 @@ struct ncclSymkLsaA2AArchTuningParameters {
 
 static constexpr struct ncclSymkLsaA2AKernelTuningParameters lsaA2AParameters(
   double baseLatUs, double rankLatUs, double ctaBw, double smallChunkCtaBw, double reduceScalarCtaBw, double llCtaBw,
-  double peakBw, bool peakRankEfficiency = false) {
-  return {baseLatUs,          rankLatUs, ctaBw, smallChunkCtaBw, reduceScalarCtaBw, llCtaBw, peakBw, {{1.0, 1.0}}, 0.0,
-          peakRankEfficiency, 0.0,       0.0};
+  double peakBw, bool peakRankEfficiency = false, double reduceScalarLatUs = 0.0, double reducePackedLatUs = 0.0) {
+  return {
+    baseLatUs,          rankLatUs, ctaBw, smallChunkCtaBw,   reduceScalarCtaBw, llCtaBw, peakBw, {{1.0, 1.0}}, 0.0,
+    peakRankEfficiency, 0.0,       0.0,   reduceScalarLatUs, reducePackedLatUs
+  };
 }
 
 // Rows follow ncclSymkLsaA2AArch; Rubin and later architectures share the VR parameters.
@@ -100,7 +105,7 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
   {{
      {
        // LL
-       lsaA2AParameters(10.5737, 0.0129, 8.6531, 0, 0, 2.1255, 248.9148),
+       lsaA2AParameters(6.4586, 0.0129, 8.6531, 0, 0, 2.1255, 248.9148),
        {},
        {},
      },
@@ -114,13 +119,14 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
        // LD
        lsaA2AParameters(9.6736, 0.2801, 26.0000, 12.3392, 7.3964, 0, 660), // Default
        lsaA2AParameters(8.4739, 0.2096, 16.9749, 9.5826, 4.0022, 0, 660.0000), // FP16/BF16 Sum
-       lsaA2AParameters(8.4739, 0.2096, 15.8819, 9.3889, 1.9578, 0, 660.0000), // FP8 Sum
+       lsaA2AParameters(8.4739, 0.2096, 15.8819, 9.3889, 1.9578, 0, 660.0000, false, 2.2213), // FP8 Sum
      },
      {
        // LDMC
        lsaA2AParameters(10.9124, 0.0736, 24.5386, 0, 0, 0, 750.1525, true),
        {},
        {},
+       lsaA2AParameters(8.432277, 0.0736, 24.5386, 0, 0, 0, 750.1525, true, 2.068846, 2.480123), // Shared Sum
      },
    },
    {
@@ -290,8 +296,13 @@ static const struct ncclSymkLsaA2AKernelTuningParameters* lsaA2AParametersForKer
       case ncclFloat8e5m2:
         if (parameters.fp8SumParameters.transferCtaBandwidthGbps > 0.0) return &parameters.fp8SumParameters;
         break;
-      default:
+      case ncclFloat32:
         break;
+      default:
+        return &parameters.defaultParameters;
+      }
+      if (parameters.sharedSumParameters.transferCtaBandwidthGbps > 0.0) {
+        return &parameters.sharedSumParameters;
       }
     }
     return &parameters.defaultParameters;
@@ -400,11 +411,29 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
     double endsTimeUs =
       std::max(ctaComputeTimeUs * endsFraction + ctaCopies * endsBytes / (scaledCtas * endsCtaBw * bytesPerUsPerGbps),
                peakTransferTimeUs * endsFraction);
+    // reduceEnds handles one element per thread in each iteration. Bandwidth
+    // alone misses the latency of partially occupied scalar iterations.
+    size_t iterationBytes = size_t(activeCtas) * ncclSymkMaxThreads * typeSize;
+    double scalarTimeUs = tuning->reduceScalarLatUs * divUp(endsBytes, iterationBytes);
+    endsTimeUs = std::max(endsTimeUs, scalarTimeUs);
     double smallTimeUs = std::max(ctaComputeTimeUs * smallFraction +
                                     ctaCopies * smallBytes / (scaledCtas * smallChunkCtaBw * bytesPerUsPerGbps),
                                   peakTransferTimeUs * smallFraction);
     double fullTimeUs = bandwidthBoundTimeUs * fullFraction;
     bandwidthBoundTimeUs = endsTimeUs + smallTimeUs + fullTimeUs;
+  }
+  if (kernelId == ncclSymkKernelId_ReduceScatter_LDMC) {
+    // reduceMultimem distributes complete 4 KiB chunks across all CTA warps,
+    // then processes the remainder one element per thread. Assume aligned pointers.
+    size_t tailBytes = logicalBytes % ncclSymkMultimemDeepBytePerChunk;
+    size_t packedBytes = logicalBytes - tailBytes;
+    size_t threads = size_t(activeCtas) * ncclSymkMaxThreads;
+    size_t scalarIterations = divUp(tailBytes, threads * typeSize);
+    // Scalar latency raises tail time above its bandwidth limit; zero is neutral.
+    double scalarBandwidthTimeUs = bandwidthBoundTimeUs * double(tailBytes) / logicalBytes;
+    double scalarTimeUs = tuning->reduceScalarLatUs * scalarIterations;
+    bandwidthBoundTimeUs += std::max(0.0, scalarTimeUs - scalarBandwidthTimeUs);
+    extraLatencyUs += packedBytes > 0 ? tuning->reducePackedLatUs : 0.0;
   }
   double estimateUs;
   if (isLowLatencyMulticast) {

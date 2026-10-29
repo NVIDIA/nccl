@@ -8,13 +8,14 @@
 # LLVM IR generation for NCCL device APIs
 
 # Source and output configuration
-set(LLVM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_ir.cu)
+set(LLVM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/nccl_device_ir.cu)
 set(LLVM_IMPL_HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/core.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/coop.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/gin.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/barrier.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/impl/reduce_copy.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/coop.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gin.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/barrier.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/reduce_copy.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util.h
 )
 set(OBJDIR ${CMAKE_BINARY_DIR}/obj/llvm_ir)
 set(LIBDIR ${CMAKE_BINARY_DIR}/lib)
@@ -56,9 +57,6 @@ find_program(LLVM_AS_EXECUTABLE llvm-as REQUIRED)
 # Include paths
 set(NCCL_INCLUDES
     -I${CMAKE_BINARY_DIR}/include
-    -I${CMAKE_SOURCE_DIR}/src/include
-    -I${CMAKE_SOURCE_DIR}/src/include/nccl_device
-    -I${CMAKE_SOURCE_DIR}/src/device
 )
 
 set(CUDA_INCLUDES
@@ -102,7 +100,6 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${OBJDIR}
     COMMAND ${CLANG_EXECUTABLE} ${CLANG_FLAGS} ${LLVM_SRC} -o ${UNOPTIMIZED_BC}
     DEPENDS ${LLVM_SRC} ${LLVM_IMPL_HEADERS} ${IR_HEADER}
-            ${CMAKE_CURRENT_SOURCE_DIR}/util.h
     COMMENT "Generating unoptimized LLVM bitcode..."
     VERBATIM
 )
@@ -186,7 +183,6 @@ add_custom_command(
         -o ${FINAL_LTO_IR}
         ${LLVM_SRC}
     DEPENDS ${LLVM_SRC} ${LLVM_IMPL_HEADERS} ${IR_HEADER}
-            ${CMAKE_CURRENT_SOURCE_DIR}/util.h
     COMMENT "Generating LTO IR..."
     VERBATIM
 )

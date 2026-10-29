@@ -9,8 +9,8 @@ include ../../makefiles/common.mk
 # LLVM IR generation
 
 # Source and target files
-LLVM_SRC := nccl_device_ir.cu
-LLVM_IMPL_HEADERS := impl/core.h impl/coop.h impl/gin.h impl/barrier.h impl/reduce_copy.h
+LLVM_SRC := src/nccl_device_ir.cu
+LLVM_IMPL_HEADERS := src/core.h src/coop.h src/gin.h src/barrier.h src/reduce_copy.h src/util.h
 BUILDDIR ?= $(abspath ../../build)
 OBJDIR := $(BUILDDIR)/obj/llvm_ir
 LIBDIR := $(BUILDDIR)/lib
@@ -47,7 +47,7 @@ PYTHON ?= python3
 NCCL_DEVICE_DEFINES := -DNCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1
 
 # Include paths
-NCCL_INCLUDES := -I$(BUILDDIR)/include -I../../src/include -I../../src/include/nccl_device -I../../src/device
+NCCL_INCLUDES := -I$(BUILDDIR)/include
 CUDA_INCLUDES := -I$(CUDA_INC) -I$(CUDA_INC)/cccl
 
 # Clang flags for LLVM IR generation
@@ -73,7 +73,7 @@ $(IR_HEADER): nccl_device_ir.h
 	@echo "Copying nccl_device_ir.h to build include..."
 	cp -f $< $@
 
-$(UNOPTIMIZED_BC): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER) util.h
+$(UNOPTIMIZED_BC): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER)
 	@mkdir -p $(OBJDIR)
 	@echo "Generating unoptimized LLVM bitcode..."
 	$(CLANG) $(CLANG_FLAGS) $(LLVM_SRC) -o $@
@@ -111,7 +111,7 @@ llvm_ir: $(FINAL_BC)
 	@echo "  IR Header: $(IR_HEADER)"
 
 # LTO IR generation
-$(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER) util.h
+$(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER)
 	@mkdir -p $(LIBDIR)
 	@echo "Generating LTO IR..."
 	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \

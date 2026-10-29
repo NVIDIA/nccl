@@ -46,8 +46,8 @@ __attribute__((device)) __attribute__((always_inline)) static unsigned ncclIrAct
 
 #include <new>
 
-#include "impl/core.h"
-#include "impl/coop.h"
-#include "impl/gin.h"
-#include "impl/barrier.h"
-#include "impl/reduce_copy.h"
+#include "core.h"
+#include "coop.h"
+#include "gin.h"
+#include "barrier.h"
+#include "reduce_copy.h"

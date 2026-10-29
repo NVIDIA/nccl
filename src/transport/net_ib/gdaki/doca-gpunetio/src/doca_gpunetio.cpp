@@ -57,10 +57,16 @@
 #include "doca_gpunetio_sdk_wrapper.h"
 #include "doca_gpunetio.hpp"
 #include "doca_verbs_dev.hpp"
+#include "host/doca_gpunetio_signal.h"
+#include "doca_gpunetio_signal_map.hpp"
 
 #define GPU_PAGE_SHIFT 16
 #define GPU_PAGE_SIZE (1UL << GPU_PAGE_SHIFT)
 #define GPU_FULL_ASYNC_STORE_RELEASE_SUPPORT_COMPUTE_CAP_MAJOR 10
+/* Bound work per service sweep so busy QPs cannot starve other QPs or service teardown. */
+#define DOCA_GPUNETIO_VERBS_CPU_PROXY_MAX_ROUNDS_PER_SWEEP 64
+#define DOCA_GPUNETIO_VERBS_RQ_MAX_CQES_PER_POLL 64
+#define DOCA_GPUNETIO_VERBS_RQ_MAX_ROUNDS_PER_SWEEP 64
 
 #define DOCA_GPUNETIO_FREE_FLOW_RING_DB_THRESHOLD_DEFAULT 64
 
@@ -94,6 +100,7 @@ struct doca_gpu_verbs_service {
     pthread_rwlock_t service_lock;
     bool running;
     std::set<struct doca_gpu_verbs_qp *> *qps;
+    struct doca_gpu_verbs_signal_map *signal_map;
 };
 
 bool priv_is_power_of_two(uint64_t x) { return x && (x & (x - 1)) == 0; }
@@ -183,6 +190,7 @@ doca_error_t doca_gpu_create(const char *gpu_bus_id, doca_gpu_t **gpu_dev) {
 
     try {
         gpu_dev_->open->mtable = new std::unordered_map<uintptr_t, struct doca_gpu_mtable *>();
+        gpu_dev_->open->mtable_lock = new std::mutex();
     } catch (...) {
         DOCA_LOG(LOG_ERR, "mtable map allocation failed");
         goto exit_error;
@@ -194,7 +202,11 @@ doca_error_t doca_gpu_create(const char *gpu_bus_id, doca_gpu_t **gpu_dev) {
 
 exit_error:
     if (gpu_dev_ != nullptr) {
-        if (gpu_dev_->open) free(gpu_dev_->open);
+        if (gpu_dev_->open) {
+            delete gpu_dev_->open->mtable;
+            delete gpu_dev_->open->mtable_lock;
+            free(gpu_dev_->open);
+        }
         free(gpu_dev_);
     }
 
@@ -238,7 +250,13 @@ doca_error_t doca_gpu_destroy(doca_gpu_t *gpu_dev) {
     }
 
 exit:
-    if (gpu_dev->open) free(gpu_dev->open);
+    if (gpu_dev->type == DOCA_GPU_LIB_TYPE_OPEN) {
+        if (gpu_dev->open) {
+            delete gpu_dev->open->mtable_lock;
+            free(gpu_dev->open);
+        }
+    }
+
     memset(gpu_dev, 0, sizeof(doca_gpu_t));
     free(gpu_dev);
 
@@ -504,6 +522,7 @@ doca_error_t doca_gpu_mem_alloc(doca_gpu_t *gpu_dev, size_t size, size_t alignme
     // 	      mentry->size);
 
     try {
+        std::lock_guard<std::mutex> lock(*gpu_dev->open->mtable_lock);
         gpu_dev->open->mtable->insert({mentry->align_addr_gpu, mentry});
     } catch (...) {
         DOCA_LOG(LOG_ERR, "mtable map insert failed");
@@ -548,14 +567,23 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu_dev, void *memptr_gpu) {
         return DOCA_ERROR_INVALID_VALUE;
     }
 
-    std::unordered_map<uint64_t, struct doca_gpu_mtable *>::const_iterator it =
-        gpu_dev->open->mtable->find((uintptr_t)memptr_gpu);
-    if (it == gpu_dev->open->mtable->end()) {
-        DOCA_LOG(LOG_ERR, "memptr_gpu = %p was not allocated by DOCA GPUNetIO.", memptr_gpu);
-        return DOCA_ERROR_INVALID_VALUE;
-    }
+    /*
+     * Take the entry out of the table under its lock, and free the memory without it: threads
+     * sharing the handler free their memory at the same time. The address can't be allocated
+     * again, and inserted in the table, before it is freed.
+     */
+    {
+        std::lock_guard<std::mutex> lock(*gpu_dev->open->mtable_lock);
+        std::unordered_map<uint64_t, struct doca_gpu_mtable *>::const_iterator it =
+            gpu_dev->open->mtable->find((uintptr_t)memptr_gpu);
+        if (it == gpu_dev->open->mtable->end()) {
+            DOCA_LOG(LOG_ERR, "memptr_gpu = %p was not allocated by DOCA GPUNetIO.", memptr_gpu);
+            return DOCA_ERROR_INVALID_VALUE;
+        }
 
-    mentry = it->second;
+        mentry = it->second;
+        gpu_dev->open->mtable->erase(it);
+    }
 
     if (mentry->mtype == DOCA_GPU_MEM_TYPE_GPU)
         DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaFree((void *)mentry->base_addr));
@@ -574,7 +602,6 @@ doca_error_t doca_gpu_mem_free(doca_gpu_t *gpu_dev, void *memptr_gpu) {
         free((void *)mentry->base_addr);
     }
 
-    gpu_dev->open->mtable->erase(it);
     free(mentry);
 
     return DOCA_SUCCESS;
@@ -1189,6 +1216,10 @@ doca_error_t doca_gpu_verbs_unexport_qp(doca_gpu_t *gpu_dev, struct doca_gpu_ver
     if (qp_gverbs->refcount > 0) {
         return DOCA_ERROR_IN_USE;
     }
+    if (qp_gverbs->monitored_by) {
+        DOCA_LOG(LOG_ERR, "Cannot unexport a QP while its RQ is monitored by a service");
+        return DOCA_ERROR_IN_USE;
+    }
 
     if (qp_gverbs->cpu_db &&
         ((qp_gverbs->send_dbr_mode_ext !=
@@ -1473,22 +1504,161 @@ doca_error_t doca_gpu_verbs_cpu_proxy_progress(struct doca_gpu_verbs_qp *qp, boo
     return DOCA_SUCCESS;
 }
 
+/*This function is used to log the error CQE, pulled from the device code*/
+static void priv_log_rq_err_cqe(const struct doca_gpunetio_ib_mlx5_cqe64 *cqe) {
+    const struct doca_gpunetio_ib_mlx5_err_cqe_ex *err_cqe =
+        (const struct doca_gpunetio_ib_mlx5_err_cqe_ex *)cqe;
+
+    DOCA_LOG(LOG_ERR,
+             "got completion with err: syndrome=%#x, vendor_err_synd=%#x, hw_err_synd=%#x, "
+             "hw_synd_type=%#x, wqe_counter=%u",
+             err_cqe->syndrome, err_cqe->vendor_err_synd, err_cqe->hw_err_synd,
+             err_cqe->hw_synd_type, be16toh(err_cqe->wqe_counter));
+}
+
+static doca_error_t priv_rq_progress(struct doca_gpu_verbs_qp *qp,
+                                    struct doca_gpu_verbs_signal_map *map,
+                                    bool *out_progressed) {
+    void *cq_rq_cqe_haddr = nullptr;
+    uint32_t cq_rq_cqe_num = 0;
+    uint8_t cq_rq_cqe_size = 0;
+    uint64_t consumed = 0;
+    uint64_t max_batch = 0;
+    doca_error_t status = DOCA_SUCCESS;
+
+    if (out_progressed != nullptr) *out_progressed = false;
+    if (qp == nullptr || qp->cq_rq == nullptr || qp->rq_dbrec_cpu == nullptr)
+        return DOCA_ERROR_INVALID_VALUE;
+
+    status = doca_verbs_cq_get_wq(qp->cq_rq, &cq_rq_cqe_haddr, &cq_rq_cqe_num,
+                                  &cq_rq_cqe_size);
+    if (status != DOCA_SUCCESS) return status;
+    if (cq_rq_cqe_haddr == nullptr || cq_rq_cqe_num == 0 ||
+        (cq_rq_cqe_num & (cq_rq_cqe_num - 1)) != 0 ||
+        cq_rq_cqe_size != sizeof(struct doca_gpunetio_ib_mlx5_cqe64))
+        return DOCA_ERROR_INVALID_VALUE;
+
+    const doca_error_t fatal_status = qp->rq_fatal_status;
+    if (fatal_status != DOCA_SUCCESS) return fatal_status;
+
+    max_batch = cq_rq_cqe_num < DOCA_GPUNETIO_VERBS_RQ_MAX_CQES_PER_POLL
+                    ? cq_rq_cqe_num
+                    : DOCA_GPUNETIO_VERBS_RQ_MAX_CQES_PER_POLL;
+
+    while (consumed < max_batch) {
+        const uint64_t cqe_ci = qp->cq_rq_cqe_ci + consumed;
+        struct doca_gpunetio_ib_mlx5_cqe64 *cqe =
+            (struct doca_gpunetio_ib_mlx5_cqe64 *)cq_rq_cqe_haddr +
+            (cqe_ci & (cq_rq_cqe_num - 1));
+
+        /* The NIC DMAs this word last, so acquire makes the rest of the CQE safe to read. */
+        const uint32_t cqe_ctrl_be =
+            __atomic_load_n(&cqe->wqe_counter_sig_op_own_raw, __ATOMIC_ACQUIRE);
+        const uint8_t op_own = be32toh(cqe_ctrl_be) & 0xff;
+        const uint8_t cqe_opcode = op_own >> DOCA_GPUNETIO_VERBS_MLX5_CQE_OPCODE_SHIFT;
+        const bool cqe_owner = (op_own & DOCA_GPUNETIO_IB_MLX5_CQE_OWNER_MASK) != 0;
+        const bool expected_cqe_owner = (cqe_ci & cq_rq_cqe_num) != 0;
+
+        if (cqe_opcode == DOCA_GPUNETIO_IB_MLX5_CQE_INVALID ||
+            cqe_owner != expected_cqe_owner)
+            break;
+
+        if (cqe_opcode == DOCA_GPUNETIO_IB_MLX5_CQE_RESP_ERR) {
+            DOCA_LOG(LOG_ERR, "RQ CQE indicates responder error");
+            priv_log_rq_err_cqe(cqe);
+            status = DOCA_ERROR_IO_FAILED;
+            break;
+        }
+        if (cqe_opcode != DOCA_GPUNETIO_IB_MLX5_CQE_RESP_WR_IMM) {
+            DOCA_LOG(LOG_ERR,
+                     "Unexpected RQ CQE opcode %u: this RQ only accepts RDMA_WRITE_WITH_IMM",
+                     cqe_opcode);
+            status = DOCA_ERROR_UNEXPECTED;
+            break;
+        }
+
+        status = priv_signal_map_apply(map, le32toh(cqe->imm_inval_pkey),
+                                       qp->enable_data_direct);
+        if (status != DOCA_SUCCESS) break;
+
+        ++consumed;
+    }
+
+    if (consumed != 0) {
+        qp->cq_rq_cqe_ci += consumed;
+        qp->rq_dbr_pi += consumed;
+        if (out_progressed != nullptr) *out_progressed = true;
+    }
+
+    if (status != DOCA_SUCCESS) {
+        qp->rq_fatal_status = status;
+        DOCA_LOG(LOG_ERR, "RQ is stopped and will not be polled again");
+    }
+
+    return status;
+}
+
 static void *priv_service_mainloop(void *args) {
     struct doca_gpu_verbs_service *service = (struct doca_gpu_verbs_service *)args;
-    bool progressed = false;
 
-    while (service->running) {
+    while (__atomic_load_n(&service->running, __ATOMIC_RELAXED)) {
+        bool progressed = false;
         pthread_rwlock_rdlock(&service->service_lock);
+
+        uint32_t cpu_proxy_rounds = 0;
+        bool cpu_proxy_progressed = false;
         do {
-            progressed = false;
+            cpu_proxy_progressed = false;
             for (auto qp : *service->qps) {
                 bool qp_progressed = false;
                 doca_gpu_verbs_cpu_proxy_progress(qp, &qp_progressed);
-                progressed |= qp_progressed;
+                cpu_proxy_progressed |= qp_progressed;
             }
-        } while (progressed);
+            progressed |= cpu_proxy_progressed;
+            ++cpu_proxy_rounds;
+        } while (cpu_proxy_progressed &&
+                 cpu_proxy_rounds < DOCA_GPUNETIO_VERBS_CPU_PROXY_MAX_ROUNDS_PER_SWEEP);
+
+        uint32_t rq_rounds = 0;
+        bool rq_progressed = false;
+        bool rq_sweep_progressed = false;
+        do {
+            rq_progressed = false;
+            for (auto qp : *service->qps) {
+                if (qp->cq_rq == nullptr || !qp->monitored_by) continue;
+                bool qp_progressed = false;
+                doca_error_t status = priv_rq_progress(qp, service->signal_map, &qp_progressed);
+                if (status != DOCA_SUCCESS && qp->rq_fatal_status == DOCA_SUCCESS) {
+                    qp->rq_fatal_status = status;
+                    DOCA_LOG(LOG_ERR, "RQ is stopped and will not be polled again");
+                }
+                rq_progressed |= qp_progressed;
+            }
+            progressed |= rq_progressed;
+            rq_sweep_progressed |= rq_progressed;
+            ++rq_rounds;
+        } while (rq_progressed &&
+                 rq_rounds < DOCA_GPUNETIO_VERBS_RQ_MAX_ROUNDS_PER_SWEEP);
+
+        if (rq_sweep_progressed) {
+            if (service->signal_map->data_direct_mode)
+                doca_internal_memory_fence();
+            else
+                doca_internal_wc_store_fence();
+
+            for (auto qp : *service->qps) {
+                if (qp->cq_rq == nullptr || !qp->monitored_by) continue;
+                *(volatile __be32 *)qp->rq_dbrec_cpu =
+                    htobe32((uint32_t)(qp->rq_dbr_pi & UINT16_MAX));
+            }
+
+            if (service->signal_map->data_direct_mode)
+                doca_internal_memory_fence();
+            else
+                doca_internal_wc_store_fence();
+        }
         pthread_rwlock_unlock(&service->service_lock);
-        sched_yield();
+        if (!progressed) sched_yield();
     }
 
     return nullptr;
@@ -1496,6 +1666,7 @@ static void *priv_service_mainloop(void *args) {
 
 doca_error_t doca_gpu_verbs_create_service(doca_gpu_verbs_service_t *out_service) {
     int status = 0;
+    bool service_lock_initialized = false;
     doca_error_t doca_status = DOCA_SUCCESS;
     struct doca_gpu_verbs_service *service = nullptr;
 
@@ -1514,9 +1685,17 @@ doca_error_t doca_gpu_verbs_create_service(doca_gpu_verbs_service_t *out_service
         doca_status = DOCA_ERROR_DRIVER;
         goto out;
     }
+    service_lock_initialized = true;
 
-    service->running = true;
-    service->qps = new std::set<struct doca_gpu_verbs_qp *>();
+    __atomic_store_n(&service->running, true, __ATOMIC_RELAXED);
+    try {
+        service->qps = new std::set<struct doca_gpu_verbs_qp *>();
+    } catch (...) {
+        DOCA_LOG(LOG_ERR, "Failed to allocate service QP tracking");
+        doca_status = DOCA_ERROR_NO_MEMORY;
+        goto out;
+    }
+
     status = pthread_create(&service->service_thread, nullptr, priv_service_mainloop, service);
     if (status != 0) {
         DOCA_LOG(LOG_ERR, "Failed to create service thread");
@@ -1527,9 +1706,10 @@ doca_error_t doca_gpu_verbs_create_service(doca_gpu_verbs_service_t *out_service
     *out_service = service;
 
 out:
-    if (status) {
+    if (doca_status != DOCA_SUCCESS && service != nullptr) {
         if (service->qps) delete service->qps;
-        if (service) free(service);
+        if (service_lock_initialized) pthread_rwlock_destroy(&service->service_lock);
+        free(service);
     }
     return doca_status;
 }
@@ -1540,9 +1720,66 @@ doca_error_t doca_gpu_verbs_service_monitor_qp(doca_gpu_verbs_service_t service,
     if (service == nullptr || qp == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
     pthread_rwlock_wrlock(&service_->service_lock);
+
+    if (qp->cq_rq != nullptr) {
+        if (service_->signal_map == nullptr) {
+            pthread_rwlock_unlock(&service_->service_lock);
+            DOCA_LOG(LOG_ERR,
+                     "Signal map must be set on the service before monitoring an RQ - see "
+                     "doca_gpu_verbs_service_set_signal_map()");
+            return DOCA_ERROR_BAD_STATE;
+        }
+
+        if (qp->enable_data_direct && !service_->signal_map->data_direct_mode) {
+            pthread_rwlock_unlock(&service_->service_lock);
+            DOCA_LOG(LOG_ERR,
+                     "Cannot monitor a data-direct RQ because the signal map has no forced-PCIe "
+                     "mappings");
+            return DOCA_ERROR_NOT_SUPPORTED;
+        }
+
+        if (qp->monitored_by && service_->qps->count(qp) == 0) {
+            pthread_rwlock_unlock(&service_->service_lock);
+            DOCA_LOG(LOG_ERR, "QP RQ is already monitored by another service");
+            return DOCA_ERROR_IN_USE;
+        }
+    }
+
     service_->qps->insert(qp);
+    if (qp->cq_rq != nullptr) qp->monitored_by = true;
     pthread_rwlock_unlock(&service_->service_lock);
 
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_gpu_verbs_service_set_signal_map(doca_gpu_verbs_service_t service,
+                                                   struct doca_gpu_verbs_signal_map *map) {
+    struct doca_gpu_verbs_service *service_ = (struct doca_gpu_verbs_service *)service;
+    if (service == nullptr) return DOCA_ERROR_INVALID_VALUE;
+
+    pthread_rwlock_wrlock(&service_->service_lock);
+
+    size_t monitored_rqs = 0;
+    for (auto qp : *service_->qps) {
+        if (qp->cq_rq != nullptr && qp->monitored_by) ++monitored_rqs;
+    }
+    if (monitored_rqs != 0) {
+        pthread_rwlock_unlock(&service_->service_lock);
+        DOCA_LOG(LOG_ERR,
+                 "Signal map cannot be changed while %zu RQs are being monitored - set it before "
+                 "monitoring an RQ with doca_gpu_verbs_service_monitor_qp()",
+                 monitored_rqs);
+        return DOCA_ERROR_BAD_STATE;
+    }
+
+    doca_error_t status = priv_signal_map_replace_attachment(service_->signal_map, map);
+    if (status != DOCA_SUCCESS) {
+        pthread_rwlock_unlock(&service_->service_lock);
+        return status;
+    }
+
+    service_->signal_map = map;
+    pthread_rwlock_unlock(&service_->service_lock);
     return DOCA_SUCCESS;
 }
 
@@ -1550,12 +1787,25 @@ doca_error_t doca_gpu_verbs_destroy_service(doca_gpu_verbs_service_t service) {
     struct doca_gpu_verbs_service *service_ = (struct doca_gpu_verbs_service *)service;
     if (service == nullptr) return DOCA_ERROR_INVALID_VALUE;
 
-    service_->running = false;
+    __atomic_store_n(&service_->running, false, __ATOMIC_RELAXED);
     pthread_join(service_->service_thread, nullptr);
+
+    doca_error_t status = priv_signal_map_replace_attachment(service_->signal_map, nullptr);
+    if (status != DOCA_SUCCESS)
+        DOCA_LOG(LOG_ERR, "Failed to detach signal map while destroying service");
+
+    pthread_rwlock_wrlock(&service_->service_lock);
+    for (auto qp : *service_->qps) {
+        if (qp->cq_rq != nullptr && qp->monitored_by)
+            qp->monitored_by = false;
+    }
+    pthread_rwlock_unlock(&service_->service_lock);
+
     pthread_rwlock_destroy(&service_->service_lock);
     delete service_->qps;
     free(service_);
 
+    /* The service handle is consumed once teardown starts. */
     return DOCA_SUCCESS;
 }
 
@@ -1652,7 +1902,7 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
     assert(qp_gverbs->qp_cpu);
 
     if (qp_gverbs->cq_rq != nullptr) {
-        if (qp_gverbs->monitored_by != nullptr) {
+        if (qp_gverbs->monitored_by) {
             DOCA_LOG(LOG_ERR, "Cannot reset QP tracking while its RQ is monitored by a service");
             status = DOCA_ERROR_IN_USE;
             goto out;

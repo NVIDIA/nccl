@@ -28,7 +28,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syslog.h>
@@ -36,6 +35,7 @@
 #include <string.h>
 
 #include "doca_gpunetio_log.hpp"
+#include "doca_sdk_wrapper.h"
 #include "doca_verbs_umem_sdk_wrapper.h"
 
 #ifdef __cplusplus
@@ -65,16 +65,6 @@ static doca_verbs_umem_get_address_t p_doca_verbs_umem_get_address = nullptr;
 
 static void *common_handle = nullptr;
 static void *gpunetio_handle = nullptr;
-
-/* Helper function to get function pointer from libcuda */
-static void *get_verbs_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(common_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
 
 static void doca_verbs_sdk_wrapper_init(int *ret) {
     const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
@@ -141,16 +131,20 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
     }
 
     /* Get function pointers */
-    p_doca_verbs_umem_create = (doca_verbs_umem_create_t)get_verbs_sdk_symbol("doca_umem_create");
+    p_doca_verbs_umem_create =
+        (doca_verbs_umem_create_t)doca_sdk_find_symbol(common_handle, "doca_umem_create", 1);
     p_doca_verbs_umem_gpu_create =
-        (doca_verbs_umem_gpu_create_t)get_verbs_sdk_symbol("doca_umem_gpu_create");
+        (doca_verbs_umem_gpu_create_t)doca_sdk_find_symbol(
+            common_handle, "doca_umem_gpu_create", 1);
     p_doca_verbs_umem_destroy =
-        (doca_verbs_umem_destroy_t)get_verbs_sdk_symbol("doca_umem_destroy");
-    p_doca_verbs_umem_get_id = (doca_verbs_umem_get_id_t)get_verbs_sdk_symbol("doca_umem_get_id");
+        (doca_verbs_umem_destroy_t)doca_sdk_find_symbol(common_handle, "doca_umem_destroy", 1);
+    p_doca_verbs_umem_get_id =
+        (doca_verbs_umem_get_id_t)doca_sdk_find_symbol(common_handle, "doca_umem_get_id", 1);
     p_doca_verbs_umem_get_size =
-        (doca_verbs_umem_get_size_t)get_verbs_sdk_symbol("doca_umem_get_size");
+        (doca_verbs_umem_get_size_t)doca_sdk_find_symbol(common_handle, "doca_umem_get_size", 1);
     p_doca_verbs_umem_get_address =
-        (doca_verbs_umem_get_address_t)get_verbs_sdk_symbol("doca_umem_get_address");
+        (doca_verbs_umem_get_address_t)doca_sdk_find_symbol(
+            common_handle, "doca_umem_get_address", 1);
 
     /* Check if all symbols were found */
     if (!p_doca_verbs_umem_create || !p_doca_verbs_umem_gpu_create || !p_doca_verbs_umem_destroy ||

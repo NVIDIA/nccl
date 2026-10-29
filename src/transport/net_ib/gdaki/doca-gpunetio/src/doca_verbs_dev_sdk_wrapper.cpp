@@ -28,7 +28,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syslog.h>
@@ -36,6 +35,7 @@
 #include <string.h>
 
 #include "doca_gpunetio_log.hpp"
+#include "doca_sdk_wrapper.h"
 #include "doca_verbs_net_wrapper.h"
 #include "doca_verbs_dev_sdk_wrapper.h"
 
@@ -67,16 +67,6 @@ static doca_verbs_context_destroy_t p_doca_verbs_context_destroy = nullptr;
 
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
-
-/* Helper function to get function pointer from libcuda */
-static void *get_verbs_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(verbs_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
 
 static void doca_verbs_sdk_wrapper_init(int *ret) {
     const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
@@ -138,25 +128,28 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
 
     /* Get function pointers */
     p_doca_verbs_sdk_wrapper_dev_open_from_pd =
-        (doca_verbs_sdk_wrapper_dev_open_from_pd_t)get_verbs_sdk_symbol(
-            "doca_rdma_bridge_open_dev_from_pd");
+        (doca_verbs_sdk_wrapper_dev_open_from_pd_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_rdma_bridge_open_dev_from_pd", 1);
     p_doca_verbs_dev_close =
-        (doca_verbs_sdk_wrapper_dev_close_t)get_verbs_sdk_symbol("doca_dev_close");
+        (doca_verbs_sdk_wrapper_dev_close_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_dev_close", 1);
 
     p_doca_verbs_sdk_wrapper_dev_get_ibv_ctx =
-        (doca_verbs_sdk_wrapper_dev_get_ibv_ctx_t)get_verbs_sdk_symbol(
-            "doca_verbs_bridge_get_ibv_ctx");
+        (doca_verbs_sdk_wrapper_dev_get_ibv_ctx_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_bridge_get_ibv_ctx", 1);
 
-    p_doca_verbs_bridge_verbs_pd_import = (doca_verbs_bridge_verbs_pd_import_t)get_verbs_sdk_symbol(
-        "doca_verbs_bridge_verbs_pd_import");
+    p_doca_verbs_bridge_verbs_pd_import =
+        (doca_verbs_bridge_verbs_pd_import_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_bridge_verbs_pd_import", 1);
     p_doca_verbs_bridge_verbs_context_import =
-        (doca_verbs_bridge_verbs_context_import_t)get_verbs_sdk_symbol(
-            "doca_verbs_bridge_verbs_context_import");
+        (doca_verbs_bridge_verbs_context_import_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_bridge_verbs_context_import", 1);
 
     p_doca_verbs_pd_destroy =
-        (doca_verbs_pd_destroy_t)get_verbs_sdk_symbol("doca_verbs_pd_destroy");
+        (doca_verbs_pd_destroy_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_pd_destroy", 1);
     p_doca_verbs_context_destroy =
-        (doca_verbs_context_destroy_t)get_verbs_sdk_symbol("doca_verbs_context_destroy");
+        (doca_verbs_context_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_context_destroy", 1);
 
     /* Check if all symbols were found */
     if (!p_doca_verbs_sdk_wrapper_dev_open_from_pd || !p_doca_verbs_dev_close ||

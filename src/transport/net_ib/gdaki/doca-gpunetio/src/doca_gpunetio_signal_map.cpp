@@ -220,6 +220,14 @@ doca_error_t doca_gpu_verbs_signal_register(struct doca_gpu_verbs_signal_map *ma
         return DOCA_ERROR_INVALID_VALUE;
     }
 
+    int order = 0;
+    cuda_status =  DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaDeviceGetAttribute(&order, cudaDevAttrGPUDirectRDMAWritesOrdering, attributes.device));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to check device attribute for order");
+        return DOCA_ERROR_DRIVER;
+    }
+
     const uintptr_t slot_addr = (uintptr_t)gpu_addr;
     signal_map_lifecycle_guard lifecycle_guard;
     if (map->attached_to_service || map->entries->count(sig_id) != 0 ||
@@ -248,6 +256,7 @@ doca_error_t doca_gpu_verbs_signal_register(struct doca_gpu_verbs_signal_map *ma
                                                        page_offset);
     entry.gpu_addr = gpu_addr;
     entry.page = page;
+    entry.needs_mcst = order == 0;
 
     try {
         map->registered_slots->insert(slot_addr);
@@ -354,8 +363,13 @@ doca_error_t priv_signal_map_replace_attachment(struct doca_gpu_verbs_signal_map
 }
 
 doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32_t imm,
-                                   bool need_mcst, bool use_data_direct) {
-    if (map == nullptr || map->attached_to_service == false) return DOCA_ERROR_INVALID_VALUE;
+                                   bool use_data_direct) {
+    if (map == nullptr || map->attached_to_service == false) {
+        DOCA_LOG(LOG_ERR,
+                 "Signals are arriving with no signal map attached - see "
+                 "doca_gpu_verbs_service_set_signal_map()");
+        return DOCA_ERROR_INVALID_VALUE;
+    }
 
     const uint8_t sig_op =
         (imm >> DOCA_GPUNETIO_VERBS_SIGNAL_IMM_OP_SHIFT) & DOCA_GPUNETIO_VERBS_SIGNAL_IMM_OP_MASK;
@@ -401,10 +415,7 @@ doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32
         return DOCA_SUCCESS;
     }
 
-    if (need_mcst) {
-        (void)READ_ONCE(*(volatile uint8_t *)cpu_alias);
-        if (map->data_direct_mode) doca_internal_memory_fence();
-    }
+    if (entry->needs_mcst) (void)READ_ONCE(*(volatile uint8_t *)cpu_alias);
 
     const doca_gpu_verbs_signal_value_t sum =
         entry->shadow + (doca_gpu_verbs_signal_value_t)sig_val;

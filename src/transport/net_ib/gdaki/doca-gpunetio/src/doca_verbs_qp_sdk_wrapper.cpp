@@ -28,7 +28,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syslog.h>
@@ -36,6 +35,7 @@
 #include <mutex>
 
 #include "doca_gpunetio_log.hpp"
+#include "doca_sdk_wrapper.h"
 #include "doca_verbs_uar_sdk_wrapper.h"
 
 /*
@@ -310,25 +310,6 @@ static doca_verbs_cc_group_modify_t p_doca_verbs_cc_group_modify = nullptr;
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
 
-/* Helper function to get function pointer from libcuda */
-static void *get_verbs_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(verbs_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
-
-static void *get_common_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(common_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
-
 static void doca_verbs_sdk_wrapper_init(int *ret) {
     const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
     char libcommon_versioned_path[doca_sdk_path_length];
@@ -395,210 +376,254 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
 
     /* Get function pointers */
     p_doca_verbs_qp_init_attr_create =
-        (doca_verbs_qp_init_attr_create_t)get_verbs_sdk_symbol("doca_verbs_qp_init_attr_create");
+        (doca_verbs_qp_init_attr_create_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_create", 1);
     p_doca_verbs_qp_init_attr_destroy =
-        (doca_verbs_qp_init_attr_destroy_t)get_verbs_sdk_symbol("doca_verbs_qp_init_attr_destroy");
+        (doca_verbs_qp_init_attr_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_destroy", 1);
     p_doca_verbs_qp_init_attr_set_pd =
-        (doca_verbs_qp_init_attr_set_pd_t)get_verbs_sdk_symbol("doca_verbs_qp_init_attr_set_pd");
+        (doca_verbs_qp_init_attr_set_pd_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_pd", 1);
     p_doca_verbs_qp_init_attr_set_send_cq =
-        (doca_verbs_qp_init_attr_set_send_cq_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_send_cq");
+        (doca_verbs_qp_init_attr_set_send_cq_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_send_cq", 1);
     p_doca_verbs_qp_init_attr_set_receive_cq =
-        (doca_verbs_qp_init_attr_set_receive_cq_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_receive_cq");
+        (doca_verbs_qp_init_attr_set_receive_cq_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_receive_cq", 1);
     p_doca_verbs_qp_init_attr_set_sq_sig_all =
-        (doca_verbs_qp_init_attr_set_sq_sig_all_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_sq_sig_all");
-    p_doca_verbs_qp_init_attr_set_sq_wr = (doca_verbs_qp_init_attr_set_sq_wr_t)get_verbs_sdk_symbol(
-        "doca_verbs_qp_init_attr_set_sq_wr");
-    p_doca_verbs_qp_init_attr_set_rq_wr = (doca_verbs_qp_init_attr_set_rq_wr_t)get_verbs_sdk_symbol(
-        "doca_verbs_qp_init_attr_set_rq_wr");
+        (doca_verbs_qp_init_attr_set_sq_sig_all_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_sq_sig_all", 1);
+    p_doca_verbs_qp_init_attr_set_sq_wr =
+        (doca_verbs_qp_init_attr_set_sq_wr_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_sq_wr", 1);
+    p_doca_verbs_qp_init_attr_set_rq_wr =
+        (doca_verbs_qp_init_attr_set_rq_wr_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_rq_wr", 1);
     p_doca_verbs_qp_init_attr_set_send_max_sges =
-        (doca_verbs_qp_init_attr_set_send_max_sges_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_send_max_sges");
+        (doca_verbs_qp_init_attr_set_send_max_sges_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_send_max_sges", 1);
     p_doca_verbs_qp_init_attr_set_receive_max_sges =
-        (doca_verbs_qp_init_attr_set_receive_max_sges_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_receive_max_sges");
+        (doca_verbs_qp_init_attr_set_receive_max_sges_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_receive_max_sges", 1);
     p_doca_verbs_qp_init_attr_set_max_inline_data =
-        (doca_verbs_qp_init_attr_set_max_inline_data_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_max_inline_data");
+        (doca_verbs_qp_init_attr_set_max_inline_data_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_max_inline_data", 1);
     p_doca_verbs_qp_init_attr_set_user_index =
-        (doca_verbs_qp_init_attr_set_user_index_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_user_index");
+        (doca_verbs_qp_init_attr_set_user_index_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_user_index", 1);
     p_doca_verbs_qp_init_attr_set_qp_type =
-        (doca_verbs_qp_init_attr_set_qp_type_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_qp_type");
+        (doca_verbs_qp_init_attr_set_qp_type_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_qp_type", 1);
     p_doca_verbs_qp_init_attr_set_external_umem =
-        (doca_verbs_qp_init_attr_set_external_umem_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_external_umem");
+        (doca_verbs_qp_init_attr_set_external_umem_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_external_umem", 1);
     p_doca_verbs_qp_init_attr_set_external_dbr_umem =
-        (doca_verbs_qp_init_attr_set_external_dbr_umem_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_external_dbr_umem");
+        (doca_verbs_qp_init_attr_set_external_dbr_umem_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_external_dbr_umem", 1);
     p_doca_verbs_qp_init_attr_get_external_umem =
-        (doca_verbs_qp_init_attr_get_external_umem_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_get_external_umem");
+        (doca_verbs_qp_init_attr_get_external_umem_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_get_external_umem", 1);
     p_doca_verbs_qp_init_attr_set_external_datapath_en =
-        (doca_verbs_qp_init_attr_set_external_datapath_en_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_external_datapath_en");
+        (doca_verbs_qp_init_attr_set_external_datapath_en_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_external_datapath_en", 1);
     p_doca_verbs_qp_init_attr_set_external_uar =
-        (doca_verbs_qp_init_attr_set_external_uar_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_external_uar");
+        (doca_verbs_qp_init_attr_set_external_uar_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_external_uar", 1);
     p_doca_verbs_qp_init_attr_get_external_uar =
-        (doca_verbs_qp_init_attr_get_external_uar_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_get_external_uar");
+        (doca_verbs_qp_init_attr_get_external_uar_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_get_external_uar", 1);
     p_doca_verbs_qp_init_attr_set_qp_context =
-        (doca_verbs_qp_init_attr_set_qp_context_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_qp_context");
+        (doca_verbs_qp_init_attr_set_qp_context_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_qp_context", 1);
     p_doca_verbs_qp_init_attr_set_srq =
-        (doca_verbs_qp_init_attr_set_srq_t)get_verbs_sdk_symbol("doca_verbs_qp_init_attr_set_srq");
+        (doca_verbs_qp_init_attr_set_srq_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_srq", 1);
     p_doca_verbs_qp_init_attr_set_core_direct_master =
-        (doca_verbs_qp_init_attr_set_core_direct_master_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_core_direct_master");
+        (doca_verbs_qp_init_attr_set_core_direct_master_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_core_direct_master", 1);
     p_doca_verbs_qp_init_attr_set_send_dbr_mode =
-        (doca_verbs_qp_init_attr_set_send_dbr_mode_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_send_dbr_mode");
+        (doca_verbs_qp_init_attr_set_send_dbr_mode_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_send_dbr_mode", 0);
     p_doca_verbs_qp_init_attr_get_send_dbr_mode =
-        (doca_verbs_qp_init_attr_get_send_dbr_mode_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_get_send_dbr_mode");
+        (doca_verbs_qp_init_attr_get_send_dbr_mode_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_get_send_dbr_mode", 0);
 
     // DDP setter
     p_doca_verbs_qp_init_attr_set_ordering_semantic =
-        (doca_verbs_qp_init_attr_set_ordering_semantic_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_set_ordering_semantic");
+        (doca_verbs_qp_init_attr_set_ordering_semantic_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_set_ordering_semantic", 0);
     p_doca_verbs_qp_init_attr_get_ordering_semantic =
-        (doca_verbs_qp_init_attr_get_ordering_semantic_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_get_ordering_semantic");
+        (doca_verbs_qp_init_attr_get_ordering_semantic_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_get_ordering_semantic", 0);
 
     p_doca_verbs_qp_attr_create =
-        (doca_verbs_qp_attr_create_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_create");
+        (doca_verbs_qp_attr_create_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_create", 1);
     p_doca_verbs_qp_attr_destroy =
-        (doca_verbs_qp_attr_destroy_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_destroy");
-    p_doca_verbs_qp_attr_set_next_state = (doca_verbs_qp_attr_set_next_state_t)get_verbs_sdk_symbol(
-        "doca_verbs_qp_attr_set_next_state");
+        (doca_verbs_qp_attr_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_destroy", 1);
+    p_doca_verbs_qp_attr_set_next_state =
+        (doca_verbs_qp_attr_set_next_state_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_next_state", 1);
     p_doca_verbs_qp_attr_set_current_state =
-        (doca_verbs_qp_attr_set_current_state_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_current_state");
+        (doca_verbs_qp_attr_set_current_state_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_current_state", 1);
     p_doca_verbs_qp_attr_get_current_state =
-        (doca_verbs_qp_attr_get_current_state_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_get_current_state");
+        (doca_verbs_qp_attr_get_current_state_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_get_current_state", 1);
     p_doca_verbs_qp_attr_set_path_mtu =
-        (doca_verbs_qp_attr_set_path_mtu_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_set_path_mtu");
+        (doca_verbs_qp_attr_set_path_mtu_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_path_mtu", 1);
     p_doca_verbs_qp_attr_set_rq_psn =
-        (doca_verbs_qp_attr_set_rq_psn_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_set_rq_psn");
+        (doca_verbs_qp_attr_set_rq_psn_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_rq_psn", 1);
     p_doca_verbs_qp_attr_set_sq_psn =
-        (doca_verbs_qp_attr_set_sq_psn_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_set_sq_psn");
+        (doca_verbs_qp_attr_set_sq_psn_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_sq_psn", 1);
     p_doca_verbs_qp_attr_set_dest_qp_num =
-        (doca_verbs_qp_attr_set_dest_qp_num_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_dest_qp_num");
+        (doca_verbs_qp_attr_set_dest_qp_num_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_dest_qp_num", 1);
     p_doca_verbs_qp_attr_set_allow_remote_write =
-        (doca_verbs_qp_attr_set_allow_remote_write_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_allow_remote_write");
+        (doca_verbs_qp_attr_set_allow_remote_write_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_allow_remote_write", 1);
     p_doca_verbs_qp_attr_set_allow_remote_read =
-        (doca_verbs_qp_attr_set_allow_remote_read_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_allow_remote_read");
+        (doca_verbs_qp_attr_set_allow_remote_read_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_allow_remote_read", 1);
     p_doca_verbs_qp_attr_set_atomic_mode =
-        (doca_verbs_qp_attr_set_atomic_mode_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_atomic_mode");
+        (doca_verbs_qp_attr_set_atomic_mode_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_atomic_mode", 1);
     p_doca_verbs_qp_attr_set_ah_attr =
-        (doca_verbs_qp_attr_set_ah_attr_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_set_ah_attr");
-    p_doca_verbs_qp_attr_set_pkey_index = (doca_verbs_qp_attr_set_pkey_index_t)get_verbs_sdk_symbol(
-        "doca_verbs_qp_attr_set_pkey_index");
+        (doca_verbs_qp_attr_set_ah_attr_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_ah_attr", 1);
+    p_doca_verbs_qp_attr_set_pkey_index =
+        (doca_verbs_qp_attr_set_pkey_index_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_pkey_index", 1);
     p_doca_verbs_qp_attr_set_port_num =
-        (doca_verbs_qp_attr_set_port_num_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_set_port_num");
+        (doca_verbs_qp_attr_set_port_num_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_port_num", 1);
     p_doca_verbs_qp_attr_set_ack_timeout =
-        (doca_verbs_qp_attr_set_ack_timeout_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_ack_timeout");
-    p_doca_verbs_qp_attr_set_retry_cnt = (doca_verbs_qp_attr_set_retry_cnt_t)get_verbs_sdk_symbol(
-        "doca_verbs_qp_attr_set_retry_cnt");
-    p_doca_verbs_qp_attr_set_rnr_retry = (doca_verbs_qp_attr_set_rnr_retry_t)get_verbs_sdk_symbol(
-        "doca_verbs_qp_attr_set_rnr_retry");
+        (doca_verbs_qp_attr_set_ack_timeout_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_ack_timeout", 1);
+    p_doca_verbs_qp_attr_set_retry_cnt =
+        (doca_verbs_qp_attr_set_retry_cnt_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_retry_cnt", 1);
+    p_doca_verbs_qp_attr_set_rnr_retry =
+        (doca_verbs_qp_attr_set_rnr_retry_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_rnr_retry", 1);
     p_doca_verbs_qp_attr_set_min_rnr_timer =
-        (doca_verbs_qp_attr_set_min_rnr_timer_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_min_rnr_timer");
+        (doca_verbs_qp_attr_set_min_rnr_timer_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_min_rnr_timer", 1);
     p_doca_verbs_qp_attr_set_max_rd_atomic =
-        (doca_verbs_qp_attr_set_max_rd_atomic_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_max_rd_atomic");
+        (doca_verbs_qp_attr_set_max_rd_atomic_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_max_rd_atomic", 1);
     p_doca_verbs_qp_attr_set_max_dest_rd_atomic =
-        (doca_verbs_qp_attr_set_max_dest_rd_atomic_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_max_dest_rd_atomic");
+        (doca_verbs_qp_attr_set_max_dest_rd_atomic_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_max_dest_rd_atomic", 1);
     p_doca_verbs_qp_attr_set_lag_tx_port_affinity =
-        (doca_verbs_qp_attr_set_lag_tx_port_affinity_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_attr_set_lag_tx_port_affinity");
+        (doca_verbs_qp_attr_set_lag_tx_port_affinity_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_lag_tx_port_affinity", 0);
 
     p_doca_verbs_qp_attr_set_cc_group =
-        (doca_verbs_qp_attr_set_cc_group_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_set_cc_group");
+        (doca_verbs_qp_attr_set_cc_group_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_set_cc_group", 0);
     p_doca_verbs_qp_attr_get_cc_group =
-        (doca_verbs_qp_attr_get_cc_group_t)get_verbs_sdk_symbol("doca_verbs_qp_attr_get_cc_group");
+        (doca_verbs_qp_attr_get_cc_group_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_attr_get_cc_group", 0);
     p_doca_verbs_query_cc_group_caps =
-        (doca_verbs_query_cc_group_caps_t)get_verbs_sdk_symbol("doca_verbs_query_cc_group_caps");
-    p_doca_verbs_cc_group_caps_get_data = (doca_verbs_cc_group_caps_get_data_t)get_verbs_sdk_symbol(
-        "doca_verbs_cc_group_caps_get_data");
+        (doca_verbs_query_cc_group_caps_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_query_cc_group_caps", 0);
+    p_doca_verbs_cc_group_caps_get_data =
+        (doca_verbs_cc_group_caps_get_data_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_caps_get_data", 0);
     p_doca_verbs_cc_group_caps_free =
-        (doca_verbs_cc_group_caps_free_t)get_verbs_sdk_symbol("doca_verbs_cc_group_caps_free");
+        (doca_verbs_cc_group_caps_free_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_caps_free", 0);
     p_doca_verbs_cc_group_attr_create =
-        (doca_verbs_cc_group_attr_create_t)get_verbs_sdk_symbol("doca_verbs_cc_group_attr_create");
-    p_doca_verbs_cc_group_attr_destroy = (doca_verbs_cc_group_attr_destroy_t)get_verbs_sdk_symbol(
-        "doca_verbs_cc_group_attr_destroy");
-    p_doca_verbs_cc_group_attr_set_hint = (doca_verbs_cc_group_attr_set_hint_t)get_verbs_sdk_symbol(
-        "doca_verbs_cc_group_attr_set_hint");
+        (doca_verbs_cc_group_attr_create_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_attr_create", 0);
+    p_doca_verbs_cc_group_attr_destroy =
+        (doca_verbs_cc_group_attr_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_attr_destroy", 0);
+    p_doca_verbs_cc_group_attr_set_hint =
+        (doca_verbs_cc_group_attr_set_hint_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_attr_set_hint", 0);
     p_doca_verbs_cc_group_create =
-        (doca_verbs_cc_group_create_t)get_verbs_sdk_symbol("doca_verbs_cc_group_create");
+        (doca_verbs_cc_group_create_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_create", 0);
     p_doca_verbs_cc_group_destroy =
-        (doca_verbs_cc_group_destroy_t)get_verbs_sdk_symbol("doca_verbs_cc_group_destroy");
+        (doca_verbs_cc_group_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_destroy", 0);
     p_doca_verbs_cc_group_modify =
-        (doca_verbs_cc_group_modify_t)get_verbs_sdk_symbol("doca_verbs_cc_group_modify");
+        (doca_verbs_cc_group_modify_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cc_group_modify", 0);
 
     p_doca_verbs_ah_attr_create =
-        (doca_verbs_ah_attr_create_t)get_verbs_sdk_symbol("doca_verbs_ah_attr_create");
+        (doca_verbs_ah_attr_create_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_create", 1);
     p_doca_verbs_ah_attr_destroy =
-        (doca_verbs_ah_attr_destroy_t)get_verbs_sdk_symbol("doca_verbs_ah_attr_destroy");
+        (doca_verbs_ah_attr_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_destroy", 1);
     p_doca_verbs_ah_attr_set_gid =
-        (doca_verbs_ah_attr_set_gid_t)get_verbs_sdk_symbol("doca_verbs_ah_attr_set_gid");
-    p_doca_verbs_ah_attr_set_addr_type = (doca_verbs_ah_attr_set_addr_type_t)get_verbs_sdk_symbol(
-        "doca_verbs_ah_attr_set_addr_type");
+        (doca_verbs_ah_attr_set_gid_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_gid", 1);
+    p_doca_verbs_ah_attr_set_addr_type =
+        (doca_verbs_ah_attr_set_addr_type_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_addr_type", 1);
     p_doca_verbs_ah_attr_set_dlid =
-        (doca_verbs_ah_attr_set_dlid_t)get_verbs_sdk_symbol("doca_verbs_ah_attr_set_dlid");
+        (doca_verbs_ah_attr_set_dlid_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_dlid", 1);
     p_doca_verbs_ah_attr_set_sl =
-        (doca_verbs_ah_attr_set_sl_t)get_verbs_sdk_symbol("doca_verbs_ah_attr_set_sl");
-    p_doca_verbs_ah_attr_set_sgid_index = (doca_verbs_ah_attr_set_sgid_index_t)get_verbs_sdk_symbol(
-        "doca_verbs_ah_attr_set_sgid_index");
+        (doca_verbs_ah_attr_set_sl_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_sl", 1);
+    p_doca_verbs_ah_attr_set_sgid_index =
+        (doca_verbs_ah_attr_set_sgid_index_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_sgid_index", 1);
     p_doca_verbs_ah_attr_set_static_rate =
-        (doca_verbs_ah_attr_set_static_rate_t)get_verbs_sdk_symbol(
-            "doca_verbs_ah_attr_set_static_rate");
-    p_doca_verbs_ah_attr_set_hop_limit = (doca_verbs_ah_attr_set_hop_limit_t)get_verbs_sdk_symbol(
-        "doca_verbs_ah_attr_set_hop_limit");
+        (doca_verbs_ah_attr_set_static_rate_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_static_rate", 1);
+    p_doca_verbs_ah_attr_set_hop_limit =
+        (doca_verbs_ah_attr_set_hop_limit_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_hop_limit", 1);
     p_doca_verbs_ah_attr_set_traffic_class =
-        (doca_verbs_ah_attr_set_traffic_class_t)get_verbs_sdk_symbol(
-            "doca_verbs_ah_attr_set_traffic_class");
+        (doca_verbs_ah_attr_set_traffic_class_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ah_attr_set_traffic_class", 1);
 
-    p_doca_verbs_qp_create = (doca_verbs_qp_create_t)get_verbs_sdk_symbol("doca_verbs_qp_create");
+    p_doca_verbs_qp_create =
+        (doca_verbs_qp_create_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_qp_create", 1);
     p_doca_verbs_qp_destroy =
-        (doca_verbs_qp_destroy_t)get_verbs_sdk_symbol("doca_verbs_qp_destroy");
-    p_doca_verbs_qp_modify = (doca_verbs_qp_modify_t)get_verbs_sdk_symbol("doca_verbs_qp_modify");
-    p_doca_verbs_qp_query = (doca_verbs_qp_query_t)get_verbs_sdk_symbol("doca_verbs_qp_query");
-    p_doca_verbs_qp_get_wq = (doca_verbs_qp_get_wq_t)get_verbs_sdk_symbol("doca_verbs_qp_get_wq");
+        (doca_verbs_qp_destroy_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_qp_destroy", 1);
+    p_doca_verbs_qp_modify =
+        (doca_verbs_qp_modify_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_qp_modify", 1);
+    p_doca_verbs_qp_query =
+        (doca_verbs_qp_query_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_qp_query", 1);
+    p_doca_verbs_qp_get_wq =
+        (doca_verbs_qp_get_wq_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_qp_get_wq", 1);
     p_doca_verbs_qp_init_attr_get_qp_context =
-        (doca_verbs_qp_init_attr_get_qp_context_t)get_verbs_sdk_symbol(
-            "doca_verbs_qp_init_attr_get_qp_context");
+        (doca_verbs_qp_init_attr_get_qp_context_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_init_attr_get_qp_context", 1);
     p_doca_verbs_qp_get_dbr_addr =
-        (doca_verbs_qp_get_dbr_addr_t)get_verbs_sdk_symbol("doca_verbs_qp_get_dbr_addr");
+        (doca_verbs_qp_get_dbr_addr_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_get_dbr_addr", 1);
     p_doca_verbs_qp_get_uar_addr =
-        (doca_verbs_qp_get_uar_addr_t)get_verbs_sdk_symbol("doca_verbs_qp_get_uar_addr");
+        (doca_verbs_qp_get_uar_addr_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_qp_get_uar_addr", 1);
     p_doca_verbs_qp_get_qpn =
-        (doca_verbs_qp_get_qpn_t)get_verbs_sdk_symbol("doca_verbs_qp_get_qpn");
+        (doca_verbs_qp_get_qpn_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_qp_get_qpn", 1);
 
     p_doca_rdma_bridge_get_dev_pd =
-        (doca_rdma_bridge_get_dev_pd_t)get_common_sdk_symbol("doca_rdma_bridge_get_dev_pd");
-    p_doca_verbs_bridge_verbs_pd_import = (doca_verbs_bridge_verbs_pd_import_t)get_verbs_sdk_symbol(
-        "doca_verbs_bridge_verbs_pd_import");
+        (doca_rdma_bridge_get_dev_pd_t)doca_sdk_find_symbol(
+            common_handle, "doca_rdma_bridge_get_dev_pd", 1);
+    p_doca_verbs_bridge_verbs_pd_import =
+        (doca_verbs_bridge_verbs_pd_import_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_bridge_verbs_pd_import", 1);
     p_doca_verbs_bridge_verbs_context_import =
-        (doca_verbs_bridge_verbs_context_import_t)get_verbs_sdk_symbol(
-            "doca_verbs_bridge_verbs_context_import");
+        (doca_verbs_bridge_verbs_context_import_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_bridge_verbs_context_import", 1);
 
 #if DOCA_VERBS_QP_SDK_WRAPPER_ENABLE_DEBUG == 1
     p_doca_log_backend_create_with_file_sdk =
-        (doca_log_backend_create_with_file_sdk_t)get_verbs_sdk_symbol(
-            "doca_log_backend_create_with_file_sdk");
+        (doca_log_backend_create_with_file_sdk_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_log_backend_create_with_file_sdk", 1);
 #endif
 
     /* Check if all symbols were found */

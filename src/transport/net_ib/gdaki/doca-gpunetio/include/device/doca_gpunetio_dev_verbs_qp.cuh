@@ -183,12 +183,12 @@ __device__ static __forceinline__ void doca_gpu_dev_common_mark_wqes_ready(uint6
                              (unsigned long long int)(to_wqe_idx + 1)) !=
                    (unsigned long long int)from_wqe_idx)
                 continue;
-            doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
+            doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
         } else {
             doca_gpu_dev_verbs_fence_release<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
             cuda::atomic_ref<uint64_t, cuda::thread_scope_device> ready_index_aref(ready_index);
             while (ready_index_aref.load(cuda::memory_order_relaxed) != from_wqe_idx) continue;
-            doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
+            doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
             ready_index_aref.store(to_wqe_idx + 1, cuda::memory_order_relaxed);
         }
     }

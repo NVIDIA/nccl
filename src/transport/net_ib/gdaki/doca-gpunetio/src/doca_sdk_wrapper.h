@@ -48,6 +48,11 @@
 #ifndef DOCA_SDK_WRAPPER_H
 #define DOCA_SDK_WRAPPER_H
 
+#include <dlfcn.h>
+#include <stddef.h>
+
+#include "doca_gpunetio_log.hpp"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -55,6 +60,21 @@ extern "C" {
 #define DOCA_SDK_LIB_PATH_ENV_VAR "DOCA_SDK_LIB_PATH"
 
 const size_t doca_sdk_path_length = 2048;
+
+static inline void *doca_sdk_find_symbol(void *handle, const char *symbol_name, int required) {
+    dlerror();
+    void *symbol = dlsym(handle, symbol_name);
+    const char *error = dlerror();
+    if (error != NULL) {
+        if (required) {
+            DOCA_LOG(LOG_ERR, "Failed to get required symbol %s: %s\n", symbol_name, error);
+        } else {
+            DOCA_LOG(LOG_WARNING, "Failed to get optional symbol %s: %s\n", symbol_name, error);
+        }
+        return NULL;
+    }
+    return symbol;
+}
 
 #ifdef __cplusplus
 }

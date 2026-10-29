@@ -6,6 +6,7 @@
  * RDMA_WRITE_WITH_IMM into an 8-byte slot in GPU memory, and adds the signal value to it.
  *
  * None of these calls are thread-safe, and delivery assumes a single writer.
+ * See doca_gpu_verbs_service_set_signal_map().
  */
 
 #ifndef DOCA_GPUNETIO_SIGNAL_H
@@ -148,6 +149,28 @@ doca_error_t doca_gpu_verbs_signal_reset(struct doca_gpu_verbs_signal_map *map, 
  * - DOCA_ERROR_BAD_STATE - if any signal is still registered.
  */
 doca_error_t doca_gpu_verbs_signal_map_destroy(struct doca_gpu_verbs_signal_map *map);
+
+/**
+ * Give a service the map to deliver signals into.
+ *
+ * The map is rank-local, so it is set once on the service rather than once per QP. While attached,
+ * its registrations are immutable. The service detaches the map when it is destroyed.
+ *
+ * @param [in] service
+ * Service object that will deliver into the map.
+ * @param [in] map
+ * Map to deliver into, or NULL to detach.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_IN_USE - if the map is already attached to another service.
+ * - DOCA_ERROR_BAD_STATE - if any RQ is already being monitored.
+ * - DOCA_ERROR_NO_MEMORY - if the attached-map lookup could not be built.
+ */
+doca_error_t doca_gpu_verbs_service_set_signal_map(doca_gpu_verbs_service_t service,
+                                                   struct doca_gpu_verbs_signal_map *map);
 
 #ifdef __cplusplus
 }

@@ -28,7 +28,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syslog.h>
@@ -36,6 +35,7 @@
 #include <string.h>
 
 #include "doca_gpunetio_log.hpp"
+#include "doca_sdk_wrapper.h"
 #include "doca_gpunetio_sdk_wrapper.h"
 
 /*
@@ -85,16 +85,6 @@ static doca_gpu_cap_is_nic_handler_gpu_sm_db_supported_t
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
 static void *gpunetio_handle = nullptr;
-
-/* Helper function to get function pointer from libcuda */
-static void *get_gpunetio_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(gpunetio_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
 
 static void doca_gpunetio_sdk_wrapper_init(int *ret) {
     const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
@@ -187,29 +177,35 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
     }
 
     /* Get function pointers */
-    p_doca_gpu_create = (doca_gpu_create_t)get_gpunetio_sdk_symbol("doca_gpu_create");
-    p_doca_gpu_destroy = (doca_gpu_destroy_t)get_gpunetio_sdk_symbol("doca_gpu_destroy");
-    p_doca_gpu_mem_alloc = (doca_gpu_mem_alloc_t)get_gpunetio_sdk_symbol("doca_gpu_mem_alloc");
-    p_doca_gpu_mem_free = (doca_gpu_mem_free_t)get_gpunetio_sdk_symbol("doca_gpu_mem_free");
-    p_doca_gpu_dmabuf_fd = (doca_gpu_dmabuf_fd_t)get_gpunetio_sdk_symbol("doca_gpu_dmabuf_fd");
+    p_doca_gpu_create =
+        (doca_gpu_create_t)doca_sdk_find_symbol(gpunetio_handle, "doca_gpu_create", 1);
+    p_doca_gpu_destroy =
+        (doca_gpu_destroy_t)doca_sdk_find_symbol(gpunetio_handle, "doca_gpu_destroy", 1);
+    p_doca_gpu_mem_alloc =
+        (doca_gpu_mem_alloc_t)doca_sdk_find_symbol(gpunetio_handle, "doca_gpu_mem_alloc", 1);
+    p_doca_gpu_mem_free =
+        (doca_gpu_mem_free_t)doca_sdk_find_symbol(gpunetio_handle, "doca_gpu_mem_free", 1);
+    p_doca_gpu_dmabuf_fd =
+        (doca_gpu_dmabuf_fd_t)doca_sdk_find_symbol(gpunetio_handle, "doca_gpu_dmabuf_fd", 1);
     p_doca_gpu_verbs_req_notify_cq =
-        (doca_gpu_verbs_req_notify_cq_t)get_gpunetio_sdk_symbol("doca_gpu_verbs_req_notify_cq");
+        (doca_gpu_verbs_req_notify_cq_t)doca_sdk_find_symbol(
+            gpunetio_handle, "doca_gpu_verbs_req_notify_cq", 0);
 
     /* Optional symbols */
     p_doca_gpu_cap_is_gpu_mem_umem_supported =
-        (doca_gpu_cap_is_gpu_mem_umem_supported_t)get_gpunetio_sdk_symbol(
-            "doca_gpu_cap_is_gpu_mem_umem_supported");
+        (doca_gpu_cap_is_gpu_mem_umem_supported_t)doca_sdk_find_symbol(
+            gpunetio_handle, "doca_gpu_cap_is_gpu_mem_umem_supported", 0);
     p_doca_gpu_cap_is_host_mem_umem_supported =
-        (doca_gpu_cap_is_host_mem_umem_supported_t)get_gpunetio_sdk_symbol(
-            "doca_gpu_cap_is_host_mem_umem_supported");
+        (doca_gpu_cap_is_host_mem_umem_supported_t)doca_sdk_find_symbol(
+            gpunetio_handle, "doca_gpu_cap_is_host_mem_umem_supported", 0);
     p_doca_gpu_cap_is_nic_handler_gpu_sm_db_supported =
-        (doca_gpu_cap_is_nic_handler_gpu_sm_db_supported_t)get_gpunetio_sdk_symbol(
-            "doca_gpu_cap_is_nic_handler_gpu_sm_db_supported");
+        (doca_gpu_cap_is_nic_handler_gpu_sm_db_supported_t)doca_sdk_find_symbol(
+            gpunetio_handle, "doca_gpu_cap_is_nic_handler_gpu_sm_db_supported", 0);
 
 #if DOCA_GPUNETIO_SDK_WRAPPER_ENABLE_DEBUG == 1
     p_doca_log_backend_create_with_file_sdk =
-        (doca_log_backend_create_with_file_sdk_t)get_gpunetio_sdk_symbol(
-            "doca_log_backend_create_with_file_sdk");
+        (doca_log_backend_create_with_file_sdk_t)doca_sdk_find_symbol(
+            gpunetio_handle, "doca_log_backend_create_with_file_sdk", 1);
 #endif
 
     /*

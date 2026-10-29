@@ -146,6 +146,8 @@ struct doca_gpu_verbs_qp_list_hl {
     struct doca_gpu_verbs_umem_hl *cq_dbr_umem;
     struct doca_gpu_verbs_umem_hl *sq_umem;
     struct doca_gpu_verbs_umem_hl *sq_dbr_umem;
+    struct doca_gpu_verbs_umem_hl *rq_cq_umem;     
+    struct doca_gpu_verbs_umem_hl *rq_cq_dbr_umem;
 };
 
 struct doca_gpu_verbs_qp_group_list_hl {
@@ -155,6 +157,8 @@ struct doca_gpu_verbs_qp_group_list_hl {
     struct doca_gpu_verbs_umem_hl *cq_dbr_umem;
     struct doca_gpu_verbs_umem_hl *sq_umem;
     struct doca_gpu_verbs_umem_hl *sq_dbr_umem;
+    struct doca_gpu_verbs_umem_hl *rq_cq_umem;     
+    struct doca_gpu_verbs_umem_hl *rq_cq_dbr_umem; 
 };
 
 /**
@@ -194,6 +198,10 @@ doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp);
  * create two GDAKI QPs, main one and the one used for core direct operations.
  * The two QPs share the same UAR.
  *
+ * If qp_init_attr->rq_nwqe > 0, the main QP gets a receive queue for RDMA Write with Immediate,
+ * with the requirements: an Open GPUNetIO instance, GDRCopy, and enable_umem_cpu set to false. 
+ * The companion QP never gets one.
+ *
  * @param [in] qp_init_attr
  * High-level QP init attributes.
  * @param [out] qpg
@@ -203,12 +211,16 @@ doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp);
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_NOT_SUPPORTED - if an RQ is requested without its requirements.
  */
 doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_attr_hl *qp_init_attr,
                                                struct doca_gpu_verbs_qp_group_hl **qpg);
 
 /**
  * Destroy an high-level GPUNetIO QP group.
+ *
+ * Destroy every service monitoring the group's main QP first. If a QP of the group is still
+ * monitored, nothing is destroyed and DOCA_ERROR_IN_USE is returned.
  *
  * @param [in] qp
  * GPUNetIO high-level QP group to destroy
@@ -217,6 +229,7 @@ doca_error_t doca_gpu_verbs_create_qp_group_hl(struct doca_gpu_verbs_qp_init_att
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_IN_USE - if a QP of the group is monitored by a service.
  */
 doca_error_t doca_gpu_verbs_destroy_qp_group_hl(struct doca_gpu_verbs_qp_group_hl *qpg);
 
@@ -259,6 +272,11 @@ doca_error_t doca_gpu_verbs_qp_flat_list_destroy_hl(struct doca_gpu_dev_verbs_qp
  * All QPs share four registered memory slabs (CQ ring, CQ DBR, SQ WQ, SQ DBR) to reduce
  * the number of umem registrations to O(1) instead of O(N).
  *
+ * If qp_init_attr->rq_nwqe > 0, every QP also gets a receive queue of that size (rounded up to a
+ * power of two) for RDMA Write with Immediate, with a receive CQ in host memory. The receive CQs
+ * share two more host-memory slabs (rq_cq_umem, rq_cq_dbr_umem). The RQ requirements are: 
+ * an Open GPUNetIO instance, GDRCopy, and enable_umem_cpu set to false.
+ *
  * @param [in] qp_init_attr
  * High-level QP init attributes (gpu_dev, net_dev, ibpd, sq_nwqe, mreg_type must be set).
  * @param [in] num_qps
@@ -275,10 +293,17 @@ doca_error_t doca_gpu_verbs_create_qp_list_hl(struct doca_gpu_verbs_qp_init_attr
 /**
  * Destroy a QP list created by doca_gpu_verbs_create_qp_list_hl.
  *
+ * Destroy every service monitoring a QP of the list first. If any QP is still monitored, nothing
+ * is destroyed and DOCA_ERROR_IN_USE is returned.
+ *
  * @param [in] qp_list
  * QP list to destroy.
  *
- * @return DOCA_SUCCESS or a doca_error code.
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_IN_USE - if a QP of the list is monitored by a service.
  */
 doca_error_t doca_gpu_verbs_destroy_qp_list_hl(struct doca_gpu_verbs_qp_list_hl *qp_list);
 
@@ -286,6 +311,9 @@ doca_error_t doca_gpu_verbs_destroy_qp_list_hl(struct doca_gpu_verbs_qp_list_hl 
  * Create a list of high-level GPUNetIO QP groups (main+companion pairs) backed by shared slabs.
  * All QP groups share four registered memory slabs (CQ ring, CQ DBR, SQ WQ, SQ DBR) to reduce
  * the number of umem registrations to O(1) instead of O(N).
+ *
+ * If qp_init_attr->rq_nwqe > 0, the main QP of every group gets a receive queue for RDMA Write
+ * with Immediate. Companion QPs never get one.
  *
  * @param [in] qp_init_attr
  * High-level QP init attributes.
@@ -303,10 +331,17 @@ doca_error_t doca_gpu_verbs_create_qp_group_list_hl(
 /**
  * Destroy a QP group list created by doca_gpu_verbs_create_qp_group_list_hl.
  *
+ * Destroy every service monitoring a QP of the list first. If any QP is still monitored, nothing
+ * is destroyed and DOCA_ERROR_IN_USE is returned.
+ *
  * @param [in] qpg_list
  * QP group list to destroy.
  *
- * @return DOCA_SUCCESS or a doca_error code.
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_IN_USE - if a QP of the list is monitored by a service.
  */
 doca_error_t doca_gpu_verbs_destroy_qp_group_list_hl(
     struct doca_gpu_verbs_qp_group_list_hl *qpg_list);

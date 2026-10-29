@@ -101,6 +101,8 @@ static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
 
 static void ncclTuningRubinPreInit(struct ncclComm* comm) {
   ncclTuningRubinTuningConstants(&comm->tuningContext.tuningConstants);
+  if (comm->nNodes == 1 && comm->nRanks >= 64)
+    comm->tuningContext.tuningConstants.hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] += 13;
 }
 
 static ncclResult_t ncclTuningRubinGetModelEntry(int compCap, int id, struct ncclTuningModelEntry_t** entry) {

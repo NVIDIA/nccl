@@ -24,6 +24,7 @@
 #include "param.h"
 
 #include "doca_gpunetio_host.h"
+#include "doca-gpunetio/src/doca_verbs_device_attr.hpp"
 #include "nccl_device/gin/gdaki/gin_gdaki_device_host_common.h"
 #include "gpucontext/gpucontext.h"
 #include "../gin.h"
@@ -62,7 +63,6 @@ NCCL_PARAM(GinGdakiMaxQpRdAtomic, "GIN_GDAKI_MAX_QP_RD_ATOMIC", -2);
 NCCL_PARAM(GinGdakiLAGAwareDisable, "GIN_GDAKI_LAG_AWARE_DISABLE", 0);
 NCCL_PARAM(GinGdakiCqType, "GIN_GDAKI_CQ_TYPE", 0);
 NCCL_PARAM(GinErrorQuerySec, "GIN_ERROR_QUERY_SEC", 10);
-NCCL_PARAM(GinIbOooAll, "GIN_IB_OOO_OPT", 0);
 // Allocate a dedicated GIN-owned Q counter set and attach every GIN QP to it (diagnostic-only).
 // Set to 0 to disable, leaving GIN QPs on the device default counter set (behavior unchanged).
 NCCL_PARAM(GinGdakiQCounter, "GIN_GDAKI_Q_COUNTER", 1);
@@ -80,12 +80,6 @@ static const int NCCL_IB_TC_DEFAULT = 0;
 
 static bool gdakiQpNeedsProxyProgress(const struct doca_gpu_verbs_qp* qp) {
   return qp->cpu_proxy || qp->cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST;
-}
-
-static enum doca_verbs_qp_ordering_semantic gdakiOrderingSematic() {
-  if (ncclParamGinIbOooAll() == 1) return DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL;
-
-  return DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA;
 }
 
 static inline bool gdakiRelaxedOrderingEnabled() {
@@ -335,7 +329,6 @@ struct gdaki_exch_info {
   int cuda_id;
   int rank;
   enum ibv_mtu active_mtu;
-  enum doca_verbs_qp_ordering_semantic ordering_semantic;
 };
 
 struct gdaki_context {
@@ -470,7 +463,6 @@ static void gdakiFillExchInfo(struct gdaki_exch_info* exch_info, struct gdaki_co
   exch_info->cuda_id = gdaki_ctx->cuda_id;
   exch_info->rank = gdaki_ctx->rank;
   exch_info->active_mtu = gdaki_ctx->port_attr.active_mtu;
-  exch_info->ordering_semantic = gdakiOrderingSematic();
 }
 
 static ncclResult_t gdakiCreateVerbsAh(struct gdaki_context* ctx, int ib_sl, int ib_tc, int ib_gid_index) {
@@ -580,16 +572,6 @@ static ncclResult_t gdakiConnectQp(struct gdaki_context* ctx, struct doca_gpu_ve
   }
 
   NCCLCHECK(gdakiGetPathMtu(ctx->port_attr.active_mtu, exch_info->active_mtu, &path_mtu));
-  enum doca_verbs_qp_ordering_semantic ordering_semantic = gdakiOrderingSematic();
-
-  if (ordering_semantic != exch_info->ordering_semantic) {
-    uint32_t qpn;
-    DOCACHECK(doca_verbs_qp_get_qpn(gqp->qp, &qpn));
-    WARN("Can't connect local QP %x ordering_semantic %x with remote QP %x "
-         "ordering_semantic %x are ordering_semantic value is different",
-         qpn, ordering_semantic, exch_info->qpn, exch_info->ordering_semantic);
-    return ncclInvalidArgument;
-  }
 
   DOCACHECK(doca_verbs_ah_attr_set_gid(ctx->ah, exch_info->vgid));
   DOCACHECK(doca_verbs_ah_attr_set_dlid(ctx->ah, dlid));
@@ -743,6 +725,27 @@ out:
     doca_error_t docaStatus = doca_gpu_destroy(gpuDev);
     if (docaStatus != DOCA_SUCCESS) {
       WARN("[%d] GIN/GDAKI: failed to destroy the temporary GPU device after capability validation: DOCA error %d",
+           cComm->rank, docaStatus);
+      if (status == ncclSuccess) status = ncclSystemError;
+    }
+  }
+  return status;
+}
+
+ncclResult_t ncclGinGdakiDdpCheckDeviceSupport(void* collComm) {
+  struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+  ncclResult_t status = ncclSuccess;
+  struct doca_verbs_device_attr* attr = nullptr;
+
+  DOCACHECKGOTO(doca_verbs_query_device(cComm->ib.context, &attr), status, out);
+  if (attr->m_dp_ordering_rc != DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL || !attr->m_dp_ordering_force)
+    status = ncclInvalidUsage;
+
+out:
+  if (attr) {
+    doca_error_t docaStatus = doca_verbs_device_attr_free(attr);
+    if (docaStatus != DOCA_SUCCESS) {
+      WARN("[%d] GIN/GDAKI: failed to free device attributes after DDP capability validation: DOCA error %d",
            cComm->rank, docaStatus);
       if (status == ncclSuccess) status = ncclSystemError;
     }
@@ -972,6 +975,8 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   qp_init_attr.net_dev = gdaki_ctx->ndev;
   qp_init_attr.ibpd = cComm->ib.pd;
   qp_init_attr.sq_nwqe = gdaki_ctx->qp_sq_size;
+  qp_init_attr.ordering_semantic =
+    cComm->ddpEnabled ? DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL : DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA;
   qp_init_attr.nic_handler = nicHandler;
   qp_init_attr.mreg_type = DOCA_GPUNETIO_VERBS_MEM_REG_TYPE_DEFAULT;
   if (ncclParamGinGdakiUseReliableDB())
@@ -1005,8 +1010,6 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   }
 
   if (nqps_for_comm_this_rank > 0) {
-  // SPC-X Ordering Semantic. 0 by default.
-    qp_init_attr.ordering_semantic = gdakiOrderingSematic();
     if (needCompanion) {
     retry_create_qp_group_list_hl:
       doca_error_t docaStatus =

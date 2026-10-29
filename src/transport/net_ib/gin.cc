@@ -46,6 +46,7 @@ static ncclResult_t ncclGinIbGdrGpuSupport(bool gdaki) {
 
 NCCL_PARAM(GinType, "GIN_TYPE", -1);
 NCCL_PARAM(GinIbTc, "GIN_IB_TC", -1);
+NCCL_PARAM(GinIbOooAll, "GIN_IB_OOO_OPT", -1);
 USE_NCCL_PARAM(ncclParamIbTc, int32_t);
 
 static std::mutex ncclGinIbGdakiLockMutex;
@@ -332,22 +333,61 @@ ncclResult_t ncclGinIbGdakiListen(void* ctx, int dev, void* opaqueHandle, void**
 
 static ncclResult_t ncclGinIbGdakiValidateDeviceSupport(struct ncclGinIbCollComm* cComm) {
   ncclResult_t status = ncclSuccess;
-  int* rankSupported = nullptr;
-  int localSupported = 1;
+  struct {
+    int gdakiSupported;
+    int ddpSupported;
+    int64_t ddpMode;
+  } localSupported = {1, 1, ncclParamGinIbOooAll()};
+  decltype(localSupported)* rankSupported = nullptr;
   int allSupported = 1;
+  int ddpAllSupported = 1;
+  int ddpMode = -1; // -2: invalid/conflicting, -1: auto, 0: off, 1: on.
 
-  if (ncclGinIbGdrGpuSupport(true) != ncclSuccess) localSupported = 0;
-  if (ncclGinGdakiCheckDeviceSupport(cComm) != ncclSuccess) localSupported = 0;
+  if (ncclGinIbGdrGpuSupport(true) != ncclSuccess) localSupported.gdakiSupported = 0;
+  if (ncclGinGdakiCheckDeviceSupport(cComm) != ncclSuccess) localSupported.gdakiSupported = 0;
+  if (ncclGinGdakiDdpCheckDeviceSupport(cComm) != ncclSuccess) localSupported.ddpSupported = 0;
 
   NCCLCHECKGOTO(ncclIbMalloc((void**)&rankSupported, cComm->nranks * sizeof(*rankSupported)), status, out);
   NCCLCHECKGOTO(cComm->allGather(cComm, &localSupported, rankSupported, sizeof(localSupported)), status, out);
 
   for (int r = 0; r < cComm->nranks; r++) {
-    allSupported &= rankSupported[r];
+    allSupported &= rankSupported[r].gdakiSupported;
+
+    // DDP can be enabled only if every rank reports support.
+    ddpAllSupported &= rankSupported[r].ddpSupported;
+
+    // Reduce DDP mode across ranks:
+    //   Auto (-1) adopts any valid setting; off/on accepts only auto or the same setting.
+    //   Invalid or conflicting settings transition to error (-2), which remains unchanged.
+    switch (ddpMode) {
+    case 1:
+    case 0:
+      ddpMode = (rankSupported[r].ddpMode != -1 && rankSupported[r].ddpMode != ddpMode) ? -2 : ddpMode;
+      break;
+    case -1:
+      ddpMode = (rankSupported[r].ddpMode >= -1 && rankSupported[r].ddpMode <= 1) ? rankSupported[r].ddpMode : -2;
+      break;
+    case -2:
+      break;
+    }
   }
 
   if (!allSupported) {
     cComm->gdakiUnsupported = true;
+    goto out;
+  }
+
+  if (ddpMode == -2) {
+    WARN("[%d] GIN/GDAKI: NCCL_GIN_IB_OOO_OPT must be -1, 0 or 1; 0 and 1 cannot coexist across ranks", cComm->rank);
+    status = ncclInvalidArgument;
+  } else if (ddpMode == 1 && !ddpAllSupported) {
+    WARN("[%d] GIN/GDAKI: NCCL_GIN_IB_OOO_OPT=1 requires DDP support on every rank", cComm->rank);
+    status = ncclInvalidUsage;
+  } else if (ddpMode == -1 && !ddpAllSupported) {
+    cComm->ddpEnabled = false;
+    INFO(NCCL_NET, "GIN/GDAKI: DDP disabled, using IBTA ordering");
+  } else if (ddpMode != 0 && ddpAllSupported) {
+    cComm->ddpEnabled = true;
   }
 
 out:

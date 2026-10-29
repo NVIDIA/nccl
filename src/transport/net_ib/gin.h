@@ -30,6 +30,7 @@ struct ncclGinIbCollComm {
   ncclResult_t (*getGidIndex)(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
                               int* gidIndex);
   bool gdakiUnsupported;
+  bool ddpEnabled;
 };
 
 #endif

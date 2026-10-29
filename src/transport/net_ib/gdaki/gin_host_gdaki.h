@@ -26,6 +26,7 @@
 #include "gin/gin_host.h"
 
 ncclResult_t ncclGinGdakiCheckDeviceSupport(void* collComm);
+ncclResult_t ncclGinGdakiDdpCheckDeviceSupport(void* collComm);
 ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void** outGinCtx,
                                        ncclNetDeviceHandle_t** outDevHandle);
 ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx);

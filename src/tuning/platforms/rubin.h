@@ -84,7 +84,7 @@ static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL] = 3.49;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL128] = 5.06;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 11.41;
-  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL] = 2.6;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL] = 2.35;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 3.32;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 9.5;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] = 41.35;

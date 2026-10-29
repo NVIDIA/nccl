@@ -71,9 +71,11 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
            comm->clique.size);
       return ncclSystemError;
     }
+    CUmemGenericAllocationHandle importedHandle;
     err = CUPFN(cuMemExportToShareableHandle(&cuDesc, handle, CU_MEM_HANDLE_TYPE_FABRIC, 0));
     if (err != CUDA_SUCCESS ||
-        (err = CUPFN(cuMemImportFromShareableHandle(&handle, &cuDesc, CU_MEM_HANDLE_TYPE_FABRIC))) != CUDA_SUCCESS) {
+        (err = CUPFN(cuMemImportFromShareableHandle(&importedHandle, &cuDesc, CU_MEM_HANDLE_TYPE_FABRIC))) !=
+          CUDA_SUCCESS) {
       const char* errStr;
       (void)pfn_cuGetErrorString(err, &errStr);
       NCCLCHECK(ncclCuMemFree(ptr, comm->memManager));
@@ -83,6 +85,8 @@ ncclResult_t ncclMnnvlCheck(struct ncclComm* comm) {
            comm->clique.size);
       return ncclSystemError;
     }
+    // The imported handle holds its own reference to the allocation.
+    CUCHECK(cuMemRelease(importedHandle));
     NCCLCHECK(ncclCuMemFree(ptr, comm->memManager));
 
     // Force the CUMEM handle type to be FABRIC for MNNVL

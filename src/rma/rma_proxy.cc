@@ -616,8 +616,8 @@ ncclResult_t dumpRmaProxyState(struct ncclRmaProxyState* rmaProxyState) {
     for (int i = 0; i < rmaProxyState->rmaProxyCtxCount; i++) {
       struct ncclRmaProxyCtx* ctx = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[i];
       printf("  rmaCtx[%d]: %p\n", i, ctx);
-      printf("    rmaCollComms: %p\n", ctx->rmaCollComm);
       if (ctx && ctx->comm) {
+        printf("    rmaCollComms: %p\n", ctx->rmaCollComm);
         printf("    nRanks: %d, myRank: %d\n", ctx->comm->nRanks, ctx->comm->rank);
         printf("    rail: num_ranks_on_rail %d, my_index_on_rail %d, baseStride %d, ctxStride %d\n",
                (int)idivFast32((uint32_t)ctx->comm->nRanks, (uint32_t)ctx->comm->rmaBaseStride,

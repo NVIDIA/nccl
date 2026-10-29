@@ -196,7 +196,11 @@ void ncclTopoRemovePaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode* remNode, int type, float bw);
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoLoadSystem(const char* xmlTopoFile, struct ncclTopoSystem* system);
-ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int64_t netId, int* intermediateRank);
+// Select a nearby, same-host, NVLink-reachable PXN GPU by destRank; use the first candidate for destRank == -1.
+// Set proxyGpu to -1 if no candidate is available.
+ncclResult_t ncclTopoGetPxnGpu(struct ncclTopoSystem* system, int gpuIndex, int netIndex, int destRank, int* proxyGpu);
+ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int destRank, int64_t netId,
+                                         int* intermediateRank);
 ncclResult_t ncclTopoGetLocalGpus(struct ncclTopoSystem* system, int64_t netId, int gpus[NCCL_TOPO_MAX_NET_LOCAL_GPUS],
                                   int* gpuCount);
 ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type, int* min);

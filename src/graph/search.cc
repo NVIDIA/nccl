@@ -1589,7 +1589,7 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
     NCCLCHECK(ncclTopoIdToNetDev(comm->topo, netId, &netDev));
     if (dev) *dev = netDev;
     if (id) *id = netId;
-    NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, netId, proxyRank));
+    NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, peerRank, netId, proxyRank));
   } else if (peerRank == -1) {
     return ncclInternalError;
   } else {
@@ -1600,9 +1600,8 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
     *proxyRank = rank;
 
     int pxnLevel = ncclPxnDisable(comm) == 1 ? 0 : ncclParamP2pPxnLevel();
-    // See whether we can use the remote rank preferred device.
+    // Try the local NIC matching the peer's GPU device number
     if (ncclParamCrossNic() == 0 || (pxnLevel != 0)) {
-      // Find local NIC number close to local nvmlDev
       int nvmlDev = comm->peerInfo[peerRank].nvmlDev;
       int localRank;
       if (ncclTopoDevToRank(comm->topo, comm->topo->systemId, nvmlDev, /*warn=*/false, &localRank) != ncclSuccess) {
@@ -1624,21 +1623,20 @@ ncclResult_t ncclTopoGetNetDev(struct ncclComm* comm, int rank, struct ncclTopoG
         if (gpu->paths[NET][n].type <= PATH_PXN) {
           if (dev) *dev = netDev;
           if (id) *id = netId;
-          NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, netId, proxyRank));
+          NCCLCHECK(ncclTopoGetIntermediateRank(comm->topo, rank, peerRank, netId, proxyRank));
         }
       } else if (pxnLevel == 2) {
-        // Check which local GPU corresponds to that NIC and see if we can use PXN.
+        // Select a nearby GPU by destination rank and see if we can use PXN for aggregation.
         int n, g1, g2;
         NCCLCHECK(ncclTopoIdToIndex(comm->topo, NET, netId, &n));
         NCCLCHECK(ncclTopoRankToIndex(comm->topo, rank, &g1, /*showWarn=*/true));
-        NCCLCHECK(ncclTopoGetLocalGpu(comm->topo, netId, &g2));
+        NCCLCHECK(ncclTopoGetPxnGpu(comm->topo, g1, n, peerRank, &g2));
         if (g2 != -1) {
           struct ncclTopoNode* peerGpu = comm->topo->nodes[GPU].nodes + g2;
           int pxnType = ncclParamPxnC2c() ? PATH_P2C : PATH_PXB;
           enum ncclTopoGdrMode gdrMode;
           NCCLCHECK(ncclTopoCheckGdr(comm->topo, peerGpu->gpu.rank, netId, 0, &gdrMode));
-          if (peerGpu->paths[GPU][g1].type <= PATH_NVL && peerGpu->paths[NET][n].type <= pxnType &&
-              (gdrMode != ncclTopoGdrModeDisable)) {
+          if (peerGpu->paths[NET][n].type <= pxnType && (gdrMode != ncclTopoGdrModeDisable)) {
             *proxyRank = peerGpu->gpu.rank;
             if (dev) *dev = netDev;
             if (id) *id = netId;

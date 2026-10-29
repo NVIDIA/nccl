@@ -550,9 +550,11 @@ ncclResult_t ncclTopoCheckGdr(struct ncclTopoSystem* system, int rank, int64_t n
   if (ncclTopoUserGdrLevel != -2) netGdrLevel = ncclTopoUserGdrLevel;
   int distance = gpu->paths[NET][n].type;
   if (distance == PATH_PXN) {
-    // In case of PXN, use the intermediate GPU distance instead
+    // In case of PXN, use the intermediate GPU distance instead.
+    // destRank = -1 selects the first eligible proxy; this assumes equal proxy GPU - NIC distance
+    // and GDR mapping across all GPUs sharing the NIC.
     int proxyRank;
-    NCCLCHECK(ncclTopoGetIntermediateRank(system, gpu->gpu.rank, netId, &proxyRank));
+    NCCLCHECK(ncclTopoGetIntermediateRank(system, gpu->gpu.rank, /*destRank=*/-1, netId, &proxyRank));
     NCCLCHECK(ncclTopoRankToIndex(system, proxyRank, &g, /*showWarn=*/true));
     gpu = system->nodes[GPU].nodes + g;
     distance = gpu->paths[NET][n].type;
@@ -650,7 +652,36 @@ ncclResult_t ncclTopoCheckNet(struct ncclTopoSystem* system, int rank1, int rank
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int64_t netId,
+ncclResult_t ncclTopoGetPxnGpu(struct ncclTopoSystem* system, int gpuIndex, int netIndex, int destRank, int* proxyGpu) {
+  struct ncclTopoNode* gpu = system->nodes[GPU].nodes + gpuIndex;
+  int localGpus[NCCL_TOPO_MAX_NODES];
+  int localGpuCount = 0;
+  NCCLCHECK(ncclTopoGetLocal(system, NET, netIndex, GPU, localGpus, &localGpuCount, NULL));
+  int count = 0;
+  for (int i = 0; i < localGpuCount; i++) {
+    struct ncclTopoNode* node = system->nodes[GPU].nodes + localGpus[i];
+    if (node->paths[GPU][gpuIndex].type > PATH_NVL ||
+        NCCL_TOPO_ID_SYSTEM_ID(node->id) != NCCL_TOPO_ID_SYSTEM_ID(gpu->id))
+      continue;
+    // Keep GPUs assigned to this NIC on any channel
+    for (int c = 0; c < MAXCHANNELS; c++) {
+      int64_t netId = -1;
+      NCCLCHECK(ncclTopoGetLocalNet(system, node->gpu.rank, c, &netId, NULL));
+      if (netId == system->nodes[NET].nodes[netIndex].id) {
+        localGpus[count++] = localGpus[i];
+        break;
+      }
+    }
+  }
+  if (count == 0) {
+    *proxyGpu = -1;
+    return ncclSuccess;
+  }
+  *proxyGpu = localGpus[(destRank == -1) ? 0 : (destRank % count)];
+  return ncclSuccess;
+}
+
+ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int destRank, int64_t netId,
                                          int* intermediateRank) {
   // Get GPU and NET
   int n, g;
@@ -659,24 +690,13 @@ ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank
   struct ncclTopoNode* gpu = system->nodes[GPU].nodes + g;
   struct ncclTopoLinkList* path = gpu->paths[NET] + n;
   if (path->type == PATH_PXN) {
-    // PXN path follows GPU-DEV-NVS-..., start from the first NVS node and find the first DEV in the path
-    int i = 1;
-    while (i < path->count && path->list[i]->remNode->type == NVS) i++;
-    struct ncclTopoNode* node = path->list[i]->remNode;
-
-    // Select the first GPU on the device found to be the PXN intermediate rank
-    if (node->type == DEV) {
-      for (int i = 0; i < node->nlinks; i++) {
-        if (node->links[i].remNode->type == GPU) {
-          node = node->links[i].remNode;
-          break;
-        }
-      }
-    }
-    if (node->type != GPU) {
+    int proxyGpu = -1;
+    NCCLCHECK(ncclTopoGetPxnGpu(system, g, n, destRank, &proxyGpu));
+    if (proxyGpu == -1) {
       WARN("Could not find intermediate GPU between GPU rank %d and NIC %lx", rank, netId);
       return ncclInternalError;
     }
+    struct ncclTopoNode* node = system->nodes[GPU].nodes + proxyGpu;
     NCCLCHECK(ncclTopoDevToRank(system, NCCL_TOPO_ID_SYSTEM_ID(node->id), node->gpu.dev, /*warn=*/true,
                                 intermediateRank));
   } else {

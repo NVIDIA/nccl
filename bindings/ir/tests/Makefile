@@ -11,7 +11,7 @@
 #		3. Add <name> to TESTS
 #
 # 	To run all tests:
-#   	make src.build ir.build EMIT_LLVM_IR=1 NCCL_EMIT_LTO_IR=1   	once, from the repo root to build libnccl_device.bc and libnccl_device.ltoir
+#   	make src.build ir.build NCCL_EMIT_LLVM_IR=1 NCCL_EMIT_LTO_IR=1   	once, from the repo root to build libnccl_device.bc and libnccl_device.ltoir
 #   	make -C bindings/ir/tests            							build devapi_<name>_ir and devapi_<name>_ltoir executable for each name
 #   	make -C bindings/ir/tests run        							mpirun -np 2 each of those programs
 

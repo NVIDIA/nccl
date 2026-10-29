@@ -24,12 +24,10 @@ FINAL_LTO_IR := $(LIBDIR)/libnccl_device.ltoir
 
 # Build configuration
 ifeq ($(shell test "0$(CUDA_MAJOR)" -lt 12; echo $$?),0)
-	BITCODE_LIB_ARCH ?= sm_70
+	IR_ARCH ?= sm_70
 else
-	BITCODE_LIB_ARCH ?= sm_90
+	IR_ARCH ?= sm_90
 endif
-
-LTO_IR_ARCH ?= $(BITCODE_LIB_ARCH)
 
 # Notes:
 # Device API code follows C++17
@@ -54,7 +52,7 @@ CUDA_INCLUDES := -I$(CUDA_INC) -I$(CUDA_INC)/cccl
 # Clang supports extended device lambdas but does not define nvcc's feature macro.
 COMMON_CLANG_FLAGS := -std=$(BITCODE_CXX_STD) -x cuda \
                       --cuda-path=$(CUDA_HOME) --cuda-device-only \
-                      --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
+                      --cuda-gpu-arch=$(IR_ARCH) \
                       $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
                       -D__CUDACC_EXTENDED_LAMBDA__ \
                       $(NCCL_DEVICE_DEFINES)
@@ -103,7 +101,7 @@ $(FINAL_BC): $(LLVM_IR_FILE)
 llvm_ir: $(FINAL_BC)
 	@echo "LLVM IR and bitcode generated successfully:"
 	@echo "  C++ Standard: $(BITCODE_CXX_STD)"
-	@echo "  GPU Architecture: $(BITCODE_LIB_ARCH)"
+	@echo "  GPU Architecture: $(IR_ARCH)"
 	@echo "  Unoptimized: $(UNOPTIMIZED_BC)"
 	@echo "  Optimized: $(OPTIMIZED_BC)"
 	@echo "  LLVM IR (Human-readable): $(LLVM_IR_FILE)"
@@ -114,7 +112,7 @@ llvm_ir: $(FINAL_BC)
 $(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER)
 	@mkdir -p $(LIBDIR)
 	@echo "Generating LTO IR..."
-	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
+	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
 		$(NCCL_INCLUDES) $(CUDA_INCLUDES) \
 		$(NCCL_DEVICE_DEFINES) \
 		-o $@ $(LLVM_SRC)
@@ -122,7 +120,7 @@ $(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER)
 ltoir: $(FINAL_LTO_IR)
 	@echo "LTO IR generated successfully:"
 	@echo "  C++ Standard: $(LTO_IR_CXX_STD)"
-	@echo "  GPU Architecture: $(LTO_IR_ARCH)"
+	@echo "  GPU Architecture: $(IR_ARCH)"
 	@echo "  Final LTO IR: $(FINAL_LTO_IR)"
 	@echo "  IR Header: $(IR_HEADER)"
 
@@ -134,7 +132,7 @@ clean:
 .PHONY: llvm_ir ltoir build clean
 
 # Serialize IR-gen to avoid race
-ifneq ($(EMIT_LLVM_IR), 0)
+ifneq ($(NCCL_EMIT_LLVM_IR), 0)
 ifneq ($(NCCL_EMIT_LTO_IR), 0)
 $(FINAL_LTO_IR): | $(FINAL_BC)
 endif

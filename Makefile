@@ -14,12 +14,12 @@
 # own recipes in parallel with the -j setting passed down through the jobserver.
 .NOTPARALLEL:
 
-EMIT_LLVM_IR ?= 0
+NCCL_EMIT_LLVM_IR ?= 0
 NCCL_EMIT_LTO_IR ?= 0
 
 # Set up one make target to avoid race
 IR_GOALS :=
-ifneq ($(EMIT_LLVM_IR), 0)
+ifneq ($(NCCL_EMIT_LLVM_IR), 0)
 IR_GOALS += llvm_ir
 endif
 ifneq ($(NCCL_EMIT_LTO_IR), 0)

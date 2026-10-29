@@ -33,12 +33,10 @@ set(IR_HEADER ${INCLUDEDIR}/nccl_device_ir.h)
 # Build configuration
 # Select GPU arch and C++ standard based on CUDA Toolkit version
 if(CUDAToolkit_VERSION_MAJOR LESS 12)
-    set(BITCODE_LIB_ARCH sm_70 CACHE STRING "CUDA architecture for LLVM IR")
+    set(IR_ARCH sm_70 CACHE STRING "CUDA architecture for device IR")
 else()
-    set(BITCODE_LIB_ARCH sm_90 CACHE STRING "CUDA architecture for LLVM IR")
+    set(IR_ARCH sm_90 CACHE STRING "CUDA architecture for device IR")
 endif()
-
-set(LTO_IR_ARCH ${BITCODE_LIB_ARCH} CACHE STRING "CUDA architecture for LTO IR")
 
 set(BITCODE_CXX_STD gnu++17 CACHE STRING "C++ standard for LLVM IR")
 set(LTO_IR_CXX_STD c++17 CACHE STRING "C++ standard for LTO IR")
@@ -71,7 +69,7 @@ set(COMMON_CLANG_FLAGS
     -x cuda
     --cuda-path=${CUDAToolkit_ROOT_DIR}
     --cuda-device-only
-    --cuda-gpu-arch=${BITCODE_LIB_ARCH}
+    --cuda-gpu-arch=${IR_ARCH}
     ${NCCL_INCLUDES}
     ${CUDA_INCLUDES}
     -D__CUDACC_EXTENDED_LAMBDA__
@@ -153,7 +151,7 @@ add_custom_target(llvm_ir
 add_custom_command(TARGET llvm_ir POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "LLVM IR and bitcode generated successfully:"
     COMMAND ${CMAKE_COMMAND} -E echo "  C++ Standard:      ${BITCODE_CXX_STD}"
-    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${BITCODE_LIB_ARCH}"
+    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${IR_ARCH}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Unoptimized:       ${UNOPTIMIZED_BC}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Optimized:         ${OPTIMIZED_BC}"
     COMMAND ${CMAKE_COMMAND} -E echo "  LLVM IR:           ${LLVM_IR_FILE}"
@@ -173,7 +171,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${LIBDIR}
     COMMAND ${CUDAToolkit_NVCC_EXECUTABLE}
         -std=${LTO_IR_CXX_STD}
-        -arch=${LTO_IR_ARCH}
+        -arch=${IR_ARCH}
         --extended-lambda
         -dlto --ltoir
         -x cu
@@ -197,7 +195,7 @@ add_custom_target(ltoir
 add_custom_command(TARGET ltoir POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "LTO IR generated successfully:"
     COMMAND ${CMAKE_COMMAND} -E echo "  C++ Standard:      ${LTO_IR_CXX_STD}"
-    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${LTO_IR_ARCH}"
+    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${IR_ARCH}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Final LTO IR:      ${FINAL_LTO_IR}"
     COMMAND ${CMAKE_COMMAND} -E echo "  IR Header:         ${IR_HEADER}"
     VERBATIM

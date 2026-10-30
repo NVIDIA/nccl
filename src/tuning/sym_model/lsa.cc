@@ -20,9 +20,9 @@ static ncclResult_t evaluateLsaEstimate(struct ncclTuningInput_t* input, enum nc
   NCCLCHECK(ncclSymkLsaA2AModel(input, kernelId, nBlocks, &estimate->timeUs, modeled));
   if (*modeled) {
     estimate->ctaSelectionTimeUs = estimate->timeUs;
-    bool vrReduction = RUBIN_AND_LATER(input->comm->minCompCap) &&
-                       (input->func == ncclFuncReduceScatter || input->func == ncclFuncAllReduce);
-    selectionCostPercent = vrReduction ? 0.0100f : 0.0200f;
+    bool lowerCtaPenalty = input->func == ncclFuncAllReduce ||
+                           (RUBIN_AND_LATER(input->comm->minCompCap) && input->func == ncclFuncReduceScatter);
+    selectionCostPercent = lowerCtaPenalty ? 0.0100f : 0.0200f;
   } else {
     NCCLCHECK(ncclSymkLsaBaseModel(input, kernelId, nBytes, nBlocks, estimate, modeled));
     if (!*modeled) return ncclSuccess;

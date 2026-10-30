@@ -92,95 +92,123 @@ static constexpr struct ncclSymkLsaA2AKernelTuningParameters lsaA2AParameters(
 }
 
 // Rows follow ncclSymkLsaA2AArch; Rubin and later architectures share the VR parameters.
+// clang-format off: hand-aligned tuning columns
 static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParameters[ncclSymkLsaA2AArch_Count] = {
-  {{},
-   {
-     {7.1084, 0.1065, 15.87, 0.0, 0.0, 2.32, 250.0, {{0.99, 0.69}}, 0.0, false},
-     {7.4229, 0.1030, 27.46, 0.0, 0.0, 2.1932, 316.0699, {{1.0, 1.0}}, 3.3805, true},
-     {10.0618, 0.0679, 64.1577, 0.0, 0.0, 0.0, 671.6052, {{1.0, 1.0}}, 0.0, false},
-     {10.5902, 0.0563, 64.4810, 0.0, 0.0, 0.0, 650.4378, {{1.0, 1.0}}, 0.0, false},
-     {8.2723, 0.0623, 51.55, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
-     {8.3313, 0.0561, 50.83, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
-   }},
-  {{
-     {
-       // LL
-       lsaA2AParameters(6.4586, 0.0129, 8.6531, 0, 0, 2.1255, 248.9148),
-       {},
-       {},
-     },
-     {
-       // TmaLD
-       lsaA2AParameters(5.9025, 0.2089, 46.7794, 9.5412, 7.3964, 0, 640.7738), // Default
-       lsaA2AParameters(5.9025, 0.2089, 41.1659, 7.3839, 3.6620, 0, 640.7738), // FP16/BF16 Sum
-       lsaA2AParameters(5.9025, 0.2089, 24.6948, 6.5968, 0.4053, 0, 640.7738), // FP8 Sum
-     },
-     {
-       // LD
-       lsaA2AParameters(9.6736, 0.2801, 26.0000, 12.3392, 7.3964, 0, 660), // Default
-       lsaA2AParameters(8.4739, 0.2096, 16.9749, 9.5826, 4.0022, 0, 660.0000), // FP16/BF16 Sum
-       lsaA2AParameters(8.4739, 0.2096, 15.8819, 9.3889, 1.9578, 0, 660.0000, false, 2.2213), // FP8 Sum
-     },
-     {
-       // LDMC
-       lsaA2AParameters(10.9124, 0.0736, 24.5386, 0, 0, 0, 750.1525, true),
-       {},
-       {},
-       lsaA2AParameters(8.432277, 0.0736, 24.5386, 0, 0, 0, 750.1525, true, 2.068846, 2.480123), // Shared Sum
-     },
-   },
-   {
-     {7.1084, 0.1065, 15.87, 0.0, 0.0, 2.32, 250.0, {{0.99, 0.69}}, 0.0, false},
-     {7.4229, 0.0439, 27.46, 0.0, 0.0, 2.1932, 316.0699, {{1.0, 1.0}}, 3.3805, true},
-     {10.0618, 0.0679, 64.1577, 0.0, 0.0, 0.0, 671.6052, {{1.0, 1.0}}, 0.0, false, 12.1475, 639.6826},
-     {10.5902, 0.0563, 64.4810, 0.0, 0.0, 0.0, 650.4378, {{1.0, 1.0}}, 0.0, false},
-     {8.2723, 0.0623, 51.55, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
-     {8.3313, 0.0561, 50.83, 0.0, 0.0, 0.0, 715.1451, {{1.0, 1.0}}, 0.0, true},
-   }},
-  {{
-     {
-       // LL
-       lsaA2AParameters(10.1682, 0.1318, 8.6659, 0, 0, 1.5849, 378.2311),
-       {},
-       {},
-     },
-     {
-       // TmaLD
-       lsaA2AParameters(13.2601, 0.8953, 33.9867, 7.7706, 7.4807, 0, 1004.8552), // Default
-       lsaA2AParameters(13.2601, 0.8953, 37.2708, 5.9251, 3.0701, 0, 1004.8552), // FP16/BF16 Sum
-       lsaA2AParameters(13.2601, 0.8953, 23.4600, 5.6772, 0.3082, 0, 1004.8552), // FP8 Sum
-     },
-     {
-       // LD
-       lsaA2AParameters(13.2750, 1.0829, 17.9128, 9.4630, 5.6894, 0, 692.0016), // Default
-       lsaA2AParameters(13.2750, 1.0829, 10.6581, 7.3404, 2.9289, 0, 692.0016), // FP16/BF16 Sum
-       lsaA2AParameters(13.2750, 1.0829, 10.1315, 7.1995, 1.3376, 0, 692.0016), // FP8 Sum
-     },
-     {
-       // LDMC
-       lsaA2AParameters(11.7527, 0.2263, 15.1821, 0, 0, 0, 1134.4294, true),
-       {},
-       {},
-     },
-   },
-   {
-     {7.90, 0.29, 18.05, 0.0, 0.0, 1.50, 380.00, {{0.88, 0.60}}, 0.00, false},
-     {8.02, 0.24, 26.63, 0.0, 0.0, 1.55, 497.24, {{1.00, 1.00}}, 1.52, true},
-     {22.60, 0.30, 73.98, 0.0, 0.0, 0.00, 1170.00, {{1.00, 1.00}}, 0.00, false},
-     {16.59, 0.31, 74.10, 0.0, 0.0, 0.00, 1000.00, {{1.00, 1.00}}, 0.00, false},
-     {19.51, 0.19, 61.09, 0.0, 0.0, 0.00, 1237.49, {{1.00, 1.00}}, 0.00, true},
-     {16.14, 0.22, 61.21, 0.0, 0.0, 0.00, 1100.15, {{1.00, 1.00}}, 0.00, true},
-   },
-   {
-     // VR AR fits.
-     // no datatype specializations needed for AR constants
-     lsaA2AParameters(3.0728, 0.0756, 25.0188, 0, 0, 1.6689, 346.3975), // LL
-     lsaA2AParameters(3.1691, 0.0654, 63.6576, 0, 0, 1.6267, 520.2188, true), // LLMC
-     lsaA2AParameters(11.2029, 0.3742, 63.1928, 10.8361, 8.4400, 0, 908.8153), // TmaLD/TmaST
-     lsaA2AParameters(10.6800, 0.4016, 35.4584, 7.2951, 6.8343, 0, 813.3217), // LD/ST
-     lsaA2AParameters(12.0209, 0, 35.7418, 0, 0, 0, 1900.0000, true), // LDMC/STMC
-   }},
+  // GB200 (SM100).
+  {
+    {}, // ReduceScatter: no fitted rows.
+    // AllGather.
+    {
+      // base us  rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  CTA scale [8,32]  full overlap CTAs  peak rank eff.
+      {  7.1084,  0.1065,  15.87,    0.0,            0.0,             2.32,        250.0,     {{0.99, 0.69}},   0.0,               false},          // LL
+      {  7.4229,  0.1030,  27.46,    0.0,            0.0,             2.1932,      316.0699,  {{1.0, 1.0}},     3.3805,            true},           // LLMC
+      {  10.0618, 0.0679,  64.1577,  0.0,            0.0,             0.0,         671.6052,  {{1.0, 1.0}},     0.0,               false},          // TmaST
+      {  10.5902, 0.0563,  64.4810,  0.0,            0.0,             0.0,         650.4378,  {{1.0, 1.0}},     0.0,               false},          // ST
+      {  8.2723,  0.0623,  51.55,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},           // TmaSTMC
+      {  8.3313,  0.0561,  50.83,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},           // STMC
+    }
+  },
+  // GB300 (SM103).
+  {
+    // ReduceScatter.
+    {
+      // LL.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s
+        lsaA2AParameters(6.4586,   0.0129,  8.6531,   0,              0,               2.1255,      248.9148),  // Default
+        {}, // No FP16/BF16 Sum specialization.
+        {}, // No FP8 Sum specialization.
+      },
+      // TmaLD.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s
+        lsaA2AParameters(5.9025,   0.2089,  46.7794,  9.5412,         7.3964,          0,           640.7738),  // Default
+        lsaA2AParameters(5.9025,   0.2089,  41.1659,  7.3839,         3.6620,          0,           640.7738),  // FP16/BF16 Sum
+        lsaA2AParameters(5.9025,   0.2089,  24.6948,  6.5968,         0.4053,          0,           640.7738),  // FP8 Sum
+      },
+      // LD.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  peak rank eff.  scalar us
+        lsaA2AParameters(9.6736,   0.2801,  26.0000,  12.3392,        7.3964,          0,           660),                                  // Default
+        lsaA2AParameters(8.4739,   0.2096,  16.9749,  9.5826,         4.0022,          0,           660.0000),                             // FP16/BF16 Sum
+        lsaA2AParameters(8.4739,   0.2096,  15.8819,  9.3889,         1.9578,          0,           660.0000,  false,          2.2213),    // FP8 Sum
+      },
+      // LDMC.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  peak rank eff.  scalar us  packed us
+        lsaA2AParameters(10.9124,  0.0736,  24.5386,  0,              0,               0,           750.1525,  true),                                 // Default
+        {}, // No FP16/BF16 Sum specialization.
+        {}, // No FP8 Sum specialization.
+        lsaA2AParameters(8.432277, 0.0736,  24.5386,  0,              0,               0,           750.1525,  true,           2.068846,  2.480123),  // Shared Sum
+      },
+    },
+    // AllGather.
+    {
+      // base us  rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  CTA scale [8,32]  full overlap CTAs  peak rank eff.  trough us  trough GB/s
+      {  7.1084,  0.1065,  15.87,    0.0,            0.0,             2.32,        250.0,     {{0.99, 0.69}},   0.0,               false},                                  // LL
+      {  7.4229,  0.0439,  27.46,    0.0,            0.0,             2.1932,      316.0699,  {{1.0, 1.0}},     3.3805,            true},                                   // LLMC
+      {  10.0618, 0.0679,  64.1577,  0.0,            0.0,             0.0,         671.6052,  {{1.0, 1.0}},     0.0,               false,          12.1475,   639.6826},    // TmaST
+      {  10.5902, 0.0563,  64.4810,  0.0,            0.0,             0.0,         650.4378,  {{1.0, 1.0}},     0.0,               false},                                  // ST
+      {  8.2723,  0.0623,  51.55,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},                                   // TmaSTMC
+      {  8.3313,  0.0561,  50.83,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},                                   // STMC
+    }
+  },
+  // VR (Rubin and later).
+  {
+    // ReduceScatter.
+    {
+      // LL.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s
+        lsaA2AParameters(10.1682,  0.1318,  8.6659,   0,              0,               1.5849,      378.2311),  // Default
+        {}, // No FP16/BF16 Sum specialization.
+        {}, // No FP8 Sum specialization.
+      },
+      // TmaLD.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s
+        lsaA2AParameters(13.2601,  0.8953,  33.9867,  7.7706,         7.4807,          0,           1004.8552), // Default
+        lsaA2AParameters(13.2601,  0.8953,  37.2708,  5.9251,         3.0701,          0,           1004.8552), // FP16/BF16 Sum
+        lsaA2AParameters(13.2601,  0.8953,  23.4600,  5.6772,         0.3082,          0,           1004.8552), // FP8 Sum
+      },
+      // LD.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s
+        lsaA2AParameters(13.2750,  1.0829,  17.9128,  9.4630,         5.6894,          0,           692.0016),  // Default
+        lsaA2AParameters(13.2750,  1.0829,  10.6581,  7.3404,         2.9289,          0,           692.0016),  // FP16/BF16 Sum
+        lsaA2AParameters(13.2750,  1.0829,  10.1315,  7.1995,         1.3376,          0,           692.0016),  // FP8 Sum
+      },
+      // LDMC.
+      {
+        //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  peak rank eff.
+        lsaA2AParameters(11.7527,  0.2263,  15.1821,  0,              0,               0,           1134.4294, true),           // Default
+        {}, // No FP16/BF16 Sum specialization.
+        {}, // No FP8 Sum specialization.
+      },
+    },
+    // AllGather.
+    {
+      // base us  rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  CTA scale [8,32]  full overlap CTAs  peak rank eff.
+      {  7.90,    0.29,    18.05,    0.0,            0.0,             1.50,        380.00,    {{0.88, 0.60}},   0.00,              false},          // LL
+      {  8.02,    0.24,    26.63,    0.0,            0.0,             1.55,        497.24,    {{1.00, 1.00}},   1.52,              true},           // LLMC
+      {  22.60,   0.30,    73.98,    0.0,            0.0,             0.00,        1170.00,   {{1.00, 1.00}},   0.00,              false},          // TmaST
+      {  16.59,   0.31,    74.10,    0.0,            0.0,             0.00,        1000.00,   {{1.00, 1.00}},   0.00,              false},          // ST
+      {  19.51,   0.19,    61.09,    0.0,            0.0,             0.00,        1237.49,   {{1.00, 1.00}},   0.00,              true},           // TmaSTMC
+      {  16.14,   0.22,    61.21,    0.0,            0.0,             0.00,        1100.15,   {{1.00, 1.00}},   0.00,              true},           // STMC
+    },
+    // AllReduce.
+    // No datatype specializations needed for AR constants.
+    {
+      //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  peak rank eff.
+      lsaA2AParameters(3.0728,   0.0756,  25.0188,  0,              0,               1.6689,      346.3975),                  // LL
+      lsaA2AParameters(3.1691,   0.0654,  63.6576,  0,              0,               1.6267,      520.2188,  true),           // LLMC
+      lsaA2AParameters(11.2029,  0.3742,  63.1928,  10.8361,        8.4400,          0,           908.8153),                  // TmaLD/TmaST
+      lsaA2AParameters(10.6800,  0.4016,  35.4584,  7.2951,         6.8343,          0,           813.3217),                  // LD/ST
+      lsaA2AParameters(12.0209,  0,       35.7418,  0,              0,               0,           1900.0000, true),           // LDMC/STMC
+    }
+  },
 };
+// clang-format on
 
 static const struct ncclSymkLsaA2AArchTuningParameters* lsaA2AArchTuningForComm(const struct ncclComm* comm) {
   if (RUBIN_AND_LATER(comm->minCompCap)) return &lsaA2AArchTuningParameters[ncclSymkLsaA2AArch_Rubin];
@@ -278,7 +306,8 @@ static const struct ncclSymkLsaA2AKernelTuningParameters* lsaA2AParametersForKer
   if (archTuning == nullptr) return nullptr;
   int arIndex = lsaA2AAllReduceKernelIndex(kernelId);
   if (arIndex >= 0) {
-    if (!RUBIN_AND_LATER(input->comm->minCompCap) || input->func != ncclFuncAllReduce) return nullptr;
+    if (input->func != ncclFuncAllReduce || archTuning->allReduce[arIndex].transferCtaBandwidthGbps <= 0.0)
+      return nullptr;
     return &archTuning->allReduce[arIndex];
   }
   int rsIndex = lsaA2AReduceScatterKernelIndex(kernelId);
@@ -329,8 +358,7 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   bool isReduceScatter = lsaA2AReduceScatterKernelIndex(kernelId) >= 0;
   bool isAllReduceUnicast =
     kernelId == ncclSymkKernelId_AllReduce_RSxLD_AGxST || kernelId == ncclSymkKernelId_AllReduce_RSxTmaLD_AGxTmaST;
-  bool isVrAllReduceLdmc =
-    kernelId == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC && RUBIN_AND_LATER(input->comm->minCompCap);
+  bool isAllReduceLdmc = kernelId == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC;
   bool isLoadStoreMulticast =
     kernelId == ncclSymkKernelId_AllGather_TmaSTMC || kernelId == ncclSymkKernelId_AllGather_STMC ||
     kernelId == ncclSymkKernelId_ReduceScatter_LDMC || kernelId == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC;
@@ -357,7 +385,7 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   double peakBandwidthGbps = tuning->peakBandwidthGbps;
   // The 0.9 correction lowers
   // the ceiling at small scales and vanishes as rank count grows.
-  if (isVrAllReduceLdmc) peakBandwidthGbps /= 1.0 + 0.9 / nRanks;
+  if (isAllReduceLdmc) peakBandwidthGbps /= 1.0 + 0.9 / nRanks;
   double extraLatencyUs = 0.0;
   if (kernelId == ncclSymkKernelId_AllGather_TmaST && input->comm->minCompCap >= 100 &&
       !RUBIN_AND_LATER(input->comm->minCompCap)) {
@@ -378,7 +406,7 @@ ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncc
   double bandwidthBoundTimeUs = exposeCtaComputeTime ?
                                   ctaComputeTimeUs + std::max(ctaTransferTimeUs, peakTransferTimeUs) :
                                   std::max(ctaComputeTimeUs + ctaTransferTimeUs, peakTransferTimeUs);
-  if (isVrAllReduceLdmc) {
+  if (isAllReduceLdmc) {
     // p starts at 5.6 at 4 ranks and drops by 0.6 per
     // rank doubling to model more gradual CTA saturation. The floor of 2 bounds
     // extrapolation; normalizing the p-norm by the larger time avoids overflow.

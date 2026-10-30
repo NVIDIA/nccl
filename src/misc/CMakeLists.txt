@@ -10,6 +10,7 @@ set(MISC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/nvmlwrap.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/argcheck.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/gdrwrap.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_pin.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/git_version.cc
 )
 

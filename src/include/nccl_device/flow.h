@@ -143,6 +143,7 @@ struct ncclFlowConfig {
 // ops.reduceCopy<T, RedOp, MaxSrcs, MaxDsts>(thread, nThreads, nSrcs, srcFn, nDsts, dstFn, redOp, nElts);
 // LL and LL128 call ops.reducePacked(redOp, a, b), returning a uint64_t. Only the selected protocol's
 // operation is required.
+// The Flow API is experimental. API signatures are not stable and may change.
 template <unsigned GinBackendMask, int SlicesPerChunk, int MaxPeers, ncclFlowProtocol FlowProtocol, typename FlowOps>
 struct ncclFlowProcessor;
 

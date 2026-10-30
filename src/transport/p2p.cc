@@ -124,8 +124,6 @@ NCCL_PARAM(P2pUseCudaMemcpy, "P2P_USE_CUDA_MEMCPY", 0);
 static int useMemcpy = 0;
 static void initCeOperation();
 
-extern int64_t ncclParamMNNVLEnable();
-
 /* Determine if two peers can communicate through p2p */
 ncclResult_t p2pCanConnect(int* ret, struct ncclComm* comm, struct ncclTopoGraph* graph, struct ncclPeerInfo* info1,
                            struct ncclPeerInfo* info2) {

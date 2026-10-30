@@ -106,6 +106,15 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
       {  10.5902, 0.0563,  64.4810,  0.0,            0.0,             0.0,         650.4378,  {{1.0, 1.0}},     0.0,               false},          // ST
       {  8.2723,  0.0623,  51.55,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},           // TmaSTMC
       {  8.3313,  0.0561,  50.83,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},           // STMC
+    },
+    // AllReduce.
+    {
+      //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  peak rank eff.
+      lsaA2AParameters(4.0465,   0.0738,  23.2543,  0.0,            0.0,             1.8190,      235.4482),                  // LL
+      lsaA2AParameters(3.6343,   0.0631,  58.1674,  0.0,            0.0,             1.7596,      320.1997,  true),           // LLMC
+      lsaA2AParameters(9.0861,   0.2300,  71.2905,  14.8794,        7.6217,          0.0,         590.2086),                  // TmaLD/TmaST
+      lsaA2AParameters(9.2979,   0.2307,  48.1862,  10.7756,        8.0072,          0.0,         567.0280),                  // LD/ST
+      lsaA2AParameters(9.0463,   0.0313,  46.7769,  0.0,            0.0,             0.0,         1024.6382, true),           // LDMC/STMC
     }
   },
   // GB300 (SM103).
@@ -151,6 +160,15 @@ static constexpr struct ncclSymkLsaA2AArchTuningParameters lsaA2AArchTuningParam
       {  10.5902, 0.0563,  64.4810,  0.0,            0.0,             0.0,         650.4378,  {{1.0, 1.0}},     0.0,               false},                                  // ST
       {  8.2723,  0.0623,  51.55,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},                                   // TmaSTMC
       {  8.3313,  0.0561,  50.83,    0.0,            0.0,             0.0,         715.1451,  {{1.0, 1.0}},     0.0,               true},                                   // STMC
+    },
+    // AllReduce.
+    {
+      //               base us   rank us  CTA GB/s  2 KiB CTA GB/s  scalar CTA GB/s  LL CTA GB/s  peak GB/s  peak rank eff.
+      lsaA2AParameters(3.4316,   0.0681,  23.4305,  0.0,            0.0,             1.8531,      235.5022),                  // LL
+      lsaA2AParameters(3.5680,   0.0579,  56.9024,  0.0,            0.0,             1.8472,      322.0835,  true),           // LLMC
+      lsaA2AParameters(8.8779,   0.2687,  70.8789,  16.0058,        12.7651,         0.0,         581.5283),                  // TmaLD/TmaST
+      lsaA2AParameters(8.7755,   0.2661,  48.7606,  12.2219,        24.0354,         0.0,         558.9515),                  // LD/ST
+      lsaA2AParameters(9.2161,   0.0240,  48.6733,  0.0,            0.0,             0.0,         1014.2604, true),           // LDMC/STMC
     }
   },
   // VR (Rubin and later).

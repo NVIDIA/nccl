@@ -70,14 +70,27 @@ ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     }
   }
 
+  // Prefer power-of-two CTAs near modeled saturation for GB200 four-rank LDMC.
+  // pow2Up(nMinBlocks) <= nMaxBlocks guarantees pow2Up(nMinBlocks) <= pow2Down(nMaxBlocks).
+  bool preferPowerOfTwoCtas = comm->minCompCap == 100 && comm->nRanks == 4 && input->nWorks == 1 &&
+                              input->func == ncclFuncAllReduce &&
+                              kernelId == ncclSymkKernelId_AllReduce_RSxLDMC_AGxSTMC && nUserCTAs <= 0 &&
+                              nMinBlocks != nMaxBlocks && pow2Up(nMinBlocks) <= nMaxBlocks;
+  if (preferPowerOfTwoCtas) {
+    nMinBlocks = pow2Up(nMinBlocks);
+    nMaxBlocks = pow2Down(nMaxBlocks);
+  }
+  double ctaTolerance = preferPowerOfTwoCtas ? 1.05 : 1.025;
+
   struct ncclSymkLsaEstimate candidates[ncclSymkMaxBlocks + 1];
   bool modeled = false;
   NCCLCHECK(evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, &candidates[nMaxBlocks], &modeled));
   if (!modeled) return ncclSuccess;
   *nBlocks = nMaxBlocks;
-  // Evaluate every candidate before choosing the fewest CTAs within 2.5% of the best estimate.
+  // Evaluate every candidate before choosing the fewest CTAs within tolerance of the best estimate.
   double bestCtaSelectionTimeUs = candidates[nMaxBlocks].ctaSelectionTimeUs;
-  for (int candidate = nMinBlocks; candidate < nMaxBlocks; candidate += candidate == 1 ? 1 : 2) {
+  for (int candidate = nMinBlocks; candidate < nMaxBlocks;
+       candidate = preferPowerOfTwoCtas ? 2 * candidate : candidate + (candidate == 1 ? 1 : 2)) {
     struct ncclSymkLsaEstimate& candidateEstimate = candidates[candidate];
     NCCLCHECK(evaluateLsaEstimate(input, kernelId, nBytes, candidate, &candidateEstimate, &modeled));
     if (!modeled) {
@@ -86,8 +99,9 @@ ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     }
     bestCtaSelectionTimeUs = std::min(bestCtaSelectionTimeUs, candidateEstimate.ctaSelectionTimeUs);
   }
-  for (int candidate = nMinBlocks; candidate < nMaxBlocks; candidate += candidate == 1 ? 1 : 2) {
-    if (candidates[candidate].ctaSelectionTimeUs <= 1.025 * bestCtaSelectionTimeUs) {
+  for (int candidate = nMinBlocks; candidate < nMaxBlocks;
+       candidate = preferPowerOfTwoCtas ? 2 * candidate : candidate + (candidate == 1 ? 1 : 2)) {
+    if (candidates[candidate].ctaSelectionTimeUs <= ctaTolerance * bestCtaSelectionTimeUs) {
       *nBlocks = candidate;
       break;
     }

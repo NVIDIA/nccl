@@ -893,8 +893,9 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplMode(ncclGinCtx ctx, Coop coop, 
      * the masked difference permanently non-zero. The HW counter is read
      * with system-scope acquire so the GPU bypasses caches and observes the
      * latest NIC update through PCIe-coherent memory. */
-    auto wait_for_endpoint = [abortFlag, startCycle,
-                              timeoutCycles](nccl_ofi_gin_gdaki_dev_endpoint_handle& ep) -> ncclResult_t {
+    auto wait_for_endpoint = [ctx, abortFlag, startCycle, timeoutCycles](nccl_ofi_gin_gdaki_dev_endpoint_handle& ep,
+                                                                         const char* epName,
+                                                                         int epIdx) -> ncclResult_t {
       cuda::atomic_ref<uint64_t, ncclGinScope<mode>> target_ref(ep.submitted_count);
 
       /* Drain-to-zero: outstanding = (submitted - completed) reduced to
@@ -905,19 +906,27 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplMode(ncclGinCtx ctx, Coop coop, 
       while (((((uint32_t)target_ref.load(cuda::memory_order_relaxed)) - (uint32_t)hwCounterLoad(ep.local_cntr_value)) &
               EFA_CNTR_MASK) != 0) {
         if NCCL_IF_CONSTEXPR (HasTimeout) {
-          if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
+          if (clock64() - startCycle >= timeoutCycles) {
+            uint32_t submitted = (uint32_t)target_ref.load(cuda::memory_order_relaxed);
+            uint32_t completed = (uint32_t)hwCounterLoad(ep.local_cntr_value);
+            printf("NCCL EFA GDA flush timeout: ctx %d, ep %s[%d], submitted %u, completed %u, outstanding %u, "
+                   "block %d, thread %d\n",
+                   ctx.contextId, epName, epIdx, submitted, completed, (submitted - completed) & EFA_CNTR_MASK,
+                   (int)blockIdx.x, (int)threadIdx.x);
+            return ncclTimeout;
+          }
         }
         if (abortFlag && *abortFlag) return ncclInProgress;
       }
       return ncclSuccess;
     };
 
-    result = wait_for_endpoint(dev->data);
+    result = wait_for_endpoint(dev->data, "data", 0);
     if (result != ncclSuccess) goto done;
 
     /* The dedicated PutValue endpoint is a local poster too (all PutValue
      * writes ride it), so drain it as well. */
-    result = wait_for_endpoint(dev->pvdata);
+    result = wait_for_endpoint(dev->pvdata, "putvalue", 0);
     if (result != ncclSuccess) goto done;
 
     /* Drain the counter endpoints only. With the decoupled model the
@@ -927,7 +936,7 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplMode(ncclGinCtx ctx, Coop coop, 
      * FI_WRITE counter never ticks from our writes and there is nothing to
      * drain. A signal QP needs no local completions at all. */
     for (int i = 0; i < dev->nCounters; i++) {
-      result = wait_for_endpoint(dev->counter_handles[i]->base);
+      result = wait_for_endpoint(dev->counter_handles[i]->base, "counter", i);
       if (result != ncclSuccess) goto done;
     }
   }

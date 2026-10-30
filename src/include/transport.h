@@ -111,6 +111,10 @@ struct ncclNvlsSharedRes {
   int treeMaxChunkSize;
   struct ncclShmemCollBuff nvlsShmem;
   void* nvlsShmemHandle;
+  // Suspended for a CUDA process checkpoint: no MC object, no UC physical memory, and no
+  // binding is held; every VA reservation is kept so device-side pointers stay valid.
+  bool suspended;
+  void* creditBackup;  // host copy of creditUc while suspended (credit counters persist)
 };
 
 #endif /* CUDART_VERSION >= 12010 */
@@ -173,6 +177,11 @@ ncclResult_t ncclNvlsLocalRegisterBuffer(struct ncclComm* comm, const void* send
                                          size_t sendbuffSize, size_t recvbuffSize, int* outRegBufUsed,
                                          void** outRegBufSend, void** outRegBufRecv);
 ncclResult_t ncclNvlsFree(struct ncclComm* comm);
+// Release every multicast object, binding and NVLS UC allocation for a CUDA process
+// checkpoint, and rebuild them at the same VAs. Called by ncclCommSuspend/Resume on a
+// quiesced communicator; collective over the NVLS local ranks.
+ncclResult_t ncclNvlsSuspend(struct ncclComm* comm);
+ncclResult_t ncclNvlsResume(struct ncclComm* comm);
 
 enum {
   collNetRecv = 0,

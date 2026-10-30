@@ -39,11 +39,19 @@ struct ncclTransport nvlsTransport = {"NVLS",
                                       {NULL, NULL, nvlsRecvFree, NULL, NULL, NULL, NULL, NULL}};
 
 // Release a consumer's UC physical memory and its mapping (inverse of nvlsAllocBindUc's alloc).
-static ncclResult_t nvlsFreeUc(struct ncclComm* comm, struct ncclNvlsUcSegment* uc) {
+static ncclResult_t nvlsFreeUc(struct ncclComm* comm, struct ncclNvlsUcSegment* uc, bool suspended) {
   if (uc->ptr) {
-    INFO(NCCL_NVLS, "NVLS release UC handle %llx ptr %p size %zu", uc->handle, uc->ptr, uc->size);
-    // Unmaps/frees/releases and untracks the persistent ncclMemTrack entry from nvlsAllocBindUc.
-    NCCLCHECK(ncclCuMemFree(uc->ptr, comm->memManager));
+    INFO(NCCL_NVLS, "NVLS release UC handle %llx ptr %p size %zu%s", uc->handle, uc->ptr, uc->size,
+         suspended ? " (suspended)" : "");
+    if (suspended) {
+      // The physical memory went with the suspend; only the reservation and the persistent
+      // tracking from nvlsAllocBindUc are left.
+      if (comm->memManager) NCCLCHECK(ncclMemUntrackPersist(comm->memManager, uc->ptr, uc->size));
+      CUCHECK(cuMemAddressFree((CUdeviceptr)uc->ptr, uc->size));
+    } else {
+      // Unmaps/frees/releases and untracks the persistent ncclMemTrack entry from nvlsAllocBindUc.
+      NCCLCHECK(ncclCuMemFree(uc->ptr, comm->memManager));
+    }
     memset(uc, 0, sizeof(*uc));
   }
   return ncclSuccess;
@@ -221,6 +229,14 @@ fail:
   goto exit;
 }
 
+static void nvlsUcProp(struct ncclComm* comm, CUmemAllocationProp* ucprop) {
+  memset(ucprop, 0, sizeof(CUmemAllocationProp));
+  ucprop->type = CU_MEM_ALLOCATION_TYPE_PINNED;
+  ucprop->location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+  ucprop->location.id = comm->cudaDev;
+  ucprop->requestedHandleTypes = ncclCuMemHandleType;
+}
+
 // Allocate UC backing for a consumer and bind it into its resolved MC-group slice.
 static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPartition* partition, size_t size,
                                     struct ncclNvlsUcSegment* outUc) {
@@ -231,11 +247,7 @@ static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPa
   void* ucptr = NULL;
   CUmemGenericAllocationHandle ucHandle = 0;
 
-  memset(&ucprop, 0, sizeof(CUmemAllocationProp));
-  ucprop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
-  ucprop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-  ucprop.location.id = comm->cudaDev;
-  ucprop.requestedHandleTypes = ncclCuMemHandleType;
+  nvlsUcProp(comm, &ucprop);
   CUCHECKGOTO(cuMemGetAllocationGranularity(&ucgran, &ucprop, CU_MEM_ALLOC_GRANULARITY_RECOMMENDED), ret, fail);
   ALIGN_SIZE(ucsize, ucgran);
   // Map a VA for UC memory with MC alignment and size
@@ -563,23 +575,209 @@ ncclResult_t ncclNvlsFree(struct ncclComm* comm) {
   if (ncclAtomicRefCountDecrement(&resources->refCount) == 0) {
     if (!comm->MNNVL && resources->nvlsShmemHandle) NCCLCHECKIGNORE(ncclShmClose(resources->nvlsShmemHandle), ret);
 
+    bool suspended = resources->suspended;
     if (resources->creditUc.ptr) {
-      NCCLCHECKIGNORE(
-        ncclMcPartitionUnbind(&resources->creditPartition, 0 /*offsetInPartition*/, resources->creditUc.size), ret);
-      NCCLCHECKIGNORE(nvlsFreeUc(comm, &resources->creditUc), ret);
+      if (!suspended)
+        NCCLCHECKIGNORE(
+          ncclMcPartitionUnbind(&resources->creditPartition, 0 /*offsetInPartition*/, resources->creditUc.size), ret);
+      NCCLCHECKIGNORE(nvlsFreeUc(comm, &resources->creditUc, suspended), ret);
     }
     if (resources->dataUc.ptr) {
-      NCCLCHECKIGNORE(ncclMcPartitionUnbind(&resources->dataPartition, 0 /*offsetInPartition*/, resources->dataUc.size),
-                      ret);
-      NCCLCHECKIGNORE(nvlsFreeUc(comm, &resources->dataUc), ret);
+      if (!suspended)
+        NCCLCHECKIGNORE(
+          ncclMcPartitionUnbind(&resources->dataPartition, 0 /*offsetInPartition*/, resources->dataUc.size), ret);
+      NCCLCHECKIGNORE(nvlsFreeUc(comm, &resources->dataUc, suspended), ret);
     }
     if (resources->ubEnabled) ncclMcArenaDestroy(&resources->ubArena);
     NCCLCHECKIGNORE(ncclMcGroupDestroy(&resources->mcGroup), ret);
 
+    free(resources->creditBackup);
     free(resources);
     comm->nvlsResources = NULL;
   }
   return ret;
+}
+
+// Checkpoint support. A live multicast object, or memory bound to one, hangs the driver's
+// checkpoint freeze path, so suspend releases all of it and resume rebuilds it. Every VA
+// reservation (MC group and UC segments) is kept, so the MC/UC pointers baked into device
+// connection info, kernel arguments and captured CUDA graphs stay valid. Contents:
+// - credit UC: head/tail counters paired with the step counters saved in device memory,
+//   so they are copied to the host and restored;
+// - data UC: staging only, nothing survives a collective, so it is released as is;
+// - user-buffer ranges: unbound; the user owns the memory and must have it mapped at the
+//   same VA again before resume, which rebinds every committed range at its old offset.
+
+// Release a UC segment's physical memory, keeping its VA reservation.
+static ncclResult_t nvlsUcSuspend(struct ncclNvlsUcSegment* uc) {
+  if (uc->ptr == NULL) return ncclSuccess;
+  CUCHECK(cuMemUnmap((CUdeviceptr)uc->ptr, uc->size));
+  CUCHECK(cuMemRelease(uc->handle));
+  uc->handle = 0;
+  return ncclSuccess;
+}
+
+// Back a suspended UC segment with new physical memory at its reserved VA.
+static ncclResult_t nvlsUcResume(struct ncclComm* comm, struct ncclNvlsUcSegment* uc) {
+  ncclResult_t ret = ncclSuccess;
+  CUmemAllocationProp ucprop;
+  CUmemGenericAllocationHandle handle = 0;
+
+  if (uc->ptr == NULL) return ncclSuccess;
+  nvlsUcProp(comm, &ucprop);
+  CUCHECK(cuMemCreate(&handle, uc->size, &ucprop, 0));
+  CUCHECKGOTO(cuMemMap((CUdeviceptr)uc->ptr, uc->size, 0, handle, 0), ret, fail);
+  CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)uc->ptr, uc->size, &comm->nvlsResources->accessDesc, 1), ret, fail_unmap);
+  uc->handle = handle;
+  return ncclSuccess;
+fail_unmap:
+  CUCALL(cuMemUnmap((CUdeviceptr)uc->ptr, uc->size));
+fail:
+  CUCALL(cuMemRelease(handle));
+  return ret;
+}
+
+// Committed user-buffer ranges live in the registration cache (NVLS_REG_COMPLETE implies
+// a non-NULL nvlsUbReg). Retired ranges are already unbound.
+static ncclResult_t nvlsUbUnbindAll(struct ncclComm* comm) {
+  struct ncclMcArena* arena = &comm->nvlsResources->ubArena;
+  struct ncclRegCache* cache = &comm->regCache;
+  ncclResult_t ignored = ncclSuccess;
+  int n = 0;
+
+  for (int i = 0; i < cache->population; i++) {
+    struct ncclReg* reg = cache->slots[i];
+    if ((reg->state & NVLS_REG_COMPLETE) == 0 || !reg->nvlsUbReg->bound) continue;
+    // A failed unbind means the user already freed the backing, which dropped the
+    // binding; resume will then fail to rebind it, which is reported there.
+    NCCLCHECKIGNORE(ncclMcPartitionUnbind(&arena->partition, reg->nvlsUbReg->offset, reg->nvlsUbReg->bindSize),
+                    ignored);
+    reg->nvlsUbReg->bound = false;
+    n++;
+  }
+  INFO(NCCL_NVLS, "rank %d NVLS suspend unbound %d user-buffer ranges", comm->rank, n);
+  return ncclSuccess;
+}
+
+// Rebind every committed range at its old offset and agree on the outcome: a range
+// bound on some ranks only would silently corrupt data, so any failure fails resume.
+static ncclResult_t nvlsUbRebindAll(struct ncclComm* comm) {
+  ncclResult_t ret = ncclSuccess;
+  struct ncclMcArena* arena = &comm->nvlsResources->ubArena;
+  struct ncclRegCache* cache = &comm->regCache;
+  int* allFailed = NULL;
+  int failed = 0, n = 0, failedRanks = 0;
+
+  for (int i = 0; i < cache->population; i++) {
+    struct ncclReg* reg = cache->slots[i];
+    enum ncclMcBindStatus status = ncclMcBindStatusTransient;
+    if ((reg->state & NVLS_REG_COMPLETE) == 0) continue;
+    struct ncclMcArenaReg* range = reg->nvlsUbReg;
+    if (ncclMcPartitionTryBindAddr(&arena->partition, range->offset, (CUdeviceptr)reg->begAddr, range->bindSize,
+                                   &status) != ncclSuccess ||
+        status != ncclMcBindStatusOk) {
+      WARN("NVLS resume: rank %d cannot rebind registered buffer %p size %zu at arena offset %zu; registered buffers "
+           "must be mapped at the same address before ncclCommResume",
+           comm->rank, (void*)reg->begAddr, range->bindSize, range->offset);
+      failed++;
+      continue;
+    }
+    range->bound = true;
+    n++;
+  }
+
+  NCCLCHECKGOTO(ncclCalloc(&allFailed, comm->localRanks), ret, exit);
+  allFailed[comm->localRank] = failed;
+  NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
+                                            allFailed, sizeof(int)),
+                ret, exit);
+  for (int r = 0; r < comm->localRanks; r++) failedRanks += (allFailed[r] != 0);
+  if (failedRanks) {
+    WARN("NVLS resume: %d local rank(s) failed to rebind registered buffers; the communicator is unusable",
+         failedRanks);
+    ret = ncclInvalidUsage;
+    goto exit;
+  }
+  INFO(NCCL_NVLS, "rank %d NVLS resume rebound %d user-buffer ranges", comm->rank, n);
+exit:
+  free(allFailed);
+  return ret;
+}
+
+ncclResult_t ncclNvlsSuspend(struct ncclComm* comm) {
+  struct ncclNvlsSharedRes* resources = comm->nvlsResources;
+
+  // Checked before anything is released. Both conditions are uniform across the ranks
+  // that would otherwise meet in the barriers below.
+  if (ncclDevrHasMulticast(comm)) {
+    WARN("NVLS suspend: symmetric-memory multicast teams cannot be suspended yet");
+    return ncclInvalidUsage;
+  }
+  if (resources == NULL) return ncclSuccess;
+  if (resources->refCount > 1) {
+    WARN("NVLS suspend: NVLS resources shared with %d communicators", resources->refCount);
+    return ncclInvalidUsage;
+  }
+  if (resources->suspended) {
+    WARN("NVLS suspend: already suspended");
+    return ncclInvalidUsage;
+  }
+
+  // The caller has synchronized the device and barriered, so no NVLS kernel is running.
+  if (resources->creditUc.ptr) {
+    char* backup = NULL;
+    NCCLCHECK(ncclCalloc(&backup, resources->creditUc.size));
+    resources->creditBackup = backup;
+    CUDACHECK(
+      cudaMemcpy(resources->creditBackup, resources->creditUc.ptr, resources->creditUc.size, cudaMemcpyDeviceToHost));
+  }
+  if (resources->ubEnabled) NCCLCHECK(nvlsUbUnbindAll(comm));
+  if (resources->creditUc.ptr)
+    NCCLCHECK(ncclMcPartitionUnbind(&resources->creditPartition, 0 /*offsetInPartition*/, resources->creditUc.size));
+  if (resources->dataUc.ptr)
+    NCCLCHECK(ncclMcPartitionUnbind(&resources->dataPartition, 0 /*offsetInPartition*/, resources->dataUc.size));
+  NCCLCHECK(ncclMcGroupSuspend(resources->mcGroup));
+  NCCLCHECK(nvlsUcSuspend(&resources->creditUc));
+  NCCLCHECK(nvlsUcSuspend(&resources->dataUc));
+  resources->suspended = true;
+
+  // The MC object dies only when its last rank lets go, and every rank's device stays a
+  // member until then. When suspend returns on any rank, no rank holds it any more.
+  NCCLCHECK(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
+                                      comm->localRankToRank[0]));
+  INFO(NCCL_NVLS, "rank %d NVLS suspended: MC group, credit %zu B (backed up), data %zu B released", comm->rank,
+       resources->creditUc.size, resources->dataUc.size);
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvlsResume(struct ncclComm* comm) {
+  struct ncclNvlsSharedRes* resources = comm->nvlsResources;
+
+  if (resources == NULL || !resources->suspended) return ncclSuccess;
+
+  NCCLCHECK(nvlsUcResume(comm, &resources->creditUc));
+  NCCLCHECK(nvlsUcResume(comm, &resources->dataUc));
+  NCCLCHECK(ncclMcGroupResume(comm, resources->mcGroup));
+  if (resources->creditUc.ptr) {
+    NCCLCHECK(ncclMcPartitionBindMem(&resources->creditPartition, 0 /*offsetInPartition*/, resources->creditUc.handle,
+                                     0 /*memOffset*/, resources->creditUc.size));
+    CUDACHECK(
+      cudaMemcpy(resources->creditUc.ptr, resources->creditBackup, resources->creditUc.size, cudaMemcpyHostToDevice));
+  }
+  if (resources->dataUc.ptr)
+    NCCLCHECK(ncclMcPartitionBindMem(&resources->dataPartition, 0 /*offsetInPartition*/, resources->dataUc.handle,
+                                     0 /*memOffset*/, resources->dataUc.size));
+  // Everything NCCL owns is back; from here a failure leaves a normally destroyable domain.
+  resources->suspended = false;
+  free(resources->creditBackup);
+  resources->creditBackup = NULL;
+
+  if (resources->ubEnabled) NCCLCHECK(nvlsUbRebindAll(comm));
+  // Every rank must have bound its UC memory before any kernel touches the MC VA.
+  NCCLCHECK(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
+                                      comm->localRankToRank[0]));
+  INFO(NCCL_NVLS, "rank %d NVLS resumed", comm->rank);
+  return ncclSuccess;
 }
 
 // Find the local registration record for one buffer, or leave *outReg NULL for a buffer
@@ -808,6 +1006,14 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
 }
 
 ncclResult_t ncclNvlsFree(struct ncclComm* comm) {
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvlsSuspend(struct ncclComm* comm) {
+  return ncclSuccess;
+}
+
+ncclResult_t ncclNvlsResume(struct ncclComm* comm) {
   return ncclSuccess;
 }
 

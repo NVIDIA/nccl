@@ -24,18 +24,19 @@ struct ncclMcRequest {
   size_t alignment;  // consumer alignment; effective = max(alignment, group granularity)
 };
 
+struct ncclMcGroup;
+
 // A resolved slice within the group's mapped VA; immutable for the group's life.
-// It carries everything a bind needs, so consumers never see the group itself.
+// The MC object itself is reached through the group: suspend/resume replaces it, and
+// the group is its only owner.
 struct ncclMcPartition {
   size_t offset;  // byte offset within the group's mapped VA
   size_t size;    // resolved size, aligned to the bind granularity
-  void* ptr;     // groupBase + offset
-  CUmemGenericAllocationHandle mcHandle;  // the group's MC object
+  void* ptr;     // groupBase + offset; stable across suspend/resume
+  const struct ncclMcGroup* group;        // owner of the MC object
   size_t minGranularity;                  // the group's minimum bind granularity
   int dev;                                // local device, for bind/unbind
 };
-
-struct ncclMcGroup;
 
 // How a best-effort driver bind ended
 enum ncclMcBindStatus {
@@ -61,6 +62,14 @@ ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct nccl
 
 // Unmap the VA and release the MC handle (drops any bindings still present).
 ncclResult_t ncclMcGroupDestroy(struct ncclMcGroup** group);
+
+// Release the MC object for a CUDA process checkpoint: unmap the VA (keeping its
+// reservation) and drop this rank's handle. The caller must already have unbound
+// everything. Rank-local; the object dies once every rank of the group has suspended.
+ncclResult_t ncclMcGroupSuspend(struct ncclMcGroup* group);
+// Collectively rebuild a suspended group: a new MC object of the same size, mapped at
+// the same VA, so every partition pointer stays valid. Nothing is bound on return.
+ncclResult_t ncclMcGroupResume(struct ncclComm* comm, struct ncclMcGroup* group);
 
 // Locally bind a UC handle into a partition at offsetInPartition; the bind is
 // bounds-checked against the partition.

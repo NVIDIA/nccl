@@ -115,8 +115,17 @@ static const char* ncclNvlsFifoLayoutName(int layout) {
 static ncclResult_t ncclNvlsTreeRubinTuning(struct ncclComm* comm, int* nChannels, int* chunkSize,
                                             int* treeMaxChunkSize) {
   *treeMaxChunkSize = 512 * 1024;
-  *chunkSize = *treeMaxChunkSize;
+
+  int nDomains = comm->nNodes;
+  int nRanksPerDomain = comm->minLocalRanks;
+  // TODO: Move this chunk-size policy into the pipeline cost model once it models NVLSTree pipelining and supports
+  // chunk-size selection.
+  int ranksPerDomainFactor = pow2Up(DIVUP(32, nRanksPerDomain));
+  int multiDomainChunkFactor = nDomains > 2 ? 2 : 1;
+  *chunkSize = std::min(512 * 1024, 64 * 1024 * ranksPerDomainFactor * multiDomainChunkFactor);
   *nChannels = comm->nvlsChannels;
+  INFO(NCCL_INIT, "NVLSTree topology tuning: domains %d ranksPerDomain %d channels %d chunkSize %d", nDomains,
+       nRanksPerDomain, *nChannels, *chunkSize);
   return ncclSuccess;
 }
 

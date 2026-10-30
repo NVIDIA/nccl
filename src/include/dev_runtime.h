@@ -111,6 +111,8 @@ bool ncclGinResourcesRequested(struct ncclDevCommRequirements const* reqs);
 // Check if there is only one LSA team. This function uses the cached value of comm or computes the
 // value from the comm topology.
 bool ncclDevrIsOneLsaTeam(struct ncclComm* comm);
+// Whether any device-runtime team holds a multicast object or multicast logical endpoint.
+bool ncclDevrHasMulticast(struct ncclComm* comm);
 
 // Returns the CUDA version supported by CFT on this GPU, or 0 when CFT is unsupported.
 ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport, bool* gpuCftMulticastSupport,

@@ -157,6 +157,14 @@ bool ncclDevrIsOneLsaTeam(struct ncclComm* comm) {
   return lsaSize == comm->nRanks; // Same as comm->nRanks / comm->devrState.lsaSize == 1
 }
 
+bool ncclDevrHasMulticast(struct ncclComm* comm) {
+  for (struct ncclDevrTeam* t = comm->devrState.teamHead; t != nullptr; t = t->next) {
+    if (t->mcBasePtr != nullptr || t->mcLeId[0] != NCCL_LE_ID_INVALID || t->mcLeId[1] != NCCL_LE_ID_INVALID)
+      return true;
+  }
+  return false;
+}
+
 ncclResult_t ncclDevrInitOnce(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
   struct ncclDevrState* devr = &comm->devrState;

@@ -440,6 +440,9 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
   CUDACHECK(cudaDeviceSynchronize());
   NCCLCHECKGOTO(bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xBEEF), ret, fail);
 
+  // Multicast objects and memory bound to them cannot be checkpointed: release them first.
+  NCCLCHECKGOTO(ncclNvlsSuspend(comm), ret, fail);
+
   // Step 1: Unmap all peer-imported buffers first
   entry = manager->entries;
   while (entry != nullptr) {
@@ -909,6 +912,9 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
     }
     entry = entry->next;
   }
+
+  // Rebuild NVLS multicast state now that local memory is back.
+  NCCLCHECKGOTO(ncclNvlsResume(comm), ret, fail);
 
   manager->released = 0;
 

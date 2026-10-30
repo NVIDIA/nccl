@@ -311,9 +311,15 @@ ncclResult_t ncclP2pImportShareableBuffer(struct ncclComm* comm, int peer, size_
 
     *devMemPtr = (void*)dptr;
 
-    // Track imported buffer
-    NCCLCHECK(ncclMemTrackImportFromPeer(comm->memManager, (void*)dptr, size, handle, type, memType, peer,
-                                         comm->peerInfo[peer].cudaDev, ownerPtr));
+    // Track imported buffer. A persistent owner buffer is never released, so suspend can
+    // still drop this mapping and resume imports the same descriptor again.
+    if (memType == ncclMemPersist) {
+      NCCLCHECK(ncclMemTrackPersistentImport(comm->memManager, (void*)dptr, size, handle, type, peer,
+                                             comm->peerInfo[peer].cudaDev, cuDesc, sizeof(*cuDesc)));
+    } else {
+      NCCLCHECK(ncclMemTrackImportFromPeer(comm->memManager, (void*)dptr, size, handle, type, memType, peer,
+                                           comm->peerInfo[peer].cudaDev, ownerPtr));
+    }
 #else
     return ncclInternalError;
 #endif

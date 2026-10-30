@@ -14,6 +14,7 @@
 #include "utils.h"
 #include "p2p.h"
 #include "mem_manager.h"
+#include "host_pin.h"
 struct ncclComm;
 #include "os.h"
 #include <memory>
@@ -144,6 +145,7 @@ static inline ncclResult_t ncclCuMemHostFree(void* ptr) {
 
 #endif  /* CUDART_VERSION >= 12020 */
 
+
 template <typename T>
 ncclResult_t ncclCudaHostCallocDebug(T** ptr, size_t nelem, const char* file, int line, const char* callerFunc) {
   ncclResult_t result = ncclSuccess;
@@ -151,8 +153,7 @@ ncclResult_t ncclCudaHostCallocDebug(T** ptr, size_t nelem, const char* file, in
   *ptr = nullptr;
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   if (nelem > 0) {
-    CUDACHECKGOTO(cudaHostAlloc(ptr, nelem * ncclSizeOfT<T>(), cudaHostAllocMapped), result, finish);
-    memset(*ptr, 0, nelem * ncclSizeOfT<T>());
+    NCCLCHECKGOTO(ncclHostPinAlloc((void**)ptr, nelem * ncclSizeOfT<T>()), result, finish);
   }
 finish:
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
@@ -162,10 +163,7 @@ finish:
   return result;
 }
 
-static inline ncclResult_t ncclCudaHostFree(void* ptr) {
-  CUDACHECK(cudaFreeHost(ptr));
-  return ncclSuccess;
-}
+static inline ncclResult_t ncclCudaHostFree(void* ptr) { return ncclHostPinFree(ptr); }
 
 #define ncclCudaHostCalloc(...) ncclCudaHostCallocDebug(__VA_ARGS__, __FILE__, __LINE__, __func__)
 

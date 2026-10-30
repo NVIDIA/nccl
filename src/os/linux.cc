@@ -9,6 +9,7 @@
 
 #include "checks.h"
 #include "crypt.h"
+#include "host_pin.h"
 #include "utils.h"
 
 #include <cstdint>
@@ -845,8 +846,7 @@ ncclResult_t ncclOsShmOpen(char* shmPath, size_t shmPathSize, size_t shmSize, vo
          (void*)hptr, (long)realShmSize);
     cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
     CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
-    CUDACHECKGOTO(cudaHostRegister((void*)hptr, realShmSize, cudaHostRegisterPortable | cudaHostRegisterMapped), ret,
-                  fail);
+    NCCLCHECKGOTO(ncclHostPinRegister((void*)hptr, realShmSize), ret, fail);
     CUDACHECKGOTO(cudaHostGetDevicePointer(&dptr, (void*)hptr, 0), ret, fail);
     CUDACHECKGOTO(cudaThreadExchangeStreamCaptureMode(&mode), ret, fail);
   }
@@ -885,7 +885,7 @@ ncclResult_t ncclOsShmClose(struct ncclShmHandleInternal* handle) {
     }
 
     if (handle->shmPtr) {
-      if (handle->devShmPtr) CUDACHECK(cudaHostUnregister(handle->shmPtr));
+      if (handle->devShmPtr) NCCLCHECK(ncclHostPinUnregister(handle->shmPtr));
       if (munmap(handle->shmPtr, handle->realShmSize) != 0) {
         WARN("munmap of shared memory %p size %ld failed, error: %s (%d)", handle->shmPtr, handle->realShmSize,
              strerror(errno), errno);

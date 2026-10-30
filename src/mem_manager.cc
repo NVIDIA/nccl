@@ -439,6 +439,8 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
 
   CUDACHECK(cudaDeviceSynchronize());
   NCCLCHECKGOTO(bootstrapBarrier(comm->bootstrap, comm->rank, comm->nRanks, 0xBEEF), ret, fail);
+  // NIC registrations pin the buffers' current pages; drop them while suspended.
+  NCCLCHECKGOTO(ncclTransportNetRegs(comm, false), ret, fail);
 
   // Step 1: Unmap all peer-imported buffers first
   entry = manager->entries;
@@ -666,6 +668,9 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
 
     entry = entry->next;
   }
+
+  // Register the NET buffers again, on whatever pages back them now.
+  NCCLCHECK(ncclTransportNetRegs(comm, true));
 
   // Step 2: Barrier to ensure all ranks have resumed their local memory
   if (comm->bootstrap != nullptr) {

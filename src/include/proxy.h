@@ -432,7 +432,9 @@ enum ncclProxyMsgType {
   ncclProxyMsgGetFd = 9, // cuMem API support (UDS)
   ncclProxyMsgQueryFd = 10,
   ncclProxyMsgRegister = 11,
-  ncclProxyMsgDeregister = 12
+  ncclProxyMsgDeregister = 12,
+  ncclProxyMsgSuspendRegs = 13,
+  ncclProxyMsgResumeRegs = 14
 };
 
 // This function is called by a client of the proxy that needs to invoke any of the non-progress proxyOp types

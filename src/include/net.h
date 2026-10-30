@@ -39,6 +39,8 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport);
 #endif
 
 extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetIb;
+// Internal IB only: park or restore, in place, the GPU registrations of an mhandle (ncclCommSuspend/Resume).
+ncclResult_t ncclIbMrHandleMove(void* comm, void* mhandle, bool resume, int dmabufFlags);
 extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetSocket;
 extern NCCL_NET_DATA_IMPORT ncclNet_t ncclNetNd;
 

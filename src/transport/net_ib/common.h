@@ -47,6 +47,12 @@ struct ncclIbMr {
   size_t pages;
   int refs;
   ibv_mr* mr;
+  // How the MR was registered, to register it again in place (ncclIbMrHandleMove).
+  bool cuda;
+  bool dmabuf;
+  bool dataDirect;
+  bool parked;
+  unsigned int access;
 };
 
 struct ncclIbMrCache {

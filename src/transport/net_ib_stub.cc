@@ -41,6 +41,8 @@ static ncclResult_t stubRegMrDmaBuf(void* comm, void* data, size_t size, int typ
   return ncclInternalError;
 }
 
+ncclResult_t ncclIbMrHandleMove(void* comm, void* mhandle, bool resume, int dmabufFlags) { return ncclSuccess; }
+
 static ncclResult_t stubDeregMr(void* comm, void* mhandle) {
   return ncclInternalError;
 }

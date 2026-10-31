@@ -1503,6 +1503,8 @@ The default is dependent on the number of ranks.
 
 Values are integers, in bytes.
 
+.. _NCCL_ALGO:
+
 NCCL_ALGO
 ----------
 (since 2.5)
@@ -1566,6 +1568,8 @@ algorithms available except tree.
 
 The default is unset, which causes NCCL to automatically choose the available
 algorithms based on the node topology and architecture.
+
+.. _NCCL_PROTO:
 
 NCCL_PROTO
 ----------

@@ -539,6 +539,11 @@ static void rasDiagnosticsPciSnapshotNet(struct ncclComm* comm, bool requireComm
     snapshot->netState = RAS_DIAG_PCI_NET_NO_NICS;
     return;
   }
+  // A single-node communicator has no NET routes; its graphs carry no inter-node NIC ids to look up.
+  if (comm->nNodes <= 1) {
+    snapshot->netState = RAS_DIAG_PCI_NET_NO_NICS;
+    return;
+  }
 
   // Use the same graph routes as the NET transport instead of pairing the GPU with every plugin device.
   for (size_t algorithm = 0; algorithm < sizeof(graphAlgorithms) / sizeof(graphAlgorithms[0]); algorithm++) {

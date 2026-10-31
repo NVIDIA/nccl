@@ -1621,6 +1621,14 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     // Abort on Net/CollNet mismatches
     if (ret != ncclSuccess) goto fail;
   }
+  // Every rank holds the same allGather3Data, so the other ranks must fail too instead of waiting for rank 0 in the
+  // next bootstrap exchange.
+  if ((minLocalNetCount != maxLocalNetCount && !ncclParamIgnoreNetMismatch()) ||
+      (minLocalCollNetCount != maxLocalCollNetCount && !ncclParamIgnoreCollNetMismatch())) {
+    WARN("Rank %d: mixed local Net/CollNet device counts across ranks, see rank 0 for details", rank);
+    ret = ncclSystemError;
+    goto fail;
+  }
 
   // Alert the user to the presence of mixed CPUs. In the past this has caused
   // locks in some collective routines. This may help debug issues in the future.

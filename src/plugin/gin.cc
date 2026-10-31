@@ -222,7 +222,8 @@ static void initPluginLibsOnceFunc() {
       if ((strlen(ginPluginName) + 1) <= MAX_STR_LEN) {
         pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
         pluginLibs[pluginCounter].refCount = ncclParamGinPluginRefCount();
-        strcpy(pluginLibs[pluginCounter].name, ginPluginName);
+        strncpy(pluginLibs[pluginCounter].name, ginPluginName, MAX_STR_LEN - 1);
+        pluginLibs[pluginCounter].name[MAX_STR_LEN - 1] = '\0';
         pluginCounter++;
       } else {
         INFO(NCCL_NET | NCCL_ENV,
@@ -236,13 +237,17 @@ static void initPluginLibsOnceFunc() {
     // Add default gin plugin
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
     pluginLibs[pluginCounter].refCount = ncclParamGinPluginRefCount();
-    strcpy(pluginLibs[pluginCounter++].name, defaultGinPlugin);
+    strncpy(pluginLibs[pluginCounter].name, defaultGinPlugin, MAX_STR_LEN - 1);
+    pluginLibs[pluginCounter].name[MAX_STR_LEN - 1] = '\0';
+    pluginCounter++;
   }
 
   // Also check if the NET plugin has GIN support
   if ((pluginLibs[pluginCounter].dlHandle = ncclGetNetPluginLib(ncclPluginTypeGin)) != NULL) {
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
-    strcpy(pluginLibs[pluginCounter++].name, ncclGetPluginLibName(ncclPluginTypeGin));
+    strncpy(pluginLibs[pluginCounter].name, ncclGetPluginLibName(ncclPluginTypeGin), MAX_STR_LEN - 1);
+    pluginLibs[pluginCounter].name[MAX_STR_LEN - 1] = '\0';
+    pluginCounter++;
   }
 
   // Add internal ib plugin

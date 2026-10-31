@@ -281,28 +281,33 @@ int ncclProfilerEventMask;       // Set by profiler
 static bool ncclProfilerRasOverrideActive = false;
 static int ncclProfilerRasOverrideMask = 0;
 
+// Append name to buf. Stop when buf is full; never write past its end.
+static void appendMaskName(char* buf, size_t size, const char* name) {
+  size_t len = strlen(buf);
+  if (len + 1 < size) snprintf(buf + len, size - len, "%s", name);
+}
+
 // Print enabled profiler event types
 static void printProfilerEventMask(int mask) {
   if (!mask) return;
 
   char enabled[512] = {0};
-  int pos = 0;
-  if (mask & ncclProfileGroup) pos += sprintf(enabled + pos, "Group ");
-  if (mask & ncclProfileColl) pos += sprintf(enabled + pos, "Coll ");
-  if (mask & ncclProfileP2p) pos += sprintf(enabled + pos, "P2p ");
-  if (mask & ncclProfileProxyOp) pos += sprintf(enabled + pos, "ProxyOp ");
-  if (mask & ncclProfileProxyStep) pos += sprintf(enabled + pos, "ProxyStep ");
-  if (mask & ncclProfileProxyCtrl) pos += sprintf(enabled + pos, "ProxyCtrl ");
-  if (mask & ncclProfileKernelCh) pos += sprintf(enabled + pos, "KernelCh ");
-  if (mask & ncclProfileKernelPhase) pos += sprintf(enabled + pos, "KernelPhase ");
-  if (mask & ncclProfileNetPlugin) pos += sprintf(enabled + pos, "NetPlugin ");
-  if (mask & ncclProfileGroupApi) pos += sprintf(enabled + pos, "GroupApi ");
-  if (mask & ncclProfileCollApi) pos += sprintf(enabled + pos, "CollApi ");
-  if (mask & ncclProfileP2pApi) pos += sprintf(enabled + pos, "P2pApi ");
-  if (mask & ncclProfileKernelLaunch) pos += sprintf(enabled + pos, "KernelLaunch ");
-  if (mask & ncclProfileCeColl) pos += sprintf(enabled + pos, "CeColl ");
-  if (mask & ncclProfileCeSync) pos += sprintf(enabled + pos, "CeSync ");
-  if (mask & ncclProfileCeBatch) pos += sprintf(enabled + pos, "CeBatch ");
+  if (mask & ncclProfileGroup) appendMaskName(enabled, sizeof(enabled), "Group ");
+  if (mask & ncclProfileColl) appendMaskName(enabled, sizeof(enabled), "Coll ");
+  if (mask & ncclProfileP2p) appendMaskName(enabled, sizeof(enabled), "P2p ");
+  if (mask & ncclProfileProxyOp) appendMaskName(enabled, sizeof(enabled), "ProxyOp ");
+  if (mask & ncclProfileProxyStep) appendMaskName(enabled, sizeof(enabled), "ProxyStep ");
+  if (mask & ncclProfileProxyCtrl) appendMaskName(enabled, sizeof(enabled), "ProxyCtrl ");
+  if (mask & ncclProfileKernelCh) appendMaskName(enabled, sizeof(enabled), "KernelCh ");
+  if (mask & ncclProfileKernelPhase) appendMaskName(enabled, sizeof(enabled), "KernelPhase ");
+  if (mask & ncclProfileNetPlugin) appendMaskName(enabled, sizeof(enabled), "NetPlugin ");
+  if (mask & ncclProfileGroupApi) appendMaskName(enabled, sizeof(enabled), "GroupApi ");
+  if (mask & ncclProfileCollApi) appendMaskName(enabled, sizeof(enabled), "CollApi ");
+  if (mask & ncclProfileP2pApi) appendMaskName(enabled, sizeof(enabled), "P2pApi ");
+  if (mask & ncclProfileKernelLaunch) appendMaskName(enabled, sizeof(enabled), "KernelLaunch ");
+  if (mask & ncclProfileCeColl) appendMaskName(enabled, sizeof(enabled), "CeColl ");
+  if (mask & ncclProfileCeSync) appendMaskName(enabled, sizeof(enabled), "CeSync ");
+  if (mask & ncclProfileCeBatch) appendMaskName(enabled, sizeof(enabled), "CeBatch ");
   INFO(NCCL_INIT, "Profiler event mask: 0x%x (%d) - Enabled: %s", mask, mask, enabled);
 }
 

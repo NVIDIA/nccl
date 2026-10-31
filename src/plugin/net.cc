@@ -313,7 +313,8 @@ static void initPluginLibsOnceFunc() {
       if ((strlen(netPluginName) + 1) <= MAX_STR_LEN) {
         netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
         netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
-        strcpy(netPluginLibs[pluginCounter].name, netPluginName);
+        strncpy(netPluginLibs[pluginCounter].name, netPluginName, MAX_STR_LEN-1);
+        netPluginLibs[pluginCounter].name[MAX_STR_LEN-1] = '\0';
         pluginCounter++;
       } else {
         INFO(NCCL_NET | NCCL_ENV,
@@ -327,7 +328,9 @@ static void initPluginLibsOnceFunc() {
     // Add default net plugin
     netPluginLibs[pluginCounter].ncclNetPluginState = ncclNetPluginStateLoadReady;
     netPluginLibs[pluginCounter].ncclNetPluginRefCount = ncclParamNetPluginRefCount();
-    strcpy(netPluginLibs[pluginCounter++].name, defaultNetPlugin);
+    strncpy(netPluginLibs[pluginCounter].name, defaultNetPlugin, MAX_STR_LEN-1);
+    netPluginLibs[pluginCounter].name[MAX_STR_LEN-1] = '\0';
+    pluginCounter++;
   }
 
   ncclNetPluginRegisterInternal(&pluginCounter, &ncclNetIb, 0);

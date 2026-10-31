@@ -18,6 +18,7 @@
 #include "diagnostics.h"
 #include "diagnostics_log.h"
 #include "graph.h"
+#include "hostname.h"
 #include "param.h"
 #include "transport.h"
 #include "utils.h"
@@ -561,10 +562,19 @@ void ncclDiagRunIbWriteBw(ncclComm* comm) {
   }
   // Gathered data is identical everywhere, so all ranks take this exit together.
   for (int rank = 0; rank < comm->nRanks; rank++) {
-    if (!rankInfo[rank].setupFailed) continue;
-    if (comm->rank == 0)
-      DIAG_PRINT("NCCL DIAG [INFO] net bw: setup failed on rank %d in comm 0x%lx", rank, (unsigned long)comm->commHash);
-    goto cleanup;
+    if (rankInfo[rank].setupFailed) {
+      if (comm->rank == 0)
+        DIAG_PRINT("NCCL DIAG [INFO] net bw: setup failed on rank %d in comm 0x%lx", rank, (unsigned long)comm->commHash);
+      goto cleanup;
+    }
+    // Hostnames go into the ib_write_bw shell command and the logs, so check them once here.
+    // Do not print a bad hostname; print the rank instead.
+    if (!ncclDiagIsSafeHostname(rankInfo[rank].hostname)) {
+      if (comm->rank == 0)
+        DIAG_PRINT("NCCL DIAG [INFO] net bw: unsafe hostname on rank %d in comm 0x%lx", rank,
+                   (unsigned long)comm->commHash);
+      goto cleanup;
+    }
   }
 
   if (comm->rank == 0) {

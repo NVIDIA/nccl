@@ -620,6 +620,16 @@ void ncclDiagRunIbWriteBw(ncclComm* comm) {
   if (bootstrapAllGather(comm->bootstrap, allBandwidth, sizeof(RankBandwidth)) != ncclSuccess) goto bootstrapError;
   reportBandwidthStats(comm, rankInfo, allBandwidth, sortedBandwidth, /*cross=*/false, allPairsRan);
   if (useCrossNic) reportBandwidthStats(comm, rankInfo, allBandwidth, sortedBandwidth, /*cross=*/true, allPairsRan);
+  if (comm->rank == 0 && allPairsRan) {
+    // Every scheduled pair either measured or cleared allPairsRan, so no measurement means no pair was scheduled.
+    bool measured = false;
+    for (int rank = 0; rank < comm->nRanks && !measured; rank++)
+      measured = allBandwidth[rank].direct >= 0 || allBandwidth[rank].cross >= 0;
+    if (!measured)
+      DIAG_PRINT("NCCL DIAG [INFO] net bw: not measured, no device name is shared between neighboring nodes in comm "
+                 "0x%lx",
+                 (unsigned long)comm->commHash);
+  }
 
 cleanup:
   free(sortedBandwidth);

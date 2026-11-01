@@ -1845,11 +1845,9 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       }
     }
 
-    // Connect to local net proxy
+    // Connect to local net proxy. The shared NET buffers are created on demand by sendProxySetup/recvProxySetup;
+    // the proxy connections are kept because the proxy ops pool is unlinked below when cuMem is off.
     NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_NET, 1, comm->rank, &proxyConn), ret, fail);
-    NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &proxyConn, ncclProxyMsgSharedInit, &comm->p2pnChannels, sizeof(int),
-                                        NULL, 0),
-                  ret, fail);
 
     // Then to remote ones when using PXN
     if (ncclPxnDisable(comm) == 0) {
@@ -1857,9 +1855,6 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
       NCCLCHECKGOTO(ncclTopoGetPxnRanks(comm, &pxnPeers, &nranks), ret, fail);
       for (int r = 0; r < nranks; r++) {
         NCCLCHECKGOTO(ncclProxyConnect(comm, TRANSPORT_NET, 1, pxnPeers[r], &proxyConn), ret, fail);
-        NCCLCHECKGOTO(ncclProxyCallBlocking(comm, &proxyConn, ncclProxyMsgSharedInit, &comm->p2pnChannels, sizeof(int),
-                                            NULL, 0),
-                      ret, fail);
       }
     }
 

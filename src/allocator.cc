@@ -156,16 +156,17 @@ void ncclSpaceDestruct(struct ncclSpace* a) {
   free(a->cuts);
 }
 
-static void insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi) {
+static ncclResult_t insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi) {
   // Insert space for two cuts in `a->cuts[]` before `index`.
   if (a->count + 2 > a->capacity) {
-    a->capacity *= 2;
-    if (a->capacity == 0) a->capacity = 16;
-    int64_t* cuts1 = (int64_t*)malloc(a->capacity * sizeof(int64_t));
+    int capacity = a->capacity == 0 ? 16 : 2 * a->capacity;
+    int64_t* cuts1;
+    NCCLCHECK(ncclCalloc(&cuts1, capacity));
     for (int i = 0; i < index; i++) cuts1[i] = a->cuts[i];
     for (int i = index; i < a->count; i++) cuts1[i + 2] = a->cuts[i];
     free(a->cuts);
     a->cuts = cuts1;
+    a->capacity = capacity;
   } else {
     for (int i = a->count - 1; index <= i; i--) a->cuts[i + 2] = a->cuts[i];
   }
@@ -201,6 +202,7 @@ static void insertSegment(struct ncclSpace* a, int index, int64_t lo, int64_t hi
     prev = cur;
   }
   a->count = w;
+  return ncclSuccess;
 }
 
 ncclResult_t ncclSpaceTryAlloc(struct ncclSpace* a, int64_t limit, int64_t size, int align, int64_t* outOffset) {
@@ -213,14 +215,14 @@ ncclResult_t ncclSpaceTryAlloc(struct ncclSpace* a, int64_t limit, int64_t size,
     size_t hi = i == a->count ? limit : a->cuts[i];
     off = alignUp(lo, align);
     if (off + size <= hi) {
-      *outOffset = off;
-      if (i == 0 || off + size == hi) {
-        // Slow path required.
-        insertSegment(a, i, off, off + size);
+      if (i == 0 || off != lo || off + size == hi) {
+        // Preserve alignment padding as empty space.
+        NCCLCHECK(insertSegment(a, i, off, off + size));
       } else {
         // We can just append to the end of a full segment.
         a->cuts[i - 1] = off + size;
       }
+      *outOffset = off;
       return ncclSuccess;
     }
     i += 2; // Next empty segment
@@ -230,7 +232,7 @@ ncclResult_t ncclSpaceTryAlloc(struct ncclSpace* a, int64_t limit, int64_t size,
 
 ncclResult_t ncclSpaceAlloc(struct ncclSpace* a, int64_t limit, int64_t size, int align, int64_t* outOffset) {
   ncclResult_t res = ncclSpaceTryAlloc(a, limit, size, align, outOffset);
-  if (res != ncclSuccess)
+  if (res == ncclInternalError)
     WARN("Allocation failed. No suitable space found to accommodate size=0x%lx within limit=0x%lx", (long)size,
          (long)limit);
   return res;
@@ -261,7 +263,7 @@ ncclResult_t ncclSpaceFree(struct ncclSpace* a, int64_t offset, int64_t size) {
     a->cuts[i] = offset; // Bring top down.
   } else {
     // Slow path.
-    insertSegment(a, i, offset, offset + size);
+    NCCLCHECK(insertSegment(a, i, offset, offset + size));
   }
   return ncclSuccess;
 }

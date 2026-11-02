@@ -1479,7 +1479,7 @@ ncclResult_t ncclTopoAutoMerge(struct ncclXml* xml, struct ncclTopoNetInfo* netI
   // Compute the path type between each device
   int* paths = NULL;
   ncclResult_t res = ncclSuccess;
-  ncclCalloc(&paths, nPhysDevs * nPhysDevs);
+  NCCLCHECKGOTO(ncclCalloc(&paths, nPhysDevs * nPhysDevs), res, out);
   TRACE(NCCL_GRAPH, "Allocated %d paths", nPhysDevs * nPhysDevs);
   for (int i = 0; i < nPhysDevs; i++) {
     for (int j = 0; j < nPhysDevs; j++) {
@@ -1517,14 +1517,15 @@ ncclResult_t ncclTopoAutoMerge(struct ncclXml* xml, struct ncclTopoNetInfo* netI
 
       if (vProps.ndevs > netInfo->maxDevsPerNic) {
         WARN("TOPO/NET : Tried to merge too many NICs. %d > %d", vProps.ndevs, netInfo->maxDevsPerNic);
-        return ncclInternalError;
+        res = ncclInternalError;
+        goto out;
       }
 
       ncclResult_t ret = ncclTopoMakeVnic(xml, netInfo, &vProps, physNetNodes);
 
       // Merging failed.
       // Mark all as unplaced and increase their distance to disconnected (PATH_DIS)
-      // Set i to 0 to restart the automatic merging process and ensure all are placed
+      // Set i to -1 so the loop restarts the automatic merging at 0 and ensures all are placed
       if (ret != ncclSuccess) {
         INFO(NCCL_GRAPH | NCCL_INIT | NCCL_NET,
              "Marking physical devices as unplaced, increasing distance and restarting search.");
@@ -1537,7 +1538,7 @@ ncclResult_t ncclTopoAutoMerge(struct ncclXml* xml, struct ncclTopoNetInfo* netI
           paths[dev * nPhysDevs + i] = PATH_DIS;
           TRACE(NCCL_GRAPH, "Setting dev %d as unplaced, setting distance -> %d as PATH_DIS", dev, i);
         }
-        i = 0;
+        i = -1;
       }
     }
   }

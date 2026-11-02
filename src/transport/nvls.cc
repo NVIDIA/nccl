@@ -60,7 +60,7 @@ NCCL_PARAM(NvlsEnable, "NVLS_ENABLE", 2);
 NCCL_PARAM(NvlsChunkSize, "NVLS_CHUNKSIZE", 128 * 1024);
 NCCL_PARAM(NvlsTreeMaxChunkSize, "NVLSTREE_MAX_CHUNKSIZE", -2);
 // NVLS staging FIFO layout:
-//  -1: automatic (channel-major on Rubin and later within a single NVLink domain, default layout elsewhere)
+//  -1: automatic (layout 2 for multi-node Rubin+, layout 1 for single-node Rubin+, layout 0 otherwise)
 //   0: [head][dir][channel][slot]
 //   1: [channel][slot][head][dir]   (all streams of a channel at one step are contiguous)
 //   2: [slot][channel][head][dir]   (all streams of all channels at one step are contiguous)
@@ -79,9 +79,8 @@ static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
     return ncclSuccess;
   }
 
-  // Automatic selection: channel-major is only used for a single-node NVLD. Multi-node communicators
-  // (NVLSTree, NVLS+SHARP) use the default layout.
-  *layout = (comm->nNodes == 1) ? 1 : 0;
+  // On Rubin and later, use layout 2 for multi-node and layout 1 for single-node communicators.
+  *layout = (comm->nNodes == 1) ? 1 : 2;
   for (int r = 0; r < comm->nRanks; r++) {
     if (!RUBIN_AND_LATER(comm->peerInfo[r].cudaCompCap)) {
       *layout = 0;

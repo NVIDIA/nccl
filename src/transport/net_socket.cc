@@ -108,6 +108,7 @@ struct ncclNetSocketHandle {
   struct ncclNetSocketCommStage stage;
 };
 
+// Structure shared between the main thread and the helper threads.  Atomics are required for simultaneous accesses.
 struct ncclNetSocketTask {
   int op;
   void* data;
@@ -137,17 +138,24 @@ struct ncclNetSocketRequest {
   struct ncclProfilerInfo pInfo;
 };
 
+// Structure shared between the main thread and the helper threads.  Atomics are required for simultaneous accesses.
 struct ncclNetSocketTaskQueue {
   int next;
   int len;
   struct ncclNetSocketTask* tasks;
 };
 
+// Structure shared between the main thread and the helper threads.  Most simultaneous accesses require atomics,
+// with an exception noted below.
 struct ncclNetSocketThreadResources {
   struct ncclNetSocketTaskQueue threadTaskQueue;
-  int stop;
+  int stop; // Simultaneous access protected by threadMutex.
   struct ncclNetSocketComm* comm;
   struct ncclProfilerInfo* pInfo;
+  // The mutex below is used primarily for notifications (in conjunction with the condition variable), not as the main
+  // means of resolving simultaneous accesses (which require atomics).  The one exception is the stop field above,
+  // which is accessed using regular loads/stores with the mutex held, plus an unprotected load on the fast path which
+  // is guaranteed to be eventually-consistent (once the thread goes idle).
   std::mutex threadMutex;
   std::condition_variable threadCond;
 };
@@ -184,8 +192,8 @@ void* persistentSocketThread(void* args_) {
 #endif
   while (1) {
     int idle = 1;
-    // A scan that starts from a given value of next must see every task that value counts; otherwise the wait
-    // below sleeps on a queued task. Pairs with the release store in ncclNetSocketGetTask.
+    // A scan that starts from a given value of next must see every task that value counts.
+    // Pairs with the release store in ncclNetSocketGetTask.
     int mark = COMPILER_ATOMIC_LOAD(&myQueue->next, std::memory_order_acquire); // mark newest task seen
     for (int i = 0; i < myQueue->len; i += nSocksPerThread) {
       int repeat;
@@ -206,10 +214,11 @@ void* persistentSocketThread(void* args_) {
                                    NCCL_PROFILER_NET_TYPE_SOCK | 1, &data);
             }
 #endif
-            int size = r->size;
             int offset = r->offset;
-            ncclResult_t result = ncclSocketProgress(r->op, r->sock, r->data, size, &offset);
+            ncclResult_t result = ncclSocketProgress(r->op, r->sock, r->data, r->size, &offset);
             if (result != ncclSuccess) {
+              // Pairs with the acquire load in ncclNetSocketTest.  The value is initialized to ncclSuccess in
+              // ncclNetSocketGetTask, so we need to set it only in case of an error.
               COMPILER_ATOMIC_STORE(&r->result, result, std::memory_order_release);
 #ifdef NCCL_ENABLE_NET_PROFILING
               ncclProfilerFunction(&eHandle[i + j], ncclProfilerNetEventStop, NULL, 0, NULL);
@@ -219,9 +228,9 @@ void* persistentSocketThread(void* args_) {
               return NULL;
             }
             idle = 0;
-            if (offset < size) repeat = 1;
-            // Once offset reaches size the proxy thread hands the buffer to the GPU and may refill this slot, so the
-            // bytes received must be visible first and r must not be touched afterwards.
+            if (offset < r->size) repeat = 1;
+            // Once offset reaches size, the proxy thread hands the buffer to the GPU and may refill this slot,
+            // so r must not be touched afterwards.  Pairs with the acquire load in ncclNetSocketTest.
             COMPILER_ATOMIC_STORE(&r->offset, offset, std::memory_order_release);
 #ifdef NCCL_ENABLE_NET_PROFILING
             if (repeat == 0) {
@@ -235,7 +244,13 @@ void* persistentSocketThread(void* args_) {
     }
     if (idle) {
       std::unique_lock<std::mutex> lock(resource->threadMutex);
-      resource->threadCond.wait(lock, [&] { return mark != myQueue->next || resource->stop; });
+      resource->threadCond.wait(lock, [&] {
+        // Acquire load pairs with the release store in ncclNetSocketGetTask.  In principle, the threadMutex should
+        // provide sufficient synchronization with the store without requiring atomics (like it does for stop), but we
+        // also load the same field without holding the mutex at the top of the outer loop above, so for consistency we
+        // use an atomic load here as well.
+        return mark != COMPILER_ATOMIC_LOAD(&myQueue->next, std::memory_order_acquire) || resource->stop;
+      });
     }
     if (resource->stop) return NULL;
   }
@@ -487,6 +502,8 @@ ncclResult_t ncclNetSocketGetTask(struct ncclNetSocketComm* comm, struct ncclPro
     COMPILER_ATOMIC_STORE(&r->used, 1, std::memory_order_release);
     *req = r;
     std::lock_guard<std::mutex> lock(res->threadMutex);
+    // An atomic store is required here because one of the loads of next in persistentSocketThread is conducted without
+    // holding the threadMutex.
     COMPILER_ATOMIC_STORE(&queue->next, (queue->next + 1) % queue->len, std::memory_order_release);
     res->threadCond.notify_one();
     return ncclSuccess;

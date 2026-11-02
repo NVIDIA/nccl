@@ -10,6 +10,7 @@
 #define NCCL_TUNING_PLATFORM_RUBIN_H_
 
 #include "tuner.h"
+#include "tuning.h"
 #include "../cost_model.h"
 
 static struct ncclTuningModelEntry_t ncclTuningRubinModelMap[] = {
@@ -108,6 +109,17 @@ static void ncclTuningRubinPreInit(struct ncclComm* comm) {
 static ncclResult_t ncclTuningRubinGetModelEntry(int compCap, int id, struct ncclTuningModelEntry_t** entry) {
   if (ncclTuningRubinModelMap[id].model != nullptr) {
     *entry = &ncclTuningRubinModelMap[id];
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuningRubinChannelTuning(struct ncclTuningInput_t* const input,
+                                                 const struct ncclTuningResult_t* result, int* maxChannels) {
+  struct ncclComm* comm = input->comm;
+  size_t cutoff = 2ul * 1024 * 1024 * 1024;
+  if (comm->nNodes > 1 && input->nBytes <= cutoff && result->algo == NCCL_ALGO_RING) {
+    if (comm->minLocalRanks >= 56) *maxChannels = std::min(*maxChannels, 24);
+    if (*maxChannels < input->minCTAs) *maxChannels = input->minCTAs;
   }
   return ncclSuccess;
 }

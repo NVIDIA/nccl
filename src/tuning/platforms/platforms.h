@@ -10,6 +10,7 @@
 #define NCCL_TUNING_PLATFORMS_H_
 
 #include "cudawrap.h"
+#include "tuning.h"
 #include "../cost_model.h"
 #include "rubin.h"
 
@@ -23,6 +24,14 @@ static ncclResult_t ncclTuningGetModelPlatformEntry(int compCap, int id, struct 
 static ncclResult_t ncclTuningPlatformPreInit(struct ncclComm* comm) {
   if (RUBIN_AND_LATER(comm->minCompCap)) {
     ncclTuningRubinPreInit(comm);
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuningPlatformChannelTuning(struct ncclTuningInput_t* const input,
+                                                    const struct ncclTuningResult_t* result, int* maxChannels) {
+  if (RUBIN_AND_LATER(input->comm->minCompCap)) {
+    NCCLCHECK(ncclTuningRubinChannelTuning(input, result, maxChannels));
   }
   return ncclSuccess;
 }

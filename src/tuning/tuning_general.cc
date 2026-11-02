@@ -66,7 +66,7 @@ float ncclTuningGetTime(struct ncclTuningInput_t* const inputs, int a, float lat
     }
   }
 
-  float time = lat * latCount;
+  float time = lat * latCount * precision_ratio;
   if (bw > 0) time += inputs->nBytes / (1000 * bw) * precision_ratio;
   return time;
 }

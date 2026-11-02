@@ -205,7 +205,7 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
     {40.0, 40.0, 40.0}, /* Blackwell (N1/N2/N4) */
     // For rubin this value is per CTA and not per topology channel.
-    {21.6, 17.0, 14.0}, /* Rubin (N1/N2/N4) */
+    {21.6, 16.3, 11.4}, /* Rubin (N1/N2/N4) */
   },
     // perChMaxTreeLL128Bws
   {

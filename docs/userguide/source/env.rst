@@ -1846,6 +1846,16 @@ Values accepted
 ^^^^^^^^^^^^^^^
 0 or 1. Default value is 0 (disabled).
 
+NCCL_LL128_BUFFERS
+------------------
+(since 2.33)
+
+``NCCL_LL128_BUFFERS`` instructs communicators to allocate the LL128 protocol buffer on every connection. By default, NCCL leaves this buffer out of the intra-node connections (P2P, SHM) of a system where no two GPUs are within NVLink reach of each other, and out of the network connections of a system where no NIC is within PXB or PXN reach of a GPU, because no communicator can select the LL128 protocol there (``NCCL_PROTO`` takes precedence: naming LL128 keeps the buffer, excluding it for all functions removes it everywhere). This saves 4 MiB of GPU memory per intra-node receive connection and up to 6 MiB per network connection. Set this variable to 1 to allocate the buffer on every collective connection again (connections created for send and receive operations only follow ``NCCL_P2P_SENDRECV_LL128_BUFFERS``).
+
+Values accepted
+^^^^^^^^^^^^^^^
+0 or 1. Default value is 0 (disabled).
+
 NCCL_COMM_BLOCKING
 ------------------
 (since 2.14)

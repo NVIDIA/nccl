@@ -290,6 +290,32 @@ static ncclResult_t getModelEntry(int id, struct ncclTuningModelEntry_t** entry)
 }
 
 /*
+  Settle the LL128 question from NCCL_PROTO alone, before the tuner exists: 1 when the user names LL128 for any
+  function (the platform check is bypassed, as in ncclTuningCostModelInit), 0 when LL128 is excluded for every
+  function, -1 when the platform decides. The transports use this to size the connection buffers.
+*/
+ncclResult_t ncclTuningLL128ProtoEnv(int* ll128) {
+  *ll128 = -1;
+  const char* protoStr = ncclGetEnv("NCCL_PROTO");
+  if (protoStr == NULL) return ncclSuccess;
+  int protoEnable[NCCL_NUM_FUNCTIONS * NCCL_NUM_PROTOCOLS];
+  int forced[NCCL_NUM_FUNCTIONS] = {0};
+  for (int i = 0; i < NCCL_NUM_FUNCTIONS * NCCL_NUM_PROTOCOLS; i++) {
+    protoEnable[i] = i % NCCL_NUM_PROTOCOLS == NCCL_PROTO_LL128 ? 2 : 1;
+  }
+  NCCLCHECK(parseList(protoStr, ncclFuncStr, NCCL_NUM_FUNCTIONS, ncclProtoStr, NCCL_NUM_PROTOCOLS, protoEnable,
+                      forced));
+  int named = 0, excluded = 1;
+  for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
+    int e = protoEnable[f * NCCL_NUM_PROTOCOLS + NCCL_PROTO_LL128];
+    if (e == 1) named = 1;
+    if (e != 0) excluded = 0;
+  }
+  *ll128 = named ? 1 : excluded ? 0 : -1;
+  return ncclSuccess;
+}
+
+/*
   Pre-initialize the cost model for a communicator.
   Operations to run before the tuner plugin is initialized.
 */
@@ -366,6 +392,17 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
       if (proto == NCCL_PROTO_LL128 && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 2 &&
           !isLL128Enabled(comm->minCompCap, comm->maxCompCap, comm->graphs[algo].typeInter,
                           comm->graphs[algo].typeIntra, comm->nRanks, f, algo, comm->minDriverVersion)) {
+        comm->tuningContext.enabled[i][f] = 0;
+      }
+      // Connections that no communicator sharing them can use for LL128 carry no LL128 buffer
+      // (ncclTopoLL128Possible); unless every rank has the buffer, LL128 cannot run on this communicator.
+      if (proto == NCCL_PROTO_LL128 && comm->ll128Buffers == 0 && comm->tuningContext.enabled[i][f]) {
+        if (protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 1) {
+          WARN("NCCL_PROTO requests LL128 but the LL128 buffers were not allocated on every rank; set NCCL_PROTO "
+               "identically on all ranks and before the first communicator is created");
+          ret = ncclInvalidUsage;
+          goto fail;
+        }
         comm->tuningContext.enabled[i][f] = 0;
       }
       //  Check the user env vars only for functions that have a forced configuration and not already disabled.

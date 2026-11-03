@@ -1043,6 +1043,38 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+// LL128 only runs between GPUs within NVLink reach (same GPU, NVL or NVB) of compatible compute capability, and
+// over NICs within PXN reach of such a GPU (isLL128Enabled in the cost model). Report whether this system has any
+// such GPU pair (*intra) and any such NIC (*net). Every communicator that shares the connections of this system
+// uses a subset of its GPUs and NICs, so when nothing qualifies, none of them can ever select LL128 and the
+// connections need no LL128 buffer. A single GPU or no NIC leaves nothing to decide and keeps the buffers; so do
+// the network connections of a rank whose same-host peers are not in its system (localPeers), because they are
+// reached over NET and their LL128 use follows the GPU paths, not the NIC paths.
+ncclResult_t ncclTopoLL128Possible(struct ncclTopoSystem* system, int localPeers, int* intra, int* net) {
+  int ngpus = system->nodes[GPU].count;
+  int nnets = system->nodes[NET].count;
+  int pair = 0, nic = 0;
+  for (int g = 0; g < ngpus; g++) {
+    struct ncclTopoNode* gpu = system->nodes[GPU].nodes + g;
+    int cc = gpu->gpu.cudaCompCap;
+    if (cc < 70) continue;
+    for (int p = 0; p < g; p++) {
+      int pcc = system->nodes[GPU].nodes[p].gpu.cudaCompCap;
+      // Different compute capabilities interoperate from Hopper on.
+      if (pcc < 70 || (pcc != cc && std::min(pcc, cc) < 90)) continue;
+      if (gpu->paths[GPU][p].type <= PATH_NVB) pair = 1;
+    }
+    if (gpu->paths[NET] == NULL) continue;
+    for (int n = 0; n < nnets; n++) {
+      if (gpu->paths[NET][n].type <= PATH_PXN) nic = 1;
+    }
+  }
+  *intra = ngpus < 2 || pair;
+  // A GPU pair that can run LL128 can also run it over NET between the two (intra-node NET).
+  *net = nnets == 0 || nic || pair || (ngpus < 2 && localPeers);
+  return ncclSuccess;
+}
+
 ncclResult_t ncclTopoGetNvbGpus(struct ncclTopoSystem* system, int rank, int* nranks, int** ranks) {
   int ngpus = system->nodes[GPU].count;
   NCCLCHECK(ncclCalloc(ranks, ngpus));

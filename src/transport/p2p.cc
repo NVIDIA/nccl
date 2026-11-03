@@ -395,9 +395,11 @@ NCCL_PARAM(P2pSendrecvLl128Buffers, "P2P_SENDRECV_LL128_BUFFERS", 0);
 
 // Connections set up for send/recv only (no graph, connIndex 1) never use the LL128 protocol:
 // the send/recv kernel only instantiates LL and SIMPLE. Skip their LL128 buffer unless
-// NCCL_P2P_SENDRECV_LL128_BUFFERS=1 asks for the previous layout.
-static int p2pSkipLL128(struct ncclTopoGraph* graph, int connIndex) {
-  return graph == NULL && connIndex == 1 && ncclParamP2pSendrecvLl128Buffers() == 0;
+// NCCL_P2P_SENDRECV_LL128_BUFFERS=1 asks for the previous layout. Collective connections
+// follow the decision of the resource family (initLL128Buffers).
+static int p2pSkipLL128(struct ncclComm* comm, struct ncclTopoGraph* graph, int connIndex) {
+  if (graph == NULL && connIndex == 1) return ncclParamP2pSendrecvLl128Buffers() == 0;
+  return comm->sharedRes->ll128IntraBuffers == 0;
 }
 
 /* Send: Create and return connect structures for this peer to connect to me */
@@ -417,7 +419,7 @@ ncclResult_t p2pSendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   info->read = useRead;
   // For CollNet, use write for scatter-reduce (conn 1), read for broadcast-gather (conn 0)
   if (graph && connIndex == 1) info->read = 0;
-  resources->noLL128 = p2pSkipLL128(graph, connIndex);
+  resources->noLL128 = p2pSkipLL128(comm, graph, connIndex);
   info->noLL128 = resources->noLL128;
   const char* useReadStr = info->read ? "/read" : "";
 
@@ -499,7 +501,7 @@ ncclResult_t p2pRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph, st
   info->read = useRead;
   // For CollNet, use write for scatter-reduce (conn 1), read for broadcast-gather (conn 0)
   if (graph && connIndex == 1) info->read = 0;
-  resources->noLL128 = p2pSkipLL128(graph, connIndex);
+  resources->noLL128 = p2pSkipLL128(comm, graph, connIndex);
   info->noLL128 = resources->noLL128;
 
   int recvSize = sizeof(struct ncclRecvMem);
@@ -564,13 +566,7 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
                    (void**)&remDevMem, &resources->recvMemIpc));
   resources->recvMemSameProc = P2P_SAME_PID((comm->peerInfo + rank), (comm->peerInfo + info->rank));
 
-  // The receiving rank decided the buffer layout; both ranks must have made the same decision.
-  if (info->noLL128 != resources->noLL128) {
-    WARN("Rank %d: P2P buffer layout mismatch with rank %d (noLL128 %d vs %d); set "
-         "NCCL_P2P_SENDRECV_LL128_BUFFERS identically on all ranks",
-         rank, info->rank, resources->noLL128, info->noLL128);
-    return ncclInternalError;
-  }
+  // The receiving rank allocated the block and decided its layout (info->noLL128).
   char* buff = (char*)(remDevMem + 1);
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
     if (info->read && p == NCCL_PROTO_SIMPLE) {
@@ -578,7 +574,7 @@ static ncclResult_t p2pSendConnect(struct ncclComm* comm, struct ncclConnect* co
       if (resources->sendDevMem == NULL) return ncclInternalError; // We should not use read + memcpy
       send->conn.buffs[p] = (char*)(resources->sendDevMem + 1);
     } else if (info->noLL128 && p == NCCL_PROTO_LL128) {
-      send->conn.buffs[p] = NULL; // not allocated for send/recv-only connections
+      send->conn.buffs[p] = NULL; // no LL128 buffer in this block
     } else {
       send->conn.buffs[p] = buff;
       buff += comm->buffSizes[p];
@@ -633,20 +629,15 @@ ncclResult_t p2pRecvConnect(struct ncclComm* comm, struct ncclConnect* connectIn
   }
   recv->conn.stepSize = comm->buffSizes[NCCL_PROTO_SIMPLE] / NCCL_STEPS;
 
-  if (info->noLL128 != resources->noLL128) {
-    WARN("Rank %d: P2P buffer layout mismatch with rank %d (noLL128 %d vs %d); set "
-         "NCCL_P2P_SENDRECV_LL128_BUFFERS identically on all ranks",
-         rank, info->rank, resources->noLL128, info->noLL128);
-    return ncclInternalError;
-  }
+  // This rank allocated the block and decided its layout (resources->noLL128).
   char* buff = (char*)(resources->recvDevMem + 1);
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
     if (info->read && p == NCCL_PROTO_SIMPLE) {
       if (remDevMem == NULL) return ncclInternalError; // We should not use read + memcpy
       /* For P2P Read the SIMPLE buffer is remote (ncclSendMem) */
       recv->conn.buffs[p] = (char*)(remDevMem + 1);
-    } else if (info->noLL128 && p == NCCL_PROTO_LL128) {
-      recv->conn.buffs[p] = NULL; // not allocated for send/recv-only connections
+    } else if (resources->noLL128 && p == NCCL_PROTO_LL128) {
+      recv->conn.buffs[p] = NULL; // no LL128 buffer in this block
     } else {
       recv->conn.buffs[p] = buff;
       buff += comm->buffSizes[p];

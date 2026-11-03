@@ -149,6 +149,10 @@ struct ncclSharedResources {
   int tpNChannels;
   int tpP2pNChannels;
   int tpP2pChunkSize;
+  // LL128 buffer policy of the family: whether the intra-node (P2P, SHM) and the network connections carry the
+  // LL128 slice. Decided once by the owner from facts that hold for every communicator sharing the connections.
+  int ll128IntraBuffers;
+  int ll128NetBuffers;
   uint64_t magic;
 
   // top parent rank to localRank translation table
@@ -850,6 +854,7 @@ struct ncclComm {
   // buffer registration cache
   struct ncclRegCache regCache;
   int isAllNvlink;
+  int ll128Buffers; // every connection of this communicator carries the LL128 buffer, so LL128 may run
   bool isAllDirectP2p; // Subject to NCCL_P2P_LEVEL (for local ranks only).
   bool isAllCudaP2p; // Raw CUDA capability (for local ranks only).
   bool isAllDirectNvlink; // All GPUs are directly connected to each other through NVLink.

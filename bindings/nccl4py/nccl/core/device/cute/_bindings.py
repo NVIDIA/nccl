@@ -1,6 +1,6 @@
 """Low-level CuTeDSL bindings for ``bindings/ir/nccl_device_ir.h``.
 
-Fixed symbols use ``@cute.extern``. ReduceCopy symbols are selected by dtype
+Fixed symbols use ``@cute.extern``. Typed symbols are selected by dtype
 through overloaded ``@cute.extern`` declarations. Callers handle argument
 conversion and result wrapping.
 
@@ -238,6 +238,8 @@ def nccl_get_resource_buffer_multimem_le_info(
 _CUTE_DTYPE_SUFFIX_MAPPING = {
     cutlass.Int8: "I8",
     cutlass.Uint8: "U8",
+    cutlass.Int16: "I16",
+    cutlass.Uint16: "U16",
     cutlass.Int32: "I32",
     cutlass.Uint32: "U32",
     cutlass.Int64: "I64",
@@ -250,9 +252,11 @@ _CUTE_DTYPE_SUFFIX_MAPPING = {
     cutlass.Float8E5M2: "F8E5M2",
 }
 
-_REDUCE_COPY_ALL_DTYPES = (
+_IR_ALL_DTYPES = (
     cutlass.Int8,
     cutlass.Uint8,
+    cutlass.Int16,
+    cutlass.Uint16,
     cutlass.Int32,
     cutlass.Uint32,
     cutlass.Int64,
@@ -280,7 +284,7 @@ _REDUCE_COPY_MULTIMEM_DTYPES = (
 
 ReduceCopyAllDTypes = TypeVar(
     "ReduceCopyAllDTypes",
-    *_REDUCE_COPY_ALL_DTYPES,
+    *_IR_ALL_DTYPES,
 )
 ReduceCopyMultiMemDTypes = TypeVar(
     "ReduceCopyMultiMemDTypes",
@@ -288,7 +292,7 @@ ReduceCopyMultiMemDTypes = TypeVar(
 )
 
 
-def _reduce_copy_name_mangler(ffi):
+def _dtype_name_mangler(ffi):
     dtype_param = next(
         (param for param in ffi.params_types if isinstance(param, cute.ConstValue)),
         None,
@@ -300,6 +304,9 @@ def _reduce_copy_name_mangler(ffi):
     if ffi.name.startswith("ncclIrMultimem") and dtype not in _REDUCE_COPY_MULTIMEM_DTYPES:
         raise TypeError(f"{ffi.name} does not support {dtype}")
 
+    if dtype not in _IR_ALL_DTYPES:
+        raise TypeError(f"{ffi.name} does not support {dtype}")
+
     suffix = _CUTE_DTYPE_SUFFIX_MAPPING[dtype]
     return f"{ffi.name}_{suffix}"
 
@@ -307,7 +314,7 @@ def _reduce_copy_name_mangler(ffi):
 @cute.extern(
     name="ncclIrLsaReduceSum",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_lsa_reduce_sum(
     coop: _LLVMPtrType,
@@ -323,7 +330,7 @@ def nccl_lsa_reduce_sum(
 @cute.extern(
     name="ncclIrMultimemReduceSum",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_multimem_reduce_sum(
     coop: _LLVMPtrType,
@@ -337,7 +344,7 @@ def nccl_multimem_reduce_sum(
 @cute.extern(
     name="ncclIrLsaCopy",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_lsa_copy(
     coop: _LLVMPtrType,
@@ -353,7 +360,7 @@ def nccl_lsa_copy(
 @cute.extern(
     name="ncclIrLsaCopyTma",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_lsa_copy_tma(
     coop: _LLVMPtrType,
@@ -371,7 +378,7 @@ def nccl_lsa_copy_tma(
 @cute.extern(
     name="ncclIrMultimemCopy",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_multimem_copy(
     coop: _LLVMPtrType,
@@ -385,7 +392,7 @@ def nccl_multimem_copy(
 @cute.extern(
     name="ncclIrLsaReduceSumCopy",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_lsa_reduce_sum_copy(
     coop: _LLVMPtrType,
@@ -402,7 +409,7 @@ def nccl_lsa_reduce_sum_copy(
 @cute.extern(
     name="ncclIrMultimemReduceSumCopy",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_multimem_reduce_sum_copy(
     coop: _LLVMPtrType,
@@ -416,7 +423,7 @@ def nccl_multimem_reduce_sum_copy(
 @cute.extern(
     name="ncclIrLocalReduceSumCopy",
     source=_BC,
-    name_mangler=_reduce_copy_name_mangler,
+    name_mangler=_dtype_name_mangler,
 )
 def nccl_local_reduce_sum_copy(
     coop: _LLVMPtrType,
@@ -467,15 +474,19 @@ def nccl_gin_put(
     segment_type: cutlass.Int32,
 ) -> None: ...
 
-@cute.extern(name="ncclIrGinPutValue", source=_BC)
+GinPutValueDTypes = TypeVar("GinPutValueDTypes", *_IR_ALL_DTYPES)
+
+
+@cute.extern(
+    name="ncclIrGinPutValue", source=_BC, name_mangler=_dtype_name_mangler,
+)
 def nccl_gin_put_value(
     gin: _LLVMPtrType,             # ncclIrGin* gin
     team: _LLVMPtrType,            # team
     peer: cutlass.Int32,           # peer
     dst_win: _LLVMPtrType,         # dst window
     dst_offset: cutlass.Int64,     # dst offset
-    value: cutlass.Int64,          # value
-    size: cutlass.Int64,           # size
+    value: GinPutValueDTypes,
     signal_type: cutlass.Int32,    # indexed, VA, or none
     signal_win: _LLVMPtrType,
     signal_offset: cutlass.Int64,
@@ -489,6 +500,7 @@ def nccl_gin_put_value(
     given_release: cutlass.Int32,  # given_release
     required_release: cutlass.Int32,  # required_release
     opt_flags: cutlass.Int32,      # opt_flags
+    dtype: cutlass.Constexpr[GinPutValueDTypes],
 ) -> None: ...
 
 @cute.extern(name="ncclIrGinGet", source=_BC)

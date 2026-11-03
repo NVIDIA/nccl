@@ -116,7 +116,7 @@ class Gin:
         peer: int,
         dst_win,
         dst,
-        value: int,
+        value,
         coop: Coop,
         *,
         is_strong: bool,
@@ -133,14 +133,14 @@ class Gin:
         """Put scalar ``value`` to ``dst`` on ``peer`` of ``team``.
 
         ``dst`` is a ``cute.Tensor`` instance from :meth:`Window.tensor`;
-        its byte offset and element size are derived from it.
+        its byte offset and scalar type are derived from it.
 
         Args:
             team: addressing domain.
             peer: destination rank within ``team``.
             dst_win: destination :class:`Window`.
             dst: destination ``cute.Tensor`` inside ``dst_win``.
-            value: scalar value to transfer using ``dst``'s element size.
+            value: scalar value converted to ``dst``'s element type.
             coop: cooperative group issuing the put.
             is_strong: select strong (``True``) or weak (``False``) signals.
                 Ignored when ``is_signal=False``. See :class:`Gin`.
@@ -161,17 +161,17 @@ class Gin:
         # Int8 to make the resulting subtraction a byte offset.
         dst_base = cute.make_ptr(cutlass.Int8, dst_win.local_pointer(0))
         dst_offset = dst.iterator.toint() - dst_base.toint()
-        size = dst.element_type.width // 8
         _bindings.nccl_gin_put_value(
             self.ptr, _to_struct_ptr(team), cutlass.Int32(peer),
             dst_win.ptr, cutlass.Int64(dst_offset),
-            cutlass.Int64(value), cutlass.Int64(size),
+            dst.element_type(value),
             cutlass.Int32(cutlass.Int32(is_signal) * 2), _to_ptr(0), cutlass.Int64(0),
             cutlass.Int32(signal_id), cutlass.Boolean(is_strong),
             cutlass.Int32(signal_op), cutlass.Int64(signal_op_arg),
             _to_coop_ptr(coop), cutlass.Boolean(is_descriptor), _to_ptr(descriptor_ptr),
             cutlass.Int32(int(given_release)), cutlass.Int32(int(required_release)),
             cutlass.Int32(opt_flags),
+            dst.element_type,
         )
 
     def get(

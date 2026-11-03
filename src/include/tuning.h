@@ -95,6 +95,7 @@ struct ncclTuningContext_t {
 };
 
 ncclResult_t ncclTuningInit(struct ncclComm* comm);
+ncclResult_t ncclTuningLL128ProtoEnv(int* ll128);
 ncclResult_t ncclTuningCompute(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result);
 ncclResult_t ncclTuningFinalize(struct ncclComm* comm);
 

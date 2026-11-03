@@ -24,8 +24,8 @@ virtual environment.
 nccl$ docs/userguide/build_docs.sh
 ```
 
-By default this script creates the .venv, installs packages acccording to
-requirements.txt, and builds the the pkg.doc.build target to package the
+By default this script creates the .venv, installs packages according to
+requirements.txt, and builds the pkg.doc.build target to package the
 docs into a zip file.  The `docs/userguide/.venv` environment is persistent,
 but can be removed manually.
 

@@ -7,10 +7,9 @@
 #
 """Every barrier session type, built both ways.
 
-LSA (intra-node), GIN (inter-node) and hybrid (LSA inner stage + GIN
-outer stage). Each has a convenience factory that pulls the team and
-handle out of the devcomm, and an explicit factory that takes them as
-arguments; this runs both spellings of all three.
+LSA (intra-node), GIN (inter-node) and hybrid barriers. Convenience
+factories select built-in teams and barrier resources; explicit factories
+take teams and host-requested handles. This runs both forms of all three.
 
 Needs a GIN-capable network; two nodes exercise it for real::
 
@@ -69,13 +68,10 @@ def barriers_kernel(
             f"requested lsa handle: buf_handle={lsa_handle.buf_handle} "
             f"n_barriers={lsa_handle.n_barriers}")
         cute.printf(f"requested gin handle: signal0={gin_handle.signal0}")
-        cute.printf(
-            f"embedded lsa handle:  buf_handle={dev_comm.lsa_barrier.buf_handle} "
-            f"n_barriers={dev_comm.lsa_barrier.n_barriers}")
 
     # === LSA ===
 
-    # Convenience form: team_lsa + dev_comm.lsa_barrier.
+    # Convenience form selects the built-in LSA team and barrier.
     default_lsa = nccl_cute.lsa_default(coop, dev_comm, index=INDEX)
     default_lsa.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
     default_lsa.destroy()
@@ -91,8 +87,8 @@ def barriers_kernel(
     # === GIN ===
 
     # GIN_ALL_CONTEXTS fences every context on the comm rather than the one
-    # `gin` is bound to -- needed when puts span several, at a flush per
-    # (context, peer). The fence level says what the barrier drains besides
+    # `gin` is bound to -- needed when puts span several contexts.
+    # The fence level says what the barrier drains besides
     # synchronizing: NONE nothing, PUT inbound puts, GET this rank's gets.
     all_contexts = nccl_cute.world_gin(
         coop, nccl_cute.GIN_ALL_CONTEXTS, dev_comm, index=INDEX)
@@ -111,7 +107,7 @@ def barriers_kernel(
         nccl_cute.GinFenceLevel.PUT | nccl_cute.GinFenceLevel.GET)
     rail.destroy()
 
-    # Explicit form: any team, any GIN barrier handle.
+    # Explicit form: a team and its host-requested GIN barrier handle.
     explicit_gin = nccl_cute.gin_session(
         coop, gin, dev_comm, dev_comm.team_world, gin_handle, index=INDEX)
     explicit_gin.sync(
@@ -120,23 +116,22 @@ def barriers_kernel(
 
     # === Hybrid ===
 
-    # LSA within the node, GIN across nodes: one rank per node carries
-    # the outer stage.
+    # Built-in world barrier selects its LSA/GIN algorithm based on the
+    # connections, backend capabilities and requested fence.
     world_hybrid = nccl_cute.world_hybrid(
         coop, gin, dev_comm, index=INDEX)
     world_hybrid.sync(
         coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
     world_hybrid.destroy()
 
-    # Both stages named explicitly; the handles come from the devcomm's
-    # hybrid pair, sized by requirements.barrier_count.
+    # Both stages named explicitly, using the separately requested handles.
     explicit_hybrid = nccl_cute.hybrid_session(
         coop,
         dev_comm.team_lsa,
         dev_comm.team_world,
         gin,
-        dev_comm.hybrid_lsa_barrier,
-        dev_comm.hybrid_rail_gin_barrier,
+        lsa_handle,
+        gin_handle,
         index=INDEX,
     )
     explicit_hybrid.sync(
@@ -202,13 +197,13 @@ def main():
         nccl_comm.destroy()
         return 0
 
-    # The counts size the handles NCCL embeds in the devcomm; `resources`
-    # asks for standalone ones, returned in resource_handles in order.
+    # Counts request built-in barrier resources; `resources` requests
+    # standalone ones, returned in resource_handles in order.
     reqs = nccl.NCCLDevCommRequirements(
-        lsa_barrier_count=1,          # dev_comm.lsa_barrier
-        rail_gin_barrier_count=1,     # dev_comm.rail_gin_barrier
-        world_gin_barrier_count=1,    # dev_comm.world_gin_barrier
-        barrier_count=1,              # dev_comm.hybrid_{lsa,rail_gin}_barrier
+        lsa_barrier_count=1,          # built-in LSA barrier
+        rail_gin_barrier_count=1,     # built-in rail GIN barrier
+        world_gin_barrier_count=1,    # built-in world GIN barrier
+        barrier_count=1,              # built-in world/hybrid barrier resources
         gin_connection_type=nccl.NcclGinConnectionType.FULL,
         resources=(
             nccl.LsaBarrierRequirement(

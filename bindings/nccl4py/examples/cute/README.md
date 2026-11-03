@@ -105,8 +105,8 @@ one, point `NCCL_HOME` at that build as well.
 | `DevComm.rank` / `n_ranks` / `lsa_rank` / `lsa_size` | 01 |
 | `DevComm.team_world` / `team_lsa` / `team_rail`, `team_rank_to_world` / `team_rank_to_lsa` | 01 |
 | `DevComm.gin` | 04, 05 |
-| `DevComm.lsa_barrier` / `rail_gin_barrier` / `world_gin_barrier` / `hybrid_*` | 05 |
-| `DevComm.lsa_multimem` | 03, 06 |
+| Default barrier factories (`lsa_default`, `world_gin`, `rail_gin`, `world_hybrid`) | 05 |
+| Default LSA multimem mapping and host-passed multimem handles | 03, 06 |
 | `DevComm.resource_buffer_*` (all five) | 06 |
 | `Window.tensor` | 00, 02, 04, 07 |
 | `Window.local_pointer` / `lsa_pointer` / `peer_pointer` | 02 |

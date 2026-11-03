@@ -1163,7 +1163,7 @@ doca_error_t doca_verbs_qp_open::rtr2rts(struct doca_verbs_qp_attr_open *verbs_q
     if (attr_mask & DOCA_VERBS_QP_ATTR_MAX_QP_RD_ATOMIC)
         DEVX_SET(qpc, qpc, log_sra_max, doca_internal_utils_log2(verbs_qp_attr->max_rd_atomic));
 
-    DEVX_SET(qpc, qpc, log_ack_req_freq, 0x0);  // 8
+    DEVX_SET(qpc, qpc, log_ack_req_freq, 8);
 
     int mlx5_opt_param_mask{0};
     convert_doca_verbs_qp_attr_mask_to_legal_mlx5_qp_opt_param_mask(attr_mask, mlx5_opt_param_mask,

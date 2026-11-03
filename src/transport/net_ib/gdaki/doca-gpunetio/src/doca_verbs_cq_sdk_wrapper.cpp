@@ -28,7 +28,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syslog.h>
@@ -37,6 +36,7 @@
 #include <fcntl.h>
 
 #include "doca_gpunetio_log.hpp"
+#include "doca_sdk_wrapper.h"
 #include "doca_verbs_uar_sdk_wrapper.h"
 
 /*
@@ -122,16 +122,6 @@ static doca_verbs_ack_cq_events_t p_doca_verbs_ack_cq_events = nullptr;
 static void *common_handle = nullptr;
 static void *verbs_handle = nullptr;
 
-/* Helper function to get function pointer from libcuda */
-static void *get_verbs_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(verbs_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
-
 static void doca_verbs_sdk_wrapper_init(int *ret) {
     const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
     char libcommon_versioned_path[doca_sdk_path_length];
@@ -197,61 +187,75 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
 
     /* Get function pointers */
     p_doca_verbs_cq_attr_destroy =
-        (doca_verbs_cq_attr_destroy_t)get_verbs_sdk_symbol("doca_verbs_cq_attr_destroy");
+        (doca_verbs_cq_attr_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_destroy", 1);
     p_doca_verbs_cq_attr_create =
-        (doca_verbs_cq_attr_create_t)get_verbs_sdk_symbol("doca_verbs_cq_attr_create");
+        (doca_verbs_cq_attr_create_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_create", 1);
     p_doca_verbs_cq_attr_set_cq_size =
-        (doca_verbs_cq_attr_set_cq_size_t)get_verbs_sdk_symbol("doca_verbs_cq_attr_set_cq_size");
-    p_doca_verbs_cq_attr_set_cq_context = (doca_verbs_cq_attr_set_cq_context_t)get_verbs_sdk_symbol(
-        "doca_verbs_cq_attr_set_cq_context");
+        (doca_verbs_cq_attr_set_cq_size_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_cq_size", 1);
+    p_doca_verbs_cq_attr_set_cq_context =
+        (doca_verbs_cq_attr_set_cq_context_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_cq_context", 1);
     p_doca_verbs_cq_attr_set_external_datapath_en =
-        (doca_verbs_cq_attr_set_external_datapath_en_t)get_verbs_sdk_symbol(
-            "doca_verbs_cq_attr_set_external_datapath_en");
+        (doca_verbs_cq_attr_set_external_datapath_en_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_external_datapath_en", 1);
     p_doca_verbs_cq_attr_set_external_umem =
-        (doca_verbs_cq_attr_set_external_umem_t)get_verbs_sdk_symbol(
-            "doca_verbs_cq_attr_set_external_umem");
+        (doca_verbs_cq_attr_set_external_umem_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_external_umem", 1);
     p_doca_verbs_cq_attr_set_external_dbr_umem =
-        (doca_verbs_cq_attr_set_external_dbr_umem_t)get_verbs_sdk_symbol(
-            "doca_verbs_cq_attr_set_external_dbr_umem");
+        (doca_verbs_cq_attr_set_external_dbr_umem_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_external_dbr_umem", 0);
     p_doca_verbs_cq_attr_set_external_uar =
-        (doca_verbs_cq_attr_set_external_uar_t)get_verbs_sdk_symbol(
-            "doca_verbs_cq_attr_set_external_uar");
-    p_doca_verbs_cq_attr_set_cq_overrun = (doca_verbs_cq_attr_set_cq_overrun_t)get_verbs_sdk_symbol(
-        "doca_verbs_cq_attr_set_cq_overrun");
+        (doca_verbs_cq_attr_set_external_uar_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_external_uar", 1);
+    p_doca_verbs_cq_attr_set_cq_overrun =
+        (doca_verbs_cq_attr_set_cq_overrun_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_cq_overrun", 1);
     p_doca_verbs_cq_attr_set_cq_collapsed =
-        (doca_verbs_cq_attr_set_cq_collapsed_t)get_verbs_sdk_symbol(
-            "doca_verbs_cq_attr_set_cq_collapsed");
+        (doca_verbs_cq_attr_set_cq_collapsed_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_cq_collapsed", 0);
     p_doca_verbs_cq_attr_set_comp_channel =
-        (doca_verbs_cq_attr_set_comp_channel_t)get_verbs_sdk_symbol(
-            "doca_verbs_cq_attr_set_comp_channel");
+        (doca_verbs_cq_attr_set_comp_channel_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_comp_channel", 1);
     p_doca_verbs_cq_attr_set_st =
-        (doca_verbs_cq_attr_set_st_t)get_verbs_sdk_symbol("doca_verbs_cq_attr_set_st");
-    p_doca_verbs_cq_create = (doca_verbs_cq_create_t)get_verbs_sdk_symbol("doca_verbs_cq_create");
+        (doca_verbs_cq_attr_set_st_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_attr_set_st", 0);
+    p_doca_verbs_cq_create =
+        (doca_verbs_cq_create_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_cq_create", 1);
     p_doca_verbs_cq_destroy =
-        (doca_verbs_cq_destroy_t)get_verbs_sdk_symbol("doca_verbs_cq_destroy");
-    p_doca_verbs_cq_get_wq = (doca_verbs_cq_get_wq_t)get_verbs_sdk_symbol("doca_verbs_cq_get_wq");
+        (doca_verbs_cq_destroy_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_cq_destroy", 1);
+    p_doca_verbs_cq_get_wq =
+        (doca_verbs_cq_get_wq_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_cq_get_wq", 1);
     p_doca_verbs_cq_get_dbr_addr =
-        (doca_verbs_cq_get_dbr_addr_t)get_verbs_sdk_symbol("doca_verbs_cq_get_dbr_addr");
+        (doca_verbs_cq_get_dbr_addr_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_get_dbr_addr", 1);
     p_doca_verbs_cq_get_cqn =
-        (doca_verbs_cq_get_cqn_t)get_verbs_sdk_symbol("doca_verbs_cq_get_cqn");
+        (doca_verbs_cq_get_cqn_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_cq_get_cqn", 1);
     p_doca_verbs_cq_set_cq_context =
-        (doca_verbs_cq_set_cq_context_t)get_verbs_sdk_symbol("doca_verbs_cq_set_cq_context");
+        (doca_verbs_cq_set_cq_context_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_cq_set_cq_context", 0);
     p_doca_verbs_comp_channel_create =
-        (doca_verbs_comp_channel_create_t)get_verbs_sdk_symbol("doca_verbs_comp_channel_create");
+        (doca_verbs_comp_channel_create_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_comp_channel_create", 1);
     p_doca_verbs_comp_channel_destroy =
-        (doca_verbs_comp_channel_destroy_t)get_verbs_sdk_symbol("doca_verbs_comp_channel_destroy");
+        (doca_verbs_comp_channel_destroy_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_comp_channel_destroy", 1);
     p_doca_verbs_comp_channel_get_handle =
-        (doca_verbs_comp_channel_get_handle_t)get_verbs_sdk_symbol(
-            "doca_verbs_comp_channel_get_handle");
+        (doca_verbs_comp_channel_get_handle_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_comp_channel_get_handle", 1);
     p_doca_verbs_get_cq_event =
-        (doca_verbs_get_cq_event_t)get_verbs_sdk_symbol("doca_verbs_get_cq_event");
+        (doca_verbs_get_cq_event_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_get_cq_event", 1);
     p_doca_verbs_ack_cq_events =
-        (doca_verbs_ack_cq_events_t)get_verbs_sdk_symbol("doca_verbs_ack_cq_events");
+        (doca_verbs_ack_cq_events_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_verbs_ack_cq_events", 1);
 
 #if DOCA_VERBS_CQ_SDK_WRAPPER_ENABLE_DEBUG == 1
     p_doca_log_backend_create_with_file_sdk =
-        (doca_log_backend_create_with_file_sdk_t)get_verbs_sdk_symbol(
-            "doca_log_backend_create_with_file_sdk");
+        (doca_log_backend_create_with_file_sdk_t)doca_sdk_find_symbol(
+            verbs_handle, "doca_log_backend_create_with_file_sdk", 1);
 #endif
 
     /*

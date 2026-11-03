@@ -72,6 +72,8 @@ struct ncclRawTaskSendRecv {
   cudaEvent_t launchCompletionEvent;
   // Whether the user buffer may be registered for this transfer (see p2pTaskAppend).
   bool allowUB;
+  int maxCTAs;
+  int collOpCount; // Zero for explicit P2P; otherwise identifies the originating collective.
 };
 
 // ncclPutSignal API inputs captured at enqueue time.

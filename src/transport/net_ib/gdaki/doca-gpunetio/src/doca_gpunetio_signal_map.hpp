@@ -34,6 +34,7 @@ struct doca_gpu_verbs_signal_entry {
     doca_gpu_verbs_signal_value_t *gpu_addr;
     struct doca_gpu_verbs_signal_page *page;
     doca_gpu_verbs_signal_value_t shadow;
+    bool needs_mcst;
 };
 
 struct doca_gpu_verbs_signal_lookup_block {
@@ -66,7 +67,7 @@ struct doca_gpu_verbs_signal_map {
  * stall the receive queue.
  */
 doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32_t imm,
-                                   bool need_mcst, bool use_data_direct);
+                                   bool use_data_direct);
 
 /**
  * Transfer one delivery owner's attachment from old_map to new_map.

@@ -16,7 +16,7 @@ string(STRIP "${symmetric_files}" symmetric_files)
 list(TRANSFORM symmetric_files PREPEND ${CMAKE_CURRENT_BINARY_DIR}/gensrc/symmetric/)
 
 execute_process(
-    COMMAND ${CMAKE_COMMAND} -E env NCCL_USE_CMAKE=1 ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/general "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env NCCL_USE_CMAKE=1 SYM_GENK=${SYM_GENK} ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/general "${ONLY_FUNCS}"
     OUTPUT_VARIABLE general_files
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -51,7 +51,7 @@ add_custom_command(
 
 add_custom_command(
     OUTPUT  ${general_files}
-    COMMAND ${CMAKE_COMMAND} -E env ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/general "${ONLY_FUNCS}"
+    COMMAND ${CMAKE_COMMAND} -E env SYM_GENK=${SYM_GENK} ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py ${CMAKE_CURRENT_BINARY_DIR}/gensrc/general "${ONLY_FUNCS}"
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/general/generate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating general device source files"

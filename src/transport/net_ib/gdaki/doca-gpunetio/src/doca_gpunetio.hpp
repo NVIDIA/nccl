@@ -33,6 +33,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 
+#include <mutex>
 #include <unordered_map>
 
 #include "host/doca_gpunetio.h"
@@ -42,6 +43,8 @@ struct doca_gpu_open {
     CUdevice cuda_dev; /* CUDA device handler */
     std::unordered_map<uintptr_t, struct doca_gpu_mtable *>
         *mtable; /* Table of GPU/CPU memory allocated addresses */
+    /* Lock of mtable: threads sharing the handler allocate and free memory at the same time */
+    std::mutex *mtable_lock;
 };
 
 struct doca_gpu_internal {

@@ -14,7 +14,7 @@ from __future__ import annotations
 import mmap
 import re
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, wraps
 from pathlib import Path
 
 import numpy as _np
@@ -131,6 +131,27 @@ def get_version() -> VersionInfo:
         nccl_bindings=Version(_nccl_bindings.__version__),
         libnccl=libnccl,
     )
+
+
+def require_compatible_nccl(func):
+    """Decorator that raises RuntimeError before calling ``func`` if libnccl is
+    older than the NCCL headers the bindings were generated from.
+
+    NCCL rejects versioned structs (e.g. ``ncclCommProperties_t``,
+    ``ncclDevCommRequirements_t``) stamped with a version newer than its own.
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        lib = _get_lib_version()
+        bindings = Version(_nccl_bindings.__version__)
+        if lib < bindings:
+            raise RuntimeError(
+                f"{func.__qualname__} requires libnccl.so to be no older than the nccl4py bindings ({bindings}), but the loaded version is {lib}."
+            )
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def show_versions() -> None:

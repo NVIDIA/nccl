@@ -168,9 +168,6 @@ struct ncclSharedResources {
 
   /* proxy related shared res */
   struct ncclProxyState* proxyState;
-
-  // GIN state
-  struct ncclGinState ginState;
 };
 
 struct ncclChannel {
@@ -312,6 +309,8 @@ struct ncclTaskP2p {
   int root;
   size_t bytes;
   bool allowUB;
+  int maxCTAs;
+  int collOpCount; // Zero for explicit P2P; otherwise identifies the originating collective.
   cudaEvent_t launchCompletionEvent;
 
   // Profiler plugin
@@ -505,6 +504,9 @@ struct ncclKernelPlanner {
   struct Peer* peers /*[nRanks]*/;
   int nTasksColl, nTasksP2p, nTasksBcast, nTasksRma;
   int nTasksP2pSend, nTasksP2pRecv;
+  int p2pCollOpCount;
+  bool p2pCollNeedsIsolation;
+  struct ncclIntruQueue<struct ncclTaskP2p, &ncclTaskP2p::next> p2pCollTaskQueue;
   int nCollConfigLaunchCompletionEvents; // Original event-bearing collective requests in this group.
 
   struct {
@@ -864,6 +866,9 @@ struct ncclComm {
   // RMA state
   struct ncclRmaState rmaState;
   struct ncclIntruQueue<struct ncclRmaCeInitTask, &ncclRmaCeInitTask::next> rmaCeInitTaskQueue;
+
+  // GIN state
+  struct ncclGinState ginState;
 
   // Debug check
   struct ncclIntruQueue<struct ncclArgsInfo, &ncclArgsInfo::next> argsInfoQueue;

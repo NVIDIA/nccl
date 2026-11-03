@@ -10,6 +10,7 @@
 #include "comm.h"
 #include "cudawrap.h"
 #include "channel.h"
+#include "platforms/platforms.h"
 
 NCCL_PARAM(Nthreads, "NTHREADS", -2);
 NCCL_PARAM(Ll128Nthreads, "LL128_NTHREADS", -2);
@@ -66,7 +67,7 @@ float ncclTuningGetTime(struct ncclTuningInput_t* const inputs, int a, float lat
     }
   }
 
-  float time = lat * latCount;
+  float time = lat * latCount * precision_ratio;
   if (bw > 0) time += inputs->nBytes / (1000 * bw) * precision_ratio;
   return time;
 }
@@ -148,6 +149,7 @@ ncclResult_t ncclTuningSetThreadThresholds(struct ncclComm* comm) {
 ncclResult_t ncclTuningGetChannels(struct ncclTuningInput_t* const input, struct ncclTuningResult_t* const result,
                                    bool forceMaxTreeThreads) {
   int nc = input->comm->nChannels;
+  ncclTuningPlatformChannelTuning(input, result, &nc);
   int nt = input->comm->tuningContext.maxThreads[result->algo][result->proto];
   int threadThreshold = input->comm->tuningContext.threadThresholds[result->algo][result->proto];
   if (result->algo == NCCL_ALGO_COLLNET_DIRECT) {

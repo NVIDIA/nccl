@@ -15,6 +15,12 @@ categories:
 
 Ideally NCCL diagnostics should be the first course of action when troubleshooting NCCL problems.
 
+The DIAG debug subsystem covers detailed information from both active and RAS diagnostics. Enable
+these debug logs with ``NCCL_DEBUG=INFO`` (or ``TRACE``) and ``NCCL_DEBUG_SUBSYS=DIAG`` (or ``ALL``).
+Selecting DIAG controls logging only; diagnostics must be triggered separately as described below.
+Basic reports with the ``NCCL DIAG`` prefix bypass debug filtering: initialization reports go to
+standard output, while on-demand RAS reports are returned over the RAS client connection.
+
 RAS Diagnostics
 ---------------
 
@@ -100,7 +106,7 @@ P2P debug records, including failures, start with ``P2P`` without a colon.
 Each failed directed pair is reported once
 by its P2P group leader, with the first recorded failure reason and applicable guidance.
 The reverse direction is a separate pair and can produce its own failure report.
-RAS debug messages continue to use the RAS subsystem.
+General RAS subsystem debug messages use the RAS subsystem; DIAG covers diagnostic details.
 
 Conversely, a passing P2P
 check makes intra-node or NVLink connectivity an unlikely culprit, directing the investigation

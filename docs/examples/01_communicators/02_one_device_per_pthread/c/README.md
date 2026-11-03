@@ -38,6 +38,9 @@ NCCL_DEBUG=INFO ./one_device_per_pthread
 
 ## Expected output
 
+One possible output with four GPUs is shown below. Lines from different threads
+may appear in a different order.
+
 ```
 Using 4 devices with pthreads
 Creating 4 threads for NCCL communicators
@@ -49,7 +52,7 @@ Creating 4 threads for NCCL communicators
   Thread 1: NCCL communicator initialized
   Thread 2: NCCL communicator initialized
   Thread 3: NCCL communicator initialized
-All threads synchronized - communicators ready
+All threads initialized - communicators ready
   Thread 0: Communicator rank 0 of 4
   Thread 1: Communicator rank 1 of 4
   Thread 2: Communicator rank 2 of 4
@@ -70,7 +73,9 @@ Success
 
 ### Key function: `ncclCommInitRank` in threads
 
-Each thread creates its own communicator using the shared unique ID:
+Each thread creates its own communicator using the shared unique ID. This
+simplified snippet omits error checking, logging, stream management, and
+communicator queries; see `main.cc` for the full implementation.
 
 ```c
 typedef struct {
@@ -92,11 +97,10 @@ void* thread_worker(void* arg) {
                    data->commId,
                    data->thread_id);
 
-  // ... perform work ...
-
-  // Cleanup
+  // Finalize and destroy this thread's communicator
   ncclCommFinalize(data->comms[data->thread_id]);
   ncclCommDestroy(data->comms[data->thread_id]);
+  return NULL;
 }
 ```
 

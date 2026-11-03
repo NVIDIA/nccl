@@ -406,8 +406,9 @@ static ncclResult_t netMapShm(struct ncclComm* comm, struct ncclProxyConnector* 
 }
 
 static ncclResult_t netCreateShm(struct ncclProxyState* proxyState, struct connectMapMem* mem) {
+  // The proxy only needs CPU access to this buffer (the sender registers its own mapping).
   NCCLCHECK(ncclShmAllocateShareableBuffer(mem->size, !proxyState->cuMemHostEnabled, &mem->createDesc,
-                                           (void**)&mem->cpuPtr, (void**)&mem->gpuPtr));
+                                           (void**)&mem->cpuPtr, nullptr));
   return ncclSuccess;
 }
 

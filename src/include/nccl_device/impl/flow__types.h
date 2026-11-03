@@ -22,10 +22,15 @@
 #define NCCL_FLOW_LL128_SIGNAL_WARPS_PER_PART 1
 
 #if __cplusplus
-// Persistent state shared by the protocols and send/receive directions of one Flow topology slot. step tracks the
-// shared transport credits and signals. LL uses a separate 32-bit step for FIFO-slot selection and embedded flags so
+// Each connection FIFO has ncclFlowFifoSlots fixed slots. Steps count those slots across FIFO wraps;
+// nSlices groups them into slices of sliceSteps = ncclFlowFifoSlots/nSlices slots for processing and publication.
+constexpr int ncclFlowFifoSlots = 8;
+
+// Persistent state shared by the protocols and send/receive directions of one Flow connection index. step tracks
+// shared transport credits and signals. LL uses a separate 32-bit slice sequence for FIFO selection and flags so
 // Simple operations cannot skip an LL cleanup epoch. signalValue tracks the last readiness or credit value published,
 // allowing additive GIN signals and batched receive credits to resume across operations.
+// The Flow API is experimental. API signatures are not stable and may change.
 struct alignas(64) ncclFlowConnState {
   uint64_t signal[2];
   uint64_t step[2];

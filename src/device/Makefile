@@ -107,7 +107,7 @@ $(OBJDIR)/gensrc/symmetric: $(OBJDIR)/gensrc symmetric/generate.py
 
 $(OBJDIR)/gensrc/general: $(OBJDIR)/gensrc general/generate.py
 	@mkdir -p $@
-	python3 ./general/generate.py $@
+	SYM_GENK="$(SYM_GENK)" python3 ./general/generate.py $@
 
 # The trailing ";" is necessary to make this an "empty recipe":
 # https://www.gnu.org/software/make/manual/html_node/Empty-Recipes.html

@@ -175,7 +175,7 @@ CFT Operations
 
    .. cpp:function:: void putMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes)
 
-      Multicast variant of :cpp:func:`ncclCft::put` where *leId* references a logical endpoint for which the
+      Multicast variant of :cpp:func:`ncclCft::put` where *leId* references a logical endpoint for which
       the :c:macro:`NCCL_CFT_MULTIMEM` bit was set in the :c:macro:`cftCaps` bitmask at device communicator
       creation time.
 
@@ -322,7 +322,7 @@ the kernel.
    .. cpp:function:: ncclCftBarrierSession(Coop coop, ncclDevComm const& comm, uint32_t index, bool multimem = false)
 
       Initializes a new CFT barrier session. *coop* represents a cooperative group (see :ref:`devapi_coops`) of threads
-      that synchronize throught the barrier. *comm* is the device communicator for which barrier resources were requested.
+      that synchronize through the barrier. *comm* is the device communicator for which barrier resources were requested.
       *index* selects the barrier slot from the device communicator. *multimem* can be set to ``true`` to select multicast
       CFT barrier resources (requires CFT barriers to be created with :c:macro:`NCCL_CFT_MULTIMEM` capability).
 

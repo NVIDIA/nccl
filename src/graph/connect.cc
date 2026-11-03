@@ -30,14 +30,14 @@ ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs
     struct ncclChannel* channel = comm->channels + c;
     channel->ring.prev = channel->ring.next = -1;
     channel->tree.up = -1;
-    channel->tree.upSlot = -1;
+    channel->tree.upIndex = -1;
     channel->collnetChain.up = -1;
-    channel->collnetChain.upSlot = -1;
+    channel->collnetChain.upIndex = -1;
     for (int i = 0; i < NCCL_MAX_TREE_ARITY; i++) {
       channel->tree.down[i] = -1;
-      channel->tree.downSlots[i] = -1;
+      channel->tree.downIndices[i] = -1;
       channel->collnetChain.down[i] = -1;
-      channel->collnetChain.downSlots[i] = -1;
+      channel->collnetChain.downIndices[i] = -1;
     }
     channel->collnetDirect.out = -1;
     channel->collnetDirect.headRank = -1;
@@ -67,9 +67,9 @@ ncclResult_t ncclTopoPreset(struct ncclComm* comm, struct ncclTopoGraph** graphs
         topoRanks->treeToChild0[c] = treeIntra[child0Index];
         topoRanks->treeToChild1[c] = treeIntra[child1Index];
         channel->tree.up = i == 0 ? -1 : treeIntra[i - 1];
-        channel->tree.upSlot = i == 0 ? -1 : ncclFlowTreeSlotIntra;
+        channel->tree.upIndex = i == 0 ? -1 : ncclFlowTreeIndexIntra;
         channel->tree.down[0] = i == localRanks - 1 ? -1 : treeIntra[i + 1];
-        channel->tree.downSlots[0] = i == localRanks - 1 ? -1 : ncclFlowTreeSlotIntra;
+        channel->tree.downIndices[0] = i == localRanks - 1 ? -1 : ncclFlowTreeIndexIntra;
       }
       if (collNetIntra[i] == rank) {
         channel->collnetChain.up = i == 0 ? comm->nRanks : collNetIntra[i - 1];
@@ -127,14 +127,14 @@ static ncclResult_t getIndexes(int* ranks, int* indexes, int nNodes) {
   return ncclSuccess;
 }
 
-static ncclResult_t setTreeUp(struct ncclTree* tree, int* indexes, int u, int slot) {
+static ncclResult_t setTreeUp(struct ncclTree* tree, int* indexes, int u, int connectionIndex) {
   if (u == -1) return ncclSuccess;
   tree->up = indexes[u];
-  tree->upSlot = slot;
+  tree->upIndex = connectionIndex;
   return ncclSuccess;
 }
 
-static ncclResult_t setTreeDown(struct ncclTree* tree, int* indexes, int d, int slot) {
+static ncclResult_t setTreeDown(struct ncclTree* tree, int* indexes, int d, int connectionIndex) {
   if (d == -1) return ncclSuccess;
   int x = 0;
   while (x < NCCL_MAX_TREE_ARITY && tree->down[x] >= 0) x++;
@@ -143,7 +143,7 @@ static ncclResult_t setTreeDown(struct ncclTree* tree, int* indexes, int d, int 
     return ncclInternalError;
   }
   tree->down[x] = indexes[d];
-  tree->downSlots[x] = slot;
+  tree->downIndices[x] = connectionIndex;
   return ncclSuccess;
 }
 
@@ -166,17 +166,17 @@ static ncclResult_t connectTrees(struct ncclComm* comm, int* treeToParent, int* 
     ttc1 = treeToChild1 + c * comm->nNodes;
     if (comm->rank == ttp[node]) {
       NCCLCHECK(setTreeUp(&channel0->tree, t0ChildType == 0 ? ttc0 : ttc1, t0u,
-                          t0ChildType == 0 ? ncclFlowTreeSlotChild0 : ncclFlowTreeSlotChild1));
+                          t0ChildType == 0 ? ncclFlowTreeIndexChild0 : ncclFlowTreeIndexChild1));
       NCCLCHECK(setTreeUp(&channel1->tree, t1ChildType == 0 ? ttc0 : ttc1, t1u,
-                          t1ChildType == 0 ? ncclFlowTreeSlotChild0 : ncclFlowTreeSlotChild1));
+                          t1ChildType == 0 ? ncclFlowTreeIndexChild0 : ncclFlowTreeIndexChild1));
     }
     if (comm->rank == ttc0[node]) {
-      NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d0, ncclFlowTreeSlotChild0));
-      NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d0, ncclFlowTreeSlotChild0));
+      NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d0, ncclFlowTreeIndexChild0));
+      NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d0, ncclFlowTreeIndexChild0));
     }
     if (comm->rank == ttc1[node]) {
-      NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d1, ncclFlowTreeSlotChild1));
-      NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d1, ncclFlowTreeSlotChild1));
+      NCCLCHECK(setTreeDown(&channel0->tree, ttp, t0d1, ncclFlowTreeIndexChild1));
+      NCCLCHECK(setTreeDown(&channel1->tree, ttp, t1d1, ncclFlowTreeIndexChild1));
     }
     if (comm->rank == ttp[node] || comm->rank == ttc0[node] || comm->rank == ttc1[node]) {
       INFO(NCCL_GRAPH, "Tree %d : %d -> %d -> %d/%d/%d", c, channel0->tree.up, comm->rank, channel0->tree.down[0],

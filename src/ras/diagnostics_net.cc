@@ -302,6 +302,7 @@ ncclResult_t rasDiagnosticsNetDeviceSummarize(
     int nUninspectedRanks = 0;
     int nSkippedRanks = 0;
     int nNodesDiffer = 0;
+    int nDevicesFailed = 0;
 
     while (commEnd < nRecords) {
       const struct rasDiagnosticsRankHeader* rank =
@@ -430,6 +431,7 @@ ncclResult_t rasDiagnosticsNetDeviceSummarize(
       if (nMismatch > 0) {
         char rankSet[128];
         rasDiagnosticsFormatRankSet(rankSet, sizeof(rankSet), mismatchRanks, nMismatchStored, nMismatch);
+        nDevicesFailed++;
         NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
                                            "Net device %s:%d: rank(s) %s differ from rank %d (%s) across %d of %d "
                                            "nodes in comm 0x%lx",
@@ -437,18 +439,23 @@ ncclResult_t rasDiagnosticsNetDeviceSummarize(
                                            nReportingNodes, nExpectedNodes, startRank->commId.commHash),
                       ret, exit);
       } else if (nReportingNodes < nExpectedNodes) {
+        nDevicesFailed++;
         NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
                                            "Net device %s:%d: reported on only %d of %d nodes in comm 0x%lx "
                                            "(device may be missing on some nodes)%s",
                                            reference->name, reference->port, nReportingNodes, nExpectedNodes,
                                            startRank->commId.commHash, portNote),
                       ret, exit);
-      } else {
-        NCCLCHECKGOTO(rasDiagnosticsReport(reporter, portNote[0] == '\0' ? RAS_DIAG_TAG_OK : RAS_DIAG_TAG_INFO,
-                                           "Net device %s:%d: %s across %d nodes in comm 0x%lx%s", reference->name,
-                                           reference->port, props, nReportingNodes, startRank->commId.commHash,
-                                           portNote),
+      } else if (portNote[0] != '\0') {
+        nDevicesFailed++;
+        NCCLCHECKGOTO(rasDiagnosticsReport(
+                        reporter, RAS_DIAG_TAG_INFO, "Net device %s:%d: %s across %d nodes in comm 0x%lx%s",
+                        reference->name, reference->port, props, nReportingNodes, startRank->commId.commHash, portNote),
                       ret, exit);
+      } else {
+        // Healthy NICs are debug details; the report lists failing NICs, or one summary line when none fails.
+        INFO(NCCL_DIAG, "Net device %s:%d: %s across %d nodes in comm 0x%lx", reference->name, reference->port, props,
+             nReportingNodes, startRank->commId.commHash);
       }
       start = end;
     }
@@ -459,10 +466,9 @@ ncclResult_t rasDiagnosticsNetDeviceSummarize(
                                          "state or Data Direct use) differs within %d of %d nodes in comm 0x%lx",
                                          nNodesDiffer, nCommNodes, startRank->commId.commHash),
                     ret, exit);
-    } else if (nCommNodes > 0) {
+    } else if (nCommNodes > 0 && nDevicesFailed == 0) {
       NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_OK,
-                                         "Net device: NIC configuration consistent within each node across %d "
-                                         "nodes in comm 0x%lx",
+                                         "Net device: NIC configuration consistent across %d nodes in comm 0x%lx",
                                          nCommNodes, startRank->commId.commHash),
                     ret, exit);
     }

@@ -147,7 +147,7 @@ The number of concurrently active counters per GPU should not exceed 32, for bes
 
 The following example code shows how the user-managed counter should be allocated and registered with the symmetric memory
 window, and how it is used in a counted put operation. It is important to note that the initiator of the put computes the
-counter offset from the ``leOffset``, while the recepient uses the counter's VA pointer to poll for updates using
+counter offset from the ``leOffset``, while the recipient uses the counter's VA pointer to poll for updates using
 ``waitCounted``. It should also be noticed that ``waitCounted`` is a convenience API providing cooperative thread
 synchronization, memory ordering between counter updates and data accesses, and aborts/timeouts handling. Users can implement
 their own checks at the recipient rank, provided that they handle all the aforementioned requirements.
@@ -218,7 +218,7 @@ Cross-proxy fences enforce memory ordering between operations issued by differen
 producer and consumer proxies. The common use case for fence is ordering of data
 and flag updates to establish a ``happens-before`` relationship between producer
 stores and consumer loads to the same memory region. In the following example, the
-producer is the Fabric proxy, while the consumer (ommitted) is the Generic proxy.
+producer is the Fabric proxy, while the consumer (omitted) is the Generic proxy.
 The consumer polls on the flag using relaxed loads and, after observing the flag
 update, issues a fence with memory_order_acquire, Fabric producer, Generic consumer
 and memory scope Sys.

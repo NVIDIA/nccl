@@ -10,6 +10,7 @@
 #define NCCL_TUNING_PLATFORM_RUBIN_H_
 
 #include "tuner.h"
+#include "tuning.h"
 #include "../cost_model.h"
 
 static struct ncclTuningModelEntry_t ncclTuningRubinModelMap[] = {
@@ -85,7 +86,7 @@ static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL] = 3.49;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL128] = 5.06;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 11.41;
-  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL] = 2.6;
+  constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL] = 2.35;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 3.32;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 9.5;
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_NVLS][NCCL_PROTO_SIMPLE] = 41.35;
@@ -96,17 +97,32 @@ static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 36.32;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL] = 26;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 45;
-  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 150;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 219.5;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] = 34.37;
 }
 
 static void ncclTuningRubinPreInit(struct ncclComm* comm) {
   ncclTuningRubinTuningConstants(&comm->tuningContext.tuningConstants);
+  if (comm->nNodes == 1 && comm->nRanks >= 64)
+    comm->tuningContext.tuningConstants.hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] += 13;
+  if (comm->nNodes > 1)
+    comm->tuningContext.tuningConstants.hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 17.3;
 }
 
 static ncclResult_t ncclTuningRubinGetModelEntry(int compCap, int id, struct ncclTuningModelEntry_t** entry) {
   if (ncclTuningRubinModelMap[id].model != nullptr) {
     *entry = &ncclTuningRubinModelMap[id];
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuningRubinChannelTuning(struct ncclTuningInput_t* const input,
+                                                 const struct ncclTuningResult_t* result, int* maxChannels) {
+  struct ncclComm* comm = input->comm;
+  size_t cutoff = 2ul * 1024 * 1024 * 1024;
+  if (comm->nNodes > 1 && input->nBytes <= cutoff && result->algo == NCCL_ALGO_RING) {
+    if (comm->minLocalRanks >= 56) *maxChannels = std::min(*maxChannels, 24);
+    if (*maxChannels < input->minCTAs) *maxChannels = input->minCTAs;
   }
   return ncclSuccess;
 }

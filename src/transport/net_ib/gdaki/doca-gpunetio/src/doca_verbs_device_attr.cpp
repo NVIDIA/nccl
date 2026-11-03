@@ -33,6 +33,9 @@
 #include <mutex>
 #include <time.h>
 #include <string.h>
+#include <memory>
+#include <string>
+#include <unordered_map>
 
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
@@ -207,6 +210,9 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
  * Public API functions
  *********************************************************************************************************************/
 
+static std::mutex device_attr_cache_mutex;
+static std::unordered_map<std::string, std::unique_ptr<doca_verbs_device_attr>> device_attr_cache;
+
 doca_error_t doca_verbs_query_device(struct ibv_context *context,
                                      struct doca_verbs_device_attr **verbs_device_attr) {
     if (context == nullptr) {
@@ -219,8 +225,18 @@ doca_error_t doca_verbs_query_device(struct ibv_context *context,
         return DOCA_ERROR_INVALID_VALUE;
     }
 
+    const char *device_name = nullptr;
+    doca_error_t status = doca_verbs_wrapper_ibv_get_device_name(context->device, &device_name);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to query doca_verbs_device_attr. Failed to get device name");
+        return status;
+    }
+
     try {
-        *verbs_device_attr = new doca_verbs_device_attr(context);
+        std::lock_guard<std::mutex> lock(device_attr_cache_mutex);
+        std::unique_ptr<doca_verbs_device_attr> &cached = device_attr_cache[device_name];
+        if (cached == nullptr) cached.reset(new doca_verbs_device_attr(context));
+        *verbs_device_attr = new doca_verbs_device_attr(*cached);
         return DOCA_SUCCESS;
     } catch (doca_error_t err) {
         return err;

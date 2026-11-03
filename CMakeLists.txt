@@ -52,11 +52,11 @@ option(RDMA_CORE "Enable RDMA core" OFF)
 option(NET_PROFILER "Enable network profiler" OFF)
 option(MLX5DV "Enable MLX5DV" OFF)
 option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
-option(EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
+option(NCCL_EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
+option(SYM_GENK "Compile GENK kernels" OFF)
 option(NCCL_EXACT_KERNEL_NAMES "Use one CUDA kernel wrapper per NCCL device function" OFF)
 option(NCCL_EMIT_LTO_IR "Generate LTO IR for device APIs" OFF)
 option(BUILD_NCCL4PY "Enable nccl4py Python bindings targets" OFF)
-option(BUILD_NCCL_EP "Build NCCL EP contrib library" OFF)
 
 # CMAKE_BUILD_TYPE=Debug is equivalent to -DDEBUG=ON, and vice versa (case-insensitive).
 string(TOUPPER "${CMAKE_BUILD_TYPE}" _NCCL_BUILD_TYPE_UC)
@@ -68,6 +68,10 @@ if(_NCCL_BUILD_TYPE_UC STREQUAL "DEBUG")
 endif()
 if(DEBUG)
     set(CMAKE_BUILD_TYPE "Debug")
+endif()
+
+if(SYM_GENK)
+    add_compile_definitions(SYM_GENK=1)
 endif()
 
 # Detect OS (use add_compile_definitions so CUDA .cu files get the define when built by NVCC)
@@ -345,11 +349,11 @@ if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
   add_subdirectory(pkg/srctxz)
 endif()
 
-if(EMIT_LLVM_IR OR NCCL_EMIT_LTO_IR)
+if(NCCL_EMIT_LLVM_IR OR NCCL_EMIT_LTO_IR)
     add_subdirectory(bindings/ir)
 endif()
 
-if(EMIT_LLVM_IR)
+if(NCCL_EMIT_LLVM_IR)
     add_dependencies(llvm_ir nccl_header)
     add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
     message(STATUS "LLVM IR generation will be included in default build")
@@ -363,10 +367,6 @@ endif()
 
 if(BUILD_NCCL4PY)
   add_subdirectory(bindings/nccl4py)
-endif()
-
-if(BUILD_NCCL_EP)
-  add_subdirectory(contrib/nccl_ep)
 endif()
 
 ###################### CMake package config for find_package(NCCL) ######################

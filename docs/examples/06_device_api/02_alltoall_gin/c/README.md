@@ -129,9 +129,11 @@ GIN uses signals for asynchronous completion detection. The kernel waits for the
 signal value to reach the expected count, indicating all put operations have completed.
 
 ```cpp
-// Wait for all remote puts to complete
-gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + devComm.nRanks);
-gin.flush(ncclCoopCta());  // Ensure all operations are committed
+// Only the receiving CTA waits for all incoming puts to this rank.
+int receivingCta = (devComm.rank % nthreads) / blockDim.x;
+if (blockIdx.x == receivingCta)
+    gin.waitSignal(ncclCoopCta(), signalIndex, signalValue + devComm.nRanks);
+gin.flush(ncclCoopCta());  // Ensure local send buffers are safe to reuse
 ```
 
 ### Receiving CTA (Device-side)

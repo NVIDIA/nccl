@@ -137,8 +137,7 @@ struct doca_gpu_verbs_qp {
     __be32 *rq_dbrec_cpu;    // RQ DBR host-resident CPU-proxy DBR or through the GDRCopy alias of a
                              // GPU-resident DBR.
     doca_error_t rq_fatal_status;           // Last error code seen on the RQ.
-    doca_gpu_verbs_service_t monitored_by;  // Service currently borrowing this QP for RQ progress,
-                                            // or NULL when detached.
+    bool monitored_by;  // Whether the QP is monitored by a service.
 };
 
 /**
@@ -403,21 +402,37 @@ doca_error_t doca_gpu_verbs_create_service(doca_gpu_verbs_service_t *out_service
 /**
  * Monitor a QP and make forward progress.
  *
+ * If the QP has an RQ, the service also drains its RQ CQ, delivers each immediate into the
+ * service's signal map, and returns receive credits. The signal map must be set with
+ * doca_gpu_verbs_service_set_signal_map() before monitoring an RQ-bearing QP. The service owns RQ
+ * progress until it is destroyed.
+ *
+ * Each QP independently selects its signal mapping path. QPs created with
+ * DOCA_GPUNETIO_VERBS_QP_INIT_ATTR_FLAGS_SUPPORT_DATA_DIRECT use the signal map's forced-PCIe
+ * aliases; other QPs use its legacy aliases.
+ *
  * @param [in] service
- * Service object
+ * Service object.
  * @param [in] qp
- * QP to monitor
+ * QP to monitor.
  *
  * @return
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_BAD_STATE - if the QP has an RQ and the service has no signal map set.
+ * - DOCA_ERROR_IN_USE - if the QP's RQ is already monitored by another service.
+ * - DOCA_ERROR_NOT_SUPPORTED - if the QP requests data direct but the signal map has no
+ *   forced-PCIe mappings.
  */
 doca_error_t doca_gpu_verbs_service_monitor_qp(doca_gpu_verbs_service_t service,
                                                struct doca_gpu_verbs_qp *qp);
 
 /**
  * Destroy a service object.
+ *
+ * All monitored QPs and the signal map attached to the service are detached before it is
+ * destroyed.
  *
  * @param [in] service
  * Service object to destroy
@@ -493,6 +508,7 @@ doca_error_t doca_gpu_verbs_unexport_multi_qps_dev(doca_gpu_t *gpu_dev,
 /**
  * Reset tracking and memory of a GPUNetIO QP.
  * If the QP has an RQ, its tracking and memory are reset.
+ * If the QP has an RQ, it must not be monitored by a service.
  *
  * The caller must ensure that the QP is in the RST state before calling this function.
  *

@@ -63,7 +63,7 @@ When using host-backed buffers, the following additional limitations apply:
 
 Using the host RMA API requires CUDA 12.5 or greater.
 
-Building with EMIT_LLVM_IR=1 (to generate readable LLVM intermediate representation code) requires CUDA 12.
+Building with NCCL_EMIT_LLVM_IR=1 (to generate readable LLVM intermediate representation code) requires CUDA 12.
 
 CFT has the following requirements:
 

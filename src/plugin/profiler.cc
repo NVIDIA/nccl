@@ -250,25 +250,6 @@ static inline uint64_t profilerMonoNow(void) {
   return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
 }
 
-// Stop a host-side (CPU-timed) event, stamping the current CPU clock. Used for
-// all host-thread, proxy-thread, net and CE stops.
-// stopEvent reuses the start descriptor type, so only its timestamp fields
-// carry meaning; everything else is zeroed and the event is identified by
-// eHandle. Host-sampled stops are exact, so the uncertainty stays 0.
-static inline void profilerStopEventHost(void* eHandle) {
-  ncclProfilerEventDescr_t sd = {};
-  sd.tsCpu = profilerCpuNow(profilerTsModeGet());
-  ncclProfiler->stopEvent(eHandle, &sd);
-}
-
-// Stop with no NCCL timestamps (zeroed descriptor). Used for CE events,
-// whose completion is tracked by the plugin's own CUDA events rather than by a
-// host clock at the API boundary, so NCCL deliberately does not stamp them.
-static inline void profilerStopEventNone(void* eHandle) {
-  ncclProfilerEventDescr_t sd = {};
-  ncclProfiler->stopEvent(eHandle, &sd);
-}
-
 // ---------------------------------------------------------------------------
 // GPU->CPU time calibration (profiler-thread local).
 // ---------------------------------------------------------------------------
@@ -401,54 +382,6 @@ static inline void profilerMapGpuToCpu(uint64_t tsGpu, uint64_t* tsCpu, uint64_t
   int64_t d = (int64_t)tsGpu - (int64_t)c->gpuRef;
   *tsCpu = (uint64_t)((int64_t)c->cpuRef + (int64_t)(c->slope * (double)d));
   *tsCpuUncertainty = c->uncertainty;
-}
-
-// Start a host-side (CPU-timed) event, stamping the current CPU clock into the
-// descriptor. Used for all app-thread / proxy-thread starts.
-static inline void profilerStartEventHost(void* ctx, void** eHandle, ncclProfilerEventDescr_t* d) {
-  d->tsCpu = profilerCpuNow(profilerTsModeGet());
-  ncclProfiler->startEvent(ctx, eHandle, d);
-}
-
-// Start a GPU-timed event (KernelCh, KernelPhase). The raw globaltimer value
-// already travels in the descriptor's pTimer field; here we additionally map
-// it onto the configured CPU clock, which only happens if the plugin asked for
-// gpuClockSync.
-static inline void profilerStartEventGpu(void* ctx, void** eHandle, ncclProfilerEventDescr_t* d, uint64_t tsGpu) {
-  if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
-    profilerMapGpuToCpu(tsGpu, &d->tsCpu, &d->tsCpuUncertainty);
-  }
-  ncclProfiler->startEvent(ctx, eHandle, d);
-}
-
-// Stop a GPU-timed event. The raw globaltimer stop value reaches the plugin
-// through recordEventState's pTimer; this adds the mapped CPU clock.
-static inline void profilerStopEventGpu(void* eHandle, uint64_t tsGpu) {
-  ncclProfilerEventDescr_t sd = {};
-  if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
-    profilerMapGpuToCpu(tsGpu, &sd.tsCpu, &sd.tsCpuUncertainty);
-  }
-  ncclProfiler->stopEvent(eHandle, &sd);
-}
-
-// Record a host-timed state transition, stamping the current CPU clock. The
-// caller fills the union member for eState; this only adds the timestamp.
-static inline void profilerRecordEventStateHost(void* eHandle, ncclProfilerEventState_t eState,
-                                                ncclProfilerEventStateArgs_t* a) {
-  a->tsCpu = profilerCpuNow(profilerTsModeGet());
-  ncclProfiler->recordEventState(eHandle, eState, a);
-}
-
-// Record a GPU-timed state transition (the KernelCh and KernelPhase stops).
-// tsGpu is the raw globaltimer the caller already puts in kernelCh.pTimer;
-// here it additionally lands on the configured CPU clock, so the transition
-// and the stopEvent that follows report the same instant.
-static inline void profilerRecordEventStateGpu(void* eHandle, ncclProfilerEventState_t eState,
-                                               ncclProfilerEventStateArgs_t* a, uint64_t tsGpu) {
-  if (PROF_TS_MODE_GPUSYNC(profilerTsModeGet())) {
-    profilerMapGpuToCpu(tsGpu, &a->tsCpu, &a->tsCpuUncertainty);
-  }
-  ncclProfiler->recordEventState(eHandle, eState, a);
 }
 
 extern thread_local int ncclGroupDepth;
@@ -1490,8 +1423,6 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
         eDescr.coll.root = ct->root;
         eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
         eDescr.coll.nChannels = ct->nChannels;
-        if (plan->isSymColl && ct == ncclIntruQueueHead(&plan->collTaskQueue))
-          eDescr.coll.nChannels = (uint8_t)countOneBits(plan->channelMask);
         eDescr.coll.nWarps = ct->nWarps;
         eDescr.coll.isSymColl = plan->isSymColl;
         if (plan->isSymColl) {
@@ -1740,16 +1671,16 @@ static void profilerFireKernelPhaseEvents(struct ncclProfilerWorkOp* op) {
   int ch = op->channelId;
   uint64_t wc = op->workCounter;
   int slot = wc % MAX_PROFILER_EVENTS_PER_CHANNEL;
-  uint64_t* ts = op->workPhases[ch].data[slot].timestamps;
+  // Several tasks in a sym plan can share this channel's device record. Fold
+  // boundaries in a local copy so every task can report the same phase interval.
+  uint64_t ts[MAX_PROFILER_PHASES];
+  memcpy(ts, op->workPhases[ch].data[slot].timestamps, sizeof(ts));
 
   // Fold a missing intermediate boundary onto the adjacent outer one; if both are
   // missing the kernel didn't instrument phases, so skip rather than mislabel.
   bool haveAfterOpen = ts[NCCL_KERNEL_PHASE_AFTER_OPEN] != 0;
   bool haveBeforeClose = ts[NCCL_KERNEL_PHASE_BEFORE_CLOSE] != 0;
-  if (!haveAfterOpen && !haveBeforeClose) {
-    memset(ts, 0, sizeof(uint64_t) * MAX_PROFILER_PHASES);
-    return;
-  }
+  if (!haveAfterOpen && !haveBeforeClose) return;
   if (!haveAfterOpen && ts[NCCL_KERNEL_PHASE_BEGIN] != 0)
     ts[NCCL_KERNEL_PHASE_AFTER_OPEN] = ts[NCCL_KERNEL_PHASE_BEGIN];
   if (!haveBeforeClose && ts[NCCL_KERNEL_PHASE_END] != 0)
@@ -1773,7 +1704,6 @@ static void profilerFireKernelPhaseEvents(struct ncclProfilerWorkOp* op) {
       profilerStopGpu(&phaseHandle, ts[i + 1]);
     }
   }
-  memset(ts, 0, sizeof(uint64_t) * MAX_PROFILER_PHASES);
 }
 
 // Runs without pt->mutex held: plugin callbacks may block, so we mustn't
@@ -2155,9 +2085,14 @@ static void profilerPostPlanWorkSym(struct ncclComm* comm, struct ncclKernelPlan
   if (pt == nullptr) return;
   uint64_t* counters = profilerGetSymCounters(plan, sct);
   if (counters == nullptr) return;
-  int nChannels = countOneBits(plan->channelMask);
-  for (int c = 0; c < nChannels; c++) {
-    profilerEnqueueOp(pt, comm, c, counters[c], sct->eActivationMask, sct->eventHandle, /*sym=*/true);
+  for (struct ncclTaskColl* ct = sct; ct != nullptr; ct = ct->next) {
+    if (ct->eActivationMask & ncclProfileKernelCh) {
+      for (int c = ct->channelLo; c <= ct->channelHi; c++) {
+        // A shared channel still publishes only one record for the entire plan.
+        // Reuse its counter for each task; these are shared, not per-task timings.
+        profilerEnqueueOp(pt, comm, c, counters[c], ct->eActivationMask, ct->eventHandle, /*sym=*/true);
+      }
+    }
   }
 }
 

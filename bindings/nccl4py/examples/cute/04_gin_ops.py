@@ -103,6 +103,7 @@ def gin_ops_kernel(
             recv_win, recv,
             send_win, send,
             coop,
+            is_strong=False,  # No remote signal on this operation.
             is_counter=True, counter_id=COUNTER_ID,
             given_release=nccl_cute.ThreadScope.THREAD,
             required_release=nccl_cute.ThreadScope.DEVICE,
@@ -113,13 +114,17 @@ def gin_ops_kernel(
 
         # No source window: the value travels inline, sized by the
         # destination tensor's element type.
-        gin.put_value(world, DST_RANK, recv_win, recv_tail, SCALAR, coop)
+        gin.put_value(
+            world, DST_RANK, recv_win, recv_tail, SCALAR, coop,
+            is_strong=False,
+        )
 
-        # A signal with no data transfer, ordered after the puts above.
+        # A strong signal orders both preceding puts to this peer/context.
         gin.signal(
             world, DST_RANK,
             True, SIGNAL_ID, SIGNAL_OP_INC, 1,
             coop,
+            is_strong=True,
         )
         # Drain this context before the kernel exits.
         gin.flush(coop, nccl_cute.MemoryOrder.RELEASE)
@@ -236,6 +241,7 @@ def main():
         gin_connection_type=nccl.NcclGinConnectionType.FULL,
         gin_signal_count=SIGNAL_ID + 1,
         gin_counter_count=COUNTER_ID + 1,
+        gin_strong_signals_required=True,
     )
     dev_comm_resource = nccl_comm.create_dev_comm(requirements=reqs)
 

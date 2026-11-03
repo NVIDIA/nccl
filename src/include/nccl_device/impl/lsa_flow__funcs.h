@@ -40,9 +40,9 @@ NCCL_DEVICE_INLINE void ncclLsaFlowFence() {
 template <ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE ncclLsaFlowConn<Protocol>::ncclLsaFlowConn(ncclDevComm const& comm, ncclSymPtr<char> recvFifo,
                                                               ncclSymPtr<ncclFlowConnState> state_, int peer,
-                                                              int nSlots, size_t slotSize, int type, bool recvPost)
-  : nSlots(nSlots), slotSize(slotSize), type(type), abortFlag(comm.abortFlag), state(state_.localPtr()), step(0),
-    llStep(0), signalValue(0), cache(0) {
+                                                              int nSlices, size_t stepSize, int type, bool recvPost)
+  : nSlices(nSlices), sliceSteps(ncclFlowFifoSlots / nSlices), stepSize(stepSize), type(type),
+    abortFlag(comm.abortFlag), state(state_.localPtr()), step(0), llStep(0), signalValue(0), cache(0) {
   if (type != ncclFlowTypeNone) {
     fifo = type == ncclFlowTypeSend ? recvFifo.peerPtr(peer) : recvFifo.localPtr();
 
@@ -52,11 +52,14 @@ NCCL_DEVICE_INLINE ncclLsaFlowConn<Protocol>::ncclLsaFlowConn(ncclDevComm const&
     // Recv -> Remote head, Send -> Remote tail
     peerSignal = &state_.peerPtr(peer)->signal[1 - type];
 
-    step = state->step[type];
+    // Resume on a slice boundary if the preceding protocol used a different FIFO depth.
+    uint64_t const savedStep = state->step[type];
+    step = nccl::utility::alignUp(savedStep, (uint64_t)sliceSteps);
     llStep = state->llStep[type];
     signalValue = state->signalValue[type];
 
-    if (recvPost) postRecv();
+    // Publish skipped credits even when below the usual batch size.
+    if (recvPost) postRecv(step != savedStep);
   }
 }
 
@@ -67,10 +70,10 @@ NCCL_DEVICE_INLINE void ncclLsaFlowConn<Protocol>::close() {
   state->signalValue[type] = signalValue;
 }
 
-// Wait for credit and return the next writable slot in the peer's shared buffer.
+// Wait for credit and return the next writable slice in the peer's FIFO.
 template <ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void* ncclLsaFlowConn<Protocol>::waitSend() {
-  void* const ptr = advanceFifoSlot();
+  void* const ptr = advanceSlice();
 
   // Wait for credit to send
   uint32_t spins = 0;
@@ -92,18 +95,17 @@ NCCL_DEVICE_INLINE void ncclLsaFlowConn<Protocol>::postSend(size_t /*bytes*/) {
 }
 
 template <ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE uint64_t ncclLsaFlowConn<Protocol>::advanceStep() {
-  uint64_t const fifoStep = Protocol == ncclFlowProtocolLL ? llStep++ : step;
-  step++;
-  return fifoStep;
+NCCL_DEVICE_INLINE void ncclLsaFlowConn<Protocol>::advanceStep() {
+  if (Protocol == ncclFlowProtocolLL) llStep++;
+  step += sliceSteps;
 }
 
-// Return a pointer into the local shared buffer at the next recv slot; call postRecv() after reading.
+// Return a pointer to the next local receive slice; call postRecv() after reading.
 template <ncclFlowProtocol Protocol>
 NCCL_DEVICE_INLINE void* ncclLsaFlowConn<Protocol>::waitRecv() {
-  void* const ptr = advanceFifoSlot();
+  void* const ptr = advanceSlice();
 
-  // Wait until this slot is ready.
+  // Wait until this slice is ready.
   uint32_t spins = 0;
   while (cache < step) {
     cache = ncclLsaFlowLoadSignal(localSignal);
@@ -113,9 +115,11 @@ NCCL_DEVICE_INLINE void* ncclLsaFlowConn<Protocol>::waitRecv() {
 }
 
 template <ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void* ncclLsaFlowConn<Protocol>::advanceFifoSlot() {
-  uint64_t const fifoStep = advanceStep();
-  return fifo + (fifoStep % nSlots) * slotSize;
+NCCL_DEVICE_INLINE void* ncclLsaFlowConn<Protocol>::advanceSlice() {
+  size_t const offset =
+    Protocol == ncclFlowProtocolLL ? (llStep % nSlices) * sliceSteps * stepSize : (step % ncclFlowFifoSlots) * stepSize;
+  advanceStep();
+  return fifo + offset;
 }
 
 template <ncclFlowProtocol Protocol>
@@ -125,10 +129,10 @@ NCCL_DEVICE_INLINE uint64_t ncclLsaFlowConn<Protocol>::stepFlag() const {
 
 // Publish accumulated receive progress after half of the FIFO has been consumed.
 template <ncclFlowProtocol Protocol>
-NCCL_DEVICE_INLINE void ncclLsaFlowConn<Protocol>::postRecv() {
-  uint64_t const value = step + nSlots;
-  uint64_t const batch = (nSlots + 1) / 2;
-  if (signalValue == 0 || (value > signalValue && value - signalValue >= batch)) {
+NCCL_DEVICE_INLINE void ncclLsaFlowConn<Protocol>::postRecv(bool force) {
+  uint64_t const value = step + ncclFlowFifoSlots;
+  uint64_t const batch = sliceSteps * ((nSlices + 1) / 2);
+  if (signalValue == 0 || (value > signalValue && (force || value - signalValue >= batch))) {
     ncclLsaFlowStoreSignal(peerSignal, value);
     signalValue = value;
   }

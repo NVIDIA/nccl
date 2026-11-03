@@ -387,7 +387,7 @@ struct ncclPatPeer {
   uint64_t* tailPtr;
   uint64_t stepCache;
   long long int accSize;
-  int connStepSize;
+  uint32_t connStepSize;
 };
 
 #define NCCL_SHMEM_PAT_STEPS 32

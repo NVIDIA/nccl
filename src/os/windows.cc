@@ -23,6 +23,7 @@
 
 #include <windows.h>
 #include "os.h"
+#include "compiler.h"
 #include "crypt.h"
 #include <cstring>
 #include "socket.h"
@@ -35,7 +36,6 @@
 #include <chrono>
 #include <thread>
 #include <new>
-#include <nmmintrin.h>
 #include <cstdint>
 #include <setupapi.h>
 #include <cfgmgr32.h>
@@ -718,7 +718,7 @@ void ncclOsCpuZero(ncclAffinity& affinity) {
 int ncclOsCpuCount(const ncclAffinity& affinity) {
   int count = 0;
   for (int group = 0; group < NCCL_WINDOWS_PROCESSOR_GROUP_COUNT; group++) {
-    count += _mm_popcnt_u64((unsigned long long)affinity.masks[group]);
+    count += COMPILER_POPCOUNT64((unsigned long long)affinity.masks[group]);
   }
   return count;
 }

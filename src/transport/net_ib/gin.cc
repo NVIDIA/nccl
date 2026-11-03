@@ -335,7 +335,6 @@ static ncclResult_t ncclGinIbGdakiValidateDeviceSupport(struct ncclGinIbCollComm
   int* rankSupported = nullptr;
   int localSupported = 1;
   int allSupported = 1;
-  int firstUnsupportedRank = -1;
 
   if (ncclGinIbGdrGpuSupport(true) != ncclSuccess) localSupported = 0;
   if (ncclGinGdakiCheckDeviceSupport(cComm) != ncclSuccess) localSupported = 0;
@@ -345,13 +344,10 @@ static ncclResult_t ncclGinIbGdakiValidateDeviceSupport(struct ncclGinIbCollComm
 
   for (int r = 0; r < cComm->nranks; r++) {
     allSupported &= rankSupported[r];
-    if (!rankSupported[r] && firstUnsupportedRank == -1) firstUnsupportedRank = r;
   }
 
   if (!allSupported) {
-    WARN("[%d] GIN/GDAKI: device validation failed on one or more ranks; first failing GIN rank: %d", cComm->rank,
-         firstUnsupportedRank);
-    status = ncclInvalidUsage;
+    cComm->gdakiUnsupported = true;
   }
 
 out:
@@ -372,6 +368,8 @@ ncclResult_t ncclGinIbGdakiConnect(void* ctx, void* handles[], int nranks, int r
 ncclResult_t ncclGinIbGdakiCreateContext(void* collComm, ncclGinConfig_t* config, void** ginCtx,
                                          ncclNetDeviceHandle_t** devHandle) {
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
+
+  if (cComm->gdakiUnsupported) return ncclInvalidUsage;
 
   if (ncclParamGinIbTc() != NCCL_PARAM_VAL_AUTO) config->trafficClass = ncclParamGinIbTc();
   else if (ncclParamIbTc() != NCCL_PARAM_VAL_AUTO) config->trafficClass = ncclParamIbTc();

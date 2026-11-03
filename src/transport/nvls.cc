@@ -16,6 +16,7 @@
 #include "transport.h"
 #include "register_inline.h"
 #include "dev_runtime.h"
+#include <stdint.h>
 
 #if CUDART_VERSION >= 12010
 
@@ -59,16 +60,17 @@ NCCL_PARAM(NvlsEnable, "NVLS_ENABLE", 2);
 NCCL_PARAM(NvlsChunkSize, "NVLS_CHUNKSIZE", 128 * 1024);
 NCCL_PARAM(NvlsTreeMaxChunkSize, "NVLSTREE_MAX_CHUNKSIZE", -2);
 // NVLS staging FIFO layout:
-//  -1: automatic (channel-major on Rubin and later, default layout elsewhere)
+//  -1: automatic (layout 2 for multi-node Rubin+, layout 1 for single-node Rubin+, layout 0 otherwise)
 //   0: [head][dir][channel][slot]
 //   1: [channel][slot][head][dir]   (all streams of a channel at one step are contiguous)
+//   2: [slot][channel][head][dir]   (all streams of all channels at one step are contiguous)
 // Same allocation size and per-slot chunk size; only slot addressing changes.
 NCCL_PARAM(NvlsFifoLayout, "NVLS_FIFO_LAYOUT", -1);
 
 static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
   int64_t requested = ncclParamNvlsFifoLayout();
-  if (requested < -1 || requested > 1) {
-    WARN("NCCL_NVLS_FIFO_LAYOUT=%ld is invalid (expected -1, 0 or 1)", requested);
+  if (requested < -1 || requested > 2) {
+    WARN("NCCL_NVLS_FIFO_LAYOUT=%ld is invalid (expected -1, 0, 1 or 2)", requested);
     return ncclInvalidArgument;
   }
 
@@ -77,7 +79,8 @@ static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
     return ncclSuccess;
   }
 
-  *layout = 1;
+  // On Rubin and later, use layout 2 for multi-node and layout 1 for single-node communicators.
+  *layout = (comm->nNodes == 1) ? 1 : 2;
   for (int r = 0; r < comm->nRanks; r++) {
     if (!RUBIN_AND_LATER(comm->peerInfo[r].cudaCompCap)) {
       *layout = 0;
@@ -87,12 +90,41 @@ static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
   return ncclSuccess;
 }
 
+// Slot-to-slot stride of every NVLS staging FIFO: slot k of a stream lives at its offset + k * stride.
+static size_t ncclNvlsFifoSlotStride(int layout, int nHeads, int nChannels, int chunkSize) {
+  if (layout == 1) return (size_t)2 * nHeads * chunkSize;
+  if (layout == 2) return (size_t)nChannels * 2 * nHeads * chunkSize;
+  return (size_t)chunkSize;
+}
+
+// Byte offset of the first slot of stream (h, dir) on channel c.
+static size_t ncclNvlsFifoOffset(int layout, int nHeads, int nChannels, int chunkSize, int h, int dir, int c) {
+  if (layout == 1) return ((size_t)c * NCCL_STEPS * 2 * nHeads + (size_t)h * 2 + dir) * chunkSize;
+  if (layout == 2) return ((size_t)c * 2 * nHeads + (size_t)h * 2 + dir) * chunkSize;
+  return (((size_t)h * 2 + dir) * nChannels + c) * NCCL_STEPS * chunkSize;
+}
+
+static const char* ncclNvlsFifoLayoutName(int layout) {
+  if (layout == 1) return "channel-major [channel][slot][head][dir]";
+  if (layout == 2) return "step-major [slot][channel][head][dir]";
+  return "default [head][dir][channel][slot]";
+}
+
 // Returns optimal NVLSTree tuning parameters for VeraRubin multi-node configurations.
 static ncclResult_t ncclNvlsTreeRubinTuning(struct ncclComm* comm, int* nChannels, int* chunkSize,
                                             int* treeMaxChunkSize) {
   *treeMaxChunkSize = 512 * 1024;
-  *chunkSize = *treeMaxChunkSize;
+
+  int nDomains = comm->nNodes;
+  int nRanksPerDomain = comm->minLocalRanks;
+  // TODO: Move this chunk-size policy into the pipeline cost model once it models NVLSTree pipelining and supports
+  // chunk-size selection.
+  int ranksPerDomainFactor = pow2Up(DIVUP(32, nRanksPerDomain));
+  int multiDomainChunkFactor = nDomains > 2 ? 2 : 1;
+  *chunkSize = std::min(512 * 1024, 64 * 1024 * ranksPerDomainFactor * multiDomainChunkFactor);
   *nChannels = comm->nvlsChannels;
+  INFO(NCCL_INIT, "NVLSTree topology tuning: domains %d ranksPerDomain %d channels %d chunkSize %d", nDomains,
+       nRanksPerDomain, *nChannels, *chunkSize);
   return ncclSuccess;
 }
 
@@ -264,7 +296,7 @@ fail:
 
 // Allocate UC backing for a consumer and bind it into its resolved MC-group slice.
 static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPartition* partition, size_t size,
-                                    struct ncclNvlsUcSegment* outUc) {
+                                    cudaStream_t stream, struct ncclNvlsUcSegment* outUc) {
   CUmemAllocationProp ucprop;
   ncclResult_t ret = ncclSuccess;
   size_t ucsize = size;
@@ -286,7 +318,7 @@ static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPa
   CUCHECKGOTO(cuMemCreate(&ucHandle, ucsize, &ucprop, 0), ret, fail1);
   CUCHECKGOTO(cuMemMap((CUdeviceptr)ucptr, ucsize, 0, ucHandle, 0), ret, fail2);
   CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)ucptr, ucsize, &comm->nvlsResources->accessDesc, 1), ret, fail3);
-  CUDACHECKGOTO(cudaMemset(ucptr, 0, ucsize), ret, fail3);
+  NCCLCHECKGOTO(ncclCudaMemsetSync(ucptr, 0, ucsize, stream), ret, fail3);
   // Track NVLS buffer as persistent memory
   NCCLCHECKGOTO(ncclMemTrack(comm->memManager, ucptr, ucsize, ucHandle, ncclCuMemHandleType, ncclMemPersist), ret,
                 fail3);
@@ -340,19 +372,13 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   nvlsPerRankSize = nChannels * 2 * buffSize;
   nvlsTotalSize = nvlsPerRankSize * nHeads;
   const int fifoLayout = resources->fifoLayout;
-  const size_t slotStride = fifoLayout ? (size_t)2 * nHeads * nvlsStepSize : (size_t)nvlsStepSize;
-  INFO(NCCL_INIT | NCCL_NVLS, "NVLS FIFO layout %d (%s) slotStride %zu", fifoLayout,
-       fifoLayout ? "channel-major [channel][slot][head][dir]" : "default [head][dir][channel][slot]", slotStride);
+  const size_t slotStride = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
+  INFO(NCCL_INIT | NCCL_NVLS, "NVLS FIFO layout %d (%s) slotStride %zu", fifoLayout, ncclNvlsFifoLayoutName(fifoLayout),
+       slotStride);
 
   INFO(NCCL_INIT | NCCL_NVLS,
        "NVLS comm %p headRank %d nHeads %d nvlsRanks %d buffSize %zu nvlsPerRankSize %zu nvlsTotalSize %zu", comm,
        headRank, nHeads, comm->localRanks, buffSize, nvlsPerRankSize, nvlsTotalSize);
-
-  // A prior setup attempt may have bound the data slice and then failed (inited
-  // still false); the slice offset is fixed, so reuse that binding.
-  if (resources->dataUc.ptr == NULL) {
-    NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->dataPartition, nvlsTotalSize, &resources->dataUc), res, fail);
-  }
 
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
                                         /*concurrent=*/false, &hostStream),
@@ -360,6 +386,13 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream,
                                         /*concurrent=*/false, &deviceStream),
                 res, fail);
+  // A prior setup attempt may have bound the data slice and then failed (inited
+  // still false); the slice offset is fixed, so reuse that binding.
+  if (resources->dataUc.ptr == NULL) {
+    NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->dataPartition, nvlsTotalSize, deviceStream, &resources->dataUc),
+                  res, fail);
+  }
+
   for (int h = 0; h < nHeads; h++) {
     int nvlsPeer = comm->nRanks + 1 + h;
     for (int c = 0; c < nChannels; c++) {
@@ -368,10 +401,8 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
 
       // Byte offset of the first slot of stream (h, dir) on channel c. Slot k of the stream
       // then lives at offset + k * conn.stepSize (see ncclNvlsSetup for stepSize).
-      const size_t upOff = fifoLayout ? ((size_t)c * NCCL_STEPS * 2 * nHeads + (size_t)h * 2 + 0) * nvlsStepSize :
-                                        ((size_t)h * 2 * nChannels + c) * buffSize;
-      const size_t downOff = fifoLayout ? ((size_t)c * NCCL_STEPS * 2 * nHeads + (size_t)h * 2 + 1) * nvlsStepSize :
-                                          (((size_t)h * 2 + 1) * nChannels + c) * buffSize;
+      const size_t upOff = ncclNvlsFifoOffset(fifoLayout, nHeads, nChannels, nvlsStepSize, h, 0, c);
+      const size_t downOff = ncclNvlsFifoOffset(fifoLayout, nHeads, nChannels, nvlsStepSize, h, 1, c);
 
       // Reduce UC -> MC
       peer->send[1].conn.buffs[NCCL_PROTO_SIMPLE] = (char*)resources->dataUc.ptr + upOff;
@@ -501,9 +532,13 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     int nvlsStepSize = comm->nvlsChunkSize;
     int fifoLayout;
     NCCLCHECKGOTO(ncclNvlsGetFifoLayout(comm, &fifoLayout), res, fail);
-    // Slot-to-slot stride of every NVLS staging FIFO. Default: one chunk. Channel-major layout:
-    // one chunk for every (head, dir) stream, so slot k of a stream sits k rows away.
-    const int nvlsStepStride = fifoLayout ? (int)(2 * nHeads * nvlsStepSize) : nvlsStepSize;
+    const size_t nvlsStepStrideBytes = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
+    if (nvlsStepStrideBytes > (size_t)UINT32_MAX) {
+      WARN("NCCL_NVLS_FIFO_LAYOUT=%d slot stride %zu does not fit conn.stepSize", fifoLayout, nvlsStepStrideBytes);
+      res = ncclInvalidArgument;
+      goto fail;
+    }
+    const uint32_t nvlsStepStride = (uint32_t)nvlsStepStrideBytes;
 
     NCCLCHECKGOTO(ncclCalloc(&comm->nvlsResources, 1), res, fail);
     comm->nvlsResources->inited = false;
@@ -525,6 +560,12 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     resources->accessDesc.location.id = comm->cudaDev;
     resources->dev = comm->cudaDev;
 
+    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
+                                          /*concurrent=*/false, &hostStream),
+                  res, fail);
+    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode),
+                                          &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
+                  res, fail);
     // Build the single shared MC group for this NVLS domain. The data slice is
     // reserved here but bound later by ncclNvlsBufferSetup.
     {
@@ -546,16 +587,11 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
         NCCLCHECKGOTO(ncclMcArenaInit(comm, &resources->ubArena, &resources->ubPartition), res, fail);
         resources->ubEnabled = true;
       }
-      NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->creditPartition, creditSize, &resources->creditUc), res, fail);
+      NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->creditPartition, creditSize, deviceStream, &resources->creditUc),
+                    res, fail);
     }
 
     // Set up head and tail only for now
-    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
-                                          /*concurrent=*/false, &hostStream),
-                  res, fail);
-    NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode),
-                                          &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
-                  res, fail);
     for (int h = 0; h < nHeads; h++) {
       int nvlsPeer = comm->nRanks + 1 + h;
       for (int c = 0; c < nChannels; c++) {

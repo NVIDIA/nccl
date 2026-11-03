@@ -28,7 +28,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/syslog.h>
@@ -36,6 +35,7 @@
 #include <string.h>
 
 #include "doca_gpunetio_log.hpp"
+#include "doca_sdk_wrapper.h"
 #include "doca_verbs_uar_sdk_wrapper.h"
 
 #ifdef __cplusplus
@@ -57,16 +57,6 @@ static doca_verbs_uar_get_id_t p_doca_verbs_uar_get_id = nullptr;
 static doca_verbs_uar_reg_addr_get_t p_doca_verbs_uar_reg_addr_get = nullptr;
 
 static void *common_handle = nullptr;
-
-/* Helper function to get function pointer from libcuda */
-static void *get_verbs_sdk_symbol(const char *symbol_name) {
-    void *symbol = dlsym(common_handle, symbol_name);
-    if (!symbol) {
-        DOCA_LOG(LOG_ERR, "Failed to get symbol %s: %s\n", symbol_name, dlerror());
-        return nullptr;
-    }
-    return symbol;
-}
 
 static void doca_verbs_sdk_wrapper_init(int *ret) {
     const char *doca_sdk_lib_path = getenv(DOCA_SDK_LIB_PATH_ENV_VAR);
@@ -100,11 +90,15 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
     }
 
     /* Get function pointers */
-    p_doca_verbs_uar_create = (doca_verbs_uar_create_t)get_verbs_sdk_symbol("doca_uar_create");
-    p_doca_verbs_uar_destroy = (doca_verbs_uar_destroy_t)get_verbs_sdk_symbol("doca_uar_destroy");
-    p_doca_verbs_uar_get_id = (doca_verbs_uar_get_id_t)get_verbs_sdk_symbol("doca_uar_id_get");
+    p_doca_verbs_uar_create =
+        (doca_verbs_uar_create_t)doca_sdk_find_symbol(common_handle, "doca_uar_create", 1);
+    p_doca_verbs_uar_destroy =
+        (doca_verbs_uar_destroy_t)doca_sdk_find_symbol(common_handle, "doca_uar_destroy", 1);
+    p_doca_verbs_uar_get_id =
+        (doca_verbs_uar_get_id_t)doca_sdk_find_symbol(common_handle, "doca_uar_id_get", 1);
     p_doca_verbs_uar_reg_addr_get =
-        (doca_verbs_uar_reg_addr_get_t)get_verbs_sdk_symbol("doca_uar_reg_addr_get");
+        (doca_verbs_uar_reg_addr_get_t)doca_sdk_find_symbol(
+            common_handle, "doca_uar_reg_addr_get", 1);
 
     /* Check if all symbols were found */
     if (!p_doca_verbs_uar_create || !p_doca_verbs_uar_destroy || !p_doca_verbs_uar_get_id ||

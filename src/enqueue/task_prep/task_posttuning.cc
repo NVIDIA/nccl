@@ -160,6 +160,9 @@ static ncclResult_t fillP2pTaskFromRaw(struct ncclComm* comm, struct ncclTaskTun
   task->root = raw->peer;
   task->bytes = raw->bytes;
   task->launchCompletionEvent = raw->launchCompletionEvent;
+  task->maxCTAs = raw->maxCTAs;
+  task->collOpCount = raw->collOpCount;
+  comm->planner.p2pCollNeedsIsolation |= task->maxCTAs < MAXCHANNELS;
   task->allowUB = raw->allowUB;
   ncclTaskCaptureProfilerCtx(task, tInfo->raw->profiler);
   return ncclSuccess;

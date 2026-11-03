@@ -169,8 +169,99 @@ __device__ void ncclIrGinPut(ncclIrGin const* net, ncclTeam const* team, int pee
                              ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
                              cuda::thread_scope requiredRelease, uint32_t optFlags, ncclGinSegmentType_t segmentType);
 
-__device__ void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
-                                  size_t dstOffset, uint64_t value, size_t size, ncclGinSignalType signalType,
+__device__ void ncclIrGinPutValue_I8(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, int8_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_U8(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, uint8_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_I16(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, int16_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_U16(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, uint16_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_I32(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, int32_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_U32(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, uint32_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_I64(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, int64_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_U64(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, uint64_t value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_F16(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, half value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_F32(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, float value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_F64(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, double value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_BF16(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, __nv_bfloat16 value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_F8E4M3(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, __nv_fp8_e4m3 value, ncclGinSignalType signalType,
+                                  ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
+                                  ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
+                                  bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
+                                  cuda::thread_scope requiredRelease, uint32_t optFlags);
+
+__device__ void ncclIrGinPutValue_F8E5M2(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
+                                  size_t dstOffset, __nv_fp8_e5m2 value, ncclGinSignalType signalType,
                                   ncclWindow_t signalWin, size_t signalOffset, ncclGinSignal_t signalId, bool isStrong,
                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, ncclIrCoop const* coop,
                                   bool isDescriptor, ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
@@ -331,6 +422,10 @@ __device__ void ncclIrLsaReduceSum_I8(ncclIrCoop const* coop, ncclWindow_t srcWi
                                       size_t count, ncclTeam const* team);
 __device__ void ncclIrLsaReduceSum_U8(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, uint8_t* dst,
                                       size_t count, ncclTeam const* team);
+__device__ void ncclIrLsaReduceSum_I16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, int16_t* dst,
+                                       size_t count, ncclTeam const* team);
+__device__ void ncclIrLsaReduceSum_U16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, uint16_t* dst,
+                                       size_t count, ncclTeam const* team);
 __device__ void ncclIrLsaReduceSum_I32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, int32_t* dst,
                                        size_t count, ncclTeam const* team);
 __device__ void ncclIrLsaReduceSum_U32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset, uint32_t* dst,
@@ -372,6 +467,10 @@ __device__ void ncclIrLsaCopy_I8(ncclIrCoop const* coop, int8_t* src, ncclWindow
                                  size_t count, ncclTeam const* team);
 __device__ void ncclIrLsaCopy_U8(ncclIrCoop const* coop, uint8_t* src, ncclWindow_t dstWindow, size_t dstOffset,
                                  size_t count, ncclTeam const* team);
+__device__ void ncclIrLsaCopy_I16(ncclIrCoop const* coop, int16_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam const* team);
+__device__ void ncclIrLsaCopy_U16(ncclIrCoop const* coop, uint16_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                  size_t count, ncclTeam const* team);
 __device__ void ncclIrLsaCopy_I32(ncclIrCoop const* coop, int32_t* src, ncclWindow_t dstWindow, size_t dstOffset,
                                   size_t count, ncclTeam const* team);
 __device__ void ncclIrLsaCopy_U32(ncclIrCoop const* coop, uint32_t* src, ncclWindow_t dstWindow, size_t dstOffset,
@@ -412,6 +511,12 @@ __device__ void ncclIrLsaReduceSumCopy_I8(ncclIrCoop const* coop, ncclWindow_t s
                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam const* team);
 __device__ void ncclIrLsaReduceSumCopy_U8(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count, ncclTeam const* team);
+__device__ void ncclIrLsaReduceSumCopy_I16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count,
+                                           ncclTeam const* team);
+__device__ void ncclIrLsaReduceSumCopy_U16(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
+                                           ncclWindow_t dstWindow, size_t dstOffset, size_t count,
+                                           ncclTeam const* team);
 __device__ void ncclIrLsaReduceSumCopy_I32(ncclIrCoop const* coop, ncclWindow_t srcWindow, size_t srcOffset,
                                            ncclWindow_t dstWindow, size_t dstOffset, size_t count,
                                            ncclTeam const* team);
@@ -463,6 +568,10 @@ __device__ void ncclIrLocalReduceSumCopy_I8(ncclIrCoop const* coop, int nSrc, in
                                             int nDst, int8_t* dstBase, size_t dstDispl, size_t count);
 __device__ void ncclIrLocalReduceSumCopy_U8(ncclIrCoop const* coop, int nSrc, uint8_t* srcBase, size_t srcDispl,
                                             int nDst, uint8_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_I16(ncclIrCoop const* coop, int nSrc, int16_t* srcBase, size_t srcDispl,
+                                             int nDst, int16_t* dstBase, size_t dstDispl, size_t count);
+__device__ void ncclIrLocalReduceSumCopy_U16(ncclIrCoop const* coop, int nSrc, uint16_t* srcBase, size_t srcDispl,
+                                             int nDst, uint16_t* dstBase, size_t dstDispl, size_t count);
 __device__ void ncclIrLocalReduceSumCopy_I32(ncclIrCoop const* coop, int nSrc, int32_t* srcBase, size_t srcDispl,
                                              int nDst, int32_t* dstBase, size_t dstDispl, size_t count);
 __device__ void ncclIrLocalReduceSumCopy_U32(ncclIrCoop const* coop, int nSrc, uint32_t* srcBase, size_t srcDispl,
@@ -492,6 +601,10 @@ __device__ void ncclIrLsaCopyTma_I8(ncclIrCoop const* coop, int8_t* src, ncclWin
                                     size_t count, ncclTeam const* team, char* smemPtr, int smemBytesTotal);
 __device__ void ncclIrLsaCopyTma_U8(ncclIrCoop const* coop, uint8_t* src, ncclWindow_t dstWindow, size_t dstOffset,
                                     size_t count, ncclTeam const* team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_I16(ncclIrCoop const* coop, int16_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam const* team, char* smemPtr, int smemBytesTotal);
+__device__ void ncclIrLsaCopyTma_U16(ncclIrCoop const* coop, uint16_t* src, ncclWindow_t dstWindow, size_t dstOffset,
+                                     size_t count, ncclTeam const* team, char* smemPtr, int smemBytesTotal);
 __device__ void ncclIrLsaCopyTma_I32(ncclIrCoop const* coop, int32_t* src, ncclWindow_t dstWindow, size_t dstOffset,
                                      size_t count, ncclTeam const* team, char* smemPtr, int smemBytesTotal);
 __device__ void ncclIrLsaCopyTma_U32(ncclIrCoop const* coop, uint32_t* src, ncclWindow_t dstWindow, size_t dstOffset,

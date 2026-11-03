@@ -96,51 +96,34 @@ NCCL_IR_DEVICE_INLINE void ncclIrGinPut(ncclIrGin const* net, ncclTeam const* te
               ncclIrGinSegment{segmentType == ncclGinSegmentTypeDevice});
 }
 
-NCCL_IR_DEVICE_INLINE void ncclIrGinPutValue(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin,
-                                             size_t dstOffset, uint64_t value, size_t size,
-                                             ncclGinSignalType signalType, ncclWindow_t signalWin, size_t signalOffset,
-                                             ncclGinSignal_t signalId, bool isStrong, ncclGinSignalOp_t signalOp,
-                                             uint64_t signalOpArg, ncclIrCoop const* coop, bool isDescriptor,
-                                             ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease,
-                                             cuda::thread_scope requiredRelease, uint32_t optFlags) {
-  auto const& netImpl = *reinterpret_cast<ncclGin const*>(net);
-  auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop);
-  ncclGinSignalDescriptor signal{};
-  signal.type = signalType;
-  if (signalType == NCCL_GIN_SIGNAL_TYPE_INDEXED) {
-    signal.indexedSignal.signalId = signalId;
-    signal.isStrong = isStrong;
-  } else if (signalType == NCCL_GIN_SIGNAL_TYPE_VA) {
-    signal.vaSignal.signalWindow =
-      nccl::gin::internal::getGinWindow(signalWin, netImpl.comm.backendIndex, netImpl.connectionId);
-    signal.vaSignal.signalOffset = nccl::gin::internal::windowOffsetToGinOffset(signalWin, signalOffset);
-    signal.vaSignal.ncclWindow = signalWin;
-    signal.isStrong = isStrong;
+#define NCCL_IR_DEFINE_ncclIrGinPutValue(suffix, value_type) \
+  NCCL_IR_DEVICE_INLINE void ncclIrGinPutValue_##suffix(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t dstWin, \
+                                               size_t dstOffset, value_type value, \
+                                               ncclGinSignalType signalType, ncclWindow_t signalWin, size_t signalOffset, \
+                                               ncclGinSignal_t signalId, bool isStrong, ncclGinSignalOp_t signalOp, \
+                                               uint64_t signalOpArg, ncclIrCoop const* coop, bool isDescriptor, \
+                                               ncclGinDescriptorSmem* descriptor, cuda::thread_scope givenRelease, \
+                                               cuda::thread_scope requiredRelease, uint32_t optFlags) { \
+    auto const& netImpl = *reinterpret_cast<ncclGin const*>(net); \
+    auto const& coopImpl = *reinterpret_cast<ncclCoopAny const*>(coop); \
+    ncclGinSignalDescriptor signal{}; \
+    signal.type = signalType; \
+    if (signalType == NCCL_GIN_SIGNAL_TYPE_INDEXED) { \
+      signal.indexedSignal.signalId = signalId; \
+      signal.isStrong = isStrong; \
+    } else if (signalType == NCCL_GIN_SIGNAL_TYPE_VA) { \
+      signal.vaSignal.signalWindow = \
+        nccl::gin::internal::getGinWindow(signalWin, netImpl.comm.backendIndex, netImpl.connectionId); \
+      signal.vaSignal.signalOffset = nccl::gin::internal::windowOffsetToGinOffset(signalWin, signalOffset); \
+      signal.vaSignal.ncclWindow = signalWin; \
+      signal.isStrong = isStrong; \
+    } \
+    netImpl.putValue(*team, peer, dstWin, dstOffset, value, \
+                     ncclIrGinRemoteAction{signal, signalOp, signalOpArg}, coopImpl, \
+                     ncclIrGinDescriptor{isDescriptor, descriptor}, givenRelease, requiredRelease, optFlags); \
   }
-  switch (size) {
-  case 1:
-    netImpl.putValue(*team, peer, dstWin, dstOffset, (uint8_t)value,
-                     ncclIrGinRemoteAction{signal, signalOp, signalOpArg}, coopImpl,
-                     ncclIrGinDescriptor{isDescriptor, descriptor}, givenRelease, requiredRelease, optFlags);
-    break;
-  case 2:
-    netImpl.putValue(*team, peer, dstWin, dstOffset, (uint16_t)value,
-                     ncclIrGinRemoteAction{signal, signalOp, signalOpArg}, coopImpl,
-                     ncclIrGinDescriptor{isDescriptor, descriptor}, givenRelease, requiredRelease, optFlags);
-    break;
-  case 4:
-    netImpl.putValue(*team, peer, dstWin, dstOffset, (uint32_t)value,
-                     ncclIrGinRemoteAction{signal, signalOp, signalOpArg}, coopImpl,
-                     ncclIrGinDescriptor{isDescriptor, descriptor}, givenRelease, requiredRelease, optFlags);
-    break;
-  case 8:
-  default:
-    netImpl.putValue(*team, peer, dstWin, dstOffset, (uint64_t)value,
-                     ncclIrGinRemoteAction{signal, signalOp, signalOpArg}, coopImpl,
-                     ncclIrGinDescriptor{isDescriptor, descriptor}, givenRelease, requiredRelease, optFlags);
-    break;
-  }
-}
+
+NCCL_IR_DEFINE_API_ALL_TYPES(ncclIrGinPutValue)
 
 NCCL_IR_DEVICE_INLINE void ncclIrGinGet(ncclIrGin const* net, ncclTeam const* team, int peer, ncclWindow_t remoteWnd,
                                         size_t remoteOffset, ncclWindow_t localWnd, size_t localOffset, size_t bytes,

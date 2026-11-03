@@ -28,6 +28,8 @@
 #define NCCL_IR_TYPES(F) \
   F(I8, int8_t) \
   F(U8, uint8_t) \
+  F(I16, int16_t) \
+  F(U16, uint16_t) \
   F(I32, int32_t) \
   F(U32, uint32_t) \
   F(I64, int64_t) \

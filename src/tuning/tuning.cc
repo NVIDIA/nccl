@@ -169,12 +169,18 @@ fail:
 
 /*
   Select the best tuning from the given list of tunings.
-  The tuning with the lowest simulated time/cost is determined to be best.
+  Preserve each family's selection policy, then compare their predicted times.
 */
 static ncclResult_t ncclTuningSelectBestTuning(
   struct ncclTuningResultList_t* tunings, struct ncclTuningResult_t* const bestTuning, uint64_t kernelExcludeMask = 0) {
+  enum ncclTuningFamily {
+    ncclTuningFamily_General,
+    ncclTuningFamily_Sym,
+    ncclTuningFamily_Count
+  };
   bestTuning->timeUs = FLT_MAX;
-  float bestSelectionTimeUs = FLT_MAX;
+  const struct ncclTuningResult_t* bestFamily[ncclTuningFamily_Count] = {};
+  float bestSelectionTimeUs[ncclTuningFamily_Count] = {FLT_MAX, FLT_MAX};
   struct ncclTuningResultListNode* node = tunings->head;
   while (node != nullptr) {
     const struct ncclTuningResult_t& tuning = node->result;
@@ -183,13 +189,20 @@ static ncclResult_t ncclTuningSelectBestTuning(
       TRACE(NCCL_TUNING, "A/P/S %s/%s/%s, time: %f, selection time: %f", ncclAlgoToString(tuning.algo),
             ncclProtoToString(tuning.proto), ncclSymkKernelIdToString(tuning.symKernelId), tuning.timeUs,
             selectionTimeUs);
-      if (selectionTimeUs < bestSelectionTimeUs) {
-        *bestTuning = tuning;
-        bestSelectionTimeUs = selectionTimeUs;
+      ncclTuningFamily family =
+        tuning.symKernelId == ncclSymkKernelId_Count ? ncclTuningFamily_General : ncclTuningFamily_Sym;
+      if (selectionTimeUs < bestSelectionTimeUs[family]) {
+        bestFamily[family] = &tuning;
+        bestSelectionTimeUs[family] = selectionTimeUs;
       }
     }
     node = node->next;
   }
+  const struct ncclTuningResult_t* best = bestFamily[ncclTuningFamily_General];
+  if (bestFamily[ncclTuningFamily_Sym] != nullptr &&
+      (best == nullptr || bestFamily[ncclTuningFamily_Sym]->timeUs < best->timeUs))
+    best = bestFamily[ncclTuningFamily_Sym];
+  if (best != nullptr) *bestTuning = *best;
   return ncclSuccess;
 }
 

@@ -1314,8 +1314,7 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
     }
   }
 
-  // Flush QPs are created lazily on the first flush (see ncclIbCreateFlushQp), so
-  // here we only stash the remote-derived RTR inputs the loopback QP needs.
+  // Stash the remote-derived RTR inputs the loopback flush QPs need.
   if (rComm->flushEnabled) {
     rComm->flushQpSl = remMeta->sl;
     rComm->flushQpTc = remMeta->tc;
@@ -1323,14 +1322,17 @@ static ncclResult_t ncclIbReceiverQpsCreateToRts(ncclIbRecvComm* rComm, struct n
 
   if (rComm->base.resiliency) {
     NCCLCHECK(ncclIbResiliencyReceiverQpsCreateToRts(rComm->base.resiliency, remMeta, &meta->resiliencyInfo));
+    // Resiliency may error/reset flush QPs from the first failure onward.
+    // Create them before publishing the connection, rather than racing lazy
+    // creation on the proxy with the asynchronous recovery thread.
+    NCCLCHECK(ncclIbCreateFlushQp(rComm));
   }
 
   return ncclSuccess;
 }
 
-// Build the flush QP and its host buffer on the first flush. NCCL only issues a
-// network-read flush when the topology needs one, so connections that never flush
-// never allocate these resources.
+// Normally build flush QPs lazily on the first flush. Resiliency connections
+// create them during setup so recovery never races their creation.
 ncclResult_t ncclIbCreateFlushQp(struct ncclIbRecvComm* comm) {
   if (comm->flushEnabled == 0 || comm->flushQpsCreated) return ncclSuccess;
 

@@ -316,6 +316,7 @@ static ncclResult_t ncclIbResiliencyHandleCompletionErrorReceiver(struct ncclIbR
     // counter on that device is set to zero, so the flush request could be
     // completed on other devices if needed.
     request->events[devIndex] = 0;
+    resCtx->devs[devIndex].nOutstandingFlushes.fetch_sub(1, std::memory_order_release);
     INFO(NCCL_NET, "NET/IB: %s: Ignoring error on flush request (req=%p, comm=%p, id=%ld) on device index %d", __func__,
          request, request->base, request->id, devIndex);
     break;
@@ -383,6 +384,14 @@ static ncclResult_t ncclIbResiliencyHandleDeviceFailure(struct ncclIbResiliency*
          resCtx->outstandingRecovery);
     resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateError, std::memory_order_release);
     NCCLCHECK(ncclIbResiliencyReplaceQps(resCtx, devIndex));
+    if (!resCtx->baseComm->isSend) {
+      auto* recvComm = (struct ncclIbRecvComm*)resCtx->baseComm;
+      if (recvComm->flushEnabled && recvComm->flushQpsCreated) {
+        // Produce error CQEs for old flush WRs before recovery can RESET the
+        // QP. New flushes must use only devices whose state is still Ok.
+        NCCLCHECK(ncclIbQpError(&recvComm->devs[devIndex].gpuFlush.qp));
+      }
+    }
     if (resCtx->recoveryEnabled) {
       resCtx->devs[devIndex].state.store(ncclIbResiliencyDevStateRecoveryInProgress, std::memory_order_release);
       res = ncclIbPortRecoveryHandleFailure(resCtx, devIndex);
@@ -677,6 +686,7 @@ ncclResult_t ncclIbResiliencyDevInit(struct ncclIbResiliency* resCtx, uint devIn
     return ncclInternalError;
   }
   struct ncclIbResiliencyDev* resDev = &resCtx->devs[devIndex];
+  resDev->nOutstandingFlushes.store(0, std::memory_order_relaxed);
   resDev->state.store(ncclIbResiliencyDevStateOk, std::memory_order_release);
   void* cqContext = (void*)&resCtx->baseComm->stats;
   int cqSize = -1;

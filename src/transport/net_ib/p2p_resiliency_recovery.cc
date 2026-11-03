@@ -957,6 +957,14 @@ static inline ncclResult_t ncclIbPortRecoveryProgressAliveMessagesReceiver(
       return ncclSuccess;
     }
     if (recoveryContext->recv.nInOrderMsgsReceived > ncclParamIbResiliencyPortRecoveryAliveMsgSequenceSize()) {
+      // RESET discards outstanding flush WRs. Let the proxy process every
+      // success/error CQE from the old flush QP before restoring it. In
+      // particular, an empty CQ at one instant does not mean the QP drained.
+      auto& resDev = recoveryContext->resCtx->devs[recoveryContext->devIndex];
+      if (resDev.nOutstandingFlushes.load(std::memory_order_acquire) != 0) {
+        *outResult = ncclIbPortRecoveryStateProgressResultInProgress;
+        return ncclSuccess;
+      }
       // Received enough in-order alive messages. Draining the CQ from any
       // remaining alive messages and proceeding to restore QPs and post ACK.
       // Draining is important to ensure that if the receiver goes back to the

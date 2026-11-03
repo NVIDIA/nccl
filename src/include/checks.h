@@ -155,6 +155,14 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
     } \
   } while (0)
 
+// Check the call and update a successful or in-progress result, preserving an existing error.
+#define NCCLCHECKUPDATE(call, result) \
+  do { \
+    ncclResult_t updateResult = (call); \
+    NCCLCHECK(updateResult); \
+    if ((result) == ncclSuccess || (result) == ncclInProgress) (result) = updateResult; \
+  } while (0)
+
 #define NCCLCHECKGOTO(call, RES, label) \
   do { \
     RES = call; \

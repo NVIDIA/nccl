@@ -1987,9 +1987,9 @@ ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, nc
   }
 
 exit:
-  ncclGroupErrCheck(ret);
-  NCCLCHECK(ncclGroupEndInternal());
   cudaSetDevice(saveDev);
+  ncclGroupErrCheck(ret);
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), ret);
   return ret;
 fail:
   ncclDevrRegAsyncJobFree(regJob);
@@ -2221,7 +2221,7 @@ ncclResult_t ncclDevCommCreate(ncclComm_t comm, struct ncclDevCommRequirements c
 
 exit:
   ncclGroupErrCheck(ret);
-  NCCLCHECKIGNORE(ncclGroupEndInternal(), ret);
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), ret);
   cudaSetDevice(saveDev);
   return ret;
 fail:

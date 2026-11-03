@@ -241,11 +241,15 @@ as the function returns *ncclSuccess*; operations with a stream argument (e.g. n
 *ncclSuccess* as soon as the operation is posted on the stream but may also report errors through
 ncclCommGetAsyncError() until they are completed. If the return code of any NCCL function is *ncclInProgress*,
 it means the operation is in the process of being enqueued in the background, and users must query the states
-of the communicators until all the states become *ncclSuccess* before calling another NCCL function. Before the
-states change into *ncclSuccess*, users are not allowed to issue CUDA kernel to the streams being used by NCCL.
-If there has been an error on the communicator, user should destroy the communicator with :c:func:`ncclCommAbort`.
+of the communicators until all the states become *ncclSuccess* before calling another NCCL function.
+
 If an error occurs on the communicator, nothing can be assumed about the completion or correctness of operations
-enqueued on that communicator.
+enqueued on that communicator. Communicators which are in an error state are not permitted to call *ncclCommFinalize* or
+*ncclCommDestroy*, instead they should finalize with :c:func:`ncclCommRevoke` and :c:func:`ncclCommAbort`.  See also
+:ref:`ft`.
+
+*ncclCommGetAsyncError* returns *ncclSuccess* when it was able to complete the health queries, regardless of the result
+of the query, or the health of the communicator.
 
 ncclCommCount
 -------------

@@ -652,7 +652,8 @@ ncclSimInfo_t
 
 .. c:type:: ncclSimInfo_t
 
- This struct will be used by ncclGroupSimulateEnd() to return information about the calls.
+ This struct is used by :c:func:`ncclGroupSimulateEnd` to return information
+ about the group of calls.
 
  .. c:macro:: NCCL_SIM_INFO_INITIALIZER
 

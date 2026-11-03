@@ -3081,7 +3081,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId comm
 
 exit:
   ncclGroupErrCheck(ret);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), ret);
   return ret;
 fail:
   goto exit;
@@ -3186,11 +3186,8 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t* newcomm, int nranks, ncclUniqueI
 
 exit:
   ncclGroupErrCheck(ret);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), ret);
   if (newcomm && *newcomm) {
-    if (!(*newcomm)->config.blocking) {
-      (void)ncclCommGetAsyncError(*newcomm, &ret);
-    }
     NVTX3_RANGE_ADD_PAYLOAD(CommInitRankConfig, NcclNvtxParamsCommInitRankSchema,
                             NVTX3_PAYLOAD((*newcomm)->commHash, nranks, myrank, cudaDev));
   }
@@ -3223,11 +3220,8 @@ ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myran
 
 exit:
   ncclGroupErrCheck(ret);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), ret);
   if (newcomm && *newcomm) {
-    if (!(*newcomm)->config.blocking) {
-      (void)ncclCommGetAsyncError(*newcomm, &ret);
-    }
     NVTX3_RANGE_ADD_PAYLOAD(CommInitRankScalable, NcclNvtxParamsCommInitRankSchema,
                             NVTX3_PAYLOAD((*newcomm)->commHash, nranks, myrank, cudaDev));
   }
@@ -3360,11 +3354,8 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
 
 exit:
   ncclGroupErrCheck(ret);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), ret);
   if (comm) {
-    if (!comm->config.blocking && ret == ncclSuccess) {
-      NCCLCHECK(ncclCommGetAsyncError(comm, &ret));
-    }
     NVTX3_RANGE_ADD_PAYLOAD(CommFinalize, NcclNvtxParamsCommFinalizeSchema, NVTX3_PAYLOAD(comm->commHash));
   }
   return ret;
@@ -3592,11 +3583,8 @@ ncclResult_t ncclCommRevoke(ncclComm_t comm, int revokeFlags) {
 
 exit:
   ncclGroupErrCheck(res);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), res);
   if (comm) {
-    if (!comm->config.blocking) {
-      NCCLCHECK(ncclCommGetAsyncError(comm, &res));
-    }
     NVTX3_RANGE_ADD_PAYLOAD(CommRevoke, NcclNvtxParamsCommInitRankSchema,
                             NVTX3_PAYLOAD(comm->commHash, nranks, rank, cudaDev));
   }
@@ -3815,7 +3803,7 @@ ncclResult_t ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeR
 
 exit:
   (void)ncclGroupErrCheck(res);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), res);
 
   if (newcomm && *newcomm) {
     NVTX3_RANGE_ADD_PAYLOAD(CommShrink, NcclNvtxParamsCommShrinkSchema,
@@ -3996,7 +3984,7 @@ exit:
                                           (*newcomm)->cudaDev));
   }
   (void)ncclGroupErrCheck(res);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), res);
   return res;
 
 fail:
@@ -4032,7 +4020,7 @@ ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t* newc
 
 exit:
   (void)ncclGroupErrCheck(res);
-  NCCLCHECK(ncclGroupEndInternal());
+  NCCLCHECKUPDATE(ncclGroupEndInternal(), res);
 
   if (newcomm && *newcomm) {
     NVTX3_RANGE_ADD_PAYLOAD(CommSplit, NcclNvtxParamsCommSplitSchema,

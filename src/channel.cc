@@ -44,21 +44,31 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
       NCCLCHECK(ncclCudaCallocAsync(sharedRes->devPeers + channelId, sharedRes->tpNRanks, deviceStream,
                                     comm->memManager, ncclMemOffload));
     }
-    /* channel->devPeers is not shared, so just free it when calling commFree() */
-    NCCLCHECK(ncclCudaCallocAsync(&channel->devPeers, nPeers, deviceStream, comm->memManager, ncclMemOffload));
-    ncclCommPushCudaFree(comm, channel->devPeers);
+    // Both arrays are private to this communicator and have the same offload
+    // and destruction lifetime. Pack them into one device allocation so each
+    // array does not incur a separate cuMem allocation-granularity round-up.
+    size_t ringOffset = nPeers * sizeof(*channel->devPeers);
+    ALIGN_SIZE(ringOffset, alignof(int));
+    size_t bytes = ringOffset + nRanks * sizeof(*channel->devRingUserRanks);
+    char* channelMetadata = nullptr;
+    NCCLCHECK(ncclCudaCallocAsync(&channelMetadata, bytes, deviceStream, comm->memManager, ncclMemOffload));
+    ncclCommPushCudaFree(comm, channelMetadata);
+    channel->devPeers = reinterpret_cast<struct ncclDevChannelPeer**>(channelMetadata);
+    channel->devRingUserRanks = reinterpret_cast<int*>(channelMetadata + ringOffset);
     NCCLCHECK(ncclCalloc(&channel->devPeersHostPtr, nPeers));
     for (int r = 0; r < nRanks; r++) {
       uintptr_t addr = (uintptr_t)(comm->sharedRes->devPeers[channelId] + comm->topParentRanks[r]);
       NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + r), (uintptr_t*)&addr, 1, deviceStream));
       channel->devPeersHostPtr[r] = (struct ncclDevChannelPeer*)addr;
     }
+  } else {
+    // Keep a separate ring allocation when the peer array already exists.
+    NCCLCHECK(ncclCudaCallocAsync(&channel->devRingUserRanks, nRanks, deviceStream, comm->memManager, ncclMemOffload));
+    ncclCommPushCudaFree(comm, channel->devRingUserRanks);
   }
 
   channel->ring.userRanks = ncclMemoryStackAlloc<int>(&comm->memPermanent, nRanks);
   channel->ring.rankToIndex = ncclMemoryStackAlloc<int>(&comm->memPermanent, nRanks);
-  NCCLCHECK(ncclCudaCallocAsync(&channel->devRingUserRanks, nRanks, deviceStream, comm->memManager, ncclMemOffload));
-  ncclCommPushCudaFree(comm, channel->devRingUserRanks);
 
   /* guarantee addr has been copied into channel->devPeers */
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode), &sharedRes->deviceStream,

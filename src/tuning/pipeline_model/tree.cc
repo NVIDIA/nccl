@@ -48,6 +48,7 @@ static ncclResult_t ncclTuningPipelineTreeGetAlgoStep(struct ncclTuningInput_t* 
   ncclTuningGetHwIndexes(comm, algo, &intraHw, &interHw);
   float intraRtt = comm->tuningContext.tuningConstants.hwLatencies[intraHw][algo][proto];
   float interRtt = comm->tuningContext.tuningConstants.hwLatencies[interHw][algo][proto];
+  if (comm->nNodes == 2) interBw *= 2; // tree opt on 2 nodes
   *intra = {nStepsIntra, intraRtt, intraBw * 1000};
   *inter = {nStepsInter, interRtt, interBw * 1000};
   return ncclSuccess;

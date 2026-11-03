@@ -110,8 +110,9 @@ ncclResult_t bootstrapNetInit() {
     std::lock_guard<std::mutex> lock(bootstrapNetMutex);
     if (bootstrapNetInitDone == 0) {
       const char* env = ncclGetEnv("NCCL_COMM_ID");
+      const char* ifName = ncclGetEnv("NCCL_SOCKET_IFNAME");
       int nIfs = 0;
-      if (env) {
+      if (env && !(ifName && strlen(ifName) > 1)) {
         union ncclSocketAddress remoteAddr;
         if (ncclSocketGetAddrFromString(&remoteAddr, env) != ncclSuccess) {
           WARN("Invalid NCCL_COMM_ID, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");

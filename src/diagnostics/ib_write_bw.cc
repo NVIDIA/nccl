@@ -26,6 +26,7 @@
 #include <vector>
 #include <limits.h>
 #include <math.h>
+#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -297,21 +298,31 @@ static void discoverLocal(ncclComm* comm, LocalInfo* local) {
   local->port = properties.port;
 }
 
-// Builds the ib_write_bw command line; the client form appends the server hostname (the connect
-// target). Returns false on unsafe names or truncation.
-static bool buildCommand(char* out, int outSize, bool server, const LocalInfo& local, const LocalInfo& serverInfo,
+// Numeric form of the server's bootstrap address, which every rank already holds and reaches; peers
+// may not resolve the server's hostname. A link-local scope prints as a local interface name, so the
+// result is still checked to be shell safe.
+static bool serverAddress(const ncclComm* comm, int serverRank, char (&out)[NI_MAXHOST], bool& ipv6) {
+  const union ncclSocketAddress* addr = comm->proxyState->peerAddresses + comm->topParentRanks[serverRank];
+  ipv6 = addr->sa.sa_family == AF_INET6;
+  if (getnameinfo(&addr->sa, sizeof(*addr), out, sizeof(out), nullptr, 0, NI_NUMERICHOST) != 0) return false;
+  size_t length = strlen(out);
+  return length > 0 && strspn(out, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-:%") == length;
+}
+
+// Builds the ib_write_bw command line; the client form appends the server's bootstrap address (the
+// connect target). An IPv6 address adds --ipv6-addr on both ends, as perftest requires. Returns false
+// on unsafe names or truncation.
+static bool buildCommand(char* out, int outSize, bool server, const LocalInfo& local, const char* address, bool ipv6,
                          bool cudaEnabled, bool dmabufEnabled, int cudaDev, int port, int qps) {
-  if (!isSafeShellArgument(local.device, sizeof(local.device)) ||
-      (!server && !isSafeShellArgument(serverInfo.hostname, sizeof(serverInfo.hostname))))
-    return false;
+  if (!isSafeShellArgument(local.device, sizeof(local.device))) return false;
   char cuda[80] = "";
   if (cudaEnabled) {
     snprintf(cuda, sizeof(cuda), " --use_cuda=%d%s", cudaDev, dmabufEnabled ? " --use_cuda_dmabuf" : "");
   }
-  int n = snprintf(out, outSize, "ib_write_bw -d %s -i %d -s %d --report_gbits -q %d -p %d -n %d%s", local.device,
-                   local.port, IB_BW_PAYLOAD_BYTES, qps, port, IB_BW_ITERS, cuda);
+  int n = snprintf(out, outSize, "ib_write_bw -d %s -i %d -s %d --report_gbits -q %d -p %d -n %d%s%s", local.device,
+                   local.port, IB_BW_PAYLOAD_BYTES, qps, port, IB_BW_ITERS, cuda, ipv6 ? " --ipv6-addr" : "");
   if (!server && n > 0 && n < outSize) {
-    n += snprintf(out + n, outSize - n, " %s", serverInfo.hostname);
+    n += snprintf(out + n, outSize - n, " %s", address);
   }
   return n > 0 && n < outSize;
 }
@@ -436,8 +447,12 @@ static double runPair(ncclComm* comm, const LocalInfo* rankInfo, int serverRank,
   char command[IB_BW_COMMAND_BYTES] = "";
   const char* detail = nullptr;
   double sample = -1;
-  if (!buildCommand(command, sizeof(command), isServer, local, serverInfo, cudaEnabled, dmabufEnabled, comm->cudaDev,
-                    port, (int)ncclParamIbQpsPerConn())) {
+  char address[NI_MAXHOST];
+  bool ipv6 = false;
+  if (!serverAddress(comm, serverRank, address, ipv6)) {
+    detail = "cannot format the server address";
+  } else if (!buildCommand(command, sizeof(command), isServer, local, address, ipv6, cudaEnabled, dmabufEnabled,
+                           comm->cudaDev, port, (int)ncclParamIbQpsPerConn())) {
     detail = "cannot build command";
   }
 

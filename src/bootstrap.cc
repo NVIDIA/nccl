@@ -300,6 +300,7 @@ static void* bootstrapRoot(void* rargs) {
   struct extInfo info;
   union ringConnectInfo* rankInfo = NULL;
   union ncclSocketAddress* rankAddressesRoot = NULL; // for initial rank <-> root information exchange
+  struct ncclSocket sock;
   // get zeros for comparison
   char zeroHandle[NCCL_NET_HANDLE_MAXSIZE];
   union ncclSocketAddress zeroAddress;
@@ -312,8 +313,8 @@ static void* bootstrapRoot(void* rargs) {
   TRACE(NCCL_BOOTSTRAP, "BEGIN");
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_ROOT_WAIT]);
   /* Receive addresses from all ranks */
+  NCCLCHECKGOTO(ncclSocketInit(&sock), res, out);  // so out: can always close it
   do {
-    struct ncclSocket sock;
     NCCLCHECKGOTO(ncclSocketInit(&sock), res, out);
     NCCLCHECKGOTO(ncclSocketAccept(&sock, listenSock), res, out);
     NCCLCHECKGOTO(socketRecv(&sock, &info, sizeof(info)), res, out);
@@ -393,6 +394,7 @@ static void* bootstrapRoot(void* rargs) {
         timers[BOOTSTRAP_INIT_ROOT_WAIT] / 1e9, timers[BOOTSTRAP_INIT_ROOT_RECV] / 1e9,
         timers[BOOTSTRAP_INIT_ROOT_SEND] / 1e9);
 out:
+  (void)ncclSocketClose(&sock);  // no-op unless we bailed out with an accepted connection open
   if (listenSock != NULL) {
     (void)ncclSocketClose(listenSock);
     free(listenSock);
@@ -757,14 +759,18 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   int nranks = comm->nRanks;
   // char nextPeerHandle[NCCL_NET_HANDLE_MAXSIZE];
   struct bootstrapState* state;
-  struct ncclSocket* proxySocket;
+  struct ncclSocket* proxySocket = NULL;
   struct ncclSocket sock, listenSockRoot;
   struct extInfo info = {0};
   union ringConnectInfo nextPeer;
   bool performRasAddRanks = true;
   struct rasRankInit* rasRanks = nullptr;
+  int offset = 0, curr_root = -1, nRankRoot = 0;  // declared up front: fail: is reachable before they are set
 
   uint64_t timers[BOOTSTRAP_INIT_TIME_N] = {0};
+  // Initialize up front so that fail: can always close them.
+  NCCLCHECK(ncclSocketInit(&sock));
+  NCCLCHECK(ncclSocketInit(&listenSockRoot));
 
   NEW_NOTHROW(state, bootstrapState);
   ncclIntruQueueConstruct(&state->asyncSendQueue);
@@ -798,19 +804,19 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_CREATE]);
   if (ncclParamBootstrapNetEnable()) {
     // Create net interface for other ranks to contact me (all gather)
-    NCCLCHECK(netGetDevice(rank, comm, &STATE_LISTEN(state, net.dev)));
-    NCCLCHECK(state->net->listen(comm->netContext, STATE_LISTEN(state, net.dev), STATE_LISTEN(state, net.handle),
-                                 &STATE_LISTEN(state, net.comm)));
+    NCCLCHECKGOTO(netGetDevice(rank, comm, &STATE_LISTEN(state, net.dev)), result, fail);
+    NCCLCHECKGOTO(state->net->listen(comm->netContext, STATE_LISTEN(state, net.dev), STATE_LISTEN(state, net.handle),
+                                 &STATE_LISTEN(state, net.comm)), result, fail);
     memcpy(info.connectInfo.handle, STATE_LISTEN(state, net.handle), NCCL_NET_HANDLE_MAXSIZE);
   } else {
     // create socket for ring neightbor to contact mee
-    NCCLCHECK(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, socket), &info.connectInfo.addr,
-                                 ncclSocketTypeBootstrap));
+    NCCLCHECKGOTO(createListenSocket(comm, comm->magic, &STATE_LISTEN(state, socket), &info.connectInfo.addr,
+                                 ncclSocketTypeBootstrap), result, fail);
   }
   // Create socket for root to contact me using the root's magic
   // For grow operations, offset is parent->nRanks - 1 (last existing rank joins the root)
   // For normal init, offset is 0
-  int offset = 0;
+  offset = 0;
   if (comm->isGrow) {
     if (parent != NULL) {
       offset = parent->nRanks - 1;
@@ -823,16 +829,16 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
       }
     }
   }
-  int curr_root = rootIdFromRank(rank, nranks, nHandles, offset);
+  curr_root = rootIdFromRank(rank, nranks, nHandles, offset);
   if (curr_root >= 0) {
-    NCCLCHECK(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot,
-                                 &info.listenRootAddress, ncclSocketTypeBootstrap));
+    NCCLCHECKGOTO(createListenSocket(comm, BOOTSTRAP_HANDLE(handles, curr_root)->magic, &listenSockRoot,
+                                 &info.listenRootAddress, ncclSocketTypeBootstrap), result, fail);
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_CREATE]);
 
   // stagger connection times to avoid an overload of the root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_DELAY]);
-  int nRankRoot = nRankFromRoot(curr_root, nranks, nHandles, offset);
+  nRankRoot = nRankFromRoot(curr_root, nranks, nHandles, offset);
   if (nRankRoot > ncclParamStaggerThreshold()) {
     // for socket the message rate in microsec
     double msg_rate = ncclParamStaggerRate() / 1.0e6;
@@ -848,10 +854,10 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
   info.rank = rank;
   info.iroot = curr_root;
   info.offset = offset;
-  if (curr_root >= 0) NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, curr_root), comm, &info));
+  if (curr_root >= 0) NCCLCHECKGOTO(sendToRoot(BOOTSTRAP_HANDLE(handles, curr_root), comm, &info), result, fail);
   if (parent && comm->isGrow && rank != 0) {
     // Grow: Ranks 1 to N-1 use the parent bootstrap to send connection information to the previous rank
-    NCCLCHECK(bootstrapSend(parent->bootstrap, rank - 1, 0, &info.connectInfo, sizeof(info.connectInfo)));
+    NCCLCHECKGOTO(bootstrapSend(parent->bootstrap, rank - 1, 0, &info.connectInfo, sizeof(info.connectInfo)), result, fail);
   }
   // if needed, send the connection info to the previous root
   // commGrow with more than = 1 rank in the parent comm is a special case of multiroot
@@ -862,41 +868,41 @@ ncclResult_t bootstrapInit(int nHandles, void* handles, struct ncclComm* comm, s
     info.rank = prev_rank + 1; // my rank as seen by the previous root
     info.iroot = prev_root;
     // only send if the root is valid, existing rank N-1 will use the bootstrapSend just above
-    if (prev_root >= 0) NCCLCHECK(sendToRoot(BOOTSTRAP_HANDLE(handles, prev_root), comm, &info));
+    if (prev_root >= 0) NCCLCHECKGOTO(sendToRoot(BOOTSTRAP_HANDLE(handles, prev_root), comm, &info), result, fail);
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_SEND]);
 
   // get info on my "next" rank in the bootstrap ring from root
   BOOTSTRAP_PROF_OPEN(timers[BOOTSTRAP_INIT_TIME_RECV]);
   if (curr_root >= 0) {
-    NCCLCHECK(ncclSocketInit(&sock));
-    NCCLCHECK(ncclSocketAccept(&sock, &listenSockRoot));
-    NCCLCHECK(socketRecv(&sock, &nextPeer, sizeof(nextPeer)));
-    NCCLCHECK(ncclSocketClose(&sock));
-    NCCLCHECK(ncclSocketClose(&listenSockRoot));
+    NCCLCHECKGOTO(ncclSocketInit(&sock), result, fail);
+    NCCLCHECKGOTO(ncclSocketAccept(&sock, &listenSockRoot), result, fail);
+    NCCLCHECKGOTO(socketRecv(&sock, &nextPeer, sizeof(nextPeer)), result, fail);
+    NCCLCHECKGOTO(ncclSocketClose(&sock), result, fail);
+    NCCLCHECKGOTO(ncclSocketClose(&listenSockRoot), result, fail);
   }
   if (parent && comm->isGrow && rank != parent->nRanks - 1) {
     // Grow: Ranks 0 to N-2 use the parent bootstrap to recv connection information to the next rank.
     // This is consistent with the bootstrapSend above.
-    NCCLCHECK(bootstrapRecv(parent->bootstrap, rank + 1, 0, &nextPeer, sizeof(nextPeer)));
+    NCCLCHECKGOTO(bootstrapRecv(parent->bootstrap, rank + 1, 0, &nextPeer, sizeof(nextPeer)), result, fail);
   }
   BOOTSTRAP_PROF_CLOSE(timers[BOOTSTRAP_INIT_TIME_RECV]);
 
   // accept and connect the ring network
   if (ncclParamBootstrapNetEnable()) {
-    NCCLCHECK(netRingConnect(comm->netContext, state->net, &state->listen, nextPeer.handle,
+    NCCLCHECKGOTO(netRingConnect(comm->netContext, state->net, &state->listen, nextPeer.handle,
                              &STATE_RING(state, net.sendComm), &STATE_RING(state, net.sendDevHandle),
                              &STATE_RING(state, net.recvComm), &STATE_RING(state, net.recvDevHandle),
-                             state->abortFlag));
+                             state->abortFlag), result, fail);
   } else {
-    NCCLCHECK(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket),
-                                &STATE_RING(state, socket.recv), comm->magic, state->abortFlag));
+    NCCLCHECKGOTO(socketRingConnect(&nextPeer.addr, &STATE_RING(state, socket.send), &STATE_LISTEN(state, socket),
+                                &STATE_RING(state, socket.recv), comm->magic, state->abortFlag), result, fail);
   }
 
   // AllGather all listen handlers
   // in case of failure, those resources will be free'd when calling bootstrapDestroy, so we can return immediatly
-  NCCLCHECK(ncclCalloc(&state->peerProxyAddresses, nranks));
-  NCCLCHECK(ncclCalloc(&proxySocket, 1));
+  NCCLCHECKGOTO(ncclCalloc(&state->peerProxyAddresses, nranks), result, fail);
+  NCCLCHECKGOTO(ncclCalloc(&proxySocket, 1), result, fail);
   NCCLCHECKGOTO(createListenSocket(comm, comm->magic, proxySocket, state->peerProxyAddresses + rank,
                                    ncclSocketTypeProxy),
                 result, fail);
@@ -959,6 +965,8 @@ exit:
   free(rasRanks);
   return result;
 fail:
+  (void)ncclSocketClose(&sock);
+  (void)ncclSocketClose(&listenSockRoot);
   free(proxySocket);
   goto exit;
 }

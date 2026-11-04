@@ -1198,7 +1198,11 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
     }
 
     if (*regBufFlag) {
-      if (needUpdate) {
+      // The device copy of the remote addresses serves collectives only (send/recv passes the remote address in
+      // ncclDevWorkP2p), so a record takes its array on its first collective use; an existing array is refreshed
+      // whenever a peer was added.
+      bool newArray = (type == NCCL_IPC_COLLECTIVE && regRecord->regIpcAddrs.devPeerRmtAddrs == NULL);
+      if (newArray || (needUpdate && regRecord->regIpcAddrs.devPeerRmtAddrs != NULL)) {
         cudaStream_t hostStream, deviceStream;
         NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode),
                                               &comm->sharedRes->hostStream, /*concurrent=*/false, &hostStream),
@@ -1206,9 +1210,8 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
         NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode),
                                               &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
                       ret, fail);
-        if (regRecord->regIpcAddrs.devPeerRmtAddrs == NULL) {
-          NCCLCHECKGOTO(ncclCudaCallocAsync(&regRecord->regIpcAddrs.devPeerRmtAddrs, ipcIndexSize, hostStream,
-                                            comm->memManager),
+        if (newArray) {
+          NCCLCHECKGOTO(ncclRegIpcAddrsAlloc(comm, ipcIndexSize, hostStream, &regRecord->regIpcAddrs.devPeerRmtAddrs),
                         ret, fail);
         }
         NCCLCHECKGOTO(ncclCudaMemcpyAsync(regRecord->regIpcAddrs.devPeerRmtAddrs,

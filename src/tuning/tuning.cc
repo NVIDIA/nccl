@@ -364,6 +364,9 @@ static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
            bestNonSymkTuning.proto != NCCL_PROTO_LL) ||
           bestNonSymkTuning.ceMethodId != ncclCeMethodId_Count) {
         // The best result excluding symk kernels is not LL.  Use it instead of the symk LL result.
+        if (bestNonSymkTuning.algo != NCCL_ALGO_UNDEF && bestNonSymkTuning.proto != NCCL_PROTO_UNDEF) {
+          NCCLCHECKGOTO(ncclTuningGetChannels(input, &bestNonSymkTuning, /*forceMaxTreeThreads=*/true), ret, exit);
+        }
         bestTuning = bestNonSymkTuning;
       } else if (ncclParamSymGenkEnable() == 0 && (input->tuningMask & NCCL_TUNING_MASK_GENERAL_KERNELS) == 0) {
         // The search results we have don't include either genk kernels (because they are disabled) or legacy kernels
@@ -378,6 +381,7 @@ static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
         if (bestNonSymkTuning.algo != NCCL_ALGO_UNDEF && bestNonSymkTuning.proto != NCCL_PROTO_UNDEF &&
             bestNonSymkTuning.proto != NCCL_PROTO_LL) {
           // The best legacy result is not LL. Drop the symk LL result. The legacy one will be selected later.
+          NCCLCHECKGOTO(ncclTuningGetChannels(input, &bestNonSymkTuning, /*forceMaxTreeThreads=*/true), ret, exit);
           bestTuning = bestNonSymkTuning;
         }
       }

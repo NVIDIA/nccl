@@ -809,7 +809,7 @@ ncclResult_t ncclCeScatter(struct ncclComm* comm, struct ncclCeCollArgs* args, c
     for (int r = 1; r < lsaSize; r++) {
       int dstRank = (myLsaRank + r) % lsaSize;
       uint8_t* srcPtr = mySendBuff + dstRank * chunkBytes;
-      uint8_t* dstPtr = isInPlace ? myRecvBuff + dstRank * chunkBytes : myRecvBuff;
+      uint8_t* dstPtr = isInPlace ? mySendBuff + dstRank * chunkBytes : myRecvBuff;
 
       offset = dstPtr - (uint8_t*)args->recvWin->userPtr;
       NCCLCHECKGOTO(ncclDevrGetLsaRankPtr(comm, args->recvWin, offset, dstRank, &peerDstPtr), ret, fail);

@@ -34,7 +34,7 @@ ncclDevComm
 
       Rank within the local :ref:`LSA <device_api_lsa>` team and its size (see :ref:`devapi_teams`).
 
-   .. c:member:: uint8_t ginContextCount
+   .. c:member:: uint32_t ginContextCount
 
       The number of supported GIN contexts (see :cpp:class:`ncclGin`; available
       since NCCL 2.28.7).
@@ -172,11 +172,22 @@ ncclDevCommRequirements
       Multiple GIN backends can be used at once by creating two device communicators, each with a different ginType.
       See :ref:`deviceapi_gin_multi_backend` for a worked example. Available since NCCL 2.31.
 
+   .. c:member:: bool useRuntimeVersion
+
+      If ``true``, :c:func:`ncclDevCommCreate` initializes a device
+      communicator for device code built against the runtime NCCL version,
+      e.g., JIT-compiled device code. Allocate the output buffer passed to
+      :c:func:`ncclDevCommCreate` using
+      ``ncclCommProperties_t.devCommRuntimeVersionSize`` bytes. If ``false``,
+      the compile-time version is used. Available since
+      NCCL 2.31.
+
    .. c:member:: int cftCaps
 
       Bitmask of CFT capabilities requested for the device communicator (see :ref:`device_api_cft`).
-      Set :c:macro:`NCCL_CFT` for unicast CFT logical endpoint support, :c:macro:`NCCL_CFT_MULTIMEM`
-      for multicast CFT support, :c:macro:`NCCL_CFT_NONE` for no CFT support (default).
+      Set :c:enumerator:`NCCL_CFT <ncclCftCap_t.NCCL_CFT>` for unicast CFT logical endpoint support,
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` for multicast CFT support, or
+      :c:enumerator:`NCCL_CFT_NONE <ncclCftCap_t.NCCL_CFT_NONE>` for no CFT support (default).
       Available since NCCL 2.31.
 
    .. c:member:: int cftBarrierCount
@@ -238,6 +249,10 @@ ncclCommProperties_t
 
       The number of :ref:`LSA <device_api_lsa>` teams across the entire communicator. Available since NCCL 2.29.7.
 
+   .. c:member:: bool hostRmaSupport
+
+      Whether host-initiated RMA is supported by the communicator.
+
    .. c:member:: ncclGinType_t railedGinType
 
       **Deprecated.** The railed GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
@@ -276,6 +291,28 @@ ncclCommProperties_t
       The value ``gin_type`` is one of the values from :c:type:`ncclGinType_t`.
       See :ref:`deviceapi_gin_multi_backend`. Available since NCCL 2.31.
 
+   .. c:member:: size_t devCommRuntimeVersionSize
+
+      Number of bytes required for a device communicator targeting the runtime
+      NCCL version. This can differ from ``sizeof(ncclDevComm_t)`` when the
+      runtime NCCL version differs from the version used to compile the
+      application. Available since NCCL 2.31.
+
+   .. c:member:: bool cftSupport
+
+      Whether the communicator supports unicast CFT operations. Available
+      since NCCL 2.32.
+
+   .. c:member:: bool cftMulticastSupport
+
+      Whether the communicator supports multicast CFT operations. Available
+      since NCCL 2.32.
+
+   .. c:member:: bool cftCountedSupport
+
+      Whether the communicator supports counted CFT operations. Available
+      since NCCL 2.32.
+
 
 ncclGinType_t
 -------------
@@ -308,6 +345,8 @@ ncclGinType_t
       see AWS EFA `documentation <https://github.com/aws/aws-ofi-nccl>`_ and
       `getting started guide <https://github.com/aws/aws-ofi-nccl/blob/master/doc/gin-getting-started.md>`_
       for details. Available since NCCL 2.31.
+
+.. _device_api_gin_connection_type:
 
 ncclGinConnectionType_t
 -----------------------
@@ -390,7 +429,7 @@ ncclGetLsaMultimemDevicePointer
 ncclGetMultimemDevicePointer
 ----------------------------
 
-.. c:function:: ncclResult_t ncclGetMultimemDevicePointer(ncclWindow_t window, size_t offset, ncclMultimemHandle multimem, void** outPtr)
+.. c:function:: ncclResult_t ncclGetMultimemDevicePointer(ncclWindow_t window, size_t offset, ncclMultimemHandle_t multimem, void** outPtr)
 
    Returns a multimem base pointer using a provided multimem handle instead of the window's internal multimem.
    This function enables using external or custom multimem handles for pointer calculation.
@@ -410,7 +449,7 @@ ncclGetMultimemDevicePointer
    .. code:: C
 
       // Get multimem handle from device communicator setup
-      ncclMultimemHandle customHandle;
+      ncclMultimemHandle_t customHandle;
       // ... (obtain handle)
 
       void* multimemPtr;

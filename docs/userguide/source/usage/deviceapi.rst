@@ -274,6 +274,105 @@ always contiguous (stride ``1``), whereas the rail team is typically not -- its 
 (the assumption is thus that each rank *n* within the local LSA team has direct network connectivity with corresponding
 ranks *n* of all remote LSA teams).
 
+Team descriptor
+^^^^^^^^^^^^^^^
+
+Team functions are available in host code with a :c:type:`ncclComm_t`
+argument and, where noted, in device code with a :cpp:type:`ncclDevComm`
+argument.
+
+.. cpp:struct:: ncclTeam
+
+   Describes a team relative to the calling rank.
+
+   .. cpp:member:: int nRanks
+
+      Number of ranks in the team.
+
+   .. cpp:member:: int rank
+
+      Index of the calling rank in the team.
+
+   .. cpp:member:: int stride
+
+      Distance, in world ranks, between consecutive team ranks.
+
+   ``ncclTeam_t`` is a typedef of ``ncclTeam``.
+
+Team tags
+^^^^^^^^^
+
+.. cpp:struct:: ncclTeamTagWorld
+.. cpp:struct:: ncclTeamTagLsa
+.. cpp:struct:: ncclTeamTagRail
+
+   Empty tag types selecting the world, LSA, or rail team in APIs whose
+   overload is chosen by team kind, such as barrier-session constructors.
+
+CFT teams
+^^^^^^^^^
+
+CFT-specific teams and layout modes are documented under
+:ref:`CFT Teams <device_api_cft_teams>`.
+
+Rank conversion
+^^^^^^^^^^^^^^^
+
+The following functions do not communicate or synchronize. They perform
+arithmetics on team descriptors. Except where explicitly stated, callers must
+provide a valid rank in the source team. :cpp:func:`ncclTeamRankIsMember` and
+:cpp:func:`ncclTeamRankToTeam` are callable from host and device code.
+
+.. cpp:function:: bool ncclTeamRankIsMember(ncclTeam_t a, ncclTeam_t b, int bPeer)
+
+   Returns ``true`` if rank *bPeer* of team *b* is also a member of team *a*.
+
+.. cpp:function:: int ncclTeamRankToTeam(ncclTeam_t a, ncclTeam_t b, int bPeer)
+
+   Converts rank *bPeer* in team *b* to its rank index in team *a*. Call
+   :cpp:func:`ncclTeamRankIsMember` first if membership is not already known.
+   The result is undefined if the rank is not a member of *a*.
+
+.. cpp:function:: int ncclTeamRankToWorld(ncclDevComm const& comm, ncclTeam team, int rank)
+.. c:function:: int ncclTeamRankToWorld(ncclComm_t comm, ncclTeam_t team, int rank)
+
+   Converts *rank* in *team* to a world rank in *comm*. The input rank must be
+   a valid member of *team*.
+
+.. cpp:function:: int ncclTeamRankToLsa(ncclDevComm const& comm, ncclTeam team, int rank)
+.. c:function:: int ncclTeamRankToLsa(ncclComm_t comm, ncclTeam_t team, int rank)
+
+   Converts *rank* in *team* to a rank in the calling rank's LSA team. The
+   result is meaningful only when that rank belongs to the LSA team. The host
+   overload returns ``-1`` if initialization of the communicator's device
+   state fails.
+
+Team construction
+^^^^^^^^^^^^^^^^^
+
+.. cpp:function:: ncclTeam_t ncclTeamInnerFactor(ncclTeam_t parent, int innerSize)
+
+   Splits the *parent* team into inner teams of *innerSize* consecutive ranks and
+   returns the inner team containing the calling rank. The returned team has
+   *innerSize* ranks and stride ``parent.stride``. *innerSize* must be positive
+   and divide ``parent.nRanks``.
+
+.. cpp:function:: ncclTeam_t ncclTeamOuterFactor(ncclTeam_t parent, int innerSize)
+
+   Treats consecutive groups of *innerSize* ranks as inner teams and returns
+   the outer team containing the calling rank's position across those groups.
+   The result has ``parent.nRanks / innerSize`` ranks and stride
+   ``parent.stride * innerSize``. *innerSize* must be positive and divide
+   ``parent.nRanks``.
+
+.. cpp:function:: int ncclTeamRankInDifference(ncclTeam_t parent, ncclTeam_t subset, int index)
+
+   Interprets *parent* and *subset* as sets of ranks and returns, as an index in
+   *parent*, element *index* of ``parent - subset``. *subset* must be a subset
+   of *parent*, and *index* must be in
+   ``[0, parent.nRanks - subset.nRanks)``. The function does not validate
+   these preconditions.
+
 .. _devapi_segment_types:
 
 Segment Types

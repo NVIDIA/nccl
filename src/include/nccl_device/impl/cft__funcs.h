@@ -403,7 +403,11 @@ template <typename OpCoop>
 NCCL_DEVICE_INLINE void ncclCft<Coop>::submit(OpCoop coop) {
 #if NCCL_CFT_ENABLE
   if (nccl::cft::internal::elected(coop)) {
+#if CUDART_VERSION >= 13050
+    asm volatile("fabric.submit.commit_group;" ::: "memory");
+#else
     asm volatile("fabric.submit;" ::: "memory");
+#endif
     asm volatile("mbarrier.expect_tx.relaxed.cta.shared::cta.b64 [%0], %1;"
                  :
                  : "r"(nccl::cft::internal::smemAddr(this->cftSmem)), "r"(this->txCount)
@@ -420,7 +424,12 @@ template <typename Coop>
 template <typename OpCoop>
 NCCL_DEVICE_INLINE void ncclCft<Coop>::flushSmem(OpCoop coop) {
 #if NCCL_CFT_ENABLE
+#if CUDART_VERSION >= 13050
+  // Wait for all committed submit groups to finish reading shared memory.
+  asm volatile("fabric.wait.sync_restrict::read 0;" ::: "memory");
+#else
   asm volatile("fabric.wait.sync_restrict::reads;" ::: "memory");
+#endif
   // Every thread in the coop must wait for fabric operations to consume shared memory.
   coop.sync();
 #else

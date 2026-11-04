@@ -229,14 +229,17 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
     comm = nccl_core.Communicator.init(nranks=n_ranks, rank=my_rank, unique_id=unique_id)
 
     # -- EP group -----------------------------------------------------------
-    # max_recv_tokens_per_rank is required for HT (assertion fires on 0);
-    # LL auto-derives nRanks * max_dispatch_tokens_per_rank when left at 0, but we
-    # set it explicitly to keep both paths consistent.
+    # max_recv_tokens_per_rank is required for HT (assertion fires on 0); LL
+    # auto-derives nRanks * max_dispatch_tokens_per_rank when left at 0, but we set
+    # it explicitly to keep both paths consistent. It must cover the WORST case:
+    # every token from every rank lands on this rank, each replicated to its top_k
+    # experts -> nRanks * num_tokens * top_k. Omitting the top_k factor under-sizes
+    # the HT recv buffer and ncclEpDispatch fails with ncclInvalidUsage.
     config = nccl_ep.GroupConfig(
         algorithm=algorithm,
         num_experts=num_experts,
         max_dispatch_tokens_per_rank=num_tokens,
-        max_recv_tokens_per_rank=num_tokens * n_ranks,
+        max_recv_tokens_per_rank=num_tokens * n_ranks * top_k,
         max_token_bytes=hidden * 2,  # bfloat16
         alloc=nccl_ep.AllocConfig(alloc_fn=_ALLOC_FN_ADDR, free_fn=_FREE_FN_ADDR),
     )
@@ -306,6 +309,10 @@ def main():  # noqa: C901 — kept as a single function to mirror ep_test.cu
         num_recv_tokens = int(total_host[0])
     else:
         num_recv_tokens = config.max_dispatch_tokens_per_rank * num_local_experts
+    # HT sizes the recv buffer by max_recv_tokens_per_rank (worst-case per-rank
+    # receive), matching ep_test.cu; max_dispatch * num_local_experts under-sizes it.
+    if algorithm == nccl_ep.Algorithm.HIGH_THROUGHPUT and not disable_max_tokens:
+        num_recv_tokens = config.max_recv_tokens_per_rank
     assert num_recv_tokens > 0
 
     dispatch_config = nccl_ep.DispatchConfig(send_only=dispatch_send_only, round_scales=0)

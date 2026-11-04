@@ -283,6 +283,8 @@ ncclResult_t ncclRmaInit(struct ncclComm* comm) {
 ncclResult_t ncclRmaInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
   comm->rmaContext = parent->rmaContext;
   comm->rmaPluginIndex = parent->rmaPluginIndex;
+  comm->rmaState.rmaProxyState.ncclRma = parent->rmaState.rmaProxyState.ncclRma;
+  comm->rmaState.rmaProxyState.rmaVersion = parent->rmaState.rmaProxyState.rmaVersion;
   return ncclSuccess;
 }
 

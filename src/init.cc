@@ -71,7 +71,6 @@ NCCL_PARAM(RmaEagerInit, "RMA_EAGER_INIT", NCCL_CONFIG_UNDEF_INT);
 // temporary override for the RMA-context stride
 NCCL_PARAM(RmaRankStride, "RMA_RANK_STRIDE", NCCL_CONFIG_UNDEF_INT);
 NCCL_PARAM(MaxP2pPeers, "P2P_MAX_PEERS", NCCL_CONFIG_UNDEF_INT);
-NCCL_PARAM(SetCpuStackSize, "SET_CPU_STACK_SIZE", 1);
 NCCL_PARAM(MultiRankGpuEnable, "MULTI_RANK_GPU_ENABLE", 0);
 NCCL_PARAM(LaunchOrderImplicit, "LAUNCH_ORDER_IMPLICIT", NCCL_CONFIG_UNDEF_INT);
 // Opt-in: enables GPU-resident NCCL progress counters when RAS is enabled. When disabled,
@@ -184,19 +183,6 @@ exit:;
 static ncclResult_t ncclInit() {
   std::call_once(initOnceFlag, initOnceFunc);
   return initResult;
-}
-
-static ncclResult_t envInitResult = ncclSuccess;
-static std::once_flag envInitOnceFlag;
-
-static void envInitOnceFunc() {
-  NCCLCHECKGOTO(ncclEnvPluginInit(), envInitResult, exit);
-exit:;
-}
-
-ncclResult_t ncclInitEnv() {
-  std::call_once(envInitOnceFlag, envInitOnceFunc);
-  return envInitResult;
 }
 
 NCCL_API(ncclResult_t, ncclGetVersion, int* version);

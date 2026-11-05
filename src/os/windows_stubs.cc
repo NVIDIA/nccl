@@ -64,6 +64,10 @@ ncclResult_t ncclProgressCounterMonitorDestroy(struct ncclComm* comm) {
 /* --------------------------------------------------------------------------
  * Env plugin stubs
  * -------------------------------------------------------------------------- */
+ncclResult_t ncclInitEnv(void) {
+  return ncclSuccess;
+}
+
 bool ncclEnvPluginInitialized(void) {
   return false;
 }

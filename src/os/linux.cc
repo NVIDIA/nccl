@@ -151,7 +151,7 @@ static ncclResult_t setCpuStackSize() {
   return ncclSuccess;
 }
 
-extern int ncclParamSetCpuStackSize();
+NCCL_PARAM(SetCpuStackSize, "SET_CPU_STACK_SIZE", 1);
 
 ncclResult_t ncclOsInitialize() {
   if (ncclParamSetCpuStackSize() != 0) {

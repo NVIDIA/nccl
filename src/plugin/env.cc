@@ -118,3 +118,16 @@ const char* ncclEnvPluginGetEnv(const char* name) {
 bool ncclEnvPluginInitialized(void) {
   return COMPILER_ATOMIC_LOAD(&initialized, std::memory_order_acquire);
 }
+
+static ncclResult_t envInitResult = ncclSuccess;
+static std::once_flag envInitOnceFlag;
+
+static void envInitOnceFunc() {
+  NCCLCHECKGOTO(ncclEnvPluginInit(), envInitResult, exit);
+exit:;
+}
+
+ncclResult_t ncclInitEnv() {
+  std::call_once(envInitOnceFlag, envInitOnceFunc);
+  return envInitResult;
+}

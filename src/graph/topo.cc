@@ -2460,11 +2460,13 @@ ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, i
   return ncclTopoFindLocalGpu(system, netId, MAXCHANNELS, -1, gpuIndex);
 }
 
+NCCL_PARAM(TopoNetLocalGpus, "TOPO_NET_LOCAL_GPUS", 1);
+
 ncclResult_t ncclTopoGetLocalGpus(struct ncclTopoSystem* system, int64_t netId, int gpus[NCCL_TOPO_MAX_NET_LOCAL_GPUS],
                                   int* gpuCount) {
   NCCLCHECK(ncclTopoGetLocalGpu(system, netId, gpus));
   *gpuCount = 1;
-  if (gpus[0] == -1) return ncclSuccess;
+  if (gpus[0] == -1 || ncclParamTopoNetLocalGpus() < 2) return ncclSuccess;
   NCCLCHECK(ncclTopoFindLocalGpu(system, netId, 1, gpus[0], gpus + 1));
   if (gpus[1] != -1) *gpuCount = 2;
   return ncclSuccess;

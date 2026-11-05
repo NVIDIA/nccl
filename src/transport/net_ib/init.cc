@@ -549,13 +549,28 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             ncclIbDevs[ncclNIbDevs].portNum = port_num;
             ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
             // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
+            int portSpeed = portAttr.active_speed_ex ? portAttr.active_speed_ex : portAttr.active_speed;
+            int portRate = ncclIbSpeed(portSpeed) * ncclIbWidth(portAttr.active_width);
             uint64_t querySpeed = 0;
             if (wrap_ibv_query_port_speed(context, port_num, &querySpeed) == ncclSuccess) {
               // ibv_query_port_speed returns speed in granularity of 100 Mbps
               ncclIbDevs[ncclNIbDevs].speed = querySpeed * 100;
             } else {
-              int portSpeed = portAttr.active_speed_ex ? portAttr.active_speed_ex : portAttr.active_speed;
-              ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portSpeed) * ncclIbWidth(portAttr.active_width);
+              ncclIbDevs[ncclNIbDevs].speed = portRate;
+            }
+            // ibv_query_port_speed reports the bandwidth available to this host function,
+            // that is min(network port rate, host PCIe link, host rate limit), while the
+            // network port on its own runs at portRate. NCCL derives the bandwidth of every
+            // PCIe link from sysfs on its own and applies it to the paths that traverse that
+            // link, so when the two figures differ because of the host PCIe link, that link
+            // is accounted for twice and every GPU-to-NET path is sized from the lower one.
+            // Report the difference: the speed NCCL ends up using is not otherwise visible.
+            if (ncclIbDevs[ncclNIbDevs].speed < portRate) {
+              INFO(NCCL_INIT | NCCL_NET,
+                   "NET/IB : %s:%d using speed %d Mbps, below the %d Mbps rate of the network port; the difference is "
+                   "the host PCIe link, a rate limit on the function, or both. Set NCCL_IB_QUERY_PORT_SPEED=0 to use "
+                   "the network port rate instead.",
+                   devices[d]->name, port_num, ncclIbDevs[ncclNIbDevs].speed, portRate);
             }
             COMPILER_ATOMIC_STORE(&ncclIbDevs[ncclNIbDevs].currSpeed, (uint64_t)ncclIbDevs[ncclNIbDevs].speed,
                                   std::memory_order_relaxed);

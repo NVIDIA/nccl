@@ -1263,6 +1263,22 @@ Enabled (1) by default (since 2.19). Set to 0 to disable use of ECE network capa
 
 Note: Incorrect configuration of the ECE parameters on a system can adversely affect NCCL performance. Administrators should ensure ECE is correctly configured if it is enabled at the system level.
 
+NCCL_IB_QUERY_PORT_SPEED
+------------------------
+(since 2.30)
+
+Selects how NCCL determines the speed of an IB/RoCE device.
+
+When enabled, and when the installed ``rdma-core`` provides it, NCCL calls ``ibv_query_port_speed``. That call reports the bandwidth available to the host function, that is ``min(network port rate, host PCIe link, host rate limit)``. When it is disabled, or unavailable, NCCL uses the rate of the network port alone, ``active_speed`` x ``active_width``.
+
+Disabling it is useful on a platform where the network port is faster than the host PCIe link and GPUDirect RDMA keeps GPU-to-NIC traffic off that link, for instance where a GPU and its NIC sit under a common PCIe bridge. NCCL already derives the bandwidth of every PCIe link from sysfs and applies it to the paths that traverse that link, so on such a platform the host PCIe link is accounted for twice and NCCL underestimates the NIC. Since that speed sets the bandwidth of every GPU-to-NET path, it changes the rings and trees the graph search produces and the algorithm the tuner selects.
+
+Keep it enabled where a rate limit is applied to the function, for example on a virtual function in a virtualized environment, since NCCL has no other way to learn about such a limit. NCCL logs one line per device under ``NCCL_DEBUG=INFO`` whenever the speed it uses is below the rate of the network port.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Enabled (1) by default. Set to 0 to use the rate of the network port instead.
+
 NCCL_MEM_SYNC_DOMAIN
 --------------------
 (since 2.16)

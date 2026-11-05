@@ -883,7 +883,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
         }
 
         // Then try the most local GPUs
-        int localGpu = net->net.localGpus[0];
+        int localGpu = net->net.localGpus[round % net->net.localGpuCount];
         if (localGpu != -1) {
           NCCLCHECKGOTO(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, 0, time, NET, n,
                                              localGpu),

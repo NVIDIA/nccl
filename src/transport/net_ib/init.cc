@@ -29,6 +29,7 @@ NCCL_PARAM(IbMergeVfs, "IB_MERGE_VFS", 1);
 NCCL_PARAM(IbMergeNics, "IB_MERGE_NICS", 1);
 NCCL_PARAM(IbDevicePciOrder, "IB_DEVICE_PCI_ORDER", 1);
 NCCL_PARAM(IbSortMergeNics, "IB_SORT_MERGE_NICS", 1);
+NCCL_PARAM(IbPortSpeed, "IB_PORT_SPEED", 0);
 
 extern int64_t ncclParamIbArThreshold();
 
@@ -563,6 +564,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
               int portSpeed = portAttr.active_speed_ex ? portAttr.active_speed_ex : portAttr.active_speed;
               ncclIbDevs[ncclNIbDevs].speed = ncclIbSpeed(portSpeed) * ncclIbWidth(portAttr.active_width);
             }
+            if (ncclParamIbPortSpeed() > 0) ncclIbDevs[ncclNIbDevs].speed = ncclParamIbPortSpeed();
             COMPILER_ATOMIC_STORE(&ncclIbDevs[ncclNIbDevs].currSpeed, (uint64_t)ncclIbDevs[ncclNIbDevs].speed,
                                   std::memory_order_relaxed);
             ncclIbDevs[ncclNIbDevs].context = context;

@@ -256,6 +256,15 @@ int64_t ncclParamSymGenkEnable() {
 }
 #endif
 
+static bool ncclSymGinKernelsEnabled(struct ncclComm* comm) {
+  if (!ncclParamSymGinKernelsEnable()) return false;
+  struct ncclGinState const& ginState = comm->ginState;
+  for (int i = 0; i < ginState.numActiveBackends; i++) {
+    if (ginState.backends[i].supportsStrongSignals) return true;
+  }
+  return false;
+}
+
 static bool ncclGenkGinAvailable(struct ncclComm* comm) {
 #if !defined(NCCL_OS_WINDOWS)
   if (comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL) return false;
@@ -420,7 +429,7 @@ ncclResult_t ncclSymkInitOnce(struct ncclComm* comm) {
     struct ncclDevResourceRequirements ginOutboxReq = {};
     struct ncclDevResourceRequirements rsGinAccumReq = {};
     struct ncclDevResourceRequirements railSignalReq = {};
-    if (ncclParamSymGinKernelsEnable() && lsaRanks < comm->nRanks) {
+    if (ncclSymGinKernelsEnabled(comm) && lsaRanks < comm->nRanks) {
       ncclSymkKernelMask enabledGinKernels = kernelMask_GinOnly | kernelMask_A2A;
       bool needAlltoAllGin = (enabledGinKernels & kernelMask_A2A) != 0 &&
                              comm->globalGinSupport == NCCL_GIN_CONNECTION_FULL && symk->alltoAllLLProvisionBytes != 0;
@@ -603,7 +612,7 @@ ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   if (!comm->isAllDirectNvlink) kmask &= kernelMask_Genk;
   if (ncclParamSymGenkEnable() == 0 || comm->minCompCap < 90) kmask &= ~kernelMask_Genk;
 
-  bool const hasGin = ncclParamSymGinKernelsEnable() != 0;
+  bool const hasGin = ncclSymGinKernelsEnabled(comm);
   bool const hasMultipleLsaTeams = ncclTeamLsa(comm).nRanks < comm->nRanks;
   if (hasMultipleLsaTeams) {
     kmask &= kernelMask_GinCapable | kernelMask_A2A;

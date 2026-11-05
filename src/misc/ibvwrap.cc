@@ -98,7 +98,11 @@ ncclResult_t wrap_ibv_symbols(void) {
 NCCL_PARAM(IbMQpRetryAll, "IB_MQP_RETRY_ALL", 0);
 NCCL_PARAM(IbMQpRetryCnt, "IB_MQP_RETRY_CNT", 34);
 NCCL_PARAM(IbMQpRetryTimeout, "IB_MQP_RETRY_SLEEP_MSEC", 100); // in milliseconds
-NCCL_PARAM(IbQueryPortSpeed, "IB_QUERY_PORT_SPEED", 1);
+// -1 (default) = call ibv_query_port_speed(), but do not let the host PCIe link it folds
+//                into its answer cap the speed NCCL uses (see ncclIbPortSpeed()).
+//  0           = never call it; use the network port rate.
+//  1           = call it and use its answer as it is.
+NCCL_PARAM(IbQueryPortSpeed, "IB_QUERY_PORT_SPEED", -1);
 
 #define IBV_ERR_EQ(e, code) (e == code || e == (-code))
 #define IBV_MQP_RETRY_ERRNO(e) (IBV_ERR_EQ(e, ETIMEDOUT))
@@ -399,7 +403,7 @@ ncclResult_t wrap_ibv_set_ece(
 }
 
 ncclResult_t wrap_ibv_query_port_speed(struct ibv_context* context, uint8_t port_num, uint64_t* speed) {
-  if (!ncclParamIbQueryPortSpeed() || ibvSymbols.ibv_internal_query_port_speed == NULL) {
+  if (ncclParamIbQueryPortSpeed() == 0 || ibvSymbols.ibv_internal_query_port_speed == NULL) {
     return ncclSystemError;
   }
   IBV_INT_CHECK_RET_ERRNO(ibvSymbols, ibv_internal_query_port_speed,

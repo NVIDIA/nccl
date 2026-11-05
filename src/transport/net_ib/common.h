@@ -645,6 +645,10 @@ struct ncclIbRecvComm {
 static_assert((offsetof(struct ncclIbRecvComm, remCtsFifo) % 32) == 0,
               "ncclIbRecvComm ctsFifo must be 32-byte aligned");
 
+// Picks the value NCCL uses as the speed of a NIC, in Mbps, from the value reported by
+// ibv_query_port_speed() and whether that call succeeded. Defined in init.cc.
+int ncclIbPortSpeed(const char* devName, struct ibv_port_attr* portAttr, uint64_t queriedMbps, bool queryValid);
+
 ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend);
 ncclResult_t ncclIbRecvCommInit(struct ncclIbRecvComm* recvComm);
 ncclResult_t ncclIbSendCommInit(struct ncclIbSendComm* sendComm);

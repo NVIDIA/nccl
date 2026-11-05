@@ -1269,15 +1269,17 @@ NCCL_IB_QUERY_PORT_SPEED
 
 Selects how NCCL determines the speed of an IB/RoCE device.
 
-When enabled, and when the installed ``rdma-core`` provides it, NCCL calls ``ibv_query_port_speed``. That call reports the bandwidth available to the host function, that is ``min(network port rate, host PCIe link, host rate limit)``. When it is disabled, or unavailable, NCCL uses the rate of the network port alone, ``active_speed`` x ``active_width``.
+Where the installed ``rdma-core`` provides it, ``ibv_query_port_speed`` reports the bandwidth available to the host function, that is ``min(network port rate, host PCIe link, host rate limit)``. The alternative is the rate of the network port alone, ``active_speed`` x ``active_width``.
 
-Disabling it is useful on a platform where the network port is faster than the host PCIe link and GPUDirect RDMA keeps GPU-to-NIC traffic off that link, for instance where a GPU and its NIC sit under a common PCIe bridge. NCCL already derives the bandwidth of every PCIe link from sysfs and applies it to the paths that traverse that link, so on such a platform the host PCIe link is accounted for twice and NCCL underestimates the NIC. Since that speed sets the bandwidth of every GPU-to-NET path, it changes the rings and trees the graph search produces and the algorithm the tuner selects.
+The host PCIe term does not belong in a NIC speed. NCCL derives the bandwidth of every PCIe link from sysfs and applies it to the paths that traverse that link, so a device speed that carries it as well accounts for it twice. Where a GPU and its NIC sit under a common PCIe bridge, GPUDirect RDMA traffic never crosses the host link at all, and the GPU-to-NIC path is then sized by a limit that is not on it. Since that size decides the rings and trees the graph search produces and the algorithm the tuner selects, the effect on performance can be large.
 
-Keep it enabled where a rate limit is applied to the function, for example on a virtual function in a virtualized environment, since NCCL has no other way to learn about such a limit. NCCL logs one line per device under ``NCCL_DEBUG=INFO`` whenever the speed it uses is below the rate of the network port.
+A rate limit applied to the function, for example on a virtual function in a virtualized environment, reaches NCCL through the same call and has no other source, so NCCL keeps it. By default NCCL therefore calls ``ibv_query_port_speed`` and attributes what it returns: when the value is the bandwidth of one of the PCIe links between the NIC and the root complex, it is taken to be the host PCIe link and the rate of the network port is used instead; any other value is used as reported. The reported value is also used as it is when a PCIe link on that path is running below the speed or the width that both of its ends advertise, since NCCL's own PCIe model is built from ``max_link_speed`` and ``max_link_width`` and does not account for such a degradation.
+
+A rate limit set to exactly the bandwidth of one of those PCIe links cannot be told apart from the link itself. Set this variable to 1 on such a system. NCCL logs one line per device under ``NCCL_DEBUG=INFO`` whenever it replaces a reported speed.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-Enabled (1) by default. Set to 0 to use the rate of the network port instead.
+The default is -1 (call ``ibv_query_port_speed`` and attribute the result, as described above). Set to 1 to use what it reports without attribution, or to 0 not to call it at all and always use the rate of the network port.
 
 NCCL_MEM_SYNC_DOMAIN
 --------------------

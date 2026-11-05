@@ -153,6 +153,15 @@ static void ncclIbUpdateDeviceSpeed(struct ncclIbDev* dev) {
   if (newSpeed == 0) return;
   // ibv_query_port_speed returns speed in granularity of 100 Mbps
   newSpeed *= 100;
+  // Attribute the value the same way as at init time, so a speed change event cannot put
+  // back a speed that is capped by the host PCIe link. Re-read the port attributes first,
+  // since the network port rate itself may be what changed. Keep them local and do not
+  // publish them: dev->portAttr is published under dev->mutex by ncclIbEventGidChange()
+  // and read by the connection paths, while this function holds no lock.
+  struct ibv_port_attr portAttr;
+  if (wrap_ibv_query_port(dev->context, dev->portNum, &portAttr) == ncclSuccess) {
+    newSpeed = (uint64_t)ncclIbPortSpeed(dev->devName, &portAttr, newSpeed, true);
+  }
 
   if (newSpeed != oldSpeed) {
     INFO(NCCL_NET, "NET/IB : %s:%d speed change detected: %lu -> %lu Mbps", dev->devName, dev->portNum,

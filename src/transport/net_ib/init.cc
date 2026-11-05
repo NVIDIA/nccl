@@ -31,6 +31,7 @@ NCCL_PARAM(IbDevicePciOrder, "IB_DEVICE_PCI_ORDER", 1);
 NCCL_PARAM(IbSortMergeNics, "IB_SORT_MERGE_NICS", 1);
 
 extern int64_t ncclParamIbArThreshold();
+extern int64_t ncclParamIbQueryPortSpeed();
 
 // Returns 0 if this is the path of two VFs of the same physical device
 static int ncclIbMatchVfPath(const char* path1, const char* path2) {
@@ -147,6 +148,126 @@ static int ncclIbWidth(int width) {
 }
 static int ncclIbSpeed(int speed) {
   return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
+}
+
+// Read one numeric sysfs attribute of a PCI device directory.
+// "32.0 GT/s PCIe" -> 32.0 ; "16" -> 16 ; "Unknown" -> failure.
+static ncclResult_t ncclIbReadPciAttr(const char* devDir, const char* attr, double* value) {
+  char path[PATH_MAX];
+  char buf[64];
+  snprintf(path, sizeof(path), "%s/%s", devDir, attr);
+  FILE* f = fopen(path, "r");
+  if (f == NULL) return ncclSystemError;
+  char* line = fgets(buf, sizeof(buf), f);
+  fclose(f);
+  if (line == NULL) return ncclSystemError;
+  double v = atof(buf);
+  if (!(v > 0.0)) return ncclSystemError;
+  *value = v;
+  return ncclSuccess;
+}
+
+// Bandwidth, in Mbps, of the PCIe path between the NIC and the host root complex: the
+// NIC's own link in *ownLink, and the slowest link of the whole path in *pathMin. These
+// are raw figures, the per-lane transfer rate times the lane count with no encoding
+// overhead removed, which is how the device counts them. Both are returned because
+// devices up to CX7 read the host PCIe state from their own PCIe registers, which
+// describe their own link alone, while later ones are told about the whole path.
+//
+// Fails if the path cannot be walked, and also if any link on it is running below what
+// NCCL's own PCIe model assumes. That model is built from max_link_speed and
+// max_link_width, each minimised against the parent port (ncclTopoGetXmlFromSys() in
+// src/graph/xml.cc), so on a link that trained down further the model is optimistic and
+// the value reported by the device is the only thing accounting for the difference.
+static ncclResult_t ncclIbHostPciePath(const char* devName, uint64_t* ownLink, uint64_t* pathMin) {
+  char devicePath[PATH_MAX];
+  snprintf(devicePath, sizeof(devicePath), "/sys/class/infiniband/%s/device", devName);
+  char* dir = realpath(devicePath, NULL);
+  if (dir == NULL) return ncclSystemError;
+
+  ncclResult_t ret = ncclSuccess;
+  *ownLink = *pathMin = 0;
+  // Walk up towards the root complex. Every PCI device and bridge on the way exposes
+  // current_link_speed / current_link_width; the host bridge above them does not.
+  while (1) {
+    char* slash = strrchr(dir, '/');
+    if (slash == NULL || slash == dir) break;
+    // Stop once we leave the PCI devices: a bus:device.function component always has ':'.
+    if (strchr(slash + 1, ':') == NULL) break;
+
+    double gts = 0.0, width = 0.0, maxGts = 0.0, maxWidth = 0.0, parent = 0.0;
+    if (ncclIbReadPciAttr(dir, "current_link_speed", &gts) == ncclSuccess &&
+        ncclIbReadPciAttr(dir, "current_link_width", &width) == ncclSuccess) {
+      if (ncclIbReadPciAttr(dir, "max_link_speed", &maxGts) != ncclSuccess) maxGts = gts;
+      if (ncclIbReadPciAttr(dir, "max_link_width", &maxWidth) != ncclSuccess) maxWidth = width;
+      if (ncclIbReadPciAttr(dir, "../max_link_speed", &parent) == ncclSuccess && parent < maxGts) maxGts = parent;
+      if (ncclIbReadPciAttr(dir, "../max_link_width", &parent) == ncclSuccess && parent < maxWidth) maxWidth = parent;
+      if (gts < 0.99 * maxGts || width < 0.99 * maxWidth) {
+        INFO(NCCL_INIT | NCCL_NET,
+             "NET/IB : %s sits behind PCIe link %s running at %g GT/s x%g where %g GT/s x%g is advertised; keeping "
+             "the speed reported by the device, which accounts for it.",
+             devName, slash + 1, gts, width, maxGts, maxWidth);
+        ret = ncclSystemError;
+        break;
+      }
+      uint64_t mbps = (uint64_t)(gts * width * 1000.0);
+      if (*ownLink == 0) *ownLink = mbps;
+      if (*pathMin == 0 || mbps < *pathMin) *pathMin = mbps;
+    }
+    *slash = '\0'; // move to the parent device
+  }
+
+  free(dir);
+  if (ret == ncclSuccess && *pathMin == 0) ret = ncclSystemError;
+  return ret;
+}
+
+// 1% of slack absorbs rounding differences between the device and sysfs.
+static bool ncclIbSameBw(uint64_t value, uint64_t reference) {
+  return reference > 0 && (double)value >= 0.99 * (double)reference && (double)value <= 1.01 * (double)reference;
+}
+
+// Pick the value NCCL uses as the speed of a NIC, in Mbps.
+//
+// ibv_query_port_speed() reports the bandwidth available to this host function, that is
+// min(network port rate, host PCIe link, host rate limit). The host PCIe term does not
+// belong in a NIC speed. NCCL derives the bandwidth of every PCIe link from sysfs in
+// ncclTopoAddPci() and applies it to the paths that traverse that link, so a NET node
+// carrying it as well counts it twice; and where a GPU and its NIC sit under a common
+// PCIe bridge, GPUDirect RDMA traffic never crosses the host link at all, so the
+// GPU-to-NIC path ends up sized by a limit that is not on it. On a CX9 running an
+// 800Gbps port behind a Gen5 x16 host link the device reports 512Gbps, NCCL sizes that
+// path at 64 GB/s instead of 100 GB/s, and ncclTopoCompute() drops from the 96.0 entry
+// of rubinSpeedArrayInter to 48.0, which changes the algorithm the tuner selects.
+//
+// A rate limit on the function is a different matter: NCCL has no other source for it,
+// so it has to survive. The host PCIe term is recognised by its value, since it is the
+// bandwidth of one of the PCIe links between the NIC and the root complex, and only then
+// is the network port rate used in its place. Everything else is kept as reported. A
+// rate limit set to exactly the bandwidth of one of those links cannot be told apart and
+// is dropped; NCCL_IB_QUERY_PORT_SPEED=1 covers that case.
+//
+// queryValid is false when ibv_query_port_speed() is unavailable, failed, or was turned
+// off with NCCL_IB_QUERY_PORT_SPEED=0; only then is the port rate used unconditionally.
+int ncclIbPortSpeed(const char* devName, struct ibv_port_attr* portAttr, uint64_t queriedMbps, bool queryValid) {
+  int portSpeed = portAttr->active_speed_ex ? portAttr->active_speed_ex : portAttr->active_speed;
+  int portRate = ncclIbSpeed(portSpeed) * ncclIbWidth(portAttr->active_width);
+
+  if (!queryValid) return portRate;
+  if (ncclParamIbQueryPortSpeed() > 0) return (int)queriedMbps;
+  // Nothing is capping the port, so there is nothing to attribute.
+  if (queriedMbps == 0 || portRate <= 0 || (int64_t)queriedMbps >= portRate) return (int)queriedMbps;
+
+  uint64_t ownLink = 0, pathMin = 0;
+  if (ncclIbHostPciePath(devName, &ownLink, &pathMin) != ncclSuccess) return (int)queriedMbps;
+  if (!ncclIbSameBw(queriedMbps, ownLink) && !ncclIbSameBw(queriedMbps, pathMin)) return (int)queriedMbps;
+
+  INFO(NCCL_INIT | NCCL_NET,
+       "NET/IB : %s reports %lu Mbps, the bandwidth of its host PCIe link (own link %lu, path %lu); using the %d Mbps "
+       "network port rate instead, since NCCL models PCIe separately. Set NCCL_IB_QUERY_PORT_SPEED=1 to keep the "
+       "reported value.",
+       devName, (unsigned long)queriedMbps, (unsigned long)ownLink, (unsigned long)pathMin, portRate);
+  return portRate;
 }
 
 // Determine whether RELAXED_ORDERING is enabled and possible
@@ -549,29 +670,11 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
             ncclIbDevs[ncclNIbDevs].portNum = port_num;
             ncclIbDevs[ncclNIbDevs].link = portAttr.link_layer;
             // A non-zero active_speed_ex indicates XDR rate (0x100) or higher
-            int portSpeed = portAttr.active_speed_ex ? portAttr.active_speed_ex : portAttr.active_speed;
-            int portRate = ncclIbSpeed(portSpeed) * ncclIbWidth(portAttr.active_width);
             uint64_t querySpeed = 0;
-            if (wrap_ibv_query_port_speed(context, port_num, &querySpeed) == ncclSuccess) {
-              // ibv_query_port_speed returns speed in granularity of 100 Mbps
-              ncclIbDevs[ncclNIbDevs].speed = querySpeed * 100;
-            } else {
-              ncclIbDevs[ncclNIbDevs].speed = portRate;
-            }
-            // ibv_query_port_speed reports the bandwidth available to this host function,
-            // that is min(network port rate, host PCIe link, host rate limit), while the
-            // network port on its own runs at portRate. NCCL derives the bandwidth of every
-            // PCIe link from sysfs on its own and applies it to the paths that traverse that
-            // link, so when the two figures differ because of the host PCIe link, that link
-            // is accounted for twice and every GPU-to-NET path is sized from the lower one.
-            // Report the difference: the speed NCCL ends up using is not otherwise visible.
-            if (ncclIbDevs[ncclNIbDevs].speed < portRate) {
-              INFO(NCCL_INIT | NCCL_NET,
-                   "NET/IB : %s:%d using speed %d Mbps, below the %d Mbps rate of the network port; the difference is "
-                   "the host PCIe link, a rate limit on the function, or both. Set NCCL_IB_QUERY_PORT_SPEED=0 to use "
-                   "the network port rate instead.",
-                   devices[d]->name, port_num, ncclIbDevs[ncclNIbDevs].speed, portRate);
-            }
+            bool querySpeedValid = wrap_ibv_query_port_speed(context, port_num, &querySpeed) == ncclSuccess;
+            // ibv_query_port_speed returns speed in granularity of 100 Mbps
+            ncclIbDevs[ncclNIbDevs].speed =
+                ncclIbPortSpeed(devices[d]->name, &portAttr, querySpeedValid ? querySpeed * 100 : 0, querySpeedValid);
             COMPILER_ATOMIC_STORE(&ncclIbDevs[ncclNIbDevs].currSpeed, (uint64_t)ncclIbDevs[ncclNIbDevs].speed,
                                   std::memory_order_relaxed);
             ncclIbDevs[ncclNIbDevs].context = context;

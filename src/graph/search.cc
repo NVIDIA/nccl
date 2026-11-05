@@ -842,10 +842,11 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
       }
     }
 
+    int round = graph->nChannels / netCount;
     if (graph->pattern == NCCL_TOPO_PATTERN_NVLS || graph->pattern == NCCL_TOPO_PATTERN_COLLNET_DIRECT) {
       // NVLS search only tries to find NIC:GPU combinations to compute the heads.
-      if (graph->nChannels < netCount) {
-        int gpu = net->net.localGpu;
+      if (round == 0 || graph->pattern == NCCL_TOPO_PATTERN_NVLS) {
+        int gpu = net->net.localGpus[round % net->net.localGpuCount];
         if (gpu != -1) {
           int duplicate = 0;
           // check whether there is duplicate head when one GPU connects with multiple NICs
@@ -882,7 +883,7 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
         }
 
         // Then try the most local GPUs
-        int localGpu = net->net.localGpu;
+        int localGpu = net->net.localGpus[0];
         if (localGpu != -1) {
           NCCLCHECKGOTO(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, 0, time, NET, n,
                                              localGpu),

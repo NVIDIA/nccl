@@ -92,6 +92,8 @@ struct ncclTopoLinkList {
 
 #define NCCL_TOPO_UNDEF (-1)
 
+#define NCCL_TOPO_MAX_NET_LOCAL_GPUS 2
+
 #define NCCL_TOPO_ID_LOCAL_ID_MASK 0x00ffffffffffffff
 #define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
 #define NCCL_TOPO_ID_LOCAL_ID(id) (id & NCCL_TOPO_ID_LOCAL_ID_MASK)
@@ -138,7 +140,8 @@ struct ncclTopoNode {
       int gdrSupport;
       int collSupport;
       int maxChannels;
-      int localGpu;
+      int localGpus[NCCL_TOPO_MAX_NET_LOCAL_GPUS]; // GPUs whose first NET is this NET, or -1 if none
+      int localGpuCount; // number of localGpus
       int railId;
       int planeId;
     } net;
@@ -194,6 +197,8 @@ ncclResult_t ncclTopoConnectNodes(struct ncclTopoNode* node, struct ncclTopoNode
 ncclResult_t ncclTopoPrintPaths(struct ncclTopoSystem* system);
 ncclResult_t ncclTopoLoadSystem(const char* xmlTopoFile, struct ncclTopoSystem* system);
 ncclResult_t ncclTopoGetIntermediateRank(struct ncclTopoSystem* system, int rank, int64_t netId, int* intermediateRank);
+ncclResult_t ncclTopoGetLocalGpus(struct ncclTopoSystem* system, int64_t netId, int gpus[NCCL_TOPO_MAX_NET_LOCAL_GPUS],
+                                  int* gpuCount);
 ncclResult_t ncclTopoGetGpuMinPath(struct ncclTopoSystem* system, int type, int* min);
 ncclResult_t ncclTopoGetGpuMaxPath(struct ncclTopoSystem* system, int type, int* max);
 ncclResult_t ncclTopoSplitNvLink(struct ncclTopoSystem* system, int* splitNvLink);

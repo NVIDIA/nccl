@@ -2427,7 +2427,8 @@ ncclResult_t ncclTopoGetLocalRmaDevs(struct ncclComm* comm, int* localRmaDevs, i
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, int* gpuIndex) {
+static ncclResult_t ncclTopoFindLocalGpu(struct ncclTopoSystem* system, int64_t netId, int maxChannels, int skipGpu,
+                                         int* gpuIndex) {
   ncclResult_t ret = ncclSuccess;
   int netIndex;
   NCCLCHECK(ncclTopoIdToIndex(system, NET, netId, &netIndex));
@@ -2437,10 +2438,11 @@ ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, i
   NCCLCHECK(ncclTopoGetLocal(system, NET, netIndex, GPU, localGpus, &localGpuCount, NULL));
 
   int foundGpu = -1;
-  for (int c = 0; c < MAXCHANNELS; c++) {
+  for (int c = 0; c < maxChannels; c++) {
     for (int lg = 0; lg < localGpuCount; lg++) {
       int g = localGpus[lg];
       struct ncclTopoNode* gpu = system->nodes[GPU].nodes + g;
+      if (skipGpu != -1 && gpu->gpu.dev == system->nodes[GPU].nodes[skipGpu].gpu.dev) continue;
       int64_t id;
       NCCLCHECK(ncclTopoGetLocalNet(system, gpu->gpu.rank, c, &id, NULL));
       if (netId == id) {
@@ -2452,6 +2454,10 @@ ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, i
 exit:
   *gpuIndex = foundGpu;
   return ret;
+}
+
+ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, int* gpuIndex) {
+  return ncclTopoFindLocalGpu(system, netId, MAXCHANNELS, -1, gpuIndex);
 }
 
 /****************************/

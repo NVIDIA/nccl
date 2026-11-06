@@ -845,7 +845,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     nicHandler = DOCA_GPUNETIO_VERBS_NIC_HANDLER_CPU_PROXY_FREE_FLOW;
   }
 
-  NCCLCHECK(cComm->getProperties(cComm->dev, &props));
+  NCCLCHECKGOTO(cComm->getProperties(cComm->dev, &props), status, out);
 
   NCCLCHECKGOTO(gin_gdaki_gpu_ctx_hd_mhandle->allocate(ncontexts * NCCL_GIN_GDAKI_GPU_CONTEXT_MAX_SIZE), status, out);
   NCCLCHECKGOTO(counters_table->allocate(num_counters * ncontexts, nranks), status, out);
@@ -888,10 +888,11 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
   gethostname(gdaki_ctx->hostname, HOST_NAME_MAX);
   snprintf(gdaki_ctx->ib_dev_name, IBV_SYSFS_NAME_MAX, "%s", props.name);
 
-  CUDACHECK(cudaGetDevice(&gdaki_ctx->cuda_id));
-  CUDACHECK(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, gdaki_ctx->cuda_id));
+  CUDACHECKGOTO(cudaGetDevice(&gdaki_ctx->cuda_id), status, out);
+  CUDACHECKGOTO(cudaDeviceGetPCIBusId(pciBusId, MAX_PCI_ADDRESS_LEN, gdaki_ctx->cuda_id), status, out);
 
-  CUDACHECK(cudaDeviceGetAttribute(&rdmaWritesOrder, cudaDevAttrGPUDirectRDMAWritesOrdering, gdaki_ctx->cuda_id));
+  CUDACHECKGOTO(cudaDeviceGetAttribute(&rdmaWritesOrder, cudaDevAttrGPUDirectRDMAWritesOrdering, gdaki_ctx->cuda_id),
+                status, out);
   preHopper = (rdmaWritesOrder < CU_FLUSH_GPU_DIRECT_RDMA_WRITES_TO_OWNER);
   if (ncclParamIbDataDirect() > 0) {
     ncclResult_t result =

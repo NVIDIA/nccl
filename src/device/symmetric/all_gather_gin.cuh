@@ -69,7 +69,10 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct nc
           }
         }
       }
-      gin.flush(warps);
+      // This ring sends only to nextPeer; retain completion for all of those puts.
+      ncclGinRequest_t request;
+      gin.flushAsync(rail, nextPeer, &request, warps);
+      gin.wait(request, warps);
     } else {
       ncclCoopWarpSpan warps(1, blockDim.x / WARP_SIZE - 1, 1);
       // Loop through rail ranks starting from itself

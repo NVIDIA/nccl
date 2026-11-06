@@ -2461,7 +2461,7 @@ ncclResult_t ncclTopoGetLocalGpu(struct ncclTopoSystem* system, int64_t netId, i
   return ncclTopoFindLocalGpu(system, netId, MAXCHANNELS, -1, gpuIndex);
 }
 
-NCCL_PARAM(TopoNetLocalGpus, "TOPO_NET_LOCAL_GPUS", 1);
+NCCL_PARAM(TopoNetLocalGpus, "TOPO_NET_LOCAL_GPUS", 2);
 
 ncclResult_t ncclTopoGetLocalGpus(struct ncclTopoSystem* system, int64_t netId, int gpus[NCCL_TOPO_MAX_NET_LOCAL_GPUS],
                                   int* gpuCount) {

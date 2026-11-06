@@ -1149,7 +1149,8 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
       ret = ncclInternalError;
       goto fail;
     }
-    if (ncclGroupBlocking == 0) {
+    // Simulation must finish synchronously to return its estimate without launching work.
+    if (ncclGroupBlocking == 0 && simInfo == nullptr) {
       /* nonblocking group */
       if (!ncclIntruQueueEmpty(&groupJob->asyncJobs)) {
         ncclAsyncJob* job = ncclIntruQueueHead(&groupJob->asyncJobs);

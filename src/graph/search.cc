@@ -845,23 +845,21 @@ ncclResult_t ncclTopoSearchRecNet(struct ncclTopoSystem* system, struct ncclTopo
     int round = graph->nChannels / netCount;
     if (graph->pattern == NCCL_TOPO_PATTERN_NVLS || graph->pattern == NCCL_TOPO_PATTERN_COLLNET_DIRECT) {
       // NVLS search only tries to find NIC:GPU combinations to compute the heads.
-      if (round == 0 || graph->pattern == NCCL_TOPO_PATTERN_NVLS) {
-        int gpu = net->net.localGpus[round % net->net.localGpuCount];
-        if (gpu != -1) {
-          int duplicate = 0;
-          // check whether there is duplicate head when one GPU connects with multiple NICs
-          for (int gc = 0; gc < graph->nChannels; gc++) {
-            if (graph->intra[gc * system->nodes[GPU].count] == system->nodes[GPU].nodes[gpu].gpu.rank) {
-              duplicate = 1;
-              break;
-            }
+      int gpu = net->net.localGpus[round % net->net.localGpuCount];
+      if (gpu != -1) {
+        int duplicate = 0;
+        // check whether there is duplicate head when one GPU connects with multiple NICs
+        for (int gc = 0; gc < graph->nChannels; gc++) {
+          if (graph->intra[gc * system->nodes[GPU].count] == system->nodes[GPU].nodes[gpu].gpu.rank) {
+            duplicate = 1;
+            break;
           }
-          if (!duplicate) {
-            NCCLCHECKGOTO(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, 0, time, NET, n,
-                                               gpu),
-                          ret, exit);
-            graphFound = 1;
-          }
+        }
+        if (!duplicate) {
+          NCCLCHECKGOTO(ncclTopoSearchTryGpu(system, graph, saveGraph, 0, backToNet, backToFirstRank, 0, time, NET, n,
+                                             gpu),
+                        ret, exit);
+          graphFound = 1;
         }
       }
     } else {

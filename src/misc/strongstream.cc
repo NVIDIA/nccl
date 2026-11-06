@@ -207,7 +207,7 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
         return ncclSuccess;
       } else {
         cudaStreamCaptureStatus status;
-        CUDACHECKGOTO(cudaStreamIsCapturing(cap->captureStream, &status), ret, do_unlock);
+        CUDACHECKGOTO(cudaStreamIsCapturing(cap->captureStream, &status), ret, fail);
         if (status == cudaStreamCaptureStatusActive) {
           pcap = &cap->next; // Active capture doesn't match, on to next.
         } else {
@@ -227,14 +227,27 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
     cap = spare;
     if (cap == nullptr) {
       cap = (struct ncclStrongStreamCapture*)calloc(1, sizeof(struct ncclStrongStreamCapture));
-      CUDACHECKGOTO(cudaStreamCreateWithFlags(&cap->captureStream, cudaStreamNonBlocking), ret, do_unlock);
+      if (cap == nullptr) {
+        WARN("Failed to allocate ncclStrongStreamCapture");
+        ret = ncclSystemError;
+        goto fail;
+      }
+      CUDACHECKGOTO(cudaStreamCreateWithFlags(&cap->captureStream, cudaStreamNonBlocking), ret, fail_free_cap);
     }
     cap->graphId = graph.graphId;
     cap->acquiredBy = localThreadId();
     // Push to capturing list.
     cap->next = ss->captureHead;
     ss->captureHead = cap;
+    goto do_unlock;
 
+  fail_free_cap:
+    free(cap);
+  fail:
+    if (spare != nullptr) {
+      (void)cudaStreamDestroy(spare->captureStream);
+      free(spare);
+    }
   do_unlock:
     if (concurrent) lock.unlock();
     if (ret != ncclSuccess) return ret;

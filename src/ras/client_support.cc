@@ -1181,6 +1181,8 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
   struct rasAuxComm* auxComms = nullptr;
   int maxCommSize;
   int* peerIdxConv = nullptr;
+  union ncclSocketAddress* unsortedPeers = nullptr;
+  int* peerSortedIdx = nullptr; // Collective peerIdx -> index in the sorted coll->peers.
   int vcIdx;
   int nPeersMissing;
   uint64_t* peerNvmlDevs = nullptr;
@@ -1232,8 +1234,16 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
     peerIdxConv[peerIdx] = rasPeerFind(coll->peers + peerIdx);
     TRACE(NCCL_RAS, "RAS: coll peers[%d] -> rasPeers[%d]", peerIdx, peerIdxConv[peerIdx]);
   }
+  NCCLCHECKGOTO(ncclCalloc(&unsortedPeers, coll->nPeers), ret, fail);
+  memcpy(unsortedPeers, coll->peers, coll->nPeers * sizeof(*coll->peers));
   // Sort coll->peers to match the ordering of rasPeers -- we may need it later...
   qsort(coll->peers, coll->nPeers, sizeof(*coll->peers), &ncclSocketsCompare);
+  // Unlike rasPeers, the sorted coll->peers also has the addresses of processes missing from rasPeers.
+  NCCLCHECKGOTO(ncclCalloc(&peerSortedIdx, coll->nPeers), ret, fail);
+  for (int peerIdx = 0; peerIdx < coll->nPeers; peerIdx++)
+    peerSortedIdx[peerIdx] = (union ncclSocketAddress*)bsearch(unsortedPeers + peerIdx, coll->peers, coll->nPeers,
+                                                               sizeof(*coll->peers), ncclSocketsCompare) -
+                             coll->peers;
 
   // Check output format and call appropriate dump function for JSON.
   if (client->outputFormat == RAS_OUTPUT_JSON) {
@@ -1293,12 +1303,11 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
       } // nPeersMissing > 0 || nRasDeadPeers > 0
     } // if (comm->nMissingRanks > 0)
 
-    // Initialize auxCommRanks from comm->rank, converting peerIdx to rasPeers, then sort by it -- that way we will
-    // have the ranks sorted by node and process, which makes counting easy.
+    // Sort ranks by collective peer address to count nodes and processes.
     for (int rankIdx = 0; rankIdx < comm->nRanks; rankIdx++) {
       struct rasCollComms::comm::rank* rank = comm->ranks + rankIdx;
       auxCommRanks[rankIdx].rank = rank;
-      auxCommRanks[rankIdx].value = peerIdxConv[rank->peerIdx];
+      auxCommRanks[rankIdx].value = peerSortedIdx[rank->peerIdx];
       TRACE(NCCL_RAS, "RAS: comm rank[%d] commRank %d, peerIdx %d (-> %d), cudaDev %d, nvmlDev %d", rankIdx,
             rank->commRank, rank->peerIdx, peerIdxConv[rank->peerIdx], rank->cudaDev, rank->nvmlDev);
       TRACE(NCCL_RAS, "RAS: comm rank[%d] collOpCounts (%ld, %ld, %ld, %ld, %ld)", rankIdx, rank->collOpCounts[0],
@@ -1325,7 +1334,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
         // rankIdx > 0
         if (auxRank->value != auxRank[-1].value) {
           auxComm->nPeers++;
-          if (!ncclSocketsSameNode(&rasPeers[auxRank->value].addr, &rasPeers[auxRank[-1].value].addr)) {
+          if (!ncclSocketsSameNode(coll->peers + auxRank->value, coll->peers + auxRank[-1].value)) {
             auxComm->nNodes++;
             if (auxComm->ranksPerNodeMin > nRanks) auxComm->ranksPerNodeMin = nRanks;
             if (auxComm->ranksPerNodeMax < nRanks) auxComm->ranksPerNodeMax = nRanks;
@@ -1870,6 +1879,8 @@ exit:
   free(collOpCounts);
   free(valCounts);
   free(peerIdxConv);
+  free(unsortedPeers);
+  free(peerSortedIdx);
   free(auxCommRanks);
   free(auxComms);
   return ret;

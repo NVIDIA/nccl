@@ -360,8 +360,10 @@ static ncclResult_t commFree(ncclComm_t comm) {
       NCCLCHECK(ncclGinFinalize(comm));
       for (int c = 0; c < MAXCHANNELS; c++) {
         if (comm->sharedRes->peers[c]) free(comm->sharedRes->peers[c]);
-        if (comm->sharedRes->devPeers[c]) ncclCudaFree(comm->sharedRes->devPeers[c], comm->memManager);
+        if (comm->sharedRes->devPeers[c] && !comm->sharedRes->devPeersInSlab[c])
+          ncclCudaFree(comm->sharedRes->devPeers[c], comm->memManager);
       }
+      if (comm->sharedRes->devPeersSlab) NCCLCHECK(ncclCudaFree(comm->sharedRes->devPeersSlab, comm->memManager));
       free(comm->sharedRes->tpRankToLocalRank);
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->hostStream));
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->deviceStream));

@@ -94,6 +94,7 @@ struct ncclNvlsUcSegment {
 struct ncclNvlsSharedRes {
   int refCount;
   bool inited;
+  struct ncclDevChannelPeer* devPeersSlab;
   CUmemAccessDesc accessDesc;
   int dev;
   // Single MC object per NVLS domain: credit and data are slices of one group.

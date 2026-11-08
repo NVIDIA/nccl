@@ -1037,6 +1037,10 @@ ncclResult_t ncclTopoComputeP2pChannels(struct ncclComm* comm) {
     comm->p2pnChannelsPerPeer = std::min(comm->p2pnChannels, comm->p2pnChannelsPerPeer);
   }
 
+  // NVLS and P2P can use more channels than the collective graph.
+  int metadataChannels = std::max(comm->nChannels, std::max(comm->p2pnChannels, comm->nvlsChannels));
+  NCCLCHECK(initChannelMetadata(comm, metadataChannels));
+
   // Init channels that weren't used so far
   for (int c = comm->nChannels; c < comm->p2pnChannels; c++) NCCLCHECK(initChannel(comm, c));
 

@@ -8,6 +8,7 @@
 #include "core.h"
 #include "tuning.h"
 #include "cost_model.h"
+#include "platforms/platforms.h"
 #include "comm.h"
 #include "cudawrap.h"
 
@@ -42,6 +43,11 @@ static ncclResult_t parseList(const char* str, const char* const prefixElems[], 
     subToken = strdup(fullToken);
     char* tmpSubStr;
     char* prefix = strtok_r(subToken, ":", &tmpSubStr);
+    if (prefix == NULL) {
+      WARN("Empty entry when parsing \"%s\"", str);
+      ret = ncclInvalidUsage;
+      goto fail;
+    }
     char* elemList = strtok_r(NULL, ":", &tmpSubStr);
     if (elemList == NULL) {
       if (fullToken != fullStr) {
@@ -189,6 +195,8 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {87.7, 22.5 /*avg of ring & tree*/, 19.0}, /* Ampere-N1/AMD-N2/AMD-N4) */
     {141.0, 45.0 /*avg of ring & tree*/, 35.0}, /* Hopper-N1/AMD-N2/AMD-N4) */
     {2 * 141.2, 2 * 45.0 /*avg of ring & tree*/, 2 * 35.0}, /* Blackwell-N1/AMD-N2/AMD-N4) */
+    // For rubin this value is now per CTA and not an overall limit.
+    {2.0, 0.6 /*avg of ring & tree*/, 0.46}, /* Rubin-N1/AMD-N2/AMD-N4) */
   },
     // perChMaxRingLL128Bws
   {
@@ -196,6 +204,8 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 36.7}, /* Hopper (N1/N2/N4) */
     {40.0, 40.0, 40.0}, /* Blackwell (N1/N2/N4) */
+    // For rubin this value is per CTA and not per topology channel.
+    {21.6, 16.3, 11.4}, /* Rubin (N1/N2/N4) */
   },
     // perChMaxTreeLL128Bws
   {
@@ -203,6 +213,8 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {20.0, 20.0, 20.0}, /* Ampere (N1/N2/N4) */
     {36.7, 36.7, 29.0}, /* Hopper (N1/N2/N4) */
     {55.6, 36.7, 20.0}, /* Blackwell (N1/N2/N4) */
+    // For rubin this value is per CTA and not per topology channel.
+    {11.20, 11.91, 11.91}, /* Rubin (N1/N2/N4) */
   },
     // perChMaxTreeBws
   {
@@ -210,13 +222,15 @@ static const ncclTunerConstants_t ncclTunerConstantsDefaults = {
     {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
     {38.7, 41.4, 36.0}, /* Hopper (N1/N2/N4) */
     {70.0, 42.8, 24.0}, /* Blackwell (N1/N2/N4) */
+    {-1.0, -1.0, -1.0}, /* Rubin (N1/N2/N4) */
   },
     // perChMaxNVLSTreeBws
   {
     {26.5, 18.5, 10.0}, /* Volta (N1/N2/N4) */
     {24.0, 23.6, 17.8}, /* Ampere (N1/N2/N4) */
-    {0.0, 57.7, 45.5}, /* Hopper (N1/N2/N4) */
-    {0.0, 96.0, 80.0} /* Blackwell (N1/N2/N4) */
+    {0.0, 57.7, 45.5},  /* Hopper (N1/N2/N4) */
+    {0.0, 96.0, 80.0},  /* Blackwell (N1/N2/N4) */
+    {-1.0, -1.0, -1.0}, /* Rubin (N1/N2/N4) */
   }
 };
 
@@ -231,49 +245,68 @@ static struct ncclTuningModelEntry_t modelMap[] = {
     /*
 Initialize default, static models here
 {mod_init, mod_sim, mod_final, enabled}
-Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
+Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce, AlltoAll
 */
-  {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}},       // Tree/LL
-  {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}},       // Tree/LL128
-  {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}},       // Tree/Simple
-  {ncclTuningRingModelInit, ncclTuningRingModelSim, nullptr, {1, 1, 1, 1, 1}},       // Ring/LL
-  {ncclTuningRingModelInit, ncclTuningRingModelSim, nullptr, {1, 1, 1, 1, 1}},       // Ring/LL128
-  {ncclTuningRingModelInit, ncclTuningRingModelSim, nullptr, {1, 1, 1, 1, 1}},       // Ring/Simple
-  {nullptr, nullptr, nullptr, {0}}, // CollNetDirect/LL, disabled as there is no implementation
-  {nullptr, nullptr, nullptr, {0}}, // CollNetDirect/LL128, disabled as there is no implementation
-  {ncclTuningCollnetModelInit, ncclTuningCollnetModelSim, nullptr, {0, 0, 1, 1, 1}}, // CollNetDirect/Simple
-  {nullptr, nullptr, nullptr, {0}}, // CollNetChain/LL, disabled as there is no implementation
-  {nullptr, nullptr, nullptr, {0}}, // CollNetChain/LL128, disabled as there is no implementation
-  {ncclTuningCollnetModelInit, ncclTuningCollnetModelSim, nullptr, {0, 0, 0, 0, 1}}, // CollNetChain/Simple
-  {nullptr, nullptr, nullptr, {0}}, // NVLS/LL, disabled as there is no implementation
-  {nullptr, nullptr, nullptr, {0}}, // NVLS/LL128, disabled as there is no implementation
-  {ncclTuningNvlsModelInit, ncclTuningNvlsModelSim, nullptr, {0, 0, 1, 1, 1}}, // NVLS/Simple
-  {nullptr, nullptr, nullptr, {0}}, // NVLSTree/LL, disabled as there is no implementation
-  {nullptr, nullptr, nullptr, {0}}, // NVLSTree/LL128, disabled as there is no implementation
-  {ncclTuningNvlsModelInit, ncclTuningNvlsModelSim, nullptr, {0, 0, 0, 0, 1}}, // NVLSTree/Simple
-  {nullptr, nullptr, nullptr, {0}}, // PAT/LL
-  {nullptr, nullptr, nullptr, {0}}, // PAT/LL128
-  {ncclTuningPatModelInit, ncclTuningPatModelSim, nullptr, {0, 0, 1, 1, 0}}, // PAT/Simple
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}}, // AllReduce_AGxLL_R
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}}, // AllReduce_AGxLLMC_R
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}}, // AllReduce_RSxTmaLD_AGxTmaST
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}}, // AllReduce_RSxLD_AGxST
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}}, // AllReduce_RSxLDMC_AGxSTMC
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}}, // AllGather_LL
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}}, // AllGather_LLMC
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}}, // AllGather_TmaST
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}}, // AllGather_ST
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}}, // AllGather_TmaSTMC
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}}, // AllGather_STMC
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}}, // AllGather_RailRing_LsaSTMC
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}}, // ReduceScatter_LL
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}}, // ReduceScatter_TmaLD
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}}, // ReduceScatter_LD
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}}, // ReduceScatter_LDMC
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}}, // ReduceScatter_RailA2A_LsaLD
-  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}}, // ReduceScatter_RailA2A_LsaLDMC
-  {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}}, // CE AllGather Unicast
-  {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}}, // CE AllGather Multicast
+  {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL
+  {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/LL128
+  {ncclTuningTreeModelInit, ncclTuningTreeModelSim, nullptr, {0, 0, 0, 0, 1}, {}},       // Tree/Simple
+  {ncclTuningRingModelInit, ncclTuningRingModelSim, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/LL
+  {ncclTuningRingModelInit, ncclTuningRingModelSim, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/LL128
+  {ncclTuningRingModelInit, ncclTuningRingModelSim, nullptr, {1, 1, 1, 1, 1}, {}},       // Ring/Simple
+  {nullptr, nullptr, nullptr, {0}, {}}, // CollNetDirect/LL, disabled as there is no implementation
+  {nullptr, nullptr, nullptr, {0}, {}}, // CollNetDirect/LL128, disabled as there is no implementation
+  {ncclTuningCollnetModelInit, ncclTuningCollnetModelSim, nullptr, {0, 0, 1, 1, 1}, {}}, // CollNetDirect/Simple
+  {nullptr, nullptr, nullptr, {0}, {}}, // CollNetChain/LL, disabled as there is no implementation
+  {nullptr, nullptr, nullptr, {0}, {}}, // CollNetChain/LL128, disabled as there is no implementation
+  {ncclTuningCollnetModelInit, ncclTuningCollnetModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // CollNetChain/Simple
+  {nullptr, nullptr, nullptr, {0}, {}}, // NVLS/LL, disabled as there is no implementation
+  {nullptr, nullptr, nullptr, {0}, {}}, // NVLS/LL128, disabled as there is no implementation
+  {ncclTuningNvlsModelInit, ncclTuningNvlsModelSim, nullptr, {0, 0, 1, 1, 1}, {}}, // NVLS/Simple
+  {nullptr, nullptr, nullptr, {0}, {}}, // NVLSTree/LL, disabled as there is no implementation
+  {nullptr, nullptr, nullptr, {0}, {}}, // NVLSTree/LL128, disabled as there is no implementation
+  {ncclTuningNvlsModelInit, ncclTuningNvlsModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // NVLSTree/Simple
+  {nullptr, nullptr, nullptr, {0}, {}}, // PAT/LL
+  {nullptr, nullptr, nullptr, {0}, {}}, // PAT/LL128
+  {ncclTuningPatModelInit, ncclTuningPatModelSim, nullptr, {0, 0, 1, 1, 0}, {}}, // PAT/Simple
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_AGxLL_R
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_AGxLLMC_R
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_RSxTmaLD_AGxTmaST
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_RSxLD_AGxST
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_RSxLDMC_AGxSTMC
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_LLMC
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_TmaST
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_ST
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_TmaSTMC
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_STMC
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_RailRing_LsaSTMC
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_TmaLD
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_LD
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_LDMC
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_RailA2A_LsaLD
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_RailA2A_LsaLDMC
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Ring_Simple
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Tree_Simple
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_Ring_Simple
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_Simple
+  {nullptr, ncclTuningSymkModelSim, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_Simple
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_Simple
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Ring_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Tree_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_Ring_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_LL
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Ring_LL128
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 1}, {}}, // AllReduce_Tree_LL128
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // AllGather_Ring_LL128
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 1, 0}, {}}, // ReduceScatter_Ring_LL128
+  {nullptr, ncclTuningSymkModelSim, nullptr, {1, 0, 0, 0, 0}, {}}, // Broadcast_Ring_LL128
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 1, 0, 0, 0}, {}}, // Reduce_Ring_LL128
+  {nullptr, ncclTuningSymkModelSim, nullptr, {0, 0, 0, 0, 0, 1}, {}}, // AlltoAll_LL
+  {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Unicast
+  {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
 };
 
 /*
@@ -281,11 +314,13 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   This will return the model entry for the given id.
   If the id is out of bounds, it will return an invalid argument error.
 */
-static ncclResult_t getModelEntry(int id, struct ncclTuningModelEntry_t** entry) {
+static ncclResult_t getModelEntry(int compCap, int id, struct ncclTuningModelEntry_t** entry) {
   if (id < 0 || id >= NCCL_TUNING_COUNT) {
     return ncclInvalidArgument;
   }
-  *entry = &modelMap[id];
+  *entry = &modelMap[id]; // legacy fallback
+
+  NCCLCHECK(ncclTuningGetModelPlatformEntry(compCap, id, entry));
   return ncclSuccess;
 }
 
@@ -295,6 +330,7 @@ static ncclResult_t getModelEntry(int id, struct ncclTuningModelEntry_t** entry)
 */
 ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm) {
   comm->tuningContext.tuningConstants = ncclTunerConstantsDefaults;
+  NCCLCHECK(ncclTuningPlatformPreInit(comm));
   return ncclSuccess;
 }
 
@@ -305,11 +341,14 @@ ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm) {
 */
 ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
+  const char* tuningFuncStr[NCCL_NUM_TUNING_FUNCTIONS] = {"Broadcast",     "Reduce",    "AllGather",
+                                                          "ReduceScatter", "AllReduce", "AlltoAll"};
   // Protocols/Algorithms enable/disable, and user overrides.
   // All are enabled except ll128 which is enabled by default only in certain cases.
   int protoEnable[NCCL_NUM_FUNCTIONS * NCCL_NUM_PROTOCOLS];
   int algoEnable[NCCL_NUM_FUNCTIONS * NCCL_NUM_ALGORITHMS];
-  int symKernelIdEnable[NCCL_NUM_FUNCTIONS * ncclSymkKernelId_Count];
+  int symKernelIdEnable[NCCL_NUM_TUNING_FUNCTIONS * ncclSymkKernelId_Count];
+  int symKernelForced[NCCL_NUM_TUNING_FUNCTIONS] = {};
   for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
     for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
       protoEnable[f * NCCL_NUM_PROTOCOLS + p] = p == NCCL_PROTO_LL128 ? 2 : 1;
@@ -317,6 +356,8 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
     for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
       algoEnable[f * NCCL_NUM_ALGORITHMS + a] = 1;
     }
+  }
+  for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
     for (int k = 0; k < ncclSymkKernelId_Count; k++) {
       symKernelIdEnable[f * ncclSymkKernelId_Count + k] = 1;
     }
@@ -326,7 +367,7 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   const char* symKernelIdStr = ncclGetEnv("NCCL_SYM_KERNEL");
   if ((algoStr && strlen(algoStr) > 0) || (symKernelIdStr && strlen(symKernelIdStr) > 0)) {
     std::fill_n(algoEnable, NCCL_NUM_FUNCTIONS * NCCL_NUM_ALGORITHMS, 0);
-    std::fill_n(symKernelIdEnable, NCCL_NUM_FUNCTIONS * ncclSymkKernelId_Count, 0);
+    std::fill_n(symKernelIdEnable, NCCL_NUM_TUNING_FUNCTIONS * ncclSymkKernelId_Count, 0);
   }
   if (protoStr) {
     INFO(NCCL_ENV, "NCCL_PROTO set by environment to %s", protoStr);
@@ -340,30 +381,33 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   }
   if (symKernelIdStr) {
     INFO(NCCL_ENV, "NCCL_SYM_KERNEL set by environment to %s", symKernelIdStr);
-    NCCLCHECK(parseList(symKernelIdStr, ncclFuncStr, NCCL_NUM_FUNCTIONS, ncclSymKernelStr, ncclSymkKernelId_Count,
-                        symKernelIdEnable, comm->tuningContext.forced));
+    NCCLCHECK(parseList(symKernelIdStr, tuningFuncStr, NCCL_NUM_TUNING_FUNCTIONS, ncclSymKernelStr,
+                        ncclSymkKernelId_Count, symKernelIdEnable, symKernelForced));
+  }
+  for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
+    comm->tuningContext.forced[f] |= symKernelForced[f];
   }
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningModelEntry_t* model = nullptr;
-    NCCLCHECKGOTO(getModelEntry(i, &model), ret, fail);
+    NCCLCHECKGOTO(getModelEntry(comm->minCompCap, i, &model), ret, fail);
     if (model == nullptr) {
       ret = ncclInternalError;
       goto fail;
     }
-    for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
+    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
       comm->tuningContext.enabled[i][f] = model->enabled[f];
     }
     if (model->init != nullptr) {
-      NCCLCHECKGOTO(model->init(comm, i, comm->tuningContext.enabled[i]), ret, fail);
+      NCCLCHECKGOTO(model->init(comm, i, comm->tuningContext.enabled[i], &model->internal), ret, fail);
     }
     // TODO: allow NCCL_ALGO=CE to force CE-only tuning; CE is currently excluded from algo/proto forcing.
     if (i >= NCCL_TUNING_CE_METHOD_ID_OFFSET) continue;
     int algo, proto, symKernelId;
     NCCLCHECK(ncclTuningExpandId(i, &algo, &proto, &symKernelId, nullptr));
-    for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
+    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
       // Disable LL128 when 1) it is not supported on the platform, and 2) user did not explicitly request it.
       // protoEnable[..] == 2 indicates that user did not set NCCL_PROTO=LL128 explicitly.
-      if (proto == NCCL_PROTO_LL128 && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 2 &&
+      if (f < NCCL_NUM_FUNCTIONS && proto == NCCL_PROTO_LL128 && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] == 2 &&
           !isLL128Enabled(comm->minCompCap, comm->maxCompCap, comm->graphs[algo].typeInter,
                           comm->graphs[algo].typeIntra, comm->nRanks, f, algo, comm->minDriverVersion)) {
         comm->tuningContext.enabled[i][f] = 0;
@@ -371,12 +415,12 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
       //  Check the user env vars only for functions that have a forced configuration and not already disabled.
       if (comm->tuningContext.forced[f] == 0 || comm->tuningContext.enabled[i][f] == 0) continue;
       comm->tuningContext.enabled[i][f] = 0;
-      TRACE(NCCL_TUNING, "a/p/s %s/%s/%s enabled %d/%d/%d", ncclAlgoStr[algo], ncclProtoStr[proto],
+      TRACE(NCCL_TUNING, "a/p/s %s/%s/%s enabled %d/%d/%d", ncclAlgoToString(algo), ncclProtoToString(proto),
             ncclSymkKernelIdToString(symKernelId),
-            algo != NCCL_ALGO_UNDEF ? algoEnable[f * NCCL_NUM_ALGORITHMS + algo] : -1,
-            proto != NCCL_PROTO_UNDEF ? protoEnable[f * NCCL_NUM_PROTOCOLS + proto] : -1,
+            f < NCCL_NUM_FUNCTIONS && algo != NCCL_ALGO_UNDEF ? algoEnable[f * NCCL_NUM_ALGORITHMS + algo] : -1,
+            f < NCCL_NUM_FUNCTIONS && proto != NCCL_PROTO_UNDEF ? protoEnable[f * NCCL_NUM_PROTOCOLS + proto] : -1,
             symKernelId != ncclSymkKernelId_Count ? symKernelIdEnable[f * ncclSymkKernelId_Count + symKernelId] : -1);
-      if (((algo != NCCL_ALGO_UNDEF && algoEnable[f * NCCL_NUM_ALGORITHMS + algo] != 0) &&
+      if ((f < NCCL_NUM_FUNCTIONS && (algo != NCCL_ALGO_UNDEF && algoEnable[f * NCCL_NUM_ALGORITHMS + algo] != 0) &&
            (proto != NCCL_PROTO_UNDEF && protoEnable[f * NCCL_NUM_PROTOCOLS + proto] != 0)) ||
           (symKernelId != ncclSymkKernelId_Count && symKernelIdEnable[f * ncclSymkKernelId_Count + symKernelId] != 0)) {
         comm->tuningContext.enabled[i][f] = 1;
@@ -406,17 +450,17 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
     }
     offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n");
 
-    for (int f = 0; f < NCCL_NUM_FUNCTIONS; f++) {
+    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
       offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s | ",
-                         ncclFuncStr[f]);
+                         tuningFuncStr[f]);
       for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
         offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%8d  ",
-                           protoEnable[f * NCCL_NUM_PROTOCOLS + p]);
+                           f < NCCL_NUM_FUNCTIONS ? protoEnable[f * NCCL_NUM_PROTOCOLS + p] : -1);
       }
       offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
       for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
         offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13d  ",
-                           algoEnable[f * NCCL_NUM_ALGORITHMS + a]);
+                           f < NCCL_NUM_FUNCTIONS ? algoEnable[f * NCCL_NUM_ALGORITHMS + a] : -1);
       }
       offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
       for (int k = 0; k < ncclSymkKernelId_Count; k++) {
@@ -446,7 +490,7 @@ ncclResult_t ncclTuningCostModelFinalize(struct ncclComm* comm) {
   ncclResult_t ret = ncclSuccess;
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningModelEntry_t* model = nullptr;
-    NCCLCHECKGOTO(getModelEntry(i, &model), ret, fail);
+    NCCLCHECKGOTO(getModelEntry(comm->minCompCap, i, &model), ret, fail);
     if (model == nullptr) {
       ret = ncclInternalError;
       goto fail;
@@ -471,17 +515,19 @@ ncclResult_t ncclTuningCostModelSimModel(int id, struct ncclTuningInput_t* const
                                          struct ncclTuningResult_t* const result) {
   struct ncclTuningModelEntry_t* model = nullptr;
   ncclResult_t ret = ncclSuccess;
-  result->forced = input->comm->tuningContext.forced[input->func];
-  NCCLCHECKGOTO(getModelEntry(id, &model), ret, not_valid);
+  int tuningFunc = ncclTuningFuncIndex(input->func);
+  if (tuningFunc < 0) goto not_valid;
+  result->forced = input->comm->tuningContext.forced[tuningFunc];
+  NCCLCHECKGOTO(getModelEntry(input->comm->minCompCap, id, &model), ret, not_valid);
   if (model == nullptr) {
     ret = ncclInternalError;
     goto not_valid;
   }
-  if (input->comm->tuningContext.enabled[id][input->func] == 0) {
+  if (input->comm->tuningContext.enabled[id][tuningFunc] == 0) {
     goto not_valid;
   }
   if (model->model != nullptr) {
-    NCCLCHECKGOTO(model->model(input, result), ret, not_valid);
+    NCCLCHECKGOTO(model->model(input, result, &model->internal), ret, not_valid);
     if (result->timeUs <= 0.0) {
       goto not_valid;
     }

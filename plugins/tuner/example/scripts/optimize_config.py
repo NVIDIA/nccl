@@ -41,6 +41,7 @@ import csv
 import argparse
 import sys
 import os
+import math
 from collections import defaultdict
 from typing import Dict, List, Tuple, Any
 
@@ -172,6 +173,12 @@ class ConfigOptimizer:
                 reader = csv.DictReader(f)
                 for row in reader:
                     try:
+                        metric = row.get(self.optimization_metric)
+                        if metric is None or not metric.strip():
+                            raise ValueError(f"Missing optimization metric: {self.optimization_metric}")
+                        metric_value = float(metric)
+                        if not math.isfinite(metric_value) or metric_value < 0:
+                            raise ValueError(f"Invalid optimization metric: {self.optimization_metric}={metric}")
                         data.append(PerformanceData(row))
                     except (ValueError, KeyError) as e:
                         print(f"Warning: Skipping invalid row: {row} - {e}")

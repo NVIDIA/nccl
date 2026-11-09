@@ -17,15 +17,18 @@ functions.
 
 ## Plugin name and supporting multiple profiler plugins
 
-When NCCL is initialized, it will look for a `libnccl-profiler.so` library and dynamically load
-it, then look for symbols inside the library.
+When NCCL is initialized, it loads `libnccl-profiler.so` by default if `NCCL_PROFILER_PLUGIN`
+is unset or empty, and looks for a supported `ncclProfiler_vX` symbol.
 
-The `NCCL_PROFILER_PLUGIN` environment variable allows multiple plugins to coexist. If set, NCCL
-will look for a library with a name of `libnccl-profiler-${NCCL_PROFILER_PLUGIN}.so`. It is therefore
-advised to name the library following that pattern, with a symlink pointing `libnccl-profiler.so`
-to `libnccl-profiler-${NCCL_PROFILER_PLUGIN}.so`. That way, if there are multiple plugins in the
-path, setting `NCCL_PROFILER_PLUGIN` will allow users to select the right plugin. Alternatively,
-the user can also set `NCCL_PROFILER_PLUGIN` to the pathname of the `libnccl-profiler.so` library.
+`NCCL_PROFILER_PLUGIN` can instead contain a comma-separated list of up to two plugin suffixes,
+library names, or paths. For a suffix such as `trace`, NCCL tries `trace` and then
+`libnccl-profiler-trace.so`. Empty, missing, unsupported, and duplicate entries are skipped while
+later entries are still considered. Whitespace around commas is ignored. `none` disables profiler
+loading.
+
+Each plugin supplies its own activation mask through the pointer passed to its `init()` callback.
+A later write through that pointer (`exampleProfilerStart`) updates that plugin only; NCCL rebuilds
+the union on the next API event or task snapshot.
 
 ## Struct versioning
 
@@ -328,6 +331,14 @@ is a 64-bit integer that has two parts: the 16 LSB are assigned to the plugin ev
 16 bits are assigned to the plugin type (NCCL\_PROFILER\_NET\_TYPE\_IB, ...). The rest of the bits are
 unused and available for future extensions.
 
+For profiler API v6 and newer, this implementation allows NetPlugin events to be enabled independently
+of ProxyOp and ProxyStep events. When a NetPlugin event is started, its `parentObj` is the active
+ProxyStep handle when one exists, or `NULL` when the ProxyStep event is disabled or its handle is
+unavailable. A non-NULL parent always represents a ProxyStep; it is never replaced with a ProxyOp
+handle. Profiler plugins must check for a NULL parent before dereferencing it and may discard events
+they cannot retain without a parent. For pre-v6 plugins that support NetPlugin events, NCCL preserves
+implicit proxy ancestor activation.
+
 A network IB plugin can use this infrastructure to define a QP event as:
 
 ```C
@@ -440,7 +451,7 @@ Group API event
    |     |  |
    |     |  +- ProxyStep event
    |     |     |
-   |     |     +- NetPlugin event
+   |     |     +- NetPlugin event (when ProxyStep is available)
    |     |
    |     +- KernelCh event
    |
@@ -452,13 +463,15 @@ Group API event
    |     |  |
    |     |  +- ProxyStep event
    |     |     |
-   |     |     +- NetPlugin event
+   |     |     +- NetPlugin event (when ProxyStep is available)
    |     |
    |     +- KernelCh event
    |
    +- Kernel Launch event
 
 ProxyCtrl event
+
+NetPlugin event (with a NULL parent when ProxyStep is unavailable)
 ```
 
 # Profiler instrumentation and logging

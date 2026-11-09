@@ -20,10 +20,11 @@ typedef ncclGin_t* getNcclGin_t(void* ginPluginLib);
 
 extern getNcclGin_t getNcclGin_v13;
 extern getNcclGin_t getNcclGin_v14;
+extern getNcclGin_t getNcclGin_v15;
 NCCL_PARAM(GinPluginRefCount, "GIN_PLUGIN_REF_COUNT", 0);
-#define NCCL_GIN_VERSION_COUNT 2
-int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {14, 13};
-getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v14, getNcclGin_v13};
+#define NCCL_GIN_VERSION_COUNT 3
+int ncclGinVersion[NCCL_GIN_VERSION_COUNT] = {15, 14, 13};
+getNcclGin_t* getNcclGin[NCCL_GIN_VERSION_COUNT] = {getNcclGin_v15, getNcclGin_v14, getNcclGin_v13};
 
 #define NCCL_GIN_NUM_RESERVED_PLUGINS 3
 #define NCCL_GIN_NUM_INTERNAL_PLUGINS 2
@@ -172,7 +173,7 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     // NOTE: The following cast is valid because ncclGinType_t variant values
     // should match NCCL_NET_DEVICE_GIN_* values from `enum ncclNetDeviceType`.
     ncclGinType_t backendType = static_cast<ncclGinType_t>(props.netDeviceType);
-    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    struct ncclGinState* ginState = &comm->ginState;
     if (ginState->numActiveBackends >= NCCL_GIN_MAX_ACTIVE_BACKENDS) {
       WARN("GIN/Plugin: Max active backends reached, skipping plugin %s type %d", gin->name, props.netDeviceType);
       return ncclSuccess;
@@ -186,9 +187,11 @@ static ncclResult_t ncclGinPluginAssignToComm(struct ncclComm* comm, int pluginI
     ginState->supported = true;
 
     ncclGinProperties_t ginProperties;
+    memset(&ginProperties, 0, sizeof(ginProperties));
     NCCLCHECK(gin->getGinProperties(&ginProperties));
     backend->supportsStrongSignals = ginProperties.supportsStrongSignals;
     backend->supportsVASignals = ginProperties.supportsVASignals;
+    backend->barrierOptions = ginProperties.barrierOptions;
   }
   *isAssigned = true;
   return ncclSuccess;
@@ -231,7 +234,7 @@ static void initPluginLibsOnceFunc() {
       }
       ginPluginName = strtok_r(nullptr, ",", &savePtr);
     }
-    if (envGinPluginList) free(envGinPluginList);
+    free(envGinPluginList);
   } else {
     // Add default gin plugin
     pluginLibs[pluginCounter].state = ncclGinPluginStateLoadReady;
@@ -305,9 +308,22 @@ ncclResult_t ncclGinInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent) {
+  struct ncclGinState* ginState = &comm->ginState;
+  struct ncclGinState* parentState = &parent->ginState;
+  ginState->supported = parentState->supported;
+  ginState->numActiveBackends = parentState->numActiveBackends;
+  for (int i = 0; i < parentState->numActiveBackends; i++) {
+    ginState->backends[i] = parentState->backends[i];
+    ginState->backends[i].ginCommCount = 0;
+    memset(ginState->backends[i].ginComms, 0, sizeof(ginState->backends[i].ginComms));
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclGinFinalize(struct ncclComm* comm) {
   std::lock_guard<std::mutex> lock(pluginMutex);
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
   for (int t = 0; t < ginState->numActiveBackends; t++) {
     NCCLCHECK(ncclGinPluginFinalize(comm, ginState->backends[t].pluginIndex, ginState->backends[t].ginInstance));
   }
@@ -357,7 +373,7 @@ static int ncclCompareBackendPriority(const void* a, const void* b) {
 }
 
 ncclResult_t ncclGinSetDefaultBackend(struct ncclComm* comm, uint64_t globalBitMask) {
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
   int initialNumActiveBackends = ginState->numActiveBackends;
   int currentNumActiveBackends = 0;
   std::lock_guard<std::mutex> lock(pluginMutex);

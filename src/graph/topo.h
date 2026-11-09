@@ -91,12 +91,12 @@ struct ncclTopoLinkList {
 };
 
 #define NCCL_TOPO_UNDEF (-1)
-#define NCCL_TOPO_UNDEF_BIT (0x1 << 16)
 
 #define NCCL_TOPO_ID_LOCAL_ID_MASK 0x00ffffffffffffff
 #define NCCL_TOPO_ID_SYSTEM_ID(id) (id >> 56)
 #define NCCL_TOPO_ID_LOCAL_ID(id) (id & NCCL_TOPO_ID_LOCAL_ID_MASK)
-#define NCCL_TOPO_LOCAL_NIC_ID(numaid, busid) (((int64_t)numaid << 56) + busid)
+// Bits 63:56 are reserved for systemId; encode the 8-bit NUMA ID in bits 55:48.
+#define NCCL_TOPO_LOCAL_NIC_ID(numaid, busid) ((((int64_t)(numaid) & 0xff) << 48) + (busid))
 #define NCCL_TOPO_ID(systemid, localid) (((int64_t)systemid << 56) + (localid & NCCL_TOPO_ID_LOCAL_ID_MASK))
 #define NCCL_TOPO_GPU_LOCAL_RANK_SHIFT 40
 #define NCCL_TOPO_GPU_LOCAL_ID(busId, localRankOnDev) \
@@ -180,6 +180,8 @@ struct ncclTopoSystem {
   // mirrors the comm's values
   bool cuMemGdrSupport;  // global cuMem GDR support
   int minDriverVersion;  // min CUDA driver version across ranks
+  // NET selection cache of the graph search. Obtained by ncclTopoCompute for its duration, NULL otherwise.
+  struct ncclTopoSelectNetsCache* selectNetsCache;
 };
 
 ncclResult_t ncclTopoGetNode(struct ncclTopoSystem* system, struct ncclTopoNode** node, int type, uint64_t id);

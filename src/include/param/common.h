@@ -55,6 +55,9 @@ typedef struct {
   const char* desc;
 } ncclParamInfo_t;
 
+// Defines a special parameter value for "auto" option
+#define NCCL_PARAM_VAL_AUTO (-1)
+
 #ifdef __cplusplus
 }
 #endif

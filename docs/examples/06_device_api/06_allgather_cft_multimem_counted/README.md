@@ -10,9 +10,9 @@
 This example shows a simple allgather implemented inside a CUDA kernel using
 CFT multimem counted puts and wait.
 
-Each rank owns one contiguous input slice. The kernel copies the local slice to
-the local output slot, multicasts the same slice to all ranks with
-`ncclCft::putMultimemCounted`, and then waits for the expected counted bytes.
+Each rank owns one contiguous input slice. The kernel multicasts that slice to
+all ranks, including itself, with `ncclCft::putMultimemCounted`, then waits on
+one shared counter for `count * sizeof(float) * nRanks` bytes.
 
 ## Build
 

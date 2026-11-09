@@ -8,7 +8,8 @@
 #include "cost_model.h"
 #include "comm.h"
 
-ncclResult_t ncclTuningCollnetModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS]) {
+ncclResult_t ncclTuningCollnetModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                        struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   if (!comm->ncclCollNet) {
     memset(enabled, 0, NCCL_NUM_FUNCTIONS * sizeof(int));
@@ -118,8 +119,8 @@ ncclResult_t ncclTuningCollnetModelInit(struct ncclComm* comm, int id, int enabl
   return ret;
 }
 
-ncclResult_t ncclTuningCollnetModelSim(struct ncclTuningInput_t* const inputs,
-                                       struct ncclTuningResult_t* const tuning) {
+ncclResult_t ncclTuningCollnetModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                       struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   int collnetSupport = inputs->collNetSupport;
   if (!collnetSupport) {
@@ -142,7 +143,7 @@ ncclResult_t ncclTuningCollnetModelSim(struct ncclTuningInput_t* const inputs,
 
   tuning->timeUs =
     ncclTuningGetTime(inputs, tuning->algo,
-                      &inputs->comm->tuningContext.generalLatencies[inputs->func][tuning->algo][tuning->proto],
-                      &inputs->comm->tuningContext.generalBandwidths[inputs->func][tuning->algo][tuning->proto]);
+                      inputs->comm->tuningContext.generalLatencies[inputs->func][tuning->algo][tuning->proto],
+                      inputs->comm->tuningContext.generalBandwidths[inputs->func][tuning->algo][tuning->proto]);
   return ret;
 }

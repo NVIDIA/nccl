@@ -105,7 +105,7 @@ const ncclNet_v12_t ncclNetPlugin_v12 = {
 
 #include "tuner.h"
 
-__hidden ncclResult_t tunerPluginInit(void** context, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction, ncclNvlDomainInfo_v5_t* nvlDomainInfo, ncclTunerConstants_v6_t* constants) { return ncclSuccess; }
+__hidden ncclResult_t tunerPluginInit(void** context, uint64_t commId, size_t nRanks, size_t nNodes, ncclDebugLogger_t logFunction, ncclNvlDomainInfo_v7_t* nvlDomainInfo, ncclTunerConstants_v7_t* constants) { return ncclSuccess; }
 
 __hidden ncclResult_t tunerPluginGetCollInfo(void* context, ncclFunc_t collType, size_t nBytes,
                               int numPipeOps, float** collCostTable, int numAlgo, int numProto,
@@ -121,7 +121,7 @@ __hidden ncclResult_t tunerPluginGetCollInfo(void* context, ncclFunc_t collType,
 
 __hidden ncclResult_t tunerPluginFinalize(void* context) { return ncclSuccess; }
 
-const ncclTuner_v6_t ncclTunerPlugin_v6 = {
+const ncclTuner_v7_t ncclTunerPlugin_v7 = {
   .name = PLUGIN_NAME,
   .init = tunerPluginInit,
   .getCollInfo = tunerPluginGetCollInfo,

@@ -20,6 +20,7 @@ from nccl.core._binding_helpers import LowppView
 from nccl.core.constants import WindowFlag
 from nccl.core.team import NCCLTeam
 from nccl.core.typing import NcclDataType, NcclInvalid
+from nccl.core.utils import require_compatible_nccl
 
 __all__ = [
     "MultimemHandle",
@@ -614,6 +615,7 @@ class DevCommResource(CommResource):
         finally:
             del self._reqs_lowpp
 
+    @require_compatible_nccl
     def _allocate(self) -> None:
         """Creates the device communicator via ncclDevCommCreate."""
         self._dev_comm = _nccl_bindings.dev_comm_create(self._comm, self._reqs_lowpp.ptr)

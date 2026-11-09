@@ -171,7 +171,12 @@ GIN plugins expose two property queries. `getProperties` returns an
 `ncclNetProperties_t` for a GIN-capable device; this structure is shared with
 the network plugin API and is documented in `plugins/net/README.md`.
 `getGinProperties` returns GIN-specific capabilities, such as strong signal and
-VA signal support.
+VA signal support, and, from v15, the plugin's barrier preference
+(`barrierOptions`). A plugin whose signals are limited can report `NCCL_GIN_BARRIER_SIGNAL_EFFICIENT`, and NCCL's GIN barrier will reduce signal usage (possibly at the cost of performance).
+`NCCL_GIN_BARRIER_DEFAULT`, which NCCL also assumes for v14 and older plugins,
+keeps NCCL's default barrier. The device code NCCL compiles in for a backend
+type must make the same choice, so a new backend that wants the
+signal-efficient barrier needs matching NCCL support.
 
 If an application requires a feature that is not supported by a specific backend, NCCL will not use
 that backend. NCCL will fall back to a backend that supports the required features, if such a backend is available.
@@ -188,6 +193,9 @@ peers. A `collComm` is initialized in several steps:
 
 `ncclImpl` initializes a TCP socket in `listen` and stores it in `listenComm`. The address of the socket is included in `handle` so
 that all peers can connect to the socket.
+
+Since v15, `connect` also receives `abortFlag` (may be NULL). It becomes non-zero when the communicator is
+aborted; any blocking wait on the `collComm` should then return an error.
 
 ### Context Setup
 
@@ -341,7 +349,7 @@ allocate/initialize the structs according to the format that existed at the time
 
 ## Example
 
-`plugins/gin/example` contains a minimal GIN plugin example. It exports the current v14
+`plugins/gin/example` contains a minimal GIN plugin example. It exports the current v15
 interface while preserving older example exports for compatibility. Build it with:
 
 ```shell

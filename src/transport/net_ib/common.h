@@ -720,6 +720,9 @@ ncclResult_t ncclIbRegMrDmaBufInternal(void* comm, void* data, size_t size, int 
 int ncclIbGetTrafficClass(void* ctx);
 void ncclIbSetTrafficClass(void* ctx, int trafficClass);
 
+// CX9 rail policy helper. Returns NCCL_NET_ID_UNDEF when nDevs is not a positive multiple of eight.
+int ncclIbCx9RailId(enum ncclIbRailPolicy policy, int devId, int nDevs);
+
 // Net IB plugin entry functions.
 ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction);
 ncclResult_t ncclIbInit(void** ctx, uint64_t commId, ncclNetCommConfig_t* config, ncclDebugLogger_t logFunction,

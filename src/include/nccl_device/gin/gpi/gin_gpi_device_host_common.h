@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-#define NCCL_GIN_GPI_VERSION 100
+#define NCCL_GIN_GPI_VERSION 101
 
 typedef uint8_t gpi_gfd_op_t;
 
@@ -42,9 +42,10 @@ typedef struct {
   uint64_t value;
 } __attribute__((aligned(64))) gpi_counter_t;
 
-// typedef struct {
-//  uint8_t value;
-//} __attribute__((aligned(64))) gpi_counter_pending_writeback_t;
+typedef struct {
+  uint64_t value;
+} __attribute__((aligned(64))) gpi_channel_flush_t;
+
 /* Bit used to indicate that this is a control vs. data operation. */
 #define GPI_GFD_OP_CTRL (1U << 7)
 
@@ -82,9 +83,14 @@ typedef union {
   } __attribute__((packed)) flag;
   struct {
     uint32_t owner:1;
-    uint32_t resv:31;
-    uint32_t data;
-  } __attribute__((packed)) inline_data;
+    uint32_t counter:31;
+    uint32_t inline_data_low;
+  } __attribute__((packed)) counter;
+  struct {
+    uint32_t owner:1;
+    uint32_t signal:31;
+    uint32_t inline_data_high;
+  } __attribute__((packed)) signal;
   struct {
     uint64_t owner:1;
     uint64_t offset:63;
@@ -103,30 +109,30 @@ typedef union {
   } __attribute__((packed)) dst_handle;
   struct {
     uint32_t owner:1;
-    uint32_t pe:31;
-    uint32_t size;
-  } __attribute__((packed)) dst;
+    uint32_t size:31;
+    uint32_t rkey;
+  } __attribute__((packed)) resources;
   struct {
     uint16_t owner:1;
-    uint16_t resv:15;
+    uint16_t single_segment:1;
+    uint16_t size_high:14;
     uint8_t op;
     uint8_t op_flags;
-    uint16_t counter;
-    uint16_t signal;
+    uint32_t pe;
   } __attribute__((packed)) header;
 } gpi_gfd_segment_t;
 
 enum gpi_gfd_segment_id {
   GPI_GFD_SEG_HEADER = 0,
 
-  /* Required data transfer fields. */
-  GPI_GFD_DATA_DST = 1,
+  /* Transfer size and required data transfer fields. */
+  GPI_GFD_SEG_RESOURCES = 1,
   GPI_GFD_DATA_DST_MEM_HANDLE = 2,
   GPI_GFD_DATA_SRC_MEM_HANDLE = 3,
   GPI_GFD_DATA_DST_MEM_HANDLE_OFFSET = 4,
   GPI_GFD_DATA_SRC_MEM_HANDLE_OFFSET = 5,
-  GPI_GFD_DATA_INLINE_DATA_LOW = 6,
-  GPI_GFD_DATA_INLINE_DATA_HIGH = 7,
+  GPI_GFD_DATA_COUNTER = 6,
+  GPI_GFD_DATA_SIGNAL = 7,
 
   GPI_GFD_SEG_MAX = 8,
 };
@@ -143,17 +149,25 @@ _Static_assert(sizeof(gpi_gfd_t) == 64, "gpi_gfd_t must be 64 bytes");
 
 /* Data types that are also used in the host code */
 typedef struct {
-  uintptr_t* gpu_memic_ptr;
-  uint64_t pi_;
-  gpi_ci_t* ci_;
-  uint64_t ci_value_;
+  gpi_gfd_t* queue;
+  uint64_t pi;
+  gpi_ci_t* ci;
+  uint64_t ci_value;
   uint32_t log_depth;
 } Queue_t;
 
 typedef struct {
-  gpi_counter_t* gpu_counter_ptr_;
-  gpi_signal_t* gpu_signal_ptr_;
-  Queue_t queue_;
+  uint64_t* data_buffer;
+  uint64_t counter;
+  uint32_t metadata_segment_size;
+} gpi_data_buffer_t;
+
+typedef struct {
+  gpi_counter_t* counter;
+  gpi_signal_t* signal;
+  gpi_channel_flush_t* channel_flush;
+  Queue_t queue;
+  gpi_data_buffer_t data_buffer;
 } gpi_gpu_channel_t;
 
 enum gpi_resource_sharing_mode {

@@ -1,0 +1,62 @@
+/*************************************************************************
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * See LICENSE.txt for more information
+ *************************************************************************/
+
+#ifndef NCCL_DEVICE_GIN_FLOW_H_
+#define NCCL_DEVICE_GIN_FLOW_H_
+
+#include "gin.h"
+#include "impl/flow__types.h"
+#include "ptr.h"
+
+#ifdef __CUDACC__
+template <unsigned GinBackendMask = NCCL_GIN_BACKEND_MASK_ALL, ncclFlowProtocol Protocol = ncclFlowProtocolSimple>
+struct ncclGinFlowConn {
+  const int nSlices;
+  const int sliceSteps;
+  const size_t stepSize;
+  const int type;
+  ncclGin_BackendMask<GinBackendMask> gin;
+  ncclTeam team;
+  int peer;
+  ncclFlowConnState* state;
+  ncclSymPtr<char> fifo;
+  ncclSymPtr<char> peerFifo;
+  ncclGinSignal_t localSignal;
+  ncclGinSignal_t peerSignal;
+  // Transport counters are shared across protocols; LL tracks its FIFO slice and flag sequence separately.
+  uint64_t step;
+  uint32_t llStep;
+  uint64_t signalValue;
+  // Connection-owned FIFOs remain valid across kernels and are reused after
+  // receive credits. Only sends sourced from an external window need to be
+  // drained before the kernel returns.
+  bool flushOnClose;
+
+  // nSlices must divide ncclFlowFifoSlots.
+  NCCL_DEVICE_INLINE ncclGinFlowConn(ncclDevComm const& comm, int contextId, ncclTeam team, int peer,
+                                     ncclSymPtr<char> recvFifo, ncclSymPtr<char> sendFifo,
+                                     ncclSymPtr<ncclFlowConnState> state, ncclGinSignal_t signal0, size_t signalIndex,
+                                     int nSlices, size_t stepSize, int type, bool waitRole, bool recvPost);
+
+  NCCL_DEVICE_INLINE void close();
+  NCCL_DEVICE_INLINE void* waitSend();
+  NCCL_DEVICE_INLINE void postSend(size_t bytes);
+  NCCL_DEVICE_INLINE void postSendFrom(size_t bytes, ncclSymPtr<char> source);
+  NCCL_DEVICE_INLINE void postSendDirect(size_t bytes, ncclSymPtr<char> peerOutput, ncclSymPtr<char> source);
+  NCCL_DEVICE_INLINE void* waitRecv();
+  NCCL_DEVICE_INLINE void postRecv(bool force = false);
+
+  NCCL_DEVICE_INLINE void advanceStep();
+  NCCL_DEVICE_INLINE void postSendSimple(size_t bytes, ncclSymPtr<char> source, ncclSymPtr<char> destination);
+  NCCL_DEVICE_INLINE void signal(uint64_t value);
+  NCCL_DEVICE_INLINE void* advanceSlice();
+  NCCL_DEVICE_INLINE uint64_t stepFlag() const;
+};
+
+#endif
+
+#endif // NCCL_DEVICE_GIN_FLOW_H_

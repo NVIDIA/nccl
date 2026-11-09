@@ -7,7 +7,7 @@ following areas:
 
 * **Host-Side Setup** — Creating and configuring device communicators, querying properties, host-accessible device
   pointer functions, and related types.
-* **Memory and LSA** — Load/store accessible (LSA) memory, barriers, pointer accessors, and multimem.
+* **Memory and LSA** — Load/store accessible (LSA) memory, barriers, pointer accessors, multimem, and resource-buffer addressing.
 * **GIN (GPU-Initiated Networking)** — One-sided transfers, signals, counters, and network barriers.
 * **CFT (Compute Fabric Transport)** — CUDA fabric logical endpoint queries, fabric transfers, reductions, and
   CFT-backed barriers.

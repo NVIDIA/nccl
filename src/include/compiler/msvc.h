@@ -8,7 +8,9 @@
 #define NCCL_COMPILER_MSVC_H
 
 #include <intrin.h>
+#if defined(_M_IX86) || defined(_M_X64)
 #include <emmintrin.h>
+#endif
 #include <atomic>
 
 // Use standard C++ atomics via reinterpret_cast - this is safe for primitive types
@@ -70,12 +72,16 @@ static inline T COMPILER_ATOMIC_SUB_FETCH_impl(volatile T* ptr, T val, std::memo
 }
 #define COMPILER_ATOMIC_SUB_FETCH(ptr, val, order) COMPILER_ATOMIC_SUB_FETCH_impl(ptr, val, order)
 
-// Prefetch
+// Prefetch and population count use architecture-specific MSVC intrinsics.
+#if defined(_M_ARM64)
+#define COMPILER_PREFETCH(addr) __prefetch((const void*)(addr))
+#define COMPILER_POPCOUNT32(x) _CountOneBits((unsigned long)(x))
+#define COMPILER_POPCOUNT64(x) _CountOneBits64((unsigned __int64)(x))
+#else
 #define COMPILER_PREFETCH(addr) _mm_prefetch((const char*)(addr), _MM_HINT_T0)
-
-// Population count
 #define COMPILER_POPCOUNT32(x) __popcnt(x)
 #define COMPILER_POPCOUNT64(x) __popcnt64(x)
+#endif
 
 // Branch prediction hints (MSVC doesn't support these, so no-op)
 #define COMPILER_EXPECT(x, v) (x)

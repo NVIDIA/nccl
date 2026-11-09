@@ -106,4 +106,19 @@ void ncclTuningGetConstantsIndexes(struct ncclComm* comm, int* index1, int* inde
 void ncclTuningGetHwIndexes(struct ncclComm* comm, int a, int* intraHw, int* interHw);
 float ncclTuningGetTime(struct ncclTuningInput_t* const inputs, int a, float lat, float bw);
 
+// data type for Fifo
+struct ncclTuningMinFifoTimeData {
+  float minFifoTime; // per fifo time at 1 CTA
+  float saturatedFifoTime; // per fifo time at CTAsaturationPoint CTAs
+  int CTAsaturationPoint;
+};
+
+// model of latency scaling linearly between 1 CTA and
+// saturation_scaling up to channel_saturation_point CTAs. And then
+// linearly after channel_saturation_point CTA
+struct ncclTuningLatFactor {
+  float saturation_scaling = 1.;
+  int channel_saturation_point = 128; // default configuration disables latency scaling
+};
+
 #endif

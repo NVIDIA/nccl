@@ -129,4 +129,9 @@ static ncclResult_t ncclTuningRubinChannelTuning(struct ncclTuningInput_t* const
   return ncclSuccess;
 }
 
+static ncclResult_t ncclTuningRubinMinFifoTime(struct ncclComm* comm, int algo, int proto, float* minFifoTime) {
+  return ncclSuccess;
+}
+
+
 #endif // NCCL_TUNING_PLATFORM_RUBIN_H_

@@ -14,6 +14,8 @@
 #include "../cost_model.h"
 #include "rubin.h"
 
+#define NCCL_TUNING_PLATFORM_CTA_UPPERBOUND 128
+
 static ncclResult_t ncclTuningGetModelPlatformEntry(int compCap, int id, struct ncclTuningModelEntry_t** entry) {
   if (RUBIN_AND_LATER(compCap)) {
     NCCLCHECK(ncclTuningRubinGetModelEntry(compCap, id, entry));
@@ -33,6 +35,29 @@ static ncclResult_t ncclTuningPlatformChannelTuning(struct ncclTuningInput_t* co
   if (RUBIN_AND_LATER(input->comm->minCompCap)) {
     NCCLCHECK(ncclTuningRubinChannelTuning(input, result, maxChannels));
   }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuningPlatformMinFifoTime(const struct ncclComm* comm, int algo, int proto,
+                                                  struct ncclTuningMinFifoTimeData* minFifoTime) {
+  *minFifoTime = ncclTuningMinFifoTimeData({0, 0, 1});
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuningPlatformGetIntraLatFactor(const struct ncclComm* comm, int algo, int proto,
+                                                        struct ncclTuningLatFactor* lf) {
+  lf->saturation_scaling = 1.;
+  lf->channel_saturation_point = NCCL_TUNING_PLATFORM_CTA_UPPERBOUND; // disables lat scaling by default
+  if (RUBIN_AND_LATER(comm->minCompCap)) {
+    NCCLCHECK(ncclTuningRubinGetIntraLatFactor(comm, algo, proto, lf));
+  }
+  return ncclSuccess;
+}
+
+static ncclResult_t ncclTuningPlatformGetInterLatFactor(const struct ncclComm* comm, int algo, int proto,
+                                                        struct ncclTuningLatFactor* lf) {
+  lf->saturation_scaling = 1.;
+  lf->channel_saturation_point = NCCL_TUNING_PLATFORM_CTA_UPPERBOUND; // disables lat scaling by default
   return ncclSuccess;
 }
 

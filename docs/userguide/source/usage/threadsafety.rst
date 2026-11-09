@@ -3,13 +3,14 @@ Thread Safety
 *************
 
 NCCL primitives are generally not thread-safe, however, they are reentrant. Under multi-thread environment, it is not allowed
-to issue NCCL operations to a single communicator in parallel with multiple threads; it is not safe to issue NCCL operations
+to issue NCCL operations to a single communicator handle in parallel with multiple threads;
+it is not safe to issue NCCL operations
 in parallel to independent communicators located on the same device with multiple threads (see :ref:`multi-thread-concurrent-usage`).
 If the child communicator shares the resources with the parent communicator (i.e., :ref:`ncclconfig` by `splitShare`), it is not
 allowed to issue NCCL operations to the child and parent communicators in parallel.
 
-It is safe to operate a communicator from multiple threads as long as users can guarantee only one thread
-operates the communicator at a time. However, for any grouped NCCL operations, users need to ensure
+It is safe to operate a communicator handle from multiple threads as long as users can guarantee only one thread
+operates the handle at a time. However, for any grouped NCCL operations, users need to ensure
 only one thread issues all the operations in the group.
 
 For example, the following code provides a simple thread-safe example where threads are executed in sequence and only one thread

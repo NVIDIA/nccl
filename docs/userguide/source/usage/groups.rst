@@ -114,7 +114,7 @@ issuing order of the operations among different GPUs no matter whether the opera
 different communicators.
 
 For example, the following code provides the correct order of the operations. In this example, *comm0* and *comm1*
-are duplicated independent communicators that include rank 0 and 1.
+are the local handles for two identical, independent communicator cliques that include rank 0 and 1.
 
 .. code:: C
 

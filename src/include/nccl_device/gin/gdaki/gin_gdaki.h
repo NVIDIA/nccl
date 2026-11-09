@@ -368,6 +368,9 @@ NCCL_DEVICE_INLINE static ncclResult_t waitImplCore(ncclGinCtx ctx, ncclGinReque
       return ncclSuccess;
     }
     if NCCL_IF_CONSTEXPR (HasTimeout) {
+      // Error CQE (-EIO): the QP is in the error state and this request will never complete
+      // successfully (the CQ consumer index is not advanced past an error CQE).
+      if (status < 0) return ncclRemoteError;
       if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
     }
     if (testAbort(abortFlag, steps)) {
@@ -423,6 +426,7 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop co
       int status = doca_gpu_dev_verbs_poll_one_cq_at<resource_sharing_mode>(&qps[peer], ticket);
       if (status == 0) break;
       if NCCL_IF_CONSTEXPR (HasTimeout) {
+        if (status < 0) return ncclRemoteError; // Error CQE, see waitImplCore.
         if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
       }
       if (testAbort(abortFlag, steps)) {

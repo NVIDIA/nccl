@@ -9,8 +9,9 @@
 
 The starting point for the CuTeDSL device API: no windows, no data
 movement, nothing that needs more than one GPU. It builds every kind of
-coop, reads the devcomm's scalar fields, and prints the three teams and
-the rank translations between them.
+coop, reads the devcomm's scalar fields, and prints predefined teams and
+the rank translations between them. It also demonstrates host Team
+conversion and device-side construction.
 
 Runs on any rank count, one node::
 
@@ -40,72 +41,83 @@ import nccl.core.device.cute as nccl_cute
 NAME = os.path.basename(__file__)
 
 
-
 N_WARPS = 2
 THREADS = 32 * N_WARPS
 
 
 @cute.kernel
-def coop_and_teams_kernel(dev_comm: nccl_cute.DevComm):
+def coop_and_teams_kernel(dev_comm: nccl_cute.DevComm, team: nccl_cute.Team):
     """Print coop shapes and team identities from a two-warp CTA.
 
     Args:
         dev_comm: CuTeDSL view of the NCCL device communicator.
+        team: World Team passed from the host.
     """
     tidx, _, _ = cute.arch.thread_idx()
 
-    # Each coop allocates its own ncclIrCoop storage on the stack; they are cheap.
-    block = nccl_cute.cta()
-    lane_group = nccl_cute.warp()
-    single = nccl_cute.thread()
-    even_lanes = nccl_cute.lanes(0x55555555)
-    # id distinguishes concurrent spans that share a CTA; 0..15.
-    span = nccl_cute.warp_span(warp0=0, n_warps=N_WARPS, id=0)
+    # Each Coop factory allocates its own thread-local storage.
+    block = nccl_cute.Coop.cta()
+    lane_group = nccl_cute.Coop.warp()
+    single = nccl_cute.Coop.thread()
+    even_lanes = nccl_cute.Coop.lanes(0x55555555)
+    # IDs 0..14 distinguish concurrent spans that share a CTA.
+    span = nccl_cute.Coop.warp_span(warp0=0, n_warps=N_WARPS, id=0)
 
     if 0 == tidx:
+        cute.printf(f"coop cta        rank={block.thread_rank} threads={block.num_threads}")
         cute.printf(
-            f"coop cta        rank={block.thread_rank} size={block.size} threads={block.num_threads}")
+            f"coop warp       rank={lane_group.thread_rank} threads={lane_group.num_threads}"
+        )
+        cute.printf(f"coop thread     rank={single.thread_rank} threads={single.num_threads}")
         cute.printf(
-            f"coop warp       rank={lane_group.thread_rank} size={lane_group.size} threads={lane_group.num_threads}")
-        cute.printf(
-            f"coop thread     rank={single.thread_rank} size={single.size} threads={single.num_threads}")
-        cute.printf(
-            f"coop lanes      rank={even_lanes.thread_rank} size={even_lanes.size} threads={even_lanes.num_threads}")
-        cute.printf(
-            f"coop warp_span  rank={span.thread_rank} size={span.size} threads={span.num_threads}")
+            f"coop lanes      rank={even_lanes.thread_rank} threads={even_lanes.num_threads}"
+        )
+        cute.printf(f"coop warp_span  rank={span.thread_rank} threads={span.num_threads}")
 
     # The coop-scoped barrier; on a CTA coop this is __syncthreads().
     block.sync()
 
-    # Teams are addressing domains, not communicators: (nRanks, rank, stride)
+    # Teams are addressing domains, not communicators: (n_ranks, rank, stride)
     # over the world ranks.
     world = dev_comm.team_world
     lsa = dev_comm.team_lsa
     rail = dev_comm.team_rail
+    explicit_world = nccl_cute.Team(n_ranks=dev_comm.n_ranks, rank=dev_comm.rank, stride=1)
 
     if 0 == tidx:
         cute.printf(
-            f"devcomm rank={dev_comm.rank}/{dev_comm.n_ranks} lsa={dev_comm.lsa_rank}/{dev_comm.lsa_size}")
-        cute.printf(f"team world  rank={world.rank} nRanks={world.nRanks} stride={world.stride}")
-        cute.printf(f"team lsa    rank={lsa.rank} nRanks={lsa.nRanks} stride={lsa.stride}")
-        cute.printf(f"team rail   rank={rail.rank} nRanks={rail.nRanks} stride={rail.stride}")
+            f"devcomm rank={dev_comm.rank}/{dev_comm.n_ranks} lsa={dev_comm.lsa_rank}/{dev_comm.lsa_size}"
+        )
+        cute.printf(f"team world  rank={world.rank} n_ranks={world.n_ranks} stride={world.stride}")
+        cute.printf(f"team lsa    rank={lsa.rank} n_ranks={lsa.n_ranks} stride={lsa.stride}")
+        cute.printf(f"team rail   rank={rail.rank} n_ranks={rail.n_ranks} stride={rail.stride}")
+        cute.printf(f"team host   rank={team.rank} n_ranks={team.n_ranks} stride={team.stride}")
+        cute.printf(
+            f"team made   rank={explicit_world.rank} n_ranks={explicit_world.n_ranks} stride={explicit_world.stride}"
+        )
 
         # Translate a rank expressed in one team to world or LSA numbering.
         cute.printf(f"lsa   rank 0 -> world rank {dev_comm.team_rank_to_world(lsa, 0)}")
         cute.printf(f"rail  rank 0 -> world rank {dev_comm.team_rank_to_world(rail, 0)}")
         # team_rank_to_lsa requires the rank to be local; a non-local rank
         # yields an out-of-range result rather than an error.
-        cute.printf(f"world rank {dev_comm.rank} -> lsa rank {dev_comm.team_rank_to_lsa(world, dev_comm.rank)}")
+        cute.printf(
+            f"world rank {dev_comm.rank} -> lsa rank {dev_comm.team_rank_to_lsa(world, dev_comm.rank)}"
+        )
 
 
 @cute.jit
-def coop_and_teams(dev_comm: nccl_cute.DevComm):
+def coop_and_teams(
+    dev_comm: nccl_cute.DevComm,
+    team: nccl_cute.Team,
+):
     """Launch :func:`coop_and_teams_kernel` on a single two-warp CTA.
 
     Args:
         dev_comm: CuTeDSL view of the NCCL device communicator.
+        team: World Team passed from the host.
     """
-    coop_and_teams_kernel(dev_comm).launch(
+    coop_and_teams_kernel(dev_comm, team).launch(
         grid=[1, 1, 1],
         block=[THREADS, 1, 1],
         cooperative=True,
@@ -137,19 +149,19 @@ def main():
     # Without device API support no devcomm can be created at all.
     if not nccl_comm.device_api_support:
         if rank == root:
-            print("WARNING: this platform has no device API support; "
-                  "nothing to run", flush=True)
+            print("WARNING: this platform has no device API support; nothing to run", flush=True)
         nccl_comm.destroy()
         return 0
 
     # No windows, barriers or GIN here, so default requirements suffice.
-    dev_comm_resource = nccl_comm.create_dev_comm(
-        requirements=nccl.NCCLDevCommRequirements())
+    dev_comm_resource = nccl_comm.create_dev_comm(requirements=nccl.NCCLDevCommRequirements())
     assert dev_comm_resource.is_valid
 
-    coop_and_teams(nccl_cute.DevComm(dev_comm_resource))
+    dev_comm = nccl_cute.runtime.to_cute(dev_comm_resource)
+    # Host Teams require explicit conversion before entering JIT.
+    team = nccl_cute.runtime.to_cute(nccl_comm.team_world)
+    coop_and_teams(dev_comm, team)
     device.sync()
-
 
     dev_comm_resource.close()
     nccl_comm.destroy()

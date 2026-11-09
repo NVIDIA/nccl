@@ -12,8 +12,8 @@ of a window. This requests one for the LSA team and demonstrates the
 communicator's default mapping alongside explicit handles returned to
 the host by ``create_dev_comm``.
 
-The CuTeDSL layer exposes multimem *addresses*; the multimem load-reduce
-and store instructions themselves are PTX and are not wrapped here.
+This example uses multimem *addresses* only. Reductions and copies through
+them are the ``multimem_*`` functions in 08_reduce_copy.py.
 
 Multimem is an intra-node mapping, so run on a single node::
 
@@ -44,7 +44,6 @@ import nccl.core.device.cute as nccl_cute
 NAME = os.path.basename(__file__)
 
 
-
 NUM_ELEMS = 1024
 THREADS = 128
 BARRIER_INDEX = 0
@@ -54,7 +53,7 @@ BARRIER_INDEX = 0
 def multimem_kernel(
     dev_comm: nccl_cute.DevComm,
     win: nccl_cute.Window,
-    host_mm: nccl_cute.MultimemHandle,
+    mm_handle: nccl_cute.MultimemHandle,
     lsa_handle: nccl_cute.LsaBarrierHandle,
 ):
     """Report multimem addresses and run a multimem-arrive LSA barrier.
@@ -62,33 +61,38 @@ def multimem_kernel(
     Args:
         dev_comm: CuTeDSL view of the NCCL device communicator.
         win: registered window covered by the multimem mapping.
-        host_mm: the LSA team's multimem handle, passed from the host.
+        mm_handle: the LSA team's multimem handle, passed from the host.
         lsa_handle: separately requested LSA barrier handle.
     """
     tidx, _, _ = cute.arch.thread_idx()
-    coop = nccl_cute.cta()
+    coop = nccl_cute.Coop.cta()
 
     if 0 == tidx:
         # multimem_pointer takes an explicit handle, so it addresses non-LSA
         # teams too; lsa_multimem_pointer is the LSA shorthand.
-        via_handle = cute.make_ptr(cutlass.Int8, win.multimem_pointer(0, host_mm)).toint()
-        via_lsa = cute.make_ptr(cutlass.Int8, win.lsa_multimem_pointer(0, dev_comm)).toint()
-        unicast = cute.make_ptr(cutlass.Int8, win.local_pointer(0)).toint()
+        via_handle = win.multimem_pointer(cutlass.Int8, mm_handle).toint()
+        via_lsa = win.lsa_multimem_pointer(cutlass.Int8, dev_comm).toint()
+        unicast = win.local_pointer(cutlass.Int8).toint()
         cute.printf(f"window mm(handle)={via_handle} mm(lsa)={via_lsa} unicast={unicast}")
 
     # multimem=True publishes the barrier flag with one multicast store
     # instead of one per peer, using the communicator's default LSA mapping.
-    bar = nccl_cute.lsa_default(
-        coop, dev_comm, index=BARRIER_INDEX, multimem=True)
-    bar.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
-    bar.destroy()
+    bar = nccl_cute.LsaBarrierSession.lsa(coop, dev_comm, index=BARRIER_INDEX, multimem=True)
+    bar.sync()
+    bar.close()
 
     # Explicit resources: mm_handle must cover the barrier's team.
-    explicit = nccl_cute.lsa_session(
-        coop, dev_comm, dev_comm.team_lsa, lsa_handle,
-        index=BARRIER_INDEX, multimem=True, mm_handle=host_mm)
-    explicit.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
-    explicit.destroy()
+    explicit = nccl_cute.LsaBarrierSession(
+        coop,
+        dev_comm,
+        dev_comm.team_lsa,
+        lsa_handle,
+        index=BARRIER_INDEX,
+        multimem=True,
+        mm_handle=mm_handle,
+    )
+    explicit.sync()
+    explicit.close()
 
     if 0 == tidx:
         cute.printf(f"rank {dev_comm.rank}: multimem barriers passed")
@@ -98,7 +102,7 @@ def multimem_kernel(
 def multimem_demo(
     dev_comm: nccl_cute.DevComm,
     win: nccl_cute.Window,
-    host_mm: nccl_cute.MultimemHandle,
+    mm_handle: nccl_cute.MultimemHandle,
     lsa_handle: nccl_cute.LsaBarrierHandle,
 ):
     """Launch :func:`multimem_kernel` on a single CTA.
@@ -106,10 +110,10 @@ def multimem_demo(
     Args:
         dev_comm: CuTeDSL view of the NCCL device communicator.
         win: registered window covered by the multimem mapping.
-        host_mm: the LSA team's multimem handle.
+        mm_handle: the LSA team's multimem handle.
         lsa_handle: separately requested LSA barrier handle.
     """
-    multimem_kernel(dev_comm, win, host_mm, lsa_handle).launch(
+    multimem_kernel(dev_comm, win, mm_handle, lsa_handle).launch(
         grid=[1, 1, 1],
         block=[THREADS, 1, 1],
         cooperative=True,
@@ -146,20 +150,26 @@ def main():
 
     if nccl_comm.team_lsa.n_ranks != nranks:
         if rank == root:
-            print(f"\n[{NAME}] ERROR: all {nranks} ranks must be LSA peers "
-                  f"(lsa team has {nccl_comm.team_lsa.n_ranks}); run on one node", flush=True)
+            print(
+                f"\n[{NAME}] ERROR: all {nranks} ranks must be LSA peers "
+                f"(lsa team has {nccl_comm.team_lsa.n_ranks}); run on one node",
+                flush=True,
+            )
         nccl_comm.destroy()
         return 1
 
     # Requesting multimem without multimem_support fails devcomm creation.
     if not nccl_comm.device_api_support or not nccl_comm.multimem_support:
         if rank == root:
-            print("WARNING: no multicast support on this system, so no "
-                  "multimem mapping; nothing to run", flush=True)
+            print(
+                "WARNING: no multicast support on this system, so no "
+                "multimem mapping; nothing to run",
+                flush=True,
+            )
         nccl_comm.destroy()
         return 0
 
-    buf = nccl.cupy.empty(NUM_ELEMS, dtype='float32')
+    buf = nccl.cupy.empty(NUM_ELEMS, dtype="float32")
     buf[:] = float(rank + 1)
     device.sync()
     win_resource = nccl_comm.register_window(buf)
@@ -178,15 +188,14 @@ def main():
     print(f"[rank {rank}] host mc_base_pointer=0x{mm_handle.mc_base_pointer:x}")
 
     multimem_demo(
-        nccl_cute.DevComm(dev_comm_resource),
-        nccl_cute.Window(win_resource),
-        nccl_cute.MultimemHandle(mm_handle),
-        nccl_cute.LsaBarrierHandle(lsa_handle),
+        nccl_cute.runtime.to_cute(dev_comm_resource),
+        nccl_cute.runtime.to_cute(win_resource),
+        nccl_cute.runtime.to_cute(mm_handle),
+        nccl_cute.runtime.to_cute(lsa_handle),
     )
     device.sync()
 
     print(f"[rank {rank}] [SUCCESS] multimem addresses resolved and barriers completed")
-
 
     dev_comm_resource.close()
     win_resource.close()

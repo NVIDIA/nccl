@@ -1,24 +1,133 @@
-"""Compile-only representative arguments for CuTeDSL NCCL views.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
 
-Each factory builds a placeholder that carries a ``@cute.jit`` argument's
-type without owning an NCCL resource, so an application can ``cute.compile``
-before it creates a communicator or registers memory and invoke the compiled
-callable with real resources later. The nccl4py analogue of
-``cutlass.cute.runtime.make_fake_stream``.
+"""Host argument preparation for CuTeDSL NCCL views.
+
+Use ``to_cute`` for explicit conversion of NCCL host objects to CuTeDSL values.
+The ``make_fake_*`` factories provide type-only arguments for ``cute.compile``,
+allowing compilation before NCCL resources are created.
 
 .. warning::
 
-    A placeholder is only valid as a ``cute.compile`` argument. Passing one
-    to the compiled callable contributes no execution pointer, which shifts
-    every following argument and launches with garbage instead of raising;
-    only CuTeDSL's debugging mode reports it.
+    Compile-only placeholders must be replaced with real arguments before
+    execution. CuTeDSL does not guarantee a runtime error if a placeholder
+    is passed to a compiled callable.
 """
 
-from typing import ClassVar, cast
+from typing import ClassVar, cast, overload
 
-from .comm import DevComm
-from .handles import GinBarrierHandle, LsaBarrierHandle, MultimemHandle
-from .window import Window
+import cutlass
+
+import nccl.core.resources as _resources
+from nccl.core.team import NCCLTeam
+
+from ._comm import DevComm
+from ._handles import GinBarrierHandle, LsaBarrierHandle, MultimemHandle
+from ._team import Team
+from ._window import Window
+
+__all__ = [
+    "make_fake_dev_comm",
+    "make_fake_gin_barrier_handle",
+    "make_fake_lsa_barrier_handle",
+    "make_fake_multimem_handle",
+    "make_fake_window",
+    "to_cute",
+]
+
+
+@cutlass.register_jit_arg_adapter(
+    _resources.DevCommResource, scope=cutlass.JitArgAdapterRegistry.CUDA_DIALECT_SCOPE
+)
+def _adapt_dev_comm_resource(resource: _resources.DevCommResource) -> DevComm:
+    return DevComm(resource)
+
+
+@cutlass.register_jit_arg_adapter(
+    _resources.RegisteredWindowHandle, scope=cutlass.JitArgAdapterRegistry.CUDA_DIALECT_SCOPE
+)
+def _adapt_registered_window_handle(resource: _resources.RegisteredWindowHandle) -> Window:
+    return Window(resource)
+
+
+@cutlass.register_jit_arg_adapter(
+    _resources.MultimemHandle, scope=cutlass.JitArgAdapterRegistry.CUDA_DIALECT_SCOPE
+)
+def _adapt_multimem_handle(handle: _resources.MultimemHandle) -> MultimemHandle:
+    return MultimemHandle(handle)
+
+
+@cutlass.register_jit_arg_adapter(
+    _resources.LsaBarrierHandle, scope=cutlass.JitArgAdapterRegistry.CUDA_DIALECT_SCOPE
+)
+def _adapt_lsa_barrier_handle(handle: _resources.LsaBarrierHandle) -> LsaBarrierHandle:
+    return LsaBarrierHandle(handle)
+
+
+@cutlass.register_jit_arg_adapter(
+    _resources.GinBarrierHandle, scope=cutlass.JitArgAdapterRegistry.CUDA_DIALECT_SCOPE
+)
+def _adapt_gin_barrier_handle(handle: _resources.GinBarrierHandle) -> GinBarrierHandle:
+    return GinBarrierHandle(handle)
+
+
+@overload
+def to_cute(value: NCCLTeam) -> Team: ...
+
+
+@overload
+def to_cute(value: _resources.DevCommResource) -> DevComm: ...
+
+
+@overload
+def to_cute(value: _resources.RegisteredWindowHandle) -> Window: ...
+
+
+@overload
+def to_cute(value: _resources.MultimemHandle) -> MultimemHandle: ...
+
+
+@overload
+def to_cute(value: _resources.LsaBarrierHandle) -> LsaBarrierHandle: ...
+
+
+@overload
+def to_cute(value: _resources.GinBarrierHandle) -> GinBarrierHandle: ...
+
+
+def to_cute(value: object) -> object:
+    """Convert a supported NCCL host object to its CuTeDSL view.
+
+    Call outside JIT. Supports ``NCCLTeam``,
+    ``DevCommResource``, ``RegisteredWindowHandle``, ``MultimemHandle``,
+    ``LsaBarrierHandle`` and ``GinBarrierHandle``. Teams copy their fields;
+    resource views retain the host object without taking ownership. Keep
+    resources open until device work completes. Conversion allocates no
+    NCCL resources or device storage.
+
+    Raises:
+        TypeError: If the object's type is not supported.
+    """
+    if isinstance(value, NCCLTeam):
+        return Team(n_ranks=value.n_ranks, rank=value.rank, stride=value.stride)
+    if isinstance(value, _resources.DevCommResource):
+        return DevComm(value)
+    if isinstance(value, _resources.RegisteredWindowHandle):
+        return Window(value)
+    if isinstance(value, _resources.MultimemHandle):
+        return MultimemHandle(value)
+    if isinstance(value, _resources.LsaBarrierHandle):
+        return LsaBarrierHandle(value)
+    if isinstance(value, _resources.GinBarrierHandle):
+        return GinBarrierHandle(value)
+    raise TypeError(
+        f"to_cute does not support {type(value).__name__}; "
+        "supported host types: nccl.core.NCCLTeam, nccl.core.DevCommResource, "
+        "nccl.core.RegisteredWindowHandle, "
+        "nccl.core.MultimemHandle, nccl.core.LsaBarrierHandle, nccl.core.GinBarrierHandle"
+    )
 
 
 class _CompileOnlyJitArgument:
@@ -79,54 +188,40 @@ class _FakeGinBarrierHandle(_CompileOnlyJitArgument):
 
 
 def make_fake_dev_comm() -> DevComm:
-    """Create a type-only ``DevComm`` placeholder for ``cute.compile``.
+    """Create a compile-only ``DevComm`` placeholder for ``cute.compile``.
 
-    Valid only as a ``cute.compile`` argument; invoke the compiled callable
-    with a real ``DevCommResource``, or a :class:`DevComm` wrapping one.
+    Replace it with ``to_cute(dev_comm_resource)`` before execution.
     """
     return cast(DevComm, _FakeDevComm())
 
 
 def make_fake_window() -> Window:
-    """Create a type-only ``Window`` placeholder for ``cute.compile``.
+    """Create a compile-only ``Window`` placeholder for ``cute.compile``.
 
-    Valid only as a ``cute.compile`` argument; invoke the compiled callable
-    with a real ``RegisteredWindowHandle``, or a :class:`Window` wrapping one.
+    Replace it with ``to_cute(window_resource)`` before execution.
     """
     return cast(Window, _FakeWindow())
 
 
 def make_fake_multimem_handle() -> MultimemHandle:
-    """Create a type-only ``MultimemHandle`` placeholder for ``cute.compile``.
+    """Create a compile-only ``MultimemHandle`` placeholder for ``cute.compile``.
 
-    Valid only as a ``cute.compile`` argument; invoke the compiled callable
-    with the real handle.
+    Replace it with ``to_cute(host_handle)`` before execution.
     """
     return cast(MultimemHandle, _FakeMultimemHandle())
 
 
 def make_fake_lsa_barrier_handle() -> LsaBarrierHandle:
-    """Create a type-only ``LsaBarrierHandle`` placeholder for ``cute.compile``.
+    """Create a compile-only ``LsaBarrierHandle`` placeholder for ``cute.compile``.
 
-    Valid only as a ``cute.compile`` argument; invoke the compiled callable
-    with the real handle.
+    Replace it with ``to_cute(host_handle)`` before execution.
     """
     return cast(LsaBarrierHandle, _FakeLsaBarrierHandle())
 
 
 def make_fake_gin_barrier_handle() -> GinBarrierHandle:
-    """Create a type-only ``GinBarrierHandle`` placeholder for ``cute.compile``.
+    """Create a compile-only ``GinBarrierHandle`` placeholder for ``cute.compile``.
 
-    Valid only as a ``cute.compile`` argument; invoke the compiled callable
-    with the real handle.
+    Replace it with ``to_cute(host_handle)`` before execution.
     """
     return cast(GinBarrierHandle, _FakeGinBarrierHandle())
-
-
-__all__ = [
-    "make_fake_dev_comm",
-    "make_fake_gin_barrier_handle",
-    "make_fake_lsa_barrier_handle",
-    "make_fake_multimem_handle",
-    "make_fake_window",
-]

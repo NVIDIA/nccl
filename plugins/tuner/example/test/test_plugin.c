@@ -173,11 +173,9 @@ int test_collective_matching() {
   void* context = NULL;
   pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
-  // Create mock cost table
+  // NCCL passes a contiguous 2D cost table cast to float**, not an array of row pointers.
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
       cost_table[i][j] = 1.0; // Default high cost
     }
@@ -187,7 +185,7 @@ int test_collective_matching() {
 
   // Test allreduce matching (should match first config)
   ncclResult_t result = pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                                          cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                                          (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                                           0, &nChannels);
 
   TEST_ASSERT(result == ncclSuccess, "GetCollInfo should succeed");
@@ -205,7 +203,7 @@ int test_collective_matching() {
   }
 
   result = pluginGetCollInfo(context, ncclFuncBroadcast, 16384, 1,
-                            cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                            (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                             0, &nChannels);
   TEST_ASSERT(result == ncclSuccess, "GetCollInfo should succeed");
   mock_logger(NCCL_LOG_INFO, NCCL_ALL, __FILE__, __LINE__,
@@ -235,9 +233,7 @@ int test_size_matching() {
   pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
       cost_table[i][j] = 1.0;
     }
@@ -245,7 +241,7 @@ int test_size_matching() {
   int nChannels = 1;
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 512, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   mock_logger(NCCL_LOG_INFO, NCCL_ALL, __FILE__, __LINE__,
               "DEBUG: Small message - checking cost_table[TREE][SIMPLE] (%p) = %.1f (expecting 0.0)",
@@ -261,7 +257,7 @@ int test_size_matching() {
   }
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   mock_logger(NCCL_LOG_INFO, NCCL_ALL, __FILE__, __LINE__,
               "DEBUG: Medium message - checking cost_table[RING][SIMPLE] (%p) = %.1f (expecting 0.0)",
@@ -277,7 +273,7 @@ int test_size_matching() {
   }
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 1048576, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   mock_logger(NCCL_LOG_INFO, NCCL_ALL, __FILE__, __LINE__,
               "DEBUG: Large message - checking cost_table[RING][LL128] (%p) = %.1f (expecting 0.0)",
@@ -307,9 +303,7 @@ int test_topology_matching() {
   pluginInit(&context1, 0, 8, 1, mock_logger, NULL, NULL);  // 8 ranks, 1 node
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
       cost_table[i][j] = 1.0;
     }
@@ -317,7 +311,7 @@ int test_topology_matching() {
 
   int nChannels;
   pluginGetCollInfo(context1, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   TEST_ASSERT(cost_table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] == 0.0, "Single node: Should match tree config");
   TEST_ASSERT(nChannels == 2, "Single node: Should set 2 channels");
@@ -335,7 +329,7 @@ int test_topology_matching() {
   }
 
   pluginGetCollInfo(context2, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   TEST_ASSERT(cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] == 0.0, "4-node: Should match ring/simple config");
   TEST_ASSERT(nChannels == 4, "4-node: Should set 4 channels");
@@ -358,9 +352,7 @@ int test_default_channels() {
   pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
       cost_table[i][j] = 1.0;
     }
@@ -368,11 +360,11 @@ int test_default_channels() {
 
   int nChannels = 99;  // Set to known value
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
 
   TEST_ASSERT(cost_table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] == 0.0, "Should apply algorithm/protocol");
-  TEST_ASSERT(nChannels == 1, "Should keep default channels (1) when config has -1");
+  TEST_ASSERT(nChannels == 0, "Should preserve automatic channels when config has -1");
 
   // Clean up
   pluginFinalize(context);
@@ -395,10 +387,6 @@ int test_regbuff_matching() {
   pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
-  for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
-  }
 
   int nChannels;
 
@@ -410,7 +398,7 @@ int test_regbuff_matching() {
   }
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     1, &nChannels);  // regBuff = 1 (registered)
   TEST_ASSERT(cost_table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] == 0.0, "Registered buffer: Tree/Simple should have low cost");
   TEST_ASSERT(nChannels == 2, "Registered buffer: Should set 2 channels");
@@ -423,7 +411,7 @@ int test_regbuff_matching() {
   }
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);  // regBuff = 0 (non-registered)
   TEST_ASSERT(cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] == 0.0, "Non-registered buffer: Ring/Simple should have low cost");
   TEST_ASSERT(nChannels == 4, "Non-registered buffer: Should set 4 channels");
@@ -437,7 +425,7 @@ int test_regbuff_matching() {
 
   // First try with regBuff=2 (unusual value, should match third config)
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     2, &nChannels);  // regBuff = 2 (only third config should match)
   TEST_ASSERT(cost_table[NCCL_ALGO_RING][NCCL_PROTO_LL128] == 0.0, "Any regBuff: Ring/LL128 should have low cost");
   TEST_ASSERT(nChannels == 8, "Any regBuff: Should set 8 channels");
@@ -463,10 +451,6 @@ int test_pipeops_matching() {
   pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
-  for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
-  }
 
   int nChannels;
 
@@ -478,7 +462,7 @@ int test_pipeops_matching() {
   }
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   TEST_ASSERT(cost_table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] == 0.0, "Single pipeOp: Tree/Simple should have low cost");
   TEST_ASSERT(nChannels == 2, "Single pipeOp: Should set 2 channels");
@@ -491,7 +475,7 @@ int test_pipeops_matching() {
   }
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 4,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   TEST_ASSERT(cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] == 0.0, "Multiple pipeOps: Ring/Simple should have low cost");
   TEST_ASSERT(nChannels == 4, "Multiple pipeOps: Should set 4 channels");
@@ -504,7 +488,7 @@ int test_pipeops_matching() {
   }
 
   pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 2,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                    (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                     0, &nChannels);
   TEST_ASSERT(cost_table[NCCL_ALGO_RING][NCCL_PROTO_LL128] == 0.0, "Any pipeOps: Ring/LL128 should have low cost");
   TEST_ASSERT(nChannels == 8, "Any pipeOps: Should set 8 channels");
@@ -528,29 +512,85 @@ int test_no_match_fallback() {
   pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
 
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
       cost_table[i][j] = 1.0;
     }
   }
 
   int nChannels;
+  // First apply an explicit channel count, then verify that the next call clears it.
+  ncclResult_t result = pluginGetCollInfo(context, ncclFuncBroadcast, 512, 1,
+                                          (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                                          0, &nChannels);
+  TEST_ASSERT(result == ncclSuccess, "Matching config should succeed");
+  TEST_ASSERT(nChannels == 2, "Matching config should set 2 channels");
+  cost_table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 1.0;
+
   // Try allreduce (should not match, use fallback)
-  pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                    cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
-                    0, &nChannels);
+  result = pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
+                            (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                            0, &nChannels);
+  TEST_ASSERT(result == ncclSuccess, "Unmatched config should fall back successfully");
 
   mock_logger(NCCL_LOG_INFO, NCCL_ALL, __FILE__, __LINE__,
-              "DEBUG: Fallback test - checking cost_table[RING][SIMPLE] (%p) = %.1f (expecting 0.0)",
+              "DEBUG: Fallback test - checking cost_table[RING][SIMPLE] (%p) = %.1f (expecting 1.0)",
               &cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE], cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE]);
   TEST_ASSERT(cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] == 1.0, "Should use pass through unmodified");
-  TEST_ASSERT(nChannels == 1, "Should use default channels");
+  TEST_ASSERT(nChannels == 0, "Should preserve automatic channels when no config matches");
+  for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
+    for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
+      TEST_ASSERT(cost_table[i][j] == 1.0, "Unmatched config should leave the cost table unchanged");
+    }
+  }
 
   // Clean up
   pluginFinalize(context);
   unlink("test_fallback.conf");
+  unsetenv("NCCL_TUNER_CONFIG_FILE");
+  TEST_PASS();
+}
+
+// Matching but unavailable algorithm/protocol combinations must not override NCCL's defaults.
+int test_unavailable_config() {
+  const char* test_config =
+    "allreduce,0,65536,ring,simple,8,-1,-1,-1,-1\n";
+
+  create_test_config("test_unavailable.conf", test_config);
+  setenv("NCCL_TUNER_CONFIG_FILE", "test_unavailable.conf", 1);
+
+  void* context = NULL;
+  ncclResult_t result = pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
+  TEST_ASSERT(result == ncclSuccess, "Plugin init should succeed");
+
+  // Exercise an ignored entry, an excluded algorithm, and an excluded protocol.
+  const int num_algorithms[] = {NCCL_NUM_ALGORITHMS, NCCL_ALGO_RING, NCCL_NUM_ALGORITHMS};
+  const int num_protocols[] = {NCCL_NUM_PROTOCOLS, NCCL_NUM_PROTOCOLS, NCCL_PROTO_SIMPLE};
+  for (int test_case = 0; test_case < 3; test_case++) {
+    float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+    float original_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+    for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
+      for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
+        cost_table[i][j] = 1.0;
+      }
+    }
+    if (test_case == 0) {
+      cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = NCCL_ALGO_PROTO_IGNORE;
+    }
+    memcpy(original_table, cost_table, sizeof(cost_table));
+
+    int nChannels = 99;
+    result = pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
+                               (float**)cost_table, num_algorithms[test_case], num_protocols[test_case],
+                               0, &nChannels);
+    TEST_ASSERT(result == ncclSuccess, "Unavailable config should fall back successfully");
+    TEST_ASSERT(nChannels == 0, "Unavailable config should preserve automatic channels");
+    TEST_ASSERT(memcmp(cost_table, original_table, sizeof(cost_table)) == 0,
+                "Unavailable config should leave the entire cost table unchanged");
+  }
+
+  pluginFinalize(context);
+  unlink("test_unavailable.conf");
   unsetenv("NCCL_TUNER_CONFIG_FILE");
   TEST_PASS();
 }
@@ -642,9 +682,7 @@ int test_large_config() {
 
   // Test that the plugin can still find matching configurations from the large set
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
       cost_table[i][j] = 1.0; // Default high cost
     }
@@ -653,7 +691,7 @@ int test_large_config() {
   int nChannels;
   // Try to find a matching configuration - should work with large config set
   result = pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                            cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                            (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                             0, &nChannels);
   TEST_ASSERT(result == ncclSuccess, "GetCollInfo should work with large config set");
 
@@ -742,9 +780,7 @@ int test_empty_config() {
 
   // Test that plugin still works with no configurations (fallback behavior)
   float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
-  float* cost_table_ptr[NCCL_NUM_ALGORITHMS];
   for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
-    cost_table_ptr[i] = cost_table[i];
     for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
       cost_table[i][j] = 1.0;
     }
@@ -752,9 +788,15 @@ int test_empty_config() {
 
   int nChannels;
   result = pluginGetCollInfo(context, ncclFuncAllReduce, 32768, 1,
-                            cost_table_ptr, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
+                            (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS,
                             0, &nChannels);
   TEST_ASSERT(result == ncclSuccess, "GetCollInfo should work with empty config");
+  TEST_ASSERT(nChannels == 0, "Empty config should preserve automatic channels");
+  for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
+    for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
+      TEST_ASSERT(cost_table[i][j] == 1.0, "Empty config should leave the cost table unchanged");
+    }
+  }
 
   // Clean up
   pluginFinalize(context);
@@ -907,6 +949,7 @@ TestCase test_cases[] = {
   {"regbuff", test_regbuff_matching, "Registered buffer matching"},
   {"pipeops", test_pipeops_matching, "Pipeline operations matching"},
   {"fallback", test_no_match_fallback, "Fallback behavior"},
+  {"unavailable", test_unavailable_config, "Unavailable algorithm/protocol fallback"},
   {"large-config", test_large_config, "Large configuration files (dynamic allocation)"},
   {"stress-config", test_very_large_config_stress, "Very large configuration stress test"},
   {"empty-config", test_empty_config, "Empty configuration file handling"},

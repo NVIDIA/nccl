@@ -13,7 +13,7 @@ cannot be merged with others.
 Management Of Multiple GPUs From One Thread
 -------------------------------------------
 
-When a single thread is managing multiple devices, group semantics must be used.
+When a thread issues commands to multiple devices, group semantics must be used if those calls are to be matched.
 This is because every NCCL call may have to block, waiting for other threads/ranks to arrive, before effectively posting the NCCL operation on the given stream. Hence, a simple loop on multiple devices like shown below could block on the first call waiting for the other ones:
 
 .. warning::
@@ -112,6 +112,9 @@ Group Operation Ordering Semantics
 Although NCCL group allows different operations to be issued in one shot, users still need to guarantee the same
 issuing order of the operations among different GPUs no matter whether the operations are issued to the same or
 different communicators.
+
+This does not enforce any order on the execution of the operations themselves,
+but if commands are issued in an inconsistent order then matching may fail or cause incorrect results.
 
 For example, the following code provides the correct order of the operations. In this example, *comm0* and *comm1*
 are duplicated independent communicators that include rank 0 and 1.

@@ -9,6 +9,7 @@
 #define _NCCL_DEVICE_GIN_GDAKI_H_
 
 #include "nccl_device/utility.h"
+#include <cstddef>
 #include <cstdint>
 #ifndef DOCA_GPUNETIO_USE_CUDA_WRAPPER
 #define DOCA_GPUNETIO_USE_CUDA_WRAPPER
@@ -48,6 +49,32 @@ NCCL_DEVICE_INLINE uint32_t docaOptFlagsFromGinOptFlags(uint32_t ginOptFlags) {
          (!!(ginOptFlags & ncclGinOptFlagsAggregateRequests) * DOCA_GPUNETIO_VERBS_GPU_CODE_OPT_SKIP_DB_RINGING);
 }
 
+// Per-QP error flag: the first byte of reserved1 in doca_gpu_dev_verbs_qp, zero when the QP is exported and not
+// used by DOCA. A poll of the QP that returns an error CQE sets it. The CQ consumer index stops at the first error
+// CQE, so WQEs posted after it are never consumed and a later wait would spin: the posting paths skip their post on
+// a QP whose flag is set, and flushAsync on it returns a request that is not polled. Other QPs are not affected.
+// Exact values on purpose: any change of the vendored DOCA QP layout must re-check that the byte is still unused.
+static_assert(offsetof(struct doca_gpu_dev_verbs_qp, reserved1) == 88 &&
+                sizeof(((struct doca_gpu_dev_verbs_qp*)nullptr)->reserved1) == 8 &&
+                sizeof(struct doca_gpu_dev_verbs_qp) == 296,
+              "GDAKI QP error flag: doca_gpu_dev_verbs_qp layout changed");
+
+NCCL_DEVICE_INLINE static bool qpHasError(doca_gpu_dev_verbs_qp* qp) {
+  return *(volatile uint8_t*)&qp->reserved1[0] != 0;
+}
+
+NCCL_DEVICE_INLINE static bool qpHasError(ncclGinCtx ctx, int peer) {
+  using nccl::utility::loadConst;
+  return qpHasError(loadConst(&((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId].gdqp) + peer);
+}
+
+NCCL_DEVICE_INLINE static void qpSetError(doca_gpu_dev_verbs_qp* qp) {
+  if (!qpHasError(qp)) *(volatile uint8_t*)&qp->reserved1[0] = 1;
+}
+
+// sq_rsvd_index of a request created by flushAsync on a failed QP: nothing was posted and the request is not polled.
+static constexpr uint64_t NCCL_GIN_GDAKI_FAILED_REQUEST = ~uint64_t(0);
+
 template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode, typename Coop>
 NCCL_DEVICE_INLINE static void putImplMode(
   ncclGinCtx ctx, Coop coop, int peer, bool hasWins, ncclGinWindow_t dstWin, size_t dstOff, ncclGinWindow_t srcWin,
@@ -56,7 +83,7 @@ NCCL_DEVICE_INLINE static void putImplMode(
   ncclGinDescriptorSmem* descriptor, cuda::thread_scope required, cuda::thread_scope given, uint32_t optFlags) {
   using nccl::utility::loadConst;
   coop.sync();
-  if (coop.thread_rank() == 0) {
+  if (coop.thread_rank() == 0 && !qpHasError(ctx, peer)) {
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
     doca_gpu_dev_verbs_qp* companion_qp;
@@ -162,7 +189,7 @@ NCCL_DEVICE_INLINE static void putValueImplMode(
   using nccl::utility::loadConst;
 
   coop.sync();
-  if (coop.thread_rank() == 0) {
+  if (coop.thread_rank() == 0 && !qpHasError(ctx, peer)) {
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
     ncclGinGdakiMemHandle* dstMh = (ncclGinGdakiMemHandle*)dstWin;
@@ -263,7 +290,7 @@ NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer, 
                                            bool hasDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags) {
   using nccl::utility::loadConst;
   coop.sync();
-  if (coop.thread_rank() == 0) {
+  if (coop.thread_rank() == 0 && !qpHasError(ctx, peer)) {
     ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
     doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
     ncclGinGdakiMemHandle* remoteMh = (ncclGinGdakiMemHandle*)remoteWin;
@@ -312,6 +339,11 @@ NCCL_DEVICE_INLINE static void flushAsyncImpl(ncclGinCtx ctx, int peer, ncclGinR
   ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
   doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + peer;
 
+  if (qpHasError(qp)) {
+    req->sq_rsvd_index = NCCL_GIN_GDAKI_FAILED_REQUEST;
+    return;
+  }
+
   if (loadConst(&gdaki->use_mcst)) {
     uint64_t* lastIssuedGetArr = loadConst(&gdaki->last_issued_get);
     uint64_t* lastVisibleGetArr = loadConst(&gdaki->last_visible_get);
@@ -344,13 +376,20 @@ NCCL_DEVICE_INLINE static ncclResult_t waitImplCore(ncclGinCtx ctx, ncclGinReque
   ncclGinGdakiGPUContext* gdaki = &((struct ncclGinGdakiGPUContext*)ctx.handle)[ctx.contextId];
   doca_gpu_dev_verbs_qp* qp = loadConst(&gdaki->gdqp) + req.peer;
   if (req.sq_rsvd_index == 0) return ncclSuccess;
+  // A request on a failed QP never completes. Without an abort flag, return at once with the code that a wait on a
+  // failed QP returns otherwise: ncclTimeout (timed); the untimed wait returns nothing.
+  if (req.sq_rsvd_index == NCCL_GIN_GDAKI_FAILED_REQUEST && abortFlag == nullptr)
+    return HasTimeout ? ncclTimeout : ncclSuccess;
+  // A failed request with an abort flag falls through: its index is past any CQ window, so polls return EBUSY until
+  // the abort or the deadline.
   const doca_gpu_dev_verbs_ticket_t pollIdx = static_cast<doca_gpu_dev_verbs_ticket_t>(req.sq_rsvd_index - 1u);
 
   // doca_gpu_dev_verbs_wait blocks indefinitely, so it can only be used when
   // the caller has no deadline AND no abort flag to honor.
   if NCCL_IF_CONSTEXPR (!HasTimeout) {
     if (abortFlag == nullptr) {
-      doca_gpu_dev_verbs_wait<doca_sharing_mode>(qp, pollIdx);
+      // As doca_gpu_dev_verbs_wait, but keep the status to mark the QP failed on an error CQE.
+      if (doca_gpu_dev_verbs_poll_cq_at<doca_sharing_mode>(qp, pollIdx) < 0) qpSetError(qp);
       cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
       return ncclSuccess;
     }
@@ -367,6 +406,7 @@ NCCL_DEVICE_INLINE static ncclResult_t waitImplCore(ncclGinCtx ctx, ncclGinReque
       cuda::atomic_thread_fence(ord, cuda::thread_scope_system);
       return ncclSuccess;
     }
+    if (status < 0) qpSetError(qp);
     if NCCL_IF_CONSTEXPR (HasTimeout) {
       if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
     }
@@ -409,11 +449,19 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop co
     if (ticket == 0) continue; // No need to poll if there are no outstanding operations
     --ticket;
 
+    // Nothing posted on a failed QP is ever consumed. Without an abort flag, do not wait on it (as for a failed
+    // request in waitImplCore).
+    if (abortFlag == nullptr && qpHasError(&qps[peer])) {
+      if NCCL_IF_CONSTEXPR (HasTimeout) return ncclTimeout;
+      continue;
+    }
+
     // doca_gpu_dev_verbs_wait blocks indefinitely; only usable when there's
     // no deadline AND no abort flag to honor.
     if NCCL_IF_CONSTEXPR (!HasTimeout) {
       if (abortFlag == nullptr) {
-        doca_gpu_dev_verbs_wait<resource_sharing_mode>(&qps[peer], ticket);
+        // As doca_gpu_dev_verbs_wait, but keep the status to mark the QP failed on an error CQE.
+        if (doca_gpu_dev_verbs_poll_cq_at<resource_sharing_mode>(&qps[peer], ticket) < 0) qpSetError(&qps[peer]);
         continue;
       }
     }
@@ -422,6 +470,7 @@ NCCL_DEVICE_INLINE static ncclResult_t flushImplModeCore(ncclGinCtx ctx, Coop co
     while (true) {
       int status = doca_gpu_dev_verbs_poll_one_cq_at<resource_sharing_mode>(&qps[peer], ticket);
       if (status == 0) break;
+      if (status < 0) qpSetError(&qps[peer]);
       if NCCL_IF_CONSTEXPR (HasTimeout) {
         if (clock64() - startCycle >= timeoutCycles) return ncclTimeout;
       }

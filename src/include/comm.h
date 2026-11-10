@@ -858,6 +858,7 @@ struct ncclComm {
 
   // buffer registration cache
   struct ncclRegCache regCache;
+  struct ncclRegIpcAddrPool regIpcAddrPool;
   int isAllNvlink;
   bool isAllDirectP2p; // Subject to NCCL_P2P_LEVEL (for local ranks only).
   bool isAllCudaP2p; // Raw CUDA capability (for local ranks only).

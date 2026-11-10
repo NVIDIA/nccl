@@ -15,6 +15,100 @@
 
 NCCL_PARAM(LocalRegister, "LOCAL_REGISTER", 1);
 
+// Blocks are the cuMem allocation granularity, which one array would cost on its own; without cuMem, cudaMalloc has
+// no such granularity and a small block keeps a few registrations cheap.
+#define NCCL_REG_IPC_ADDR_BLOCK_CUMEM CUDA_IPC_MIN
+#define NCCL_REG_IPC_ADDR_BLOCK_NOCUMEM (16 * 1024)
+
+static ncclResult_t regIpcAddrPoolGrow(struct ncclComm* comm, cudaStream_t stream) {
+  struct ncclRegIpcAddrPool* pool = &comm->regIpcAddrPool;
+  struct ncclRegIpcAddrBlock* block = NULL;
+  ncclResult_t ret = ncclSuccess;
+  NCCLCHECK(ncclCalloc(&block, 1));
+  NCCLCHECKGOTO(ncclCudaCallocAsync(&block->base, (size_t)pool->arraysPerBlock * pool->arrayEntries, stream,
+                                    comm->memManager),
+                ret, fail);
+  block->next = pool->blocks;
+  pool->blocks = block;
+  pool->nextArray = 0;
+  return ncclSuccess;
+fail:
+  free(block);
+  return ret;
+}
+
+ncclResult_t ncclRegIpcAddrsAlloc(struct ncclComm* comm, int arrayEntries, cudaStream_t stream, uintptr_t** addrs) {
+  struct ncclRegIpcAddrPool* pool = &comm->regIpcAddrPool;
+  // ipcIndexSize (localRanks, or nRanks across cliques) does not change during the life of a communicator
+  if (arrayEntries <= 0 || (pool->arrayEntries != 0 && pool->arrayEntries != arrayEntries)) {
+    WARN("rank %d IPC address array of %d entries requested from a pool of %d-entry arrays", comm->rank, arrayEntries,
+         pool->arrayEntries);
+    return ncclInternalError;
+  }
+  if (pool->arrayEntries == 0) {
+    size_t blockBytes = ncclCuMemEnable() ? NCCL_REG_IPC_ADDR_BLOCK_CUMEM : NCCL_REG_IPC_ADDR_BLOCK_NOCUMEM;
+    size_t arraysPerBlock = blockBytes / ((size_t)arrayEntries * sizeof(uintptr_t));
+    pool->arrayEntries = arrayEntries;
+    pool->arraysPerBlock = arraysPerBlock > 0 ? (int)arraysPerBlock : 1;
+  }
+  if (pool->nFree > 0) {
+    *addrs = pool->freeArrays[--pool->nFree];
+    return ncclSuccess;
+  }
+  if (pool->blocks == NULL || pool->nextArray == pool->arraysPerBlock) NCCLCHECK(regIpcAddrPoolGrow(comm, stream));
+  *addrs = pool->blocks->base + (size_t)pool->nextArray * pool->arrayEntries;
+  pool->nextArray++;
+  return ncclSuccess;
+}
+
+ncclResult_t ncclRegIpcAddrsFree(struct ncclComm* comm, uintptr_t* addrs, bool clear) {
+  struct ncclRegIpcAddrPool* pool = &comm->regIpcAddrPool;
+  if (clear) {
+    // Zero the array on the stream that carries every copy into it, so that a kernel which still reads it faults
+    // (offset from address 0) instead of reading the addresses of the next record that takes the array.
+    cudaStream_t stream;
+    cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+    cudaError_t res;
+    NCCLCHECK(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
+                                      /*concurrent=*/false, &stream));
+    CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+    res = cudaMemsetAsync(addrs, 0, (size_t)pool->arrayEntries * sizeof(uintptr_t), stream);
+    if (res == cudaSuccess && pool->clearEvent == NULL) {
+      res = cudaEventCreateWithFlags(&pool->clearEvent, cudaEventDisableTiming);
+    }
+    if (res == cudaSuccess) res = cudaEventRecord(pool->clearEvent, stream);
+    CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+    CUDACHECK(res);
+    NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
+                                      /*concurrent=*/false));
+  }
+  if (pool->nFree == pool->freeCap) {
+    int freeCap = pool->freeCap ? 2 * pool->freeCap : 64;
+    NCCLCHECK(ncclRealloc(&pool->freeArrays, pool->freeCap, freeCap));
+    pool->freeCap = freeCap;
+  }
+  pool->freeArrays[pool->nFree++] = addrs;
+  return ncclSuccess;
+}
+
+static ncclResult_t regIpcAddrPoolDestroy(struct ncclComm* comm) {
+  struct ncclRegIpcAddrPool* pool = &comm->regIpcAddrPool;
+  if (pool->clearEvent) {
+    // the zeroing of released arrays is asynchronous; the blocks must not be unmapped under it
+    CUDACHECK(cudaEventSynchronize(pool->clearEvent));
+    CUDACHECK(cudaEventDestroy(pool->clearEvent));
+  }
+  while (pool->blocks) {
+    struct ncclRegIpcAddrBlock* block = pool->blocks;
+    pool->blocks = block->next;
+    NCCLCHECK(ncclCudaFree(block->base, comm->memManager));
+    free(block);
+  }
+  free(pool->freeArrays);
+  memset(pool, 0, sizeof(*pool));
+  return ncclSuccess;
+}
+
 ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid) {
   if (reg && isValid) {
     if (reg->localRefs) *isValid = true;
@@ -94,7 +188,7 @@ exit:
   return ncclSuccess;
 }
 
-static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
+static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg, bool clearIpcAddrs) {
   if (reg->state & NET_REG_COMPLETE) {
     struct ncclRegNetHandles* netHandle = reg->netHandleHead;
     struct ncclRegNetHandles* netHandlePrev;
@@ -130,22 +224,29 @@ static ncclResult_t regCleanup(struct ncclComm* comm, struct ncclReg* reg) {
       free(reg->ipcInfos);
     }
     if (reg->regIpcAddrs.hostPeerRmtAddrs) free(reg->regIpcAddrs.hostPeerRmtAddrs);
-    if (reg->regIpcAddrs.devPeerRmtAddrs) NCCLCHECK(ncclCudaFree(reg->regIpcAddrs.devPeerRmtAddrs, comm->memManager));
+    if (reg->regIpcAddrs.devPeerRmtAddrs) {
+      NCCLCHECK(ncclRegIpcAddrsFree(comm, reg->regIpcAddrs.devPeerRmtAddrs, clearIpcAddrs));
+    }
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclRegCleanup(struct ncclComm* comm) {
   struct ncclRegCache* cache = &comm->regCache;
+  ncclResult_t ret = ncclSuccess, res;
   for (int i = 0; i < cache->population; i++) {
     struct ncclReg* reg = cache->slots[i];
     INFO(NCCL_DESTROY, "Cleanup buffer %p pages %lx", (void*)reg->begAddr,
          (reg->endAddr - reg->begAddr) / cache->pageSize);
-    NCCLCHECK(regCleanup(comm, reg));
+    // keep going after a failure so that every record and the address blocks are released
+    res = regCleanup(comm, reg, /*clearIpcAddrs=*/false);
+    if (res != ncclSuccess && ret == ncclSuccess) ret = res;
     free(reg);
   }
   free(cache->slots);
-  return ncclSuccess;
+  res = regIpcAddrPoolDestroy(comm);
+  if (res != ncclSuccess && ret == ncclSuccess) ret = res;
+  return ret;
 }
 
 NCCL_API(ncclResult_t, ncclCommRegister, const ncclComm_t comm, void* buff, size_t size, void** handle);
@@ -191,7 +292,7 @@ static ncclResult_t commDeregister(struct ncclComm* comm, bool isGraph, struct n
   if (isGraph) --reg->graphRefs;
   else --reg->localRefs;
   if (reg->localRefs || reg->graphRefs) return ncclSuccess;
-  NCCLCHECK(regCleanup(comm, reg));
+  NCCLCHECK(regCleanup(comm, reg, /*clearIpcAddrs=*/true));
   free(reg);
   memmove(cache->slots + slot, cache->slots + slot + 1, (cache->population - slot - 1) * sizeof(struct ncclReg*));
   cache->population -= 1;

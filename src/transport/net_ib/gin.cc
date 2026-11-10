@@ -464,6 +464,11 @@ struct ncclRmaIbProxyMrHandle {
   uint32_t* rkeys;
 };
 
+struct ncclRmaIbProxyMrExch {
+  uintptr_t base_va;
+  uint32_t rkey;
+};
+
 ncclResult_t ncclRmaIbProxyInit(void** ctx, uint64_t commId, ncclDebugLogger_t logFunction) {
   return ncclGinIbInitType(ctx, commId, logFunction, NCCL_GIN_TYPE_PROXY);
 }
@@ -677,6 +682,7 @@ ncclResult_t ncclRmaIbProxyRegMrSymDmaBuf(void* collComm, void* data, size_t siz
   ncclResult_t ret = ncclSuccess;
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
   struct ncclRmaIbProxyMrHandle* rmaMrHandle = NULL;
+  struct ncclRmaIbProxyMrExch local, *all = NULL;
   NCCLCHECKGOTO(ncclCalloc(&rmaMrHandle, 1), ret, fail);
 
   NCCLCHECKGOTONOWARN(ncclIbRegMrDmaBufInternal(cComm->recvComm, data, size, type, offset, fd, mr_flags,
@@ -686,14 +692,23 @@ ncclResult_t ncclRmaIbProxyRegMrSymDmaBuf(void* collComm, void* data, size_t siz
   NCCLCHECKGOTO(ncclCalloc(&rmaMrHandle->base_vas, cComm->nranks), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&rmaMrHandle->rkeys, cComm->nranks), ret, fail);
 
-  NCCLCHECKGOTO(cComm->allGather(cComm, &data, rmaMrHandle->base_vas, sizeof(uintptr_t)), ret, fail);
-  NCCLCHECKGOTO(cComm->allGather(cComm, &rmaMrHandle->mrHandle->mrs[0]->rkey, rmaMrHandle->rkeys, sizeof(uint32_t)),
-                ret, fail);
+  // Exchange the base address and the rkey with a single AllGather.
+  memset(&local, 0, sizeof(local));
+  local.base_va = (uintptr_t)data;
+  local.rkey = rmaMrHandle->mrHandle->mrs[0]->rkey;
+  NCCLCHECKGOTO(ncclIbMalloc((void**)&all, cComm->nranks * sizeof(local)), ret, fail);
+  NCCLCHECKGOTO(cComm->allGather(cComm, &local, all, sizeof(local)), ret, fail);
+  for (int r = 0; r < cComm->nranks; r++) {
+    rmaMrHandle->base_vas[r] = all[r].base_va;
+    rmaMrHandle->rkeys[r] = all[r].rkey;
+  }
+  free(all);
 
   *mhandle = rmaMrHandle;
 
   return ncclSuccess;
 fail:
+  free(all);
   if (rmaMrHandle) {
     if (rmaMrHandle->mrHandle) ncclNetIb.deregMr(cComm->recvComm, rmaMrHandle->mrHandle);
     free(rmaMrHandle->base_vas);

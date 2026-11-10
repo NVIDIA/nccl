@@ -1277,6 +1277,8 @@ A rate limit applied to the function, for example on a virtual function in a vir
 
 A rate limit set to exactly the bandwidth of one of those PCIe links cannot be told apart from the link itself. Set this variable to 1 on such a system. NCCL logs one line per device under ``NCCL_DEBUG=INFO`` whenever it replaces a reported speed.
 
+The same attribution is applied to the speed a net plugin reports, at the point where that speed enters the topology, using the port rate read from ``/sys/class/infiniband``. A plugin that carries its own copy of an IB transport has no way of knowing that NCCL models PCIe separately, so the correction is made on NCCL's side and this variable governs it for the built-in transport and for plugins alike. A plugin that already reports the rate of the network port is left untouched.
+
 Values accepted
 ^^^^^^^^^^^^^^^
 The default is -1 (call ``ibv_query_port_speed`` and attribute the result, as described above). Set to 1 to use what it reports without attribution, or to 0 not to call it at all and always use the rate of the network port.

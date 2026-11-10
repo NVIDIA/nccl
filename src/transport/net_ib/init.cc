@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "common.h"
+#include "hostpcie.h"
 #include "p2p_resiliency_recovery.h"
 
 NCCL_PARAM(IbPciRelaxedOrdering, "IB_PCI_RELAXED_ORDERING", 2);
@@ -31,7 +32,6 @@ NCCL_PARAM(IbDevicePciOrder, "IB_DEVICE_PCI_ORDER", 1);
 NCCL_PARAM(IbSortMergeNics, "IB_SORT_MERGE_NICS", 1);
 
 extern int64_t ncclParamIbArThreshold();
-extern int64_t ncclParamIbQueryPortSpeed();
 
 // Returns 0 if this is the path of two VFs of the same physical device
 static int ncclIbMatchVfPath(const char* path1, const char* path2) {
@@ -150,83 +150,6 @@ static int ncclIbSpeed(int speed) {
   return ibvSpeeds[firstBitSet(speed, sizeof(ibvSpeeds) / sizeof(int) - 1)];
 }
 
-// Read one numeric sysfs attribute of a PCI device directory.
-// "32.0 GT/s PCIe" -> 32.0 ; "16" -> 16 ; "Unknown" -> failure.
-static ncclResult_t ncclIbReadPciAttr(const char* devDir, const char* attr, double* value) {
-  char path[PATH_MAX];
-  char buf[64];
-  snprintf(path, sizeof(path), "%s/%s", devDir, attr);
-  FILE* f = fopen(path, "r");
-  if (f == NULL) return ncclSystemError;
-  char* line = fgets(buf, sizeof(buf), f);
-  fclose(f);
-  if (line == NULL) return ncclSystemError;
-  double v = atof(buf);
-  if (!(v > 0.0)) return ncclSystemError;
-  *value = v;
-  return ncclSuccess;
-}
-
-// Bandwidth, in Mbps, of the PCIe path between the NIC and the host root complex: the
-// NIC's own link in *ownLink, and the slowest link of the whole path in *pathMin. These
-// are raw figures, the per-lane transfer rate times the lane count with no encoding
-// overhead removed, which is how the device counts them. Both are returned because
-// devices up to CX7 read the host PCIe state from their own PCIe registers, which
-// describe their own link alone, while later ones are told about the whole path.
-//
-// Fails if the path cannot be walked, and also if any link on it is running below what
-// NCCL's own PCIe model assumes. That model is built from max_link_speed and
-// max_link_width, each minimised against the parent port (ncclTopoGetXmlFromSys() in
-// src/graph/xml.cc), so on a link that trained down further the model is optimistic and
-// the value reported by the device is the only thing accounting for the difference.
-static ncclResult_t ncclIbHostPciePath(const char* devName, uint64_t* ownLink, uint64_t* pathMin) {
-  char devicePath[PATH_MAX];
-  snprintf(devicePath, sizeof(devicePath), "/sys/class/infiniband/%s/device", devName);
-  char* dir = realpath(devicePath, NULL);
-  if (dir == NULL) return ncclSystemError;
-
-  ncclResult_t ret = ncclSuccess;
-  *ownLink = *pathMin = 0;
-  // Walk up towards the root complex. Every PCI device and bridge on the way exposes
-  // current_link_speed / current_link_width; the host bridge above them does not.
-  while (1) {
-    char* slash = strrchr(dir, '/');
-    if (slash == NULL || slash == dir) break;
-    // Stop once we leave the PCI devices: a bus:device.function component always has ':'.
-    if (strchr(slash + 1, ':') == NULL) break;
-
-    double gts = 0.0, width = 0.0, maxGts = 0.0, maxWidth = 0.0, parent = 0.0;
-    if (ncclIbReadPciAttr(dir, "current_link_speed", &gts) == ncclSuccess &&
-        ncclIbReadPciAttr(dir, "current_link_width", &width) == ncclSuccess) {
-      if (ncclIbReadPciAttr(dir, "max_link_speed", &maxGts) != ncclSuccess) maxGts = gts;
-      if (ncclIbReadPciAttr(dir, "max_link_width", &maxWidth) != ncclSuccess) maxWidth = width;
-      if (ncclIbReadPciAttr(dir, "../max_link_speed", &parent) == ncclSuccess && parent < maxGts) maxGts = parent;
-      if (ncclIbReadPciAttr(dir, "../max_link_width", &parent) == ncclSuccess && parent < maxWidth) maxWidth = parent;
-      if (gts < 0.99 * maxGts || width < 0.99 * maxWidth) {
-        INFO(NCCL_INIT | NCCL_NET,
-             "NET/IB : %s sits behind PCIe link %s running at %g GT/s x%g where %g GT/s x%g is advertised; keeping "
-             "the speed reported by the device, which accounts for it.",
-             devName, slash + 1, gts, width, maxGts, maxWidth);
-        ret = ncclSystemError;
-        break;
-      }
-      uint64_t mbps = (uint64_t)(gts * width * 1000.0);
-      if (*ownLink == 0) *ownLink = mbps;
-      if (*pathMin == 0 || mbps < *pathMin) *pathMin = mbps;
-    }
-    *slash = '\0'; // move to the parent device
-  }
-
-  free(dir);
-  if (ret == ncclSuccess && *pathMin == 0) ret = ncclSystemError;
-  return ret;
-}
-
-// 1% of slack absorbs rounding differences between the device and sysfs.
-static bool ncclIbSameBw(uint64_t value, uint64_t reference) {
-  return reference > 0 && (double)value >= 0.99 * (double)reference && (double)value <= 1.01 * (double)reference;
-}
-
 // Pick the value NCCL uses as the speed of a NIC, in Mbps.
 //
 // ibv_query_port_speed() reports the bandwidth available to this host function, that is
@@ -258,9 +181,11 @@ int ncclIbPortSpeed(const char* devName, struct ibv_port_attr* portAttr, uint64_
   // Nothing is capping the port, so there is nothing to attribute.
   if (queriedMbps == 0 || portRate <= 0 || (int64_t)queriedMbps >= portRate) return (int)queriedMbps;
 
+  char devicePath[PATH_MAX];
+  snprintf(devicePath, sizeof(devicePath), "/sys/class/infiniband/%s/device", devName);
   uint64_t ownLink = 0, pathMin = 0;
-  if (ncclIbHostPciePath(devName, &ownLink, &pathMin) != ncclSuccess) return (int)queriedMbps;
-  if (!ncclIbSameBw(queriedMbps, ownLink) && !ncclIbSameBw(queriedMbps, pathMin)) return (int)queriedMbps;
+  if (ncclHostPciePath(devicePath, devName, &ownLink, &pathMin) != ncclSuccess) return (int)queriedMbps;
+  if (!ncclBwMatches(queriedMbps, ownLink) && !ncclBwMatches(queriedMbps, pathMin)) return (int)queriedMbps;
 
   INFO(NCCL_INIT | NCCL_NET,
        "NET/IB : %s reports %lu Mbps, the bandwidth of its host PCIe link (own link %lu, path %lu); using the %d Mbps "

@@ -13,6 +13,7 @@
 #include "nccl.h"
 #include "nvmlwrap.h"
 #include "coll_net.h"
+#include "hostpcie.h"
 #if defined(NCCL_OS_WINDOWS)
 #include "gin/gin_host_win_stub.h"
 #else
@@ -1771,7 +1772,11 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
 
     NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
-    NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
+    // Every network, built in or supplied by a plugin, passes its speed through here on
+    // its way into the topology, so this is where the bandwidth of the host PCIe link is
+    // kept out of it. See ncclNetAdjustSpeed() in src/misc/hostpcie.cc.
+    NCCLCHECK(xmlInitAttrInt(netNode, "speed",
+                             ncclNetAdjustSpeed(props.name, props.pciPath, props.port, props.speed)));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
     NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
     // Reserve bit 16 for NCCL-generated rail and plane IDs.

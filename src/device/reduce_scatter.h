@@ -291,6 +291,9 @@ struct RunWorkColl<ncclFuncReduceScatter, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_S
           railAllOffset += delta;
           node += 1;
         }
+        // The NVLS buffer filled here is read back with multimem.ld_reduce: zero the lanes after the data
+        // (NVIDIA/nccl#2479). Only on the send side, where dstPtrs are NCCL's own buffers.
+        if (ReduceSendNotRecv && nDsts != 0) zeroPadTo16B<T>(tid, (T*)dstPtrs[dst], railAllSize);
         dst += 1;
         rail += 1;
       } while (ReduceSendNotRecv && dst < nRails);

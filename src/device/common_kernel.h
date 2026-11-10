@@ -34,6 +34,21 @@ inline __device__ ssize_t loadSsize(ssize_t* ptr) {
   return v;
 }
 
+// Zero the elements between the end of a buffer's data and the next 16-byte boundary. NVLS peers read NCCL's buffers
+// with multimem.ld_reduce, whose 16-bit and 8-bit packed forms load whole 4-byte words, so the lanes next to the last
+// element must not carry stale bytes of an earlier step (NVIDIA/nccl#2479). Only for NCCL-owned buffers: the pad stays
+// inside the current step slot, whose size is a multiple of 16 bytes.
+template <typename T>
+__device__ __forceinline__ void zeroPadTo16B(int tid, T* dst, ssize_t nElts) {
+  uintptr_t end = cvta_to_global(dst + nElts);
+  int padBytes = (16 - int(end % 16)) % 16;
+  if (tid * (int)sizeof(T) < padBytes) {
+    BytePack<sizeof(T)> zero;
+    zero.native = 0;
+    st_global<sizeof(T)>(end + tid * sizeof(T), zero);
+  }
+}
+
 template <typename RedFn, typename T, int Unroll, int BytePerPack, int MultimemSrcs, int MinSrcs, int MaxSrcs,
           int MultimemDsts, int MinDsts, int MaxDsts, int PreOpSrcs, typename IntBytes, typename SrcPtrFn,
           typename DstPtrFn>

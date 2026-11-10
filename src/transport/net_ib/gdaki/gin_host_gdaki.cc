@@ -879,7 +879,7 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     EQCHECKGOTO(gdaki_ctx->companion_gqps, nullptr, status, out);
   }
 
-  local_exch_info = (struct gdaki_exch_info*)calloc(nranks, sizeof(*local_exch_info));
+  local_exch_info = (struct gdaki_exch_info*)calloc(ncontexts * nranks, sizeof(*local_exch_info));
   EQCHECKGOTO(local_exch_info, nullptr, status, out);
 
   remote_exch_info = (struct gdaki_exch_info*)calloc(ncontexts * nranks, sizeof(*remote_exch_info));
@@ -1113,21 +1113,20 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     for (int i = 0; i < peerArrayCount; i++) {
       const int rank_idx = peerArray[i];
       int qp_idx = rank_idx + ctx_idx * nranks;
-      gdakiFillExchInfo(&local_exch_info[rank_idx], gdaki_ctx, gdaki_ctx->gqps[qp_idx]);
+      gdakiFillExchInfo(&local_exch_info[rank_idx * ncontexts + ctx_idx], gdaki_ctx, gdaki_ctx->gqps[qp_idx]);
     }
-
-    // Exchange information with peers
-    NCCLCHECKGOTO(cComm->allToAll(cComm, local_exch_info, &remote_exch_info[ctx_idx * nranks],
-                                  sizeof(struct gdaki_exch_info)),
-                  status, out);
   }
+
+  // Exchange the information of all contexts with peers in a single collective
+  NCCLCHECKGOTO(cComm->allToAll(cComm, local_exch_info, remote_exch_info, ncontexts * sizeof(struct gdaki_exch_info)),
+                status, out);
 
   for (int i = 0; i < peerArrayCount; i++) {
     const int rank_idx = peerArray[i];
     if (rank_idx == rank) continue;
     for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
       int qp_idx = rank_idx + ctx_idx * nranks;
-      struct gdaki_exch_info* peer_info = &remote_exch_info[ctx_idx * nranks + rank_idx];
+      struct gdaki_exch_info* peer_info = &remote_exch_info[rank_idx * ncontexts + ctx_idx];
 
       uint8_t lagTxPortAffinity = (numLagPorts > 0) ? (ctx_idx % numLagPorts) + 1 : 0;
 

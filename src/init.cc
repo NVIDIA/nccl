@@ -1069,6 +1069,32 @@ NCCL_PARAM(GraphDumpFileRank, "GRAPH_DUMP_FILE_RANK", 0);
 NCCL_PARAM(CollNetNodeThreshold, "COLLNET_NODE_THRESHOLD", 2);
 NCCL_PARAM(NvbPreconnect, "NVB_PRECONNECT", 1);
 NCCL_PARAM(AllocP2pNetLLBuffers, "ALLOC_P2P_NET_LL_BUFFERS", 0);
+NCCL_PARAM(Ll128Buffers, "LL128_BUFFERS", 0);
+
+// Decide once per resource family whether its connections carry the LL128 buffer. The owner decides before any
+// connection exists, from facts that hold for every communicator sharing the connections: the GPUs and NICs of
+// its system (ncclTopoLL128Possible) and the process-wide NCCL_PROTO. Children inherit the decision with the
+// connectors; the tuner of every communicator then allows LL128 only if all ranks report the buffer.
+static ncclResult_t initLL128Buffers(struct ncclComm* comm) {
+  struct ncclSharedResources* sharedRes = comm->sharedRes;
+  if (sharedRes->owner == comm) {
+    int localPeers = 0, ll128Env;
+    for (int r = 0; r < comm->nRanks; r++) {
+      if (r != comm->rank && comm->peerInfo[r].hostHash == comm->peerInfo[comm->rank].hostHash) localPeers = 1;
+    }
+    NCCLCHECK(ncclTopoLL128Possible(comm->topo, localPeers, &sharedRes->ll128IntraBuffers,
+                                    &sharedRes->ll128NetBuffers));
+    NCCLCHECK(ncclTuningLL128ProtoEnv(&ll128Env));
+    if (ll128Env == 1 || ncclParamLl128Buffers()) {
+      sharedRes->ll128IntraBuffers = sharedRes->ll128NetBuffers = 1;
+    } else if (ll128Env == 0) {
+      sharedRes->ll128IntraBuffers = sharedRes->ll128NetBuffers = 0;
+    }
+  }
+  INFO(NCCL_INIT, "LL128 buffers: intra-node connections %d, network connections %d%s", sharedRes->ll128IntraBuffers,
+       sharedRes->ll128NetBuffers, sharedRes->owner == comm ? "" : " (inherited)");
+  return ncclSuccess;
+}
 
 // MNNVL: Flag to indicate whether to enable Multi-Node NVLink
 NCCL_PARAM(MNNVLEnable, "MNNVL_ENABLE", 2);
@@ -1259,6 +1285,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     float localNetBw;
     int localCollNetCount;
     int isAllNvlink;
+    int ll128IntraBuffers;
+    int ll128NetBuffers;
   };
 
   int nChannelsOrig;
@@ -1460,6 +1488,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   NCCLCHECKGOTO(ncclTopoComputeCommCPU(comm), ret, fail);
   // Print final topology
   NCCLCHECKGOTO(ncclTopoPrint(comm->topo), ret, fail);
+  // Decide whether the connections of this resource family need the LL128 buffer
+  NCCLCHECKGOTO(initLL128Buffers(comm), ret, fail);
   timers[TIMER_INIT_TOPO] = clockNano() - timers[TIMER_INIT_TOPO];
 
   // Set Affinity to a CPU local the our GPU, so that all memory we allocate
@@ -1585,6 +1615,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   NCCLCHECK(ncclTopoPathAllNVLink(comm->topo, &comm->isAllNvlink));
   allGather3Data[rank].isAllNvlink = comm->isAllNvlink;
+  allGather3Data[rank].ll128IntraBuffers = comm->sharedRes->ll128IntraBuffers;
+  allGather3Data[rank].ll128NetBuffers = comm->sharedRes->ll128NetBuffers;
 
   comm->nChannels = std::min(treeGraph->nChannels, ringGraph->nChannels);
   NCCLCHECKGOTO(ncclTopoPreset(comm, graphs, &allGather3Data[rank].topoRanks), ret, fail);
@@ -1760,6 +1792,15 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->p2pMaxPeers = std::max(comm->p2pMaxPeers, allGather3Data[i].p2pMaxPeers);
     comm->minNetBw = std::min(comm->minNetBw, allGather3Data[i].minNetBw);
   }
+  // LL128 may run only if every rank's connections carry the LL128 buffer: the intra-node ones when the rank has
+  // local peers, the network ones when the communicator spans several nodes.
+  comm->ll128Buffers = 1;
+  for (int i = 0; i < nranks; i++) {
+    if (comm->nodeRanks[comm->rankToNode[i]].localRanks > 1 && !allGather3Data[i].ll128IntraBuffers)
+      comm->ll128Buffers = 0;
+    if (comm->nNodes > 1 && !allGather3Data[i].ll128NetBuffers) comm->ll128Buffers = 0;
+  }
+  if (!comm->ll128Buffers) INFO(NCCL_INIT, "LL128 protocol not available: no LL128 buffer on some connection");
   if (graphs[NCCL_ALGO_COLLNET_CHAIN]->nChannels == 0) comm->config.collnetEnable = 0;
   if (graphs[NCCL_ALGO_NVLS]->nChannels == 0) comm->nvlsSupport = comm->nvlsChannels = 0;
 

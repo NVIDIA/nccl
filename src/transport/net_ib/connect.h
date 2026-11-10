@@ -19,6 +19,7 @@ struct ncclIbQpCreateAttr {
   struct ibv_pd* pd;
   uint32_t maxRecvWorkRequest;
   uint32_t maxSendWorkRequest;
+  uint32_t maxInlineData; // inline send capacity to request (receiver data QPs post the CTS inline)
 };
 
 // Per-QP connection metatdata

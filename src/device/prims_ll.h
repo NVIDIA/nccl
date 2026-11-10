@@ -28,6 +28,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   volatile uint64_t* sendConnHeadPtr = NULL;
   uint64_t sendConnHead;
   uint64_t sendConnHeadCache; // Cache last seen value
+  // NET send connections with NCCL_LL_NET_SENDSIG: a step that publishes at least
+  // ncclShmem.comm.llSendSigMin bytes writes its connFifo size after the step's lines and a fence,
+  // so that the proxy can post it without reading the lines.
+  uint32_t llSigMask = 0; // bit i: send peer i's connection has NCCL_LL_NET_SENDSIG
+  int llSigSize = -1;     // threads tid < nsend: the size still to be published, or -1
 
   // Avoid zero-length arrays while keeping the logical fan sizes unchanged.
   uint64_t recvStep[MaxRecv ? MaxRecv : 1];
@@ -64,6 +69,18 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
 
   int abort = 0;
 
+  // The size a step publishes in connFifo: a cleanup step covers all its lines.
+  inline __device__ int publishSize(uint64_t step, int nbytes) {
+    return ((step & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ?
+             stepLines * sizeof(union ncclLLFifoLine) :
+             nbytes;
+  }
+  // Whether send peer i publishes this step after its lines. The proxy (sendProxyProgress) skips
+  // reading the lines for exactly these steps: it applies the same threshold to the published size.
+  inline __device__ bool publishLate(int i, uint64_t step, int nbytes) {
+    return ((llSigMask >> i) & 1) && publishSize(step, nbytes) >= ncclShmem.comm.llSendSigMin;
+  }
+
   inline __device__ void waitSend(int nbytes) {
     if (sendConnHeadPtr) {
       int spins = 0;
@@ -72,14 +89,27 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
         if (checkAbort(abort, 1, spins)) break;
       }
       if (sendConnFifo) {
-        int size = ((sendConnHead & NCCL_LL_CLEAN_MASK) == NCCL_LL_CLEAN_MASK) ?
-                     stepLines * sizeof(union ncclLLFifoLine) :
-                     nbytes;
-        sendConnFifo[sendConnHead % NCCL_STEPS].size = size;
+        int size = publishSize(sendConnHead, nbytes);
+        if (publishLate(tid, sendConnHead, nbytes)) {
+          llSigSize = size; // published by latePublish()
+        } else {
+          sendConnFifo[sendConnHead % NCCL_STEPS].size = size;
+        }
       }
       sendConnHead += 1;
     }
     barrier();
+  }
+
+  // Runs after the step's line stores when some send peer has NCCL_LL_NET_SENDSIG (llSigMask is
+  // the same in every thread, so the whole group takes the barrier).
+  inline __device__ void latePublish() {
+    barrier(); // every thread has issued its line stores, including incSend()'s cleanup stores
+    if (llSigSize >= 0) {
+      fence_acq_rel_sys();
+      sendConnFifo[(sendConnHead - 1) % NCCL_STEPS].size = llSigSize;
+      llSigSize = -1;
+    }
   }
 
   inline __device__ void incRecv(int i) {
@@ -307,6 +337,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       for (int i = 1; i < MaxSend && i < fan.nsend(); i++) incSend(i, offset);
       incSend(0, offset);
     }
+    if (SEND && llSigMask) latePublish();
   }
 
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
@@ -324,6 +355,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
     sendBuff[i] = (union ncclLLFifoLine*)conn->buffs[NCCL_PROTO_LL];
     sendStep[i] = conn->step;
+    if (conn->flags & NCCL_LL_NET_SENDSIG) llSigMask |= 1u << i;
     if (wid == i) sendConn = conn;
   }
   __device__ __forceinline__ void loadSendSync() {

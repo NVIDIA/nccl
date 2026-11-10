@@ -831,6 +831,7 @@ struct ncclComm {
   // also used by RAS; they are independent of GPU completed-work counters.
   uint64_t seqNumber[NCCL_NUM_FUNCTIONS];
   struct ncclProfilerCommState profiler;
+  int llSendSigMin; // NCCL_LL_SENDSIG_MIN when NCCL_LL_SENDSIG=1, else -1 (see prims_ll.h)
 
   // RAS GPU-resident counters support
   // Pinned host mirror of the NCCL progress counters.

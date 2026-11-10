@@ -91,6 +91,8 @@ static_assert(NCCL_LL_CLEAN_MASK % NCCL_STEPS == 0, "Invalid NCCL_LL_CLEAN_MASK 
 #define NCCL_P2P_WRITE 0x01
 #define NCCL_P2P_READ 0x02
 #define NCCL_DIRECT_NIC 0x04
+// NET send: large LL steps publish their connFifo size after their lines (see prims_ll.h)
+#define NCCL_LL_NET_SENDSIG 0x08
 #define NCCL_NVLS_MIN_POLL 0x80
 
 // Number of named barriers supported by CUDA
@@ -474,6 +476,10 @@ struct ncclKernelComm {
 
   // GPU-resident progress-counter block; null when GPU progress counters are disabled.
   struct ncclProgressCountersBlock* progressCounters;
+
+  // NCCL_LL_SENDSIG_MIN: on connections with NCCL_LL_NET_SENDSIG, LL steps that publish at least
+  // this many bytes publish them after their lines.
+  int llSendSigMin;
 };
 
 struct alignas(16) ncclKernelCommAndChannels {

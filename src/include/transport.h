@@ -39,6 +39,8 @@ struct ncclComm;
 
 int64_t ncclParamMultiSegmentRegister();
 extern int64_t ncclParamNvlsEnable();
+int64_t ncclParamLlSendSig();
+int64_t ncclParamLlSendSigMin();
 int ncclPatEnable(struct ncclComm* comm);
 
 // ncclPeerInfo is exchanged before NCCL version validation.

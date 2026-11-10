@@ -92,6 +92,15 @@ ncclResult_t ncclTuningPipelineModelSim(struct ncclTuningInput_t* const inputs, 
   lat = comm->tuningContext.tuningConstants.baseLatencies[tuning->algo][tuning->proto];
   tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, lat, algBw);
 
+  TRACE(NCCL_TUNING,
+        "a/p/c/s/n %s/%s/%s/%ld/%d pipelineTime %f pipeline was {.sliceSize=%ld .nSlices=%ld .intra={.stepCount=%d "
+        ".lat=%f .busBw=%f} "
+        ".inter={.stepCount=%d .lat=%f .busBw=%f} }",
+        ncclAlgoToString(tuning->algo), ncclProtoToString(tuning->proto), ncclFuncToString(inputs->func),
+        ncclTuningGeneralBytes(inputs), inputs->comm->nRanks, pipelineTime, pipeline.sliceSize, pipeline.nSlices,
+        pipeline.intraStep.stepCount, pipeline.intraStep.lat, pipeline.intraStep.busBw, pipeline.interStep.stepCount,
+        pipeline.interStep.lat, pipeline.interStep.busBw);
+
   TRACE(
     NCCL_TUNING,
     "a/p/c/s/n %s/%s/%s/%ld/%d maxBusBw %f, maxAlgBw %f, channelAlgBw %f * %d channels [%d warps] = algBw %f timeUs=%f",

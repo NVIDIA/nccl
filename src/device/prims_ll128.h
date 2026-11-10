@@ -28,6 +28,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
   struct ncclConnInfo* recvConn = NULL;
   volatile uint64_t* recvConnHeadPtr = NULL;
   uint64_t recvConnHead;
+  volatile uint64_t* recvConnTailPtr = NULL;
+  bool recvCopy = false;
+  bool sendCopy = false;
 
   struct ncclConnInfo* sendConn = NULL;
   volatile struct ncclConnFifo* sendConnFifo = NULL;
@@ -79,6 +82,18 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
       }
       sendConnHead += 1;
     }
+  }
+
+  inline __device__ void waitRecvCopy() {
+    if (!recvCopy) return;
+    if (recvConnTailPtr) {
+      int spins = 0;
+      while (*recvConnTailPtr < recvConnHead + 1) {
+        if (checkAbort(abort, 1, spins)) break;
+      }
+    }
+    // Do not observe in-band flags until the entire DMA copy has completed.
+    barrier();
   }
 
   inline __device__ void postRecv() {
@@ -304,6 +319,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
     nelem = nelem < 0 ? 0 : nelem;
 
     if (SEND) waitSend(divUp(nelem, DataEltPerSlice) * WireWordPerSlice * sizeof(uint64_t));
+    if (RECV) waitRecvCopy();
     barrier();
     nelem -= DataEltPerSlice * warp;
     srcPtr += DataEltPerSlice * warp;
@@ -321,6 +337,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
       nelem -= DataEltPerSlice * nwarps;
     }
 
+    if (SEND && sendCopy) __threadfence_system();
     barrier();
     if (SEND) {
       for (int i = 0; i < MaxSend; i++) sendStep[i] += 1;
@@ -335,18 +352,21 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p, isNetOffload>
   __device__ __forceinline__ void loadRecvConn(struct ncclConnInfo* conn, int i) {
     recvBuff[i] = (uint64_t*)conn->buffs[NCCL_PROTO_LL128];
     recvStep[i] = conn->step;
+    recvCopy |= (conn->flags & NCCL_NET_CUDA_COPY) != 0;
     if (wid == i) recvConn = conn;
   }
   __device__ __forceinline__ void loadRecvSync() {
     if (tid >= nthreads - WARP_SIZE && wid < fan.nrecv()) {
       recvConnHeadPtr = recvConn->head;
       recvConnHead = recvConn->step;
+      if (recvConn->flags & NCCL_NET_CUDA_COPY) recvConnTailPtr = recvConn->tail;
     }
   }
 
   __device__ __forceinline__ void loadSendConn(struct ncclConnInfo* conn, int i) {
     sendBuff[i] = (uint64_t*)conn->buffs[NCCL_PROTO_LL128];
     sendStep[i] = conn->step;
+    sendCopy |= (conn->flags & NCCL_NET_CUDA_COPY) != 0;
     if (wid == i) sendConn = conn;
   }
   __device__ __forceinline__ void loadSendSync() {

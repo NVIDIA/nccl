@@ -634,6 +634,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       return ncclSuccess;
     }
     event->type = ncclProfileCollApi;
+    event->startTs = gettime() - startTime;
     event->collApiId = collApiId;
     event->ctx = ctx;
     event->func = eDescr->collApi.func;
@@ -663,6 +664,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       return ncclSuccess;
     }
     event->type = ncclProfileP2pApi;
+    event->startTs = gettime() - startTime;
     event->p2pApiId = p2pApiId;
     event->ctx = ctx;
     event->func = eDescr->p2pApi.func;
@@ -688,6 +690,7 @@ __hidden ncclResult_t exampleProfilerStartEvent(void* context, void** eHandle, n
       return ncclSuccess;
     }
     event->type = ncclProfileKernelLaunch;
+    event->startTs = gettime() - startTime;
     event->ctx = ctx;
     event->stream = (cudaStream_t) eDescr->kernelLaunch.stream;
     struct groupApi* parent = (struct groupApi *) eDescr->parentObj;

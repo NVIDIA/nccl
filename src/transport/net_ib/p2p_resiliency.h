@@ -29,6 +29,10 @@ enum ncclIbResiliencyDevState {
 struct ncclIbResiliencyDev {
   // Atomic to allow lock-free access from multiple threads (main + recovery).
   std::atomic<ncclIbResiliencyDevState> state;
+  // Successful flush posts whose CQEs have not yet been processed. The proxy
+  // owns posting/completion accounting; recovery must acquire a zero count
+  // before resetting the flush QP, which would discard outstanding work.
+  std::atomic<int> nOutstandingFlushes;
   // CQ to get CQEs on the sender side for probing operations.
   // Receiver side is not expected to get any CQEs on the this CQ but Verbs
   // requires a CQ to be associated with a QP.

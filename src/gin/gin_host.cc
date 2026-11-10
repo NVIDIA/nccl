@@ -128,11 +128,12 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   int ndev = 0;
   struct ncclGinBackendState* backend = NULL;
   int* ginCommCountHandles = NULL;
+  char myHandles[NCCL_GIN_MAX_ACTIVE_BACKENDS * NCCL_GIN_MAX_CONNECTIONS * NCCL_NET_HANDLE_MAXSIZE];
+  char devNames[NCCL_GIN_MAX_ACTIVE_BACKENDS][1024];
+  int nSlots = 0, totalSlots = 0;
 
   NCCLCHECKGOTO(ncclCalloc(&listenComms, ginState->numActiveBackends * NCCL_GIN_MAX_CONNECTIONS), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&ginCommCountHandles, comm->nRanks), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&allHandles, (size_t)comm->nRanks * NCCL_GIN_MAX_CONNECTIONS * NCCL_NET_HANDLE_MAXSIZE), ret,
-                fail);
   NCCLCHECKGOTO(ncclCalloc(&handles, comm->nRanks), ret, fail);
 
   // Connect the maximum supported connection type. Any future devComm may request
@@ -182,11 +183,10 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
 
     // At most NCCL_GIN_MAX_CONNECTIONS (4) entries
     // bounded snprintf truncates oversized names without overflowing.
-    char devNames[1024] = "";
+    devNames[backendIdx][0] = '\0';
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
       NCCLCHECKGOTO(backend->ncclGin->listen(backend->ginInstance, localGinDevs[commIdx % nLocalGinDevs],
-                                             allHandles +
-                                               NCCL_NET_HANDLE_MAXSIZE * (comm->rank * backend->ginCommCount + commIdx),
+                                             myHandles + NCCL_NET_HANDLE_MAXSIZE * (nSlots + commIdx),
                                              &listenComms[backendIdx * NCCL_GIN_MAX_CONNECTIONS + commIdx]),
                     ret, fail);
 
@@ -202,19 +202,29 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
              backend->ncclGin->name, ginState->backends[0].ncclGin->name, commIdx);
       }
 
-      snprintf(devNames + strlen(devNames), sizeof(devNames) - strlen(devNames), " [%d]%s",
+      snprintf(devNames[backendIdx] + strlen(devNames[backendIdx]),
+               sizeof(devNames[backendIdx]) - strlen(devNames[backendIdx]), " [%d]%s",
                localGinDevs[commIdx % nLocalGinDevs], backend->ginProps[commIdx].name);
     }
+    nSlots += backend->ginCommCount;
+  }
 
-    // Exchange the handles of all connections with a single AllGather.
-    NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE * backend->ginCommCount), ret,
-                  fail);
+  // Exchange the handles of all backends and connections with a single AllGather.
+  NCCLCHECKGOTO(ncclCalloc(&allHandles, (size_t)comm->nRanks * nSlots * NCCL_NET_HANDLE_MAXSIZE), ret, fail);
+  memcpy(allHandles + (size_t)NCCL_NET_HANDLE_MAXSIZE * nSlots * comm->rank, myHandles,
+         (size_t)NCCL_NET_HANDLE_MAXSIZE * nSlots);
+  NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE * nSlots), ret, fail);
+
+  totalSlots = nSlots;
+  nSlots = 0;
+  for (int backendIdx = 0; backendIdx < ginState->numActiveBackends; backendIdx++) {
+    backend = &ginState->backends[backendIdx];
 
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
       void*& listenComm = listenComms[backendIdx * NCCL_GIN_MAX_CONNECTIONS + commIdx];
       for (int r = 0; r < ginTeam.nRanks; r++) {
         int worldRank = ncclTeamRankToWorld(comm, ginTeam, r);
-        handles[r] = allHandles + NCCL_NET_HANDLE_MAXSIZE * (worldRank * backend->ginCommCount + commIdx);
+        handles[r] = allHandles + NCCL_NET_HANDLE_MAXSIZE * (worldRank * totalSlots + nSlots + commIdx);
       }
 
       NCCLCHECKGOTO(backend->ncclGin->connect(backend->ginInstance, handles, ginTeam.nRanks, ginTeam.rank, listenComm,
@@ -224,8 +234,9 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
       NCCLCHECKGOTO(backend->ncclGin->closeListen(listenComm), ret, fail);
       listenComm = NULL;
     }
+    nSlots += backend->ginCommCount;
     INFO(NCCL_INIT, "GIN: backend %s using %d connections on devices%s", backend->ncclGin->name, backend->ginCommCount,
-         devNames);
+         devNames[backendIdx]);
   }
 
 exit:

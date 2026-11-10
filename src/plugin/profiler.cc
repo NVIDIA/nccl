@@ -346,7 +346,7 @@ static bool profilerClockProbe(struct ncclProfilerClockCalib* c, uint32_t mode, 
 // ~1ns/tick, so a sane slope is within a few percent of 1.0; values
 // outside that come from a perturbed sample and are rejected.
 static void profilerClockCalibUpdate(struct ncclProfilerClockCalib* c, uint32_t mode) {
-  uint64_t gpu, cpu, unc;
+  uint64_t gpu = 0, cpu = 0, unc = 0;
   if (!profilerClockProbe(c, mode, &gpu, &cpu, &unc)) return;
   if (c->havePrev && gpu > c->prevGpu) {
     double s = (double)(cpu - c->prevCpu) / (double)(gpu - c->prevGpu);
@@ -1009,7 +1009,7 @@ static void profilerStopNet(void** eHandle) {
 // plugins are responsible for ignoring or handling NULL handles
 static void profilerRecordNet(void* eHandle, ncclProfilerEventState_t eState, ncclProfilerEventStateArgs_t* args) {
   if (!eHandle) {
-    for (int slot = 0; slot < profilerPluginCount; slot++) {
+    for (int slot = 0; slot < profilerPluginCount && slot < NCCL_PROFILER_MAX_PLUGINS; slot++) {
       ncclProfilerEventStateArgs_t slotArgs = *args;
       uint32_t mode = profilerPluginCount <= 1 ?
                         profilerTsModeGet() :

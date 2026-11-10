@@ -129,9 +129,10 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   struct ncclGinBackendState* backend = NULL;
   int* ginCommCountHandles = NULL;
 
-  NCCLCHECKGOTO(ncclCalloc(&listenComms, ginState->numActiveBackends), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&listenComms, ginState->numActiveBackends * NCCL_GIN_MAX_CONNECTIONS), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&ginCommCountHandles, comm->nRanks), ret, fail);
-  NCCLCHECKGOTO(ncclCalloc(&allHandles, (size_t)comm->nRanks * NCCL_NET_HANDLE_MAXSIZE), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&allHandles, (size_t)comm->nRanks * NCCL_GIN_MAX_CONNECTIONS * NCCL_NET_HANDLE_MAXSIZE), ret,
+                fail);
   NCCLCHECKGOTO(ncclCalloc(&handles, comm->nRanks), ret, fail);
 
   // Connect the maximum supported connection type. Any future devComm may request
@@ -143,10 +144,6 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
       .rank = comm->rank / comm->contiguousRanksPerHost,
       .stride = comm->contiguousRanksPerHost,
     };
-  }
-  for (int r = 0; r < ginTeam.nRanks; r++) {
-    int worldRank = ncclTeamRankToWorld(comm, ginTeam, r);
-    handles[r] = allHandles + worldRank * NCCL_NET_HANDLE_MAXSIZE;
   }
 
   for (int backendIdx = 0; backendIdx < ginState->numActiveBackends; backendIdx++) {
@@ -188,8 +185,9 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     char devNames[1024] = "";
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
       NCCLCHECKGOTO(backend->ncclGin->listen(backend->ginInstance, localGinDevs[commIdx % nLocalGinDevs],
-                                             allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank,
-                                             &listenComms[backendIdx]),
+                                             allHandles +
+                                               NCCL_NET_HANDLE_MAXSIZE * (comm->rank * backend->ginCommCount + commIdx),
+                                             &listenComms[backendIdx * NCCL_GIN_MAX_CONNECTIONS + commIdx]),
                     ret, fail);
 
       NCCLCHECKGOTO(backend->ncclGin->getProperties(localGinDevs[commIdx % nLocalGinDevs], backend->ginProps + commIdx),
@@ -204,17 +202,27 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
              backend->ncclGin->name, ginState->backends[0].ncclGin->name, commIdx);
       }
 
-      NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
-
-      NCCLCHECKGOTO(backend->ncclGin->connect(backend->ginInstance, handles, ginTeam.nRanks, ginTeam.rank,
-                                              listenComms[backendIdx], backend->ginComms + commIdx, comm->abortFlag),
-                    ret, fail);
-
-      NCCLCHECKGOTO(backend->ncclGin->closeListen(listenComms[backendIdx]), ret, fail);
-      listenComms[backendIdx] = NULL;
-
       snprintf(devNames + strlen(devNames), sizeof(devNames) - strlen(devNames), " [%d]%s",
                localGinDevs[commIdx % nLocalGinDevs], backend->ginProps[commIdx].name);
+    }
+
+    // Exchange the handles of all connections with a single AllGather.
+    NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE * backend->ginCommCount), ret,
+                  fail);
+
+    for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
+      void*& listenComm = listenComms[backendIdx * NCCL_GIN_MAX_CONNECTIONS + commIdx];
+      for (int r = 0; r < ginTeam.nRanks; r++) {
+        int worldRank = ncclTeamRankToWorld(comm, ginTeam, r);
+        handles[r] = allHandles + NCCL_NET_HANDLE_MAXSIZE * (worldRank * backend->ginCommCount + commIdx);
+      }
+
+      NCCLCHECKGOTO(backend->ncclGin->connect(backend->ginInstance, handles, ginTeam.nRanks, ginTeam.rank, listenComm,
+                                              backend->ginComms + commIdx, comm->abortFlag),
+                    ret, fail);
+
+      NCCLCHECKGOTO(backend->ncclGin->closeListen(listenComm), ret, fail);
+      listenComm = NULL;
     }
     INFO(NCCL_INIT, "GIN: backend %s using %d connections on devices%s", backend->ncclGin->name, backend->ginCommCount,
          devNames);
@@ -231,8 +239,11 @@ fail:
   for (int backendIdx = 0; backendIdx < ginState->numActiveBackends; backendIdx++) {
     backend = &ginState->backends[backendIdx];
 
-    if (listenComms[backendIdx] != NULL) {
-      NCCLCHECKIGNORE(backend->ncclGin->closeListen(listenComms[backendIdx]), ret);
+    for (int commIdx = 0; commIdx < NCCL_GIN_MAX_CONNECTIONS; commIdx++) {
+      void*& listenComm = listenComms[backendIdx * NCCL_GIN_MAX_CONNECTIONS + commIdx];
+      if (listenComm != NULL) {
+        NCCLCHECKIGNORE(backend->ncclGin->closeListen(listenComm), ret);
+      }
     }
 
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {

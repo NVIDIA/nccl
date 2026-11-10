@@ -602,6 +602,7 @@ struct ncclComm {
   int minNetCount; // Minimum number of network devices local to a rank
   float minLocalNetBw; // Minimum total network bandwidth local to a GPU
   float minNetBw; // Minimum bw of any network device local to a rank
+  int maxDevsPerNic; // Maximum number of physical devices in any merged network device
 
   ncclNet_t* ncclNet;
   void* netContext;

@@ -107,8 +107,7 @@ ncclResult_t ncclIbDeregMrInternal(ncclIbNetCommDevBase* base, ibv_mr* mhandle) 
       if (0 == --cache->slots[i].refs) {
         cache->population--;
         if (i < cache->population) {
-          memmove(cache->slots + i, cache->slots + i + 1,
-                  (cache->population - i) * sizeof(struct ncclIbMr));
+          memmove(cache->slots + i, cache->slots + i + 1, (cache->population - i) * sizeof(struct ncclIbMr));
         }
         if (cache->population == 0) {
           free(cache->slots);

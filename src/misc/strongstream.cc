@@ -53,7 +53,7 @@ ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out, int launchOrderI
       p->launchOrderImplicitEverDisabled = !launchOrderImplicitEnabled;
       p->next = cxtListHead;
       cxtListHead = p;
-      NCCLCHECKGOTO(ncclStrongStreamConstruct(&p->launchOrder), result, leave);
+      NCCLCHECKGOTO(ncclStrongStreamConstruct(&p->launchOrder), result, fail);
       break;
     }
     if (p->hcontext == hcontext) {
@@ -71,11 +71,12 @@ ncclResult_t ncclCudaContextTrack(struct ncclCudaContext** out, int launchOrderI
     p = p->next;
   }
   *out = p;
-  return ncclSuccess;
-leave:
+exit:
+  return result;
+fail:
   cxtListHead = p->next;
   delete p;
-  return result;
+  goto exit;
 }
 
 void ncclCudaContextDrop(struct ncclCudaContext* cxt) {
@@ -147,18 +148,19 @@ ncclResult_t ncclCudaGraphAddDestructor(struct ncclCudaGraph graph, cudaHostFn_t
 ////////////////////////////////////////////////////////////////////////////////
 
 ncclResult_t ncclStrongStreamConstruct(struct ncclStrongStream* ss) {
+  ncclResult_t result = ncclSuccess;
   CUDACHECK(cudaStreamCreateWithFlags(&ss->liveStream, cudaStreamNonBlocking));
 #if CUDART_VERSION >= 11030
   ss->everCaptured = false;
   ss->captureHead = nullptr;
-  ncclResult_t result = ncclSuccess;
   CUDACHECKGOTO(cudaEventCreateWithFlags(&ss->serialEvent, cudaEventDisableTiming), result, fail);
-  return ncclSuccess;
+exit:
+#endif
+  return result;
+#if CUDART_VERSION >= 11030
 fail:
   CUDACHECKIGNORE(cudaStreamDestroy(ss->liveStream));
-  return result;
-#else
-  return ncclSuccess;
+  goto exit;
 #endif
 }
 

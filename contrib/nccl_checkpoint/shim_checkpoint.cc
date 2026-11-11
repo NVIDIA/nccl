@@ -105,7 +105,7 @@ static ncclResult_t restoreCommViaInit(KVStoreClient& kv, ncclComm_t synthComm, 
 
   ncclUniqueId newUid;
   if (params->rank == 0) {
-    ncclGetUniqueId(&newUid);
+    NCCLCHECK(ncclGetUniqueId(&newUid));
     if (!kv.set(uidKey, &newUid, sizeof(newUid))) return ncclInternalError;
     TRACE(NCCL_CHECKPOINT, "set restore uid for comm %p key %s", synthComm, uidKey);
   }

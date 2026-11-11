@@ -274,12 +274,19 @@ public:
     return ncclSuccess;
   }
 
-  ncclResult_t exchange_info(struct ncclGinIbCollComm* cComm) {
+  // The rkey of this rank's memory region to send to the peers, 0 if the table is empty.
+  __be32 local_rkey() {
+    return this->num_elements == 0 ? 0 : htobe32(this->mr->rkey);
+  }
+
+  // Set the rkey received from a peer.
+  void set_rkey(int rank, __be32 rkey) {
+    if (this->num_elements != 0) this->rkeys_hd_mhandle.host_buf[rank] = rkey;
+  }
+
+  ncclResult_t copy_rkeys_to_device() {
     if (this->num_elements == 0) return ncclSuccess;
-    __be32 rkey = htobe32(this->mr->rkey);
-    NCCLCHECK(cComm->allGather(cComm, &rkey, this->rkeys_hd_mhandle.host_buf, sizeof(__be32)));
-    NCCLCHECK(this->rkeys_hd_mhandle.copy_h_to_d());
-    return ncclSuccess;
+    return this->rkeys_hd_mhandle.copy_h_to_d();
   }
 
   ncclResult_t allocate_elements(unsigned int num_elements, unsigned int* out_start_idx) {
@@ -329,6 +336,9 @@ struct gdaki_exch_info {
   int cuda_id;
   int rank;
   enum ibv_mtu active_mtu;
+  // rkeys of the counters and signals tables, the same in the entries sent to all peers
+  __be32 counters_rkey;
+  __be32 signals_rkey;
 };
 
 struct gdaki_context {
@@ -916,12 +926,9 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
 
   NCCLCHECKGOTO(wrap_ibv_query_device(cComm->ib.context, &gdaki_ctx->ib_dev_attr), status, out);
 
-  // Exchange counters and signals with peers
+  // Register counters and signals, their rkeys are exchanged with the QP information
   NCCLCHECKGOTO(counters_table->register_mr(cComm->ib.pd, true), status, out);
   NCCLCHECKGOTO(signals_table->register_mr(cComm->ib.pd, true), status, out);
-
-  NCCLCHECKGOTO(counters_table->exchange_info(cComm), status, out);
-  NCCLCHECKGOTO(signals_table->exchange_info(cComm), status, out);
 
   gdaki_ctx->port_num = 1; // assume 1 for mlx5 devices
   NCCLCHECKGOTO(wrap_ibv_query_port(cComm->ib.context, gdaki_ctx->port_num, &gdaki_ctx->port_attr), status, out);
@@ -1117,9 +1124,21 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
     }
   }
 
+  for (int r = 0; r < nranks; r++) {
+    local_exch_info[r * ncontexts].counters_rkey = counters_table->local_rkey();
+    local_exch_info[r * ncontexts].signals_rkey = signals_table->local_rkey();
+  }
+
   // Exchange the information of all contexts with peers in a single collective
   NCCLCHECKGOTO(cComm->allToAll(cComm, local_exch_info, remote_exch_info, ncontexts * sizeof(struct gdaki_exch_info)),
                 status, out);
+
+  for (int r = 0; r < nranks; r++) {
+    counters_table->set_rkey(r, remote_exch_info[r * ncontexts].counters_rkey);
+    signals_table->set_rkey(r, remote_exch_info[r * ncontexts].signals_rkey);
+  }
+  NCCLCHECKGOTO(counters_table->copy_rkeys_to_device(), status, out);
+  NCCLCHECKGOTO(signals_table->copy_rkeys_to_device(), status, out);
 
   for (int i = 0; i < peerArrayCount; i++) {
     const int rank_idx = peerArray[i];

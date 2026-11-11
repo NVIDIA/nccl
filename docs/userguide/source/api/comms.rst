@@ -350,3 +350,12 @@ ncclCommMemStats
 
 Query communicator memory statistics. The *stat* parameter selects which statistic to retrieve, and the
 result is written to *\*value*. See :c:type:`ncclCommMemStat_t` for the list of available statistics.
+
+A communicator created by :c:func:`ncclCommSplit` or :c:func:`ncclCommShrink` can share its parent's
+memory manager when the parent enabled ``splitShare`` or ``shrinkShare``. Sharing is disabled when the
+parent has been revoked, and :c:func:`ncclCommShrink` with ``NCCL_SHRINK_ABORT`` never shares resources.
+While that sharing is in effect, :c:func:`ncclCommMemStats` returns the values of the shared memory
+manager through either communicator, so the same memory is reported more than once; count it once for
+communicators that share a memory manager. Equal values do not by themselves prove sharing: independent
+memory managers on the same device can allocate the same amount, and each rank reports the memory
+manager of its own device.

@@ -38,6 +38,10 @@
 #include "host/doca_verbs.h"
 #include "doca_verbs_uar.hpp"
 
+#define PRIV_DOCA_MLX5_DP_ORDERING_IBTA 0b00
+#define PRIV_DOCA_MLX5_DP_ORDERING_OOO_RW 0b01
+#define PRIV_DOCA_MLX5_DP_ORDERING_OOO_ALL 0b10
+
 struct doca_verbs_ah_attr_open {
    public:
     /**
@@ -97,6 +101,8 @@ struct doca_verbs_qp_init_attr_open {
     uint32_t send_cqn{};
     uint32_t receive_cqn{};
     uint8_t core_direct_master{};
+    bool is_ordering_semantic_set{};
+    enum doca_verbs_qp_ordering_semantic ordering_semantic { DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA };
     uint8_t send_dbr_mode{};
     bool emulate_no_dbr_ext{};
 
@@ -138,6 +144,8 @@ struct doca_verbs_qp_attr_open {
     uint8_t max_dest_rd_atomic{};
     uint32_t counter_set_id{};
     uint8_t lag_tx_port_affinity{};
+    uint8_t ordering_semantic{};
+    bool ordering_semantic_set{};
 
     doca_verbs_qp_attr_open(doca_verbs_qp_attr_open const &) = delete;
     doca_verbs_qp_attr_open &operator=(doca_verbs_qp_attr_open const &) = delete;
@@ -180,6 +188,10 @@ struct doca_verbs_qp_open {
     uint32_t get_rq_size() const noexcept;
 
     uint32_t get_rcv_wqe_size() const noexcept;
+
+    doca_verbs_cq_t *get_cq_sq() const noexcept;
+
+    doca_verbs_cq_t *get_cq_rq() const noexcept;
 
     void *get_dbr_addr() const noexcept;
 

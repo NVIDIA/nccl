@@ -36,6 +36,7 @@ __all__ = [
     "NcclStreamSpec",
     "NcclEventSpec",
     "NcclInvalid",
+    "NcclEncryptionMode",
     # Data type constants
     "INT8",
     "CHAR",
@@ -187,6 +188,10 @@ class NcclGinConnectionType(IntEnum):
     CUSTOM_STRIDE = 3
     """Strided. Ranks must be reachable via GIN at the stride given by
     :py:attr:`NCCLDevCommRequirements.gin_custom_stride`."""
+    CUSTOM_ARRAY = 4
+    """Sparse. Ranks must be reachable via GIN only to the world ranks listed
+    in :py:attr:`NCCLDevCommRequirements.gin_custom_peers`. Each connection
+    must be requested on both sides (symmetric peer lists)."""
 
 
 class NcclHostCftMode(IntEnum):
@@ -259,6 +264,13 @@ class NcclCftCap(IntFlag):
     MULTIMEM = 0x2
     """Request multicast CFT operations and multimem CFT barriers."""
 
+class NcclEncryptionMode(IntEnum):
+    """Socket Encryption Setting, mirroring :c:type:`ncclEncryptionMode_t`."""
+
+    NONE = 0
+    """Disable encryption and use plaintext connections."""
+    PSK = 1
+    """Encrypt connections using a pre-shared key."""
 
 class NcclDataType(IntEnum):
     """NCCL data type, mirroring :c:type:`ncclDataType_t`.

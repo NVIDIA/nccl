@@ -109,8 +109,8 @@ ncclGetUniqueId(&id);
 
 ncclGroupStart();
 for(int i = 0; i < num_gpus; i++) {
-  cudaSetDevice(i);
-  ncclCommInitRank(comms[i], num_gpus, id, devices[i]);
+  cudaSetDevice(devices[i]);
+  ncclCommInitRank(&comms[i], num_gpus, id, i);
 }
 ncclGroupEnd();
 ```

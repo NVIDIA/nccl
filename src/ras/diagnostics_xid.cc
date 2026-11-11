@@ -888,6 +888,7 @@ ncclResult_t rasDiagnosticsXidSummarize(const struct rasDiagnosticsContext* ctx,
   int nFindings = 0;
   int nLinks = 0;
   int nUniqueInstances = 0;
+  int nHostsWithoutLogSource = 0;
   int nRecords;
   bool complete;
 
@@ -1009,9 +1010,7 @@ ncclResult_t rasDiagnosticsXidSummarize(const struct rasDiagnosticsContext* ctx,
     const struct rasDiagnosticsXidHost* host = hosts + hostIdx;
     if (!host->scanned) {
       complete = false;
-      NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
-                                         "Xid/SXid: no kernel-log source was available on host %s", host->hostName),
-                    ret, exit);
+      nHostsWithoutLogSource++;
     }
     if (host->truncated) {
       complete = false;
@@ -1019,6 +1018,12 @@ ncclResult_t rasDiagnosticsXidSummarize(const struct rasDiagnosticsContext* ctx,
                                          "Xid/SXid: recent-event scan was truncated on host %s", host->hostName),
                     ret, exit);
     }
+  }
+  if (nHostsWithoutLogSource > 0) {
+    NCCLCHECKGOTO(rasDiagnosticsReport(reporter, RAS_DIAG_TAG_INFO,
+                                       "Xid/SXid: no kernel-log source was available on %d/%d host%s",
+                                       nHostsWithoutLogSource, nHosts, nHosts == 1 ? "" : "s"),
+                  ret, exit);
   }
 
   for (int findingIdx = 0; findingIdx < nFindings; findingIdx++) {

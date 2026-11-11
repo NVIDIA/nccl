@@ -98,3 +98,31 @@ struct ibv_qp* wrap_mlx5dv_create_qp(struct ibv_context* context, struct ibv_qp_
   }
   return mlx5dvSymbols.mlx5dv_internal_create_qp(context, qp_attr, mlx5_qp_attr);
 }
+
+/* DevX object support. Create/query failures are logged at INFO level since callers may treat them as non-fatal. */
+ncclResult_t wrap_mlx5dv_devx_obj_create(struct mlx5dv_devx_obj** ret, struct ibv_context* context, const void* in,
+                                         size_t inlen, void* out, size_t outlen) {
+  CHECK_NOT_NULL(mlx5dvSymbols, mlx5dv_internal_devx_obj_create);
+  *ret = mlx5dvSymbols.mlx5dv_internal_devx_obj_create(context, in, inlen, out, outlen);
+  if (*ret == NULL) {
+    INFO(NCCL_NET, "NET/MLX5: Call to mlx5dv_devx_obj_create failed with error %s", strerror(errno));
+    return ncclSystemError;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t wrap_mlx5dv_devx_obj_query(struct mlx5dv_devx_obj* obj, const void* in, size_t inlen, void* out,
+                                        size_t outlen) {
+  CHECK_NOT_NULL(mlx5dvSymbols, mlx5dv_internal_devx_obj_query);
+  int ret = mlx5dvSymbols.mlx5dv_internal_devx_obj_query(obj, in, inlen, out, outlen);
+  if (ret != 0) {
+    INFO(NCCL_NET, "NET/MLX5: Call to mlx5dv_devx_obj_query failed with error %s", strerror(ret));
+    return ncclSystemError;
+  }
+  return ncclSuccess;
+}
+
+ncclResult_t wrap_mlx5dv_devx_obj_destroy(struct mlx5dv_devx_obj* obj) {
+  MLX5DV_INT_CHECK_RET_ERRNO(mlx5dvSymbols, mlx5dv_internal_devx_obj_destroy, mlx5dv_internal_devx_obj_destroy(obj), 0,
+                             "mlx5dv_devx_obj_destroy");
+}

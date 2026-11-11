@@ -228,7 +228,7 @@ struct doca_verbs_umem_open;
 /**
  * Opaque structure representing a DOCA Verbs UMEM handler open and SDK.
  */
-typedef struct {
+typedef struct doca_verbs_umem {
     enum doca_verbs_lib_type type;
     union {
         void *sdk;
@@ -903,7 +903,7 @@ doca_error_t doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
 /**
  * @brief Set ordering semantic attribute for verbs_qp_init_attr
  * @note Not setting ordering semantic doesn't guarantee ordering semantic didn't change (setting
- * ECE may change it) Supported only by SDK mode.
+ * ECE may change it).
  *
  * @param [in] verbs_qp_init_attr
  * Pointer to verbs_qp_init_attr instance.
@@ -914,15 +914,15 @@ doca_error_t doca_verbs_qp_init_attr_get_emulate_no_dbr_ext(
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
- * - DOCA_ERROR_NOT_SUPPORTED - if qp_init_attr is called in open mode.
+ * - DOCA_ERROR_NOT_SUPPORTED - if the DOCA SDK version doesn't support this setter.
  */
+
 doca_error_t doca_verbs_qp_init_attr_set_ordering_semantic(
     doca_verbs_qp_init_attr_t *verbs_qp_init_attr,
     enum doca_verbs_qp_ordering_semantic ordering_semantic);
 
 /**
  * @brief Get ordering semantic attribute from verbs_qp_init_attr
- * Supported only by SDK mode.
  *
  * @param [in] verbs_qp_init_attr
  * Pointer to verbs_qp_init_attr instance.
@@ -933,10 +933,10 @@ doca_error_t doca_verbs_qp_init_attr_set_ordering_semantic(
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
- * - DOCA_ERROR_NOT_SUPPORTED - if qp_init_attr is called in open mode.
+ * - DOCA_ERROR_NOT_SUPPORTED - if the DOCA SDK version doesn't support this getter.
  */
 doca_error_t doca_verbs_qp_init_attr_get_ordering_semantic(
-    doca_verbs_qp_init_attr_t *verbs_qp_init_attr,
+    const doca_verbs_qp_init_attr_t *qp_init_attr,
     enum doca_verbs_qp_ordering_semantic *ordering_semantic);
 
 /**
@@ -2560,7 +2560,7 @@ uint8_t doca_verbs_device_attr_get_max_qp_init_rd_atom(
  * @return
  * The LAG TX port affinity capability flag.
  */
-uint8_t doca_verbs_device_attr_get_lag_tx_port_affinity(
+uint8_t doca_verbs_device_attr_get_is_lag_tx_port_affinity_supported(
     const struct doca_verbs_device_attr *verbs_device_attr);
 
 /**
@@ -2584,7 +2584,7 @@ uint8_t doca_verbs_device_attr_get_num_lag_ports(
  * @return
  * The INIT2 LAG TX port affinity capability flag.
  */
-uint8_t doca_verbs_device_attr_get_init2_lag_tx_port_affinity(
+uint8_t doca_verbs_device_attr_get_is_init2_lag_tx_port_affinity_supported(
     const struct doca_verbs_device_attr *verbs_device_attr);
 
 /**
@@ -2596,7 +2596,7 @@ uint8_t doca_verbs_device_attr_get_init2_lag_tx_port_affinity(
  * @return
  * The RTS2RTS LAG TX port affinity capability flag.
  */
-uint8_t doca_verbs_device_attr_get_rts2rts_lag_tx_port_affinity(
+uint8_t doca_verbs_device_attr_get_is_rts2rts_lag_tx_port_affinity_supported(
     const struct doca_verbs_device_attr *verbs_device_attr);
 
 /**
@@ -2761,6 +2761,22 @@ doca_error_t doca_verbs_uar_reg_addr_get(const doca_verbs_uar_t *uar_obj, void *
  */
 doca_error_t doca_verbs_uar_dbr_less_addr_get(const doca_verbs_uar_t *uar_obj,
                                               void **dbr_less_addr);
+
+/**
+ * @brief This method retrieves the system traffic class of a given port on a given device.
+ *
+ * @param [in] net_dev
+ * Pointer to DOCA dev instance.
+ * @param [in] port_num
+ * The port number to query.
+ * @param [out] global_traffic_class
+ * The global traffic class of the given port.
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure
+ */
+doca_error_t doca_verbs_query_global_traffic_class(doca_dev_t *net_dev, uint16_t port_num,
+                                                   uint8_t *global_traffic_class);
 
 #ifdef __cplusplus
 }

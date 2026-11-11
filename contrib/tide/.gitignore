@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.a
+build/
+dist/
+*.egg-info/
+.eggs/
+*.nsys-rep
+*.sqlite
+*.log
+/out/
+/tmp/

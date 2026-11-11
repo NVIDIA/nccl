@@ -15,6 +15,8 @@
 #include "register.h"
 #include "transport.h"
 #include "register_inline.h"
+#include "dev_runtime.h"
+#include <stdint.h>
 
 #if CUDART_VERSION >= 12010
 
@@ -57,6 +59,74 @@ static ncclResult_t nvlsFreeUc(struct ncclComm* comm, struct ncclNvlsUcSegment* 
 NCCL_PARAM(NvlsEnable, "NVLS_ENABLE", 2);
 NCCL_PARAM(NvlsChunkSize, "NVLS_CHUNKSIZE", 128 * 1024);
 NCCL_PARAM(NvlsTreeMaxChunkSize, "NVLSTREE_MAX_CHUNKSIZE", -2);
+// NVLS staging FIFO layout:
+//  -1: automatic (layout 2 for multi-node Rubin+, layout 1 for single-node Rubin+, layout 0 otherwise)
+//   0: [head][dir][channel][slot]
+//   1: [channel][slot][head][dir]   (all streams of a channel at one step are contiguous)
+//   2: [slot][channel][head][dir]   (all streams of all channels at one step are contiguous)
+// Same allocation size and per-slot chunk size; only slot addressing changes.
+NCCL_PARAM(NvlsFifoLayout, "NVLS_FIFO_LAYOUT", -1);
+
+static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
+  int64_t requested = ncclParamNvlsFifoLayout();
+  if (requested < -1 || requested > 2) {
+    WARN("NCCL_NVLS_FIFO_LAYOUT=%ld is invalid (expected -1, 0, 1 or 2)", requested);
+    return ncclInvalidArgument;
+  }
+
+  if (requested != -1) {
+    *layout = (int)requested;
+    return ncclSuccess;
+  }
+
+  // On Rubin and later, use layout 2 for multi-node and layout 1 for single-node communicators.
+  *layout = (comm->nNodes == 1) ? 1 : 2;
+  for (int r = 0; r < comm->nRanks; r++) {
+    if (!RUBIN_AND_LATER(comm->peerInfo[r].cudaCompCap)) {
+      *layout = 0;
+      break;
+    }
+  }
+  return ncclSuccess;
+}
+
+// Slot-to-slot stride of every NVLS staging FIFO: slot k of a stream lives at its offset + k * stride.
+static size_t ncclNvlsFifoSlotStride(int layout, int nHeads, int nChannels, int chunkSize) {
+  if (layout == 1) return (size_t)2 * nHeads * chunkSize;
+  if (layout == 2) return (size_t)nChannels * 2 * nHeads * chunkSize;
+  return (size_t)chunkSize;
+}
+
+// Byte offset of the first slot of stream (h, dir) on channel c.
+static size_t ncclNvlsFifoOffset(int layout, int nHeads, int nChannels, int chunkSize, int h, int dir, int c) {
+  if (layout == 1) return ((size_t)c * NCCL_STEPS * 2 * nHeads + (size_t)h * 2 + dir) * chunkSize;
+  if (layout == 2) return ((size_t)c * 2 * nHeads + (size_t)h * 2 + dir) * chunkSize;
+  return (((size_t)h * 2 + dir) * nChannels + c) * NCCL_STEPS * chunkSize;
+}
+
+static const char* ncclNvlsFifoLayoutName(int layout) {
+  if (layout == 1) return "channel-major [channel][slot][head][dir]";
+  if (layout == 2) return "step-major [slot][channel][head][dir]";
+  return "default [head][dir][channel][slot]";
+}
+
+// Returns optimal NVLSTree tuning parameters for VeraRubin multi-node configurations.
+static ncclResult_t ncclNvlsTreeRubinTuning(struct ncclComm* comm, int* nChannels, int* chunkSize,
+                                            int* treeMaxChunkSize) {
+  *treeMaxChunkSize = 512 * 1024;
+
+  int nDomains = comm->nNodes;
+  int nRanksPerDomain = comm->minLocalRanks;
+  // TODO: Move this chunk-size policy into the pipeline cost model once it models NVLSTree pipelining and supports
+  // chunk-size selection.
+  int ranksPerDomainFactor = pow2Up(DIVUP(32, nRanksPerDomain));
+  int multiDomainChunkFactor = nDomains > 2 ? 2 : 1;
+  *chunkSize = std::min(512 * 1024, 64 * 1024 * ranksPerDomainFactor * multiDomainChunkFactor);
+  *nChannels = comm->nvlsChannels;
+  INFO(NCCL_INIT, "NVLSTree topology tuning: domains %d ranksPerDomain %d channels %d chunkSize %d", nDomains,
+       nRanksPerDomain, *nChannels, *chunkSize);
+  return ncclSuccess;
+}
 
 // Returns optimal NVLSTree tuning parameters for SM100 multi-node configurations.
 static ncclResult_t ncclNvlsTreeSm100Tuning(struct ncclComm* comm, int* nChannels, int* chunkSize,
@@ -97,11 +167,14 @@ static ncclResult_t ncclNvlsTreeSm100Tuning(struct ncclComm* comm, int* nChannel
   return ncclSuccess;
 }
 
-static ncclResult_t ncclNvlsChannels(struct ncclComm* comm, int* nChannels, int* chunkSize, int* treeMaxChunkSize) {
+ncclResult_t ncclNvlsChannels(struct ncclComm* comm, int* nChannels, int* chunkSize, int* treeMaxChunkSize) {
   int channels = 0;
 
-  if (comm->minCompCap >= 100 && comm->nNodes > 1) {
+  if (comm->minCompCap >= 100 && comm->nNodes > 1 && !RUBIN_AND_LATER(comm->minCompCap)) {
     NCCLCHECK(ncclNvlsTreeSm100Tuning(comm, &channels, chunkSize, treeMaxChunkSize));
+  }
+  if (RUBIN_AND_LATER(comm->minCompCap) && comm->nNodes > 1) {
+    NCCLCHECK(ncclNvlsTreeRubinTuning(comm, &channels, chunkSize, treeMaxChunkSize));
   }
 
   if (comm->config.nvlsCTAs != NCCL_CONFIG_UNDEF_INT) {
@@ -223,7 +296,7 @@ fail:
 
 // Allocate UC backing for a consumer and bind it into its resolved MC-group slice.
 static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPartition* partition, size_t size,
-                                    struct ncclNvlsUcSegment* outUc) {
+                                    cudaStream_t stream, struct ncclNvlsUcSegment* outUc) {
   CUmemAllocationProp ucprop;
   ncclResult_t ret = ncclSuccess;
   size_t ucsize = size;
@@ -245,7 +318,7 @@ static ncclResult_t nvlsAllocBindUc(struct ncclComm* comm, const struct ncclMcPa
   CUCHECKGOTO(cuMemCreate(&ucHandle, ucsize, &ucprop, 0), ret, fail1);
   CUCHECKGOTO(cuMemMap((CUdeviceptr)ucptr, ucsize, 0, ucHandle, 0), ret, fail2);
   CUCHECKGOTO(cuMemSetAccess((CUdeviceptr)ucptr, ucsize, &comm->nvlsResources->accessDesc, 1), ret, fail3);
-  CUDACHECKGOTO(cudaMemset(ucptr, 0, ucsize), ret, fail3);
+  NCCLCHECKGOTO(ncclCudaMemsetSync(ucptr, 0, ucsize, stream), ret, fail3);
   // Track NVLS buffer as persistent memory
   NCCLCHECKGOTO(ncclMemTrack(comm->memManager, ucptr, ucsize, ucHandle, ncclCuMemHandleType, ncclMemPersist), ret,
                 fail3);
@@ -298,16 +371,14 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   buffSize = nvlsStepSize * NCCL_STEPS;
   nvlsPerRankSize = nChannels * 2 * buffSize;
   nvlsTotalSize = nvlsPerRankSize * nHeads;
+  const int fifoLayout = resources->fifoLayout;
+  const size_t slotStride = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
+  INFO(NCCL_INIT | NCCL_NVLS, "NVLS FIFO layout %d (%s) slotStride %zu", fifoLayout, ncclNvlsFifoLayoutName(fifoLayout),
+       slotStride);
 
   INFO(NCCL_INIT | NCCL_NVLS,
        "NVLS comm %p headRank %d nHeads %d nvlsRanks %d buffSize %zu nvlsPerRankSize %zu nvlsTotalSize %zu", comm,
        headRank, nHeads, comm->localRanks, buffSize, nvlsPerRankSize, nvlsTotalSize);
-
-  // A prior setup attempt may have bound the data slice and then failed (inited
-  // still false); the slice offset is fixed, so reuse that binding.
-  if (resources->dataUc.ptr == NULL) {
-    NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->dataPartition, nvlsTotalSize, &resources->dataUc), res, fail);
-  }
 
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
                                         /*concurrent=*/false, &hostStream),
@@ -315,22 +386,31 @@ ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm) {
   NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream,
                                         /*concurrent=*/false, &deviceStream),
                 res, fail);
+  // A prior setup attempt may have bound the data slice and then failed (inited
+  // still false); the slice offset is fixed, so reuse that binding.
+  if (resources->dataUc.ptr == NULL) {
+    NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->dataPartition, nvlsTotalSize, deviceStream, &resources->dataUc),
+                  res, fail);
+  }
+
   for (int h = 0; h < nHeads; h++) {
     int nvlsPeer = comm->nRanks + 1 + h;
     for (int c = 0; c < nChannels; c++) {
       struct ncclChannel* channel = comm->channels + c;
       struct ncclChannelPeer* peer = channel->peers[nvlsPeer];
 
+      // Byte offset of the first slot of stream (h, dir) on channel c. Slot k of the stream
+      // then lives at offset + k * conn.stepSize (see ncclNvlsSetup for stepSize).
+      const size_t upOff = ncclNvlsFifoOffset(fifoLayout, nHeads, nChannels, nvlsStepSize, h, 0, c);
+      const size_t downOff = ncclNvlsFifoOffset(fifoLayout, nHeads, nChannels, nvlsStepSize, h, 1, c);
+
       // Reduce UC -> MC
-      peer->send[1].conn.buffs[NCCL_PROTO_SIMPLE] = (char*)resources->dataUc.ptr + (h * 2 * nChannels + c) * buffSize;
-      peer->recv[0].conn.buffs[NCCL_PROTO_SIMPLE] =
-        (char*)resources->dataPartition.ptr + (h * 2 * nChannels + c) * buffSize;
+      peer->send[1].conn.buffs[NCCL_PROTO_SIMPLE] = (char*)resources->dataUc.ptr + upOff;
+      peer->recv[0].conn.buffs[NCCL_PROTO_SIMPLE] = (char*)resources->dataPartition.ptr + upOff;
 
       // Broadcast MC -> UC
-      peer->recv[1].conn.buffs[NCCL_PROTO_SIMPLE] =
-        (char*)resources->dataUc.ptr + ((h * 2 + 1) * nChannels + c) * buffSize;
-      peer->send[0].conn.buffs[NCCL_PROTO_SIMPLE] =
-        (char*)resources->dataPartition.ptr + ((h * 2 + 1) * nChannels + c) * buffSize;
+      peer->recv[1].conn.buffs[NCCL_PROTO_SIMPLE] = (char*)resources->dataUc.ptr + downOff;
+      peer->send[0].conn.buffs[NCCL_PROTO_SIMPLE] = (char*)resources->dataPartition.ptr + downOff;
 
       CUDACHECKGOTO(cudaMemcpyAsync(&comm->channels[c].devPeersHostPtr[nvlsPeer]->send[0], &peer->send[0].conn,
                                     sizeof(struct ncclConnInfo), cudaMemcpyHostToDevice, hostStream),
@@ -367,15 +447,58 @@ fail:
   goto exit;
 }
 
+// Fill parentSlots[r] with the parent NVLS slot that backs child slot r when the child shares the parent's
+// NVLS resources. Slot h < nHeads belongs to head h, so each child head maps to the parent slot whose head
+// is the same GPU; heads are distinct GPUs, so this pairs the head slots one-to-one and the remaining
+// slots keep their index. If the parent does not have the same heads, *share is cleared and the child must
+// allocate its own resources.
+static ncclResult_t nvlsMapSharedSlots(struct ncclComm* comm, struct ncclComm* parent, int* parentSlots, bool* share) {
+  int nHeads = comm->channels[0].nvls.nHeads;
+  bool remapped = false;
+
+  if (parent->channels[0].nvls.nHeads != nHeads) {
+    INFO(NCCL_INIT | NCCL_NVLS, "NVLS: comm %p has %d heads, parent %p has %d; not sharing NVLS resources", comm,
+         nHeads, parent, parent->channels[0].nvls.nHeads);
+    *share = false;
+    return ncclSuccess;
+  }
+
+  for (int h = 0; h < nHeads; h++) {
+    int gpu = comm->topParentRanks[comm->nvlsHeads[h]];
+    int s = 0;
+    while (s < nHeads && parent->topParentRanks[parent->nvlsHeads[s]] != gpu) s++;
+    if (s == nHeads) {
+      INFO(NCCL_INIT | NCCL_NVLS,
+           "NVLS: comm %p head %d (rank %d) is not a head of parent %p; not sharing NVLS resources", comm, h,
+           comm->nvlsHeads[h], parent);
+      *share = false;
+      return ncclSuccess;
+    }
+    parentSlots[h] = s;
+    remapped |= (s != h);
+  }
+  for (int r = nHeads; r < comm->localRanks; r++) parentSlots[r] = r;
+  if (remapped) {
+    INFO(NCCL_INIT | NCCL_NVLS, "NVLS: comm %p shares parent %p NVLS resources with head slots remapped", comm, parent);
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
   ncclResult_t res = ncclSuccess;
   size_t typeSize;
   char shmPath[sizeof("/dev/shm/nccl-XXXXXX")];
   uintptr_t* nvlsShmem = NULL;
+  int* parentSlots = NULL;
   bool nvlsShare =
     parent && ncclNvlsTransportEnabled(parent) && parent->shareResources && parent->localRanks == comm->localRanks;
 
   if (!ncclNvlsTransportEnabled(comm) || comm->nvlsChannels == 0) return ncclSuccess;
+
+  if (nvlsShare) {
+    NCCLCHECKGOTO(ncclCalloc(&parentSlots, comm->localRanks), res, fail);
+    NCCLCHECKGOTO(nvlsMapSharedSlots(comm, parent, parentSlots, &nvlsShare), res, fail);
+  }
 
   if (nvlsShare) {
     /* reuse NVLS resources */
@@ -385,7 +508,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     comm->nvlsChunkSize = parent->nvlsResources->chunkSize;
     comm->nvlsTreeMaxChunkSize = parent->nvlsResources->treeMaxChunkSize;
     for (int c = 0; c < comm->nvlsChannels; c++) {
-      NCCLCHECKGOTO(initNvlsChannel(comm, c, parent, true), res, fail);
+      NCCLCHECKGOTO(initNvlsChannel(comm, c, parent, parentSlots), res, fail);
     }
 
     comm->nvlsResources = parent->nvlsResources;
@@ -407,6 +530,15 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     int nChannels = comm->nvlsChannels;
     size_t creditSize = nChannels * 2 * memSize * nHeads;
     int nvlsStepSize = comm->nvlsChunkSize;
+    int fifoLayout;
+    NCCLCHECKGOTO(ncclNvlsGetFifoLayout(comm, &fifoLayout), res, fail);
+    const size_t nvlsStepStrideBytes = ncclNvlsFifoSlotStride(fifoLayout, nHeads, nChannels, nvlsStepSize);
+    if (nvlsStepStrideBytes > (size_t)UINT32_MAX) {
+      WARN("NCCL_NVLS_FIFO_LAYOUT=%d slot stride %zu does not fit conn.stepSize", fifoLayout, nvlsStepStrideBytes);
+      res = ncclInvalidArgument;
+      goto fail;
+    }
+    const uint32_t nvlsStepStride = (uint32_t)nvlsStepStrideBytes;
 
     NCCLCHECKGOTO(ncclCalloc(&comm->nvlsResources, 1), res, fail);
     comm->nvlsResources->inited = false;
@@ -414,11 +546,12 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     comm->nvlsResources->nChannels = nChannels;
     comm->nvlsResources->nHeads = nHeads;
     comm->nvlsResources->chunkSize = comm->nvlsChunkSize;
+    comm->nvlsResources->fifoLayout = fifoLayout;
     comm->nvlsResources->treeMaxChunkSize = comm->nvlsTreeMaxChunkSize;
     resources = comm->nvlsResources;
 
     for (int c = 0; c < nChannels; c++) {
-      NCCLCHECKGOTO(initNvlsChannel(comm, c, NULL, false), res, fail);
+      NCCLCHECKGOTO(initNvlsChannel(comm, c, NULL, NULL), res, fail);
     }
 
     memset(&resources->accessDesc, 0, sizeof(resources->accessDesc));
@@ -427,32 +560,38 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     resources->accessDesc.location.id = comm->cudaDev;
     resources->dev = comm->cudaDev;
 
-    // Build the single shared MC group for this NVLS domain. The data slice is
-    // reserved here but bound later by ncclNvlsBufferSetup.
-    {
-      size_t buffSize = nvlsStepSize * NCCL_STEPS;
-      size_t dataSize = nChannels * 2 * buffSize * nHeads;
-      size_t ubSize = ncclNvlsUbSize(comm);
-      struct ncclMcRequest requests[3] = {{creditSize, 0}, {dataSize, 0}, {ubSize, 0}};
-      struct ncclMcPartition partitions[3];
-      NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, requests, 3, &resources->mcGroup, partitions), res, fail);
-      resources->creditPartition = partitions[0];
-      resources->dataPartition = partitions[1];
-      if (ubSize) {
-        resources->ubPartition = partitions[2];
-        NCCLCHECKGOTO(ncclMcArenaInit(comm, &resources->ubArena, &resources->ubPartition), res, fail);
-        resources->ubEnabled = true;
-      }
-      NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->creditPartition, creditSize, &resources->creditUc), res, fail);
-    }
-
-    // Set up head and tail only for now
     NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->hostStream,
                                           /*concurrent=*/false, &hostStream),
                   res, fail);
     NCCLCHECKGOTO(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode),
                                           &comm->sharedRes->deviceStream, /*concurrent=*/false, &deviceStream),
                   res, fail);
+    // Build the single shared MC group for this NVLS domain. The data slice is
+    // reserved here but bound later by ncclNvlsBufferSetup.
+    {
+      size_t buffSize = nvlsStepSize * NCCL_STEPS;
+      size_t dataSize = nChannels * 2 * buffSize * nHeads;
+      size_t ubSize = ncclNvlsUbSize(comm);
+      // Slice 3 is the device runtime's (see ncclDevrState::nvlsMcPartition).
+      struct ncclMcRequest requests[4] = {
+        {creditSize, 0}, {dataSize, 0}, {ubSize, 0}, {computeBigSize(comm), NCCL_MAX_PAGE_SIZE}
+      };
+      struct ncclMcPartition partitions[4];
+      struct ncclMcRankSet ranks = {comm->localRank, comm->localRanks, comm->localRankToRank};
+      NCCLCHECKGOTO(ncclMcGroupBuildPartitions(comm, &ranks, requests, 4, &resources->mcGroup, partitions), res, fail);
+      resources->creditPartition = partitions[0];
+      resources->dataPartition = partitions[1];
+      comm->devrState.nvlsMcPartition = partitions[3];
+      if (ubSize) {
+        resources->ubPartition = partitions[2];
+        NCCLCHECKGOTO(ncclMcArenaInit(comm, &resources->ubArena, &resources->ubPartition), res, fail);
+        resources->ubEnabled = true;
+      }
+      NCCLCHECKGOTO(nvlsAllocBindUc(comm, &resources->creditPartition, creditSize, deviceStream, &resources->creditUc),
+                    res, fail);
+    }
+
+    // Set up head and tail only for now
     for (int h = 0; h < nHeads; h++) {
       int nvlsPeer = comm->nRanks + 1 + h;
       for (int c = 0; c < nChannels; c++) {
@@ -466,13 +605,13 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
         peer->send[1].conn.buffs[NCCL_PROTO_SIMPLE] = NULL;
         peer->send[1].conn.head = (uint64_t*)mem;
         peer->send[1].conn.tail = (uint64_t*)(mem + memSize / 2);
-        peer->send[1].conn.stepSize = nvlsStepSize;
+        peer->send[1].conn.stepSize = nvlsStepStride;
         mem = (char*)resources->creditPartition.ptr + (h * 2 * nChannels + c) * memSize;
         peer->recv[0].transportComm = &nvlsTransport.recv;
         peer->recv[0].conn.buffs[NCCL_PROTO_SIMPLE] = NULL;
         peer->recv[0].conn.head = (uint64_t*)mem;
         peer->recv[0].conn.tail = (uint64_t*)(mem + memSize / 2);
-        peer->recv[0].conn.stepSize = nvlsStepSize;
+        peer->recv[0].conn.stepSize = nvlsStepStride;
         peer->recv[0].conn.flags |= NCCL_NVLS_MIN_POLL;
 
         // Broadcast MC -> UC
@@ -481,13 +620,13 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
         peer->recv[1].conn.buffs[NCCL_PROTO_SIMPLE] = NULL;
         peer->recv[1].conn.head = (uint64_t*)mem;
         peer->recv[1].conn.tail = (uint64_t*)(mem + memSize / 2);
-        peer->recv[1].conn.stepSize = nvlsStepSize;
+        peer->recv[1].conn.stepSize = nvlsStepStride;
         mem = (char*)resources->creditPartition.ptr + ((h * 2 + 1) * nChannels + c) * memSize;
         peer->send[0].transportComm = &nvlsTransport.send;
         peer->send[0].conn.buffs[NCCL_PROTO_SIMPLE] = NULL;
         peer->send[0].conn.head = (uint64_t*)mem;
         peer->send[0].conn.tail = (uint64_t*)(mem + memSize / 2);
-        peer->send[0].conn.stepSize = nvlsStepSize;
+        peer->send[0].conn.stepSize = nvlsStepStride;
         peer->send[0].conn.flags |= NCCL_NVLS_MIN_POLL;
 
         CUDACHECKGOTO(cudaMemcpyAsync(&comm->channels[c].devPeersHostPtr[nvlsPeer]->send[0], &peer->send[0].conn,
@@ -549,6 +688,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
   }
 
 exit:
+  free(parentSlots);
   return res;
 fail:
   comm->nvlsSupport = 0;
@@ -769,6 +909,12 @@ ncclResult_t ncclNvlsRegResourcesQuery(struct ncclComm* comm, ncclFunc_t func, i
     } else if (func == ncclFuncAllReduce) {
       if (comm->compCap >= 100 && comm->minNetBw >= 96.0f) {
         factor = 10 * 8;
+      } else if (comm->compCap >= 100 && comm->minNetBw >= 48.0f) {
+        if (comm->nNodes == 2) {
+          factor = 14 * 8;
+        } else {
+          factor = 8 * 8;
+        }
       } else if (comm->compCap >= 100) {
         factor = 7 * 8;
       } else {

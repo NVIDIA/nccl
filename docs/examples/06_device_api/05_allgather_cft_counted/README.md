@@ -12,8 +12,8 @@ CFT counted puts and wait.
 
 Each rank owns one contiguous input slice. The kernel copies the local slice to
 the local output slot, sends the same slice to every other rank with
-`ncclCft::putCounted`, and then waits for the expected counted bytes from every
-peer selected by a bit mask.
+`ncclCft::putCounted`, and then waits on one shared counter for
+`count * sizeof(float) * nRanks` bytes, including the local contribution.
 
 ## Build
 

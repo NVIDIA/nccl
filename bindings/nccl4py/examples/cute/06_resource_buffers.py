@@ -56,12 +56,14 @@ INDEX = 0
 def resource_buffers_kernel(
     dev_comm: nccl_cute.DevComm,
     lsa_handle: nccl_cute.LsaBarrierHandle,
+    mm_handle: nccl_cute.MultimemHandle,
 ):
     """Translate one resource handle through every addressing mode.
 
     Args:
         dev_comm: CuTeDSL view of the NCCL device communicator.
         lsa_handle: LSA barrier handle whose ``buf_handle`` is translated.
+        mm_handle: the LSA team's host-passed multimem handle.
     """
     tidx, _, _ = cute.arch.thread_idx()
     coop = nccl_cute.cta()
@@ -83,7 +85,7 @@ def resource_buffers_kernel(
         # Multicast addresses: one store reaches every peer's copy.
         mm = cute.make_ptr(
             cutlass.Int8,
-            dev_comm.resource_buffer_multimem_pointer(handle, dev_comm.lsa_multimem)).toint()
+            dev_comm.resource_buffer_multimem_pointer(handle, mm_handle)).toint()
         lsa_mm = cute.make_ptr(
             cutlass.Int8,
             dev_comm.resource_buffer_lsa_multimem_pointer(handle)).toint()
@@ -113,14 +115,16 @@ def resource_buffers_kernel(
 def resource_buffers(
     dev_comm: nccl_cute.DevComm,
     lsa_handle: nccl_cute.LsaBarrierHandle,
+    mm_handle: nccl_cute.MultimemHandle,
 ):
     """Launch :func:`resource_buffers_kernel` on a single CTA.
 
     Args:
         dev_comm: CuTeDSL view of the NCCL device communicator.
         lsa_handle: LSA barrier handle whose ``buf_handle`` is translated.
+        mm_handle: the LSA team's host-passed multimem handle.
     """
-    resource_buffers_kernel(dev_comm, lsa_handle).launch(
+    resource_buffers_kernel(dev_comm, lsa_handle, mm_handle).launch(
         grid=[1, 1, 1],
         block=[THREADS, 1, 1],
         cooperative=True,
@@ -182,6 +186,7 @@ def main():
     )
     dev_comm_resource = nccl_comm.create_dev_comm(requirements=reqs)
     (lsa_handle,) = dev_comm_resource.resource_handles
+    mm_handle = dev_comm_resource.multimem_handle(nccl_comm.team_lsa)
 
     if rank == root:
         print(f"host: buf_handle={lsa_handle.buf_handle} "
@@ -190,6 +195,7 @@ def main():
     resource_buffers(
         nccl_cute.DevComm(dev_comm_resource),
         nccl_cute.LsaBarrierHandle(lsa_handle),
+        nccl_cute.MultimemHandle(mm_handle),
     )
     device.sync()
     comm_mpi.Barrier()

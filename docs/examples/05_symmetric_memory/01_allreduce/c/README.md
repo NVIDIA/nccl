@@ -67,19 +67,25 @@ Example completed - demonstrated symmetric memory lifecycle
 Register symmetric memory windows for low-latency peer access:
 
 ```c
-void* window;
-size_t buffer_size = count * sizeof(float);
+ncclWindow_t send_win, recv_win;
+size_t size_bytes = count * sizeof(float);
 
-// Register symmetric memory window for LSA access
-ncclCommWindowRegister(comm, &window, buffer, buffer_size,
-                       ncclCommWindowNone, ncclCommWindowLSA);
+// Register both buffers as symmetric memory windows
+ncclCommWindowRegister(comm, d_sendbuff, size_bytes, &send_win,
+                       NCCL_WIN_COLL_SYMMETRIC);
+ncclCommWindowRegister(comm, d_recvbuff, size_bytes, &recv_win,
+                       NCCL_WIN_COLL_SYMMETRIC);
 
 // Perform AllReduce with symmetric memory optimization
-ncclAllReduce(sendbuff, recvbuff, count, ncclFloat, ncclSum,
+ncclAllReduce(d_sendbuff, d_recvbuff, count, ncclFloat, ncclSum,
               comm, stream);
 
+// Wait for the collective to finish before deregistering its windows
+cudaStreamSynchronize(stream);
+
 // Deregister when done
-ncclCommWindowDeregister(comm, window);
+ncclCommWindowDeregister(comm, send_win);
+ncclCommWindowDeregister(comm, recv_win);
 ```
 
 ### Performance benefits

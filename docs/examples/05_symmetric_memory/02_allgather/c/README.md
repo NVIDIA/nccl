@@ -78,15 +78,16 @@ ncclConfig_t config = NCCL_CONFIG_INITIALIZER;
 config.CTAPolicy = 2;
 
 // Initialize communicator with config
+ncclComm_t comm;
 ncclCommInitRankConfig(&comm, total_ranks, nccl_unique_id, my_rank, &config);
 ```
 
 ### Buffer allocation and window registration
 
 ```c
-size_t sendcount;       // Elements per rank
-size_t send_size_bytes; // Size of send buffer
-size_t recv_size_bytes; // Size of recv buffer (sendcount * total_ranks * sizeof(type))
+size_t sendcount = 1024 * 1024; // 1M elements per rank
+size_t send_size_bytes = sendcount * sizeof(float);
+size_t recv_size_bytes = sendcount * total_ranks * sizeof(float);
 void *d_sendbuff;
 void *d_recvbuff;
 
@@ -94,7 +95,6 @@ void *d_recvbuff;
 ncclMemAlloc(&d_sendbuff, send_size_bytes);
 ncclMemAlloc(&d_recvbuff, recv_size_bytes);
 
-ncclComm_t comm;
 ncclWindow_t send_win;
 ncclWindow_t recv_win;
 

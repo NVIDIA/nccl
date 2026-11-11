@@ -14,8 +14,8 @@ NCCL_PARAM(IbResiliencyPortFailover, "IB_RESILIENCY_PORT_FAILOVER", 0);
 NCCL_PARAM(IbResiliencyPortFailoverMaxAttempts, "IB_RESILIENCY_PORT_FAILOVER_MAX_ATTEMPTS", 1);
 NCCL_PARAM(IbResiliencyPortFailoverProbeDelay, "IB_RESILIENCY_PORT_FAILOVER_PROBE_DELAY", 10); // In milliseconds
 
-extern int64_t ncclParamIbRetryCnt();
-extern int64_t ncclParamIbTimeout();
+USE_NCCL_PARAM(ncclParamIbRetryCnt, uint8_t);
+USE_NCCL_PARAM(ncclParamIbTimeout, uint8_t);
 
 #define MSEC_TO_NSEC 1000000ULL
 

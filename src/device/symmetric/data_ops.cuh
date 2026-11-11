@@ -1,4 +1,4 @@
-#include "primitives.cuh"
+#include "symk.cuh"
 
 struct SMemTag {}; // Shared memory
 struct GMemTag {}; // Streaming global memory

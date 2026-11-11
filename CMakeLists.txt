@@ -52,11 +52,11 @@ option(RDMA_CORE "Enable RDMA core" OFF)
 option(NET_PROFILER "Enable network profiler" OFF)
 option(MLX5DV "Enable MLX5DV" OFF)
 option(MAX_EXT_NET_PLUGINS "Maximum external network plugins" 0)
-option(EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
+option(NCCL_EMIT_LLVM_IR "Generate LLVM IR for device APIs" OFF)
+option(SYM_GENK "Compile GENK kernels" OFF)
 option(NCCL_EXACT_KERNEL_NAMES "Use one CUDA kernel wrapper per NCCL device function" OFF)
 option(NCCL_EMIT_LTO_IR "Generate LTO IR for device APIs" OFF)
 option(BUILD_NCCL4PY "Enable nccl4py Python bindings targets" OFF)
-option(BUILD_NCCL_EP "Build NCCL EP contrib library" OFF)
 
 # CMAKE_BUILD_TYPE=Debug is equivalent to -DDEBUG=ON, and vice versa (case-insensitive).
 string(TOUPPER "${CMAKE_BUILD_TYPE}" _NCCL_BUILD_TYPE_UC)
@@ -68,6 +68,10 @@ if(_NCCL_BUILD_TYPE_UC STREQUAL "DEBUG")
 endif()
 if(DEBUG)
     set(CMAKE_BUILD_TYPE "Debug")
+endif()
+
+if(SYM_GENK)
+    add_compile_definitions(SYM_GENK=1)
 endif()
 
 # Detect OS (use add_compile_definitions so CUDA .cu files get the define when built by NVCC)
@@ -107,6 +111,19 @@ set_property(CACHE TLS_BACKEND PROPERTY STRINGS "" OPENSSL3)
 find_package(CUDAToolkit REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+# Match Make's CUDA runtime selection, including compiler-generated link steps.
+set(CUDARTLIB "cudart_static" CACHE STRING "CUDA runtime library (cudart_static or cudart)")
+set_property(CACHE CUDARTLIB PROPERTY STRINGS cudart_static cudart)
+if(CUDARTLIB STREQUAL "cudart_static")
+    set(NCCL_CUDART_TARGET CUDA::cudart_static)
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Static)
+elseif(CUDARTLIB STREQUAL "cudart")
+    set(NCCL_CUDART_TARGET CUDA::cudart)
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
+else()
+    message(FATAL_ERROR "Unsupported CUDARTLIB '${CUDARTLIB}'; expected cudart_static or cudart")
+endif()
 
 # CUDA version detection
 string(REGEX MATCH "([0-9]+\\.[0-9]+)" CUDA_VERSION "${CUDAToolkit_VERSION}")
@@ -176,6 +193,12 @@ if(NCCL_COMPILER_GCC)
     # GCC/Clang-specific flags
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -fvisibility=hidden -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare -Wvla -g")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all -fPIC")
+    # --compress-mode=size shrinks the fatbin by about 40% without changing the generated code.
+    # It needs a driver that can load zstd-compressed images, which CUDA 13 already requires;
+    # CUDA 12 builds keep the default mode to stay compatible with older drivers.
+    if(CUDA_MAJOR GREATER_EQUAL 13)
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --compress-mode=size")
+    endif()
 elseif(NCCL_COMPILER_MSVC)
     # MSVC-specific flags
     # /Zc:preprocessor enables conformant preprocessor for proper variadic macro handling (needed for NVTX)
@@ -326,11 +349,11 @@ if(BUILD_SRCTXZ_PACKAGE OR BUILD_PACKAGES)
   add_subdirectory(pkg/srctxz)
 endif()
 
-if(EMIT_LLVM_IR OR NCCL_EMIT_LTO_IR)
+if(NCCL_EMIT_LLVM_IR OR NCCL_EMIT_LTO_IR)
     add_subdirectory(bindings/ir)
 endif()
 
-if(EMIT_LLVM_IR)
+if(NCCL_EMIT_LLVM_IR)
     add_dependencies(llvm_ir nccl_header)
     add_custom_target(nccl_with_ir ALL DEPENDS nccl llvm_ir)
     message(STATUS "LLVM IR generation will be included in default build")
@@ -344,10 +367,6 @@ endif()
 
 if(BUILD_NCCL4PY)
   add_subdirectory(bindings/nccl4py)
-endif()
-
-if(BUILD_NCCL_EP)
-  add_subdirectory(contrib/nccl_ep)
 endif()
 
 ###################### CMake package config for find_package(NCCL) ######################

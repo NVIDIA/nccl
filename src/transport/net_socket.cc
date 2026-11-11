@@ -114,6 +114,7 @@ enum ncclNetSocketTaskState {
   ncclNetSocketTaskComplete = 2,
 };
 
+// Structure shared between the main thread and the helper threads.  Atomics are required for simultaneous accesses.
 struct ncclNetSocketTask {
   int op;
   void* data;
@@ -578,7 +579,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       if (nCompleted == r->nSubs) {
         if (size) *size = r->size;
         *done = 1;
-        r->used = 0;
+        COMPILER_ATOMIC_STORE(&r->used, 0, std::memory_order_release);
         for (int i = 0; i < r->nSubs; i++) {
           struct ncclNetSocketTask* sub = r->tasks[i];
           COMPILER_ATOMIC_STORE(&sub->used, ncclNetSocketTaskFree, std::memory_order_release);
@@ -603,7 +604,7 @@ ncclResult_t ncclNetSocketTest(void* request, int* done, int* size) {
       if (r->offset == r->size) {
         if (size) *size = r->size;
         *done = 1;
-        r->used = 0;
+        COMPILER_ATOMIC_STORE(&r->used, 0, std::memory_order_release);
 #ifdef NCCL_ENABLE_NET_PROFILING
         ncclProfilerFunction(&r->pInfo.eHandle, ncclProfilerNetEventStop, NULL, 0, NULL);
         r->pInfo.eHandle = NULL;

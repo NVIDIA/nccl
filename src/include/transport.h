@@ -65,12 +65,16 @@ struct ncclPeerInfo {
   uint64_t supportedGinTypeBitMask;
   bool crossNicSupport;
   bool rmaPluginAvailable;
+  int rmaRankStride;
   bool cuMemGdrSupport;
   int mloPart; // MLOPart partition index, or -1 if not an MLOPart GPU
   int cudaDriverVersion;
   bool gpuCftMulticastSupport;
   bool gpuCftCountedSupport;
   uint32_t gitVersionHash;
+  bool cuMemHostSupport;
+  uint32_t cftUnicastCliqueId;
+  uint32_t cftMulticastCliqueId;
 };
 
 #define CONNECT_SIZE 256
@@ -108,6 +112,7 @@ struct ncclNvlsSharedRes {
   int nChannels;
   int nHeads;
   int chunkSize;
+  int fifoLayout;
   int treeMaxChunkSize;
   struct ncclShmemCollBuff nvlsShmem;
   void* nvlsShmemHandle;
@@ -161,6 +166,7 @@ ncclResult_t ncclTransportCheckP2pType(struct ncclComm* comm, bool* isAllDirectP
 bool ncclP2pUsesMemcpy();
 
 ncclResult_t ncclNvlsInit(struct ncclComm* comm);
+ncclResult_t ncclNvlsChannels(struct ncclComm* comm, int* nChannels, int* chunkSize, int* treeMaxChunkSize);
 ncclResult_t ncclNvlsTuning(struct ncclComm* comm);
 ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclNvlsBufferSetup(struct ncclComm* comm);

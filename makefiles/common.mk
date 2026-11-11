@@ -24,9 +24,13 @@ RDMA_CORE ?= 0
 NET_PROFILER ?= 0
 MLX5DV ?= 0
 MAX_EXT_NET_PLUGINS ?= 0
-EMIT_LLVM_IR ?= 0
+NCCL_EMIT_LLVM_IR ?= 0
 NCCL_EMIT_LTO_IR ?= 0
 NCCL_EXACT_KERNEL_NAMES ?= 0
+SYM_GENK ?= 0
+ifeq ($(SYM_GENK), 1)
+  CXXFLAGS += -DSYM_GENK=1
+endif
 
 NCCL_OS_LINUX := 1
 CXXFLAGS += -DNCCL_OS_LINUX
@@ -108,6 +112,17 @@ else
   CXXSTD ?= -std=c++14
 endif
 
+# Fatbin compression. -compress-all compresses every device image. On CUDA 13
+# --compress-mode=size selects the highest-ratio setting, which shrinks the
+# fatbin by about 40% without changing the generated code. Fatbins built this
+# way need a driver that can load zstd-compressed images (CUDA 13 already
+# requires one), so CUDA 12 builds keep the default mode to stay compatible
+# with older drivers.
+NVCC_COMPRESS := -Xfatbin -compress-all
+ifeq ($(shell test "0$(CUDA_MAJOR)" -ge 13; echo $$?),0)
+  NVCC_COMPRESS += --compress-mode=size
+endif
+
 CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \
               -Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter \
               -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
@@ -116,7 +131,7 @@ CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisi
 # Maxrregcount needs to be set accordingly to NCCL_MAX_NTHREADS (otherwise it will cause kernel launch errors)
 # 512 : 120, 640 : 96, 768 : 80, 1024 : 60
 # We would not have to set this if we used __launch_bounds__, but this only works on kernels, not on functions.
-NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all
+NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=96 $(NVCC_COMPRESS)
 # Pass OS define to NVCC (must be after NVCUFLAGS := or it would be overwritten)
 ifeq ($(NCCL_OS_LINUX), 1)
   NVCUFLAGS += -DNCCL_OS_LINUX
@@ -128,6 +143,7 @@ endif
 NVLDFLAGS  := -L${CUDA_LIB} -lcudart -lrt
 
 NVCUFLAGS_SYM :=
+NVCUFLAGS_GENK :=
 
 ########## GCOV ##########
 GCOV ?= 0 # disable by default.
@@ -145,6 +161,7 @@ CXXFLAGS  += -O3 -g
 else
 NVCUFLAGS += $(DEBUG_DEVICE_FLAGS)
 NVCUFLAGS_SYM += $(DEBUG_DEVICE_FLAGS)
+NVCUFLAGS_GENK += $(DEBUG_DEVICE_FLAGS)
 CXXFLAGS  += $(DEBUG_HOST_FLAGS)
 endif
 

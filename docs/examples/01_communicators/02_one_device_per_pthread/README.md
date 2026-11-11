@@ -24,7 +24,7 @@ This example runs on a single node only, using pthreads (not MPI) for paralleliz
 
 1. **Thread Creation**: Creates one pthread per available GPU (or `NTHREADS` if set)
 2. **Communicator Creation**: Each thread initializes its own communicator using a shared unique ID
-3. **Verification**: Queries and validates communicator properties across all threads
+3. **Communicator properties**: Queries and prints each thread's communicator rank and size
 4. **Cleanup**: Proper resource cleanup order within each thread
 
 ## Variants

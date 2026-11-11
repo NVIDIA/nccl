@@ -112,7 +112,8 @@ static void doca_verbs_wrapper_init_once(int *ret) {
         mlx5dv_handle = dlopen("libmlx5.so", RTLD_NOW);
     }
     if (!mlx5dv_handle) {
-        DOCA_LOG(LOG_ERR, "Failed to load libmlx5: %s\n", dlerror());
+        DOCA_LOG(LOG_ERR, "Failed to load libmlx5; tried libmlx5.so.1 then libmlx5.so: %s\n",
+                 dlerror());
         *ret = -1;
         return;
     }

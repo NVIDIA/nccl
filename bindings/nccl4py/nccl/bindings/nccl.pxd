@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.32.3. Do not modify it directly.
+# This code was automatically generated with version 2.32.6. Do not modify it directly.
 
 
 
@@ -46,6 +46,7 @@ ctypedef ncclGinConnectionType_t _GinConnectionType
 ctypedef ncclGinType_t _GinType
 ctypedef ncclCftTeamMode_t _CftTeamMode
 ctypedef ncclCftCap_t _CftCap
+ctypedef ncclGinBarrierOptions_t _GinBarrierOptions
 ctypedef ncclGinSignalOp_t _GinSignalOp
 
 
@@ -139,6 +140,3 @@ cpdef object team_cft_multimem(object comm)
 # Hand-written: Param API (SKIP_LOWPP in nccl.cybind.yaml).
 cpdef str param_get_parameter(str key)
 cpdef list param_get_all_keys()
-
-# Hand-written: not an NCCL entry point; reports the path of the loaded DSO.
-cpdef object get_library_path()

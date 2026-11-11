@@ -1,0 +1,234 @@
+/*************************************************************************
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * See LICENSE.txt for more information
+ *************************************************************************/
+
+#ifndef NCCL_DEVICE_FLOW__LL_FUNCS_H_
+#define NCCL_DEVICE_FLOW__LL_FUNCS_H_
+
+#include "../flow.h"
+#include "../utility.h"
+#include <cassert>
+
+#ifdef __CUDACC__
+NCCL_DEVICE_INLINE uint64_t ncclFlowLLLoad(ncclLLFifoLine* src, uint32_t flag, uint32_t* abortFlag) {
+  uint32_t data1, flag1, data2, flag2;
+  uint32_t spins = 0;
+  do {
+    asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];"
+                 : "=r"(data1), "=r"(flag1), "=r"(data2), "=r"(flag2)
+                 : "l"(&src->i4)
+                 : "memory");
+    if (nccl::utility::testAbort(abortFlag, spins)) break;
+  } while (flag1 != flag || flag2 != flag);
+  return data1 + ((uint64_t)data2 << 32);
+}
+
+NCCL_DEVICE_INLINE void ncclFlowLLStore(ncclLLFifoLine* dst, uint64_t data, uint32_t flag) {
+  asm volatile("st.volatile.global.v4.u32 [%0], {%1,%2,%3,%4};" ::"l"(&dst->i4), "r"((uint32_t)data), "r"(flag),
+               "r"((uint32_t)(data >> 32)), "r"(flag)
+               : "memory");
+}
+
+NCCL_DEVICE_INLINE bool ncclFlowLLNeedsCleanup(uint32_t flag, int nSlices) {
+#ifdef TEST_LL_CLEANUP
+  uint32_t const flagMask = NCCL_LL_FLAG_MAX - 1;
+#else
+  uint32_t const flagMask = ~uint32_t(0);
+#endif
+  // Modular distance from this flag to zero. The final nSlices operations visit and clean every FIFO slice once.
+  uint32_t const stepsUntilWrap = (-flag) & flagMask;
+  return stepsUntilWrap < (uint32_t)nSlices;
+}
+
+template <typename T>
+NCCL_DEVICE_INLINE T ncclFlowLLLoadData(T* src) {
+  union {
+    T elt;
+    uint16_t u2;
+    uint32_t u4;
+    uint64_t u8;
+  } value;
+  if (sizeof(T) == 1) asm volatile("ld.volatile.global.b8 %0,[%1];" : "=r"(value.u4) : "l"(src) : "memory");
+  else if (sizeof(T) == 2) asm volatile("ld.volatile.global.b16 %0,[%1];" : "=h"(value.u2) : "l"(src) : "memory");
+  else if (sizeof(T) == 4) asm volatile("ld.volatile.global.b32 %0,[%1];" : "=r"(value.u4) : "l"(src) : "memory");
+  else asm volatile("ld.volatile.global.b64 %0,[%1];" : "=l"(value.u8) : "l"(src) : "memory");
+  return value.elt;
+}
+
+template <typename T>
+struct ncclFlowLLDataLoader {
+  static constexpr int EltPerLine = sizeof(uint64_t) / sizeof(T);
+  union {
+    uint32_t u4[2];
+    uint64_t u8;
+    T elt[EltPerLine];
+  };
+
+  NCCL_DEVICE_INLINE void begin(T* src, int nElts, int misalign4) {
+    if NCCL_IF_CONSTEXPR (sizeof(T) < 4) {
+      if (misalign4 == 0) {
+        // This may over-read at the end of the source buffer, but we don't cross the alignment boundary, hence we also
+        // stay within the same page -- no fault possible.
+        u4[0] = ncclFlowLLLoadData((uint32_t*)src);
+        if (nElts * sizeof(T) > 4) u4[1] = ncclFlowLLLoadData((uint32_t*)src + 1);
+        return;
+      }
+    }
+    NVCC_PRAGMA_UNROLL_AUTO
+    for (int i = 0; i < EltPerLine; i++) {
+      if (i == 0 || i < nElts) elt[i] = ncclFlowLLLoadData(src + i);
+    }
+  }
+
+  NCCL_DEVICE_INLINE uint64_t finish() {
+    return u8;
+  }
+};
+
+template <typename T>
+NCCL_DEVICE_INLINE void ncclFlowLLStoreData(T* dst, uint64_t data, int nElts, int misalign4) {
+  constexpr int EltPerLine = sizeof(uint64_t) / sizeof(T);
+  if NCCL_IF_CONSTEXPR (sizeof(T) < 4) {
+    if (nElts == EltPerLine && misalign4 == 0) {
+      ((uint32_t*)dst)[0] = (uint32_t)data;
+      ((uint32_t*)dst)[1] = (uint32_t)(data >> 32);
+      return;
+    }
+  }
+  union {
+    uint64_t u8;
+    T elt[EltPerLine];
+  } value;
+  value.u8 = data;
+  NVCC_PRAGMA_UNROLL_AUTO
+  for (int i = 0; i < EltPerLine; i++) {
+    if (i == 0 || i < nElts) dst[i] = value.elt[i];
+  }
+}
+
+template <typename Backend, int SlicesPerChunk, int MaxPeers>
+template <bool Send, bool DirectSend, bool Recv, bool DirectRecv, typename T, typename SrcLambda, typename DstLambda,
+          typename RedOp>
+NCCL_DEVICE_INLINE void ncclFlowBase<Backend, SlicesPerChunk, MaxPeers>::process(
+  bool sendDirect, bool recvDirect, ncclSymPtr<T> /*input*/, ncclSymPtr<T> /*output*/, SrcLambda srcLambda, int nSrc,
+  DstLambda dstLambda, int nDst, RedOp const& redOp, size_t nElts, ncclFlowProtocolTag<ncclFlowProtocolLL>) {
+  static_assert(!DirectSend && !DirectRecv, "LL Flow does not support direct operations");
+  assert(!sendDirect && !recvDirect);
+  static_assert(SlicesPerChunk == 1, "LL Flow processes one FIFO slice per call");
+  static_assert(sizeof(T) <= sizeof(uint64_t) && sizeof(uint64_t) % sizeof(T) == 0,
+                "T must divide the eight-byte LL payload");
+  constexpr int EltPerLine = sizeof(uint64_t) / sizeof(T);
+  Backend& backend = *static_cast<Backend*>(this);
+  ncclFlowPartShmem& shmem = *partShmem;
+  int const nLines = (int)nccl::utility::divUp(nElts, (size_t)EltPerLine);
+  int const sliceSteps = ncclFlowFifoSlots / nSlices;
+  int const sliceLines = (int)(stepSize * sliceSteps / sizeof(ncclLLFifoLine));
+  bool const isWorker = role == RoleWorker || role == RoleSendWait || role == RoleRecvWait;
+  int const chunkSendPeers = Send ? nSendPeers : 0;
+  int const chunkRecvPeers = Recv ? nRecvPeers : 0;
+  bool const isPostSend = (Send && role == RoleSendPost);
+  bool const isPostRecv = (Recv && role == RoleRecvPost);
+  assert((stepSize * sliceSteps) % sizeof(ncclLLFifoLine) == 0);
+  assert(0 <= nLines && nLines <= sliceLines);
+  assert(0 <= nSrc && nSrc <= 1);
+  assert(0 <= nDst && nDst <= 1);
+  assert(0 < nSrc + chunkRecvPeers);
+  assert(0 < nDst + chunkSendPeers);
+
+  if (isWorker) {
+    void* sendBuf[NCCL_FLOW_MAX_PEERS];
+    void* recvBuf[NCCL_FLOW_MAX_PEERS];
+    uint32_t sendFlag[NCCL_FLOW_MAX_PEERS], recvFlag[NCCL_FLOW_MAX_PEERS];
+    if (Send && role == RoleSendWait) {
+      shmem.sendBuf[rolePeer] = backend.waitSend();
+      shmem.sendFlag[rolePeer] = backend.stepFlag();
+    }
+    if (Recv && role == RoleRecvWait) {
+      shmem.recvBuf[rolePeer] = backend.advanceSlice();
+      shmem.recvFlag[rolePeer] = backend.stepFlag();
+    }
+    workers.sync();
+    if NCCL_IF_CONSTEXPR (Send) {
+      for (int peer = 0; peer < chunkSendPeers; peer++) {
+        sendBuf[peer] = shmem.sendBuf[peer];
+        sendFlag[peer] = (uint32_t)shmem.sendFlag[peer];
+      }
+    }
+    if NCCL_IF_CONSTEXPR (Recv) {
+      for (int peer = 0; peer < chunkRecvPeers; peer++) {
+        recvBuf[peer] = shmem.recvBuf[peer];
+        recvFlag[peer] = (uint32_t)shmem.recvFlag[peer];
+      }
+    }
+
+    int srcMisalign4 = 0, dstMisalign4 = 0;
+    if NCCL_IF_CONSTEXPR (sizeof(T) < 4) {
+      if (nSrc != 0) srcMisalign4 = reinterpret_cast<uintptr_t>(srcLambda(0)) % 4;
+      if (nDst != 0) dstMisalign4 = reinterpret_cast<uintptr_t>(dstLambda(0)) % 4;
+    }
+
+    int line = workers.thread_rank();
+    int const eltOffset = line * EltPerLine;
+    int const eltIncrement = workers.size() * EltPerLine;
+    T* src;
+    if (nSrc != 0) src = srcLambda(0) + eltOffset;
+    T* dst;
+    if (nDst != 0) dst = dstLambda(0) + eltOffset;
+    for (int remainingElts = (int)nElts - eltOffset; remainingElts > 0;
+         remainingElts -= eltIncrement, line += workers.size()) {
+      int const lineElts = EltPerLine < remainingElts ? EltPerLine : remainingElts;
+      uint64_t data;
+      bool dataValid = (nSrc != 0);
+      if (dataValid) {
+        ncclFlowLLDataLoader<T> loader;
+        loader.begin(src, lineElts, srcMisalign4);
+        src += eltIncrement;
+        data = loader.finish();
+      }
+      if NCCL_IF_CONSTEXPR (Recv) {
+        for (int peer = 0; peer < chunkRecvPeers; peer++) {
+          uint64_t const peerData = ncclFlowLLLoad((ncclLLFifoLine*)recvBuf[peer] + line, recvFlag[peer], abortFlag);
+          data = dataValid ? backend.operations.reducePacked(redOp, peerData, data) : peerData;
+          dataValid = true;
+        }
+      }
+      if NCCL_IF_CONSTEXPR (Send) {
+        for (int peer = 0; peer < chunkSendPeers; peer++) {
+          ncclFlowLLStore((ncclLLFifoLine*)sendBuf[peer] + line, data, sendFlag[peer]);
+        }
+      }
+      if (nDst != 0) {
+        ncclFlowLLStoreData(dst, data, lineElts, dstMisalign4);
+        dst += eltIncrement;
+      }
+    }
+
+    if NCCL_IF_CONSTEXPR (Send) {
+      for (int peer = 0; peer < chunkSendPeers; peer++) {
+        if (ncclFlowLLNeedsCleanup(sendFlag[peer], nSlices)) {
+          for (int cleanLine = line; cleanLine < sliceLines; cleanLine += workers.size()) {
+            ncclFlowLLStore((ncclLLFifoLine*)sendBuf[peer] + cleanLine, 0, sendFlag[peer]);
+          }
+        }
+      }
+    }
+  } else if (isPostSend || isPostRecv) {
+    backend.advanceStep();
+  }
+  partThreads.sync();
+  if (isPostSend) {
+    size_t const sendBytes = ncclFlowLLNeedsCleanup((uint32_t)backend.stepFlag(), nSlices) ?
+                               stepSize * sliceSteps :
+                               (size_t)nLines * sizeof(ncclLLFifoLine);
+    backend.postSend(sendBytes);
+  }
+  if (isPostRecv) {
+    backend.postRecv();
+  }
+}
+#endif
+
+#endif // NCCL_DEVICE_FLOW__LL_FUNCS_H_

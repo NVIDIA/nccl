@@ -559,6 +559,8 @@ static ncclResult_t ncclRmaIbProxyCommitWrs(struct ncclRmaIbProxyCtx* ctx, int n
   return ncclSuccess;
 }
 
+ncclResult_t ncclRmaIbProxyDestroyContext(void* rmaCtx);
+
 ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config, void** rmaCtx) {
   ncclResult_t ret = ncclSuccess;
   struct ncclGinIbCollComm* cComm = (struct ncclGinIbCollComm*)collComm;
@@ -639,7 +641,7 @@ ncclResult_t ncclRmaIbProxyCreateContext(void* collComm, ncclRmaConfig_t* config
 end:
   free(handles);
   if (lComm) ncclNetIb.closeListen(lComm);
-  if (ret != ncclSuccess) free(rmaProxyCtx);
+  if (ret != ncclSuccess) ncclRmaIbProxyDestroyContext(rmaProxyCtx);
   else *rmaCtx = rmaProxyCtx;
   return ret;
 }
@@ -666,6 +668,7 @@ ncclResult_t ncclRmaIbProxyDestroyContext(void* rmaCtx) {
       gc[c].fullSendComm = NULL;
     }
   }
+  free(gc);
   return ncclSuccess;
 }
 

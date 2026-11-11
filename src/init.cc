@@ -2363,6 +2363,10 @@ exit:
   return res;
 fail:
   COMPILER_ATOMIC_STORE(&comm->initState, res, std::memory_order_release);
+  // A failed split/shrink child can be freed before its parent: unlink its abort flag from the parent.
+  if (job->parent && !job->isGrow && job->parent->childAbortFlag == comm->abortFlag) {
+    COMPILER_ATOMIC_STORE(&job->parent->childAbortFlag, static_cast<uint32_t*>(nullptr), std::memory_order_release);
+  }
   goto exit;
 }
 

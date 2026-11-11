@@ -41,6 +41,7 @@ struct ncclRegNetHandles {
 struct ncclReg {
   // common attributes
   uintptr_t begAddr, endAddr; // page aligned
+  uintptr_t maxEndAddr; // maximum end address through this slot in the registration cache
   int localRefs;
   int graphRefs;
   uint32_t state;

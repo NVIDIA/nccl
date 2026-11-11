@@ -9,9 +9,10 @@
 #include "nccl.h"
 #include "comm.h"
 #include "net.h"
-#include "register.h"
+#include "register_inline.h"
 #include "transport.h"
 #include "group.h"
+#include <algorithm>
 
 NCCL_PARAM(LocalRegister, "LOCAL_REGISTER", 1);
 
@@ -21,6 +22,16 @@ ncclResult_t ncclRegLocalIsValid(struct ncclReg* reg, bool* isValid) {
     else *isValid = false;
   }
   return ncclSuccess;
+}
+
+static void updateMaxEndAddrs(ncclRegCache* cache, int slot) {
+  uintptr_t end = slot == 0 ? 0 : cache->slots[slot - 1]->maxEndAddr;
+  for (; slot < cache->population; ++slot) {
+    ncclReg* reg = cache->slots[slot];
+    end = std::max(end, reg->endAddr);
+    if (reg->maxEndAddr == end) break;
+    reg->maxEndAddr = end;
+  }
 }
 
 ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool isGraph, void** handle) {
@@ -65,32 +76,27 @@ ncclResult_t ncclRegister(struct ncclComm* comm, void* data, size_t size, bool i
     INFO(NCCL_REG, "register comm %p buffer %p size %zi", comm, data, size);
   }
 
-  for (int slot = 0; /*true*/; slot++) {
-    if ((slot == cache->population) || (begAddr < cache->slots[slot]->begAddr)) {
-      if (cache->population == cache->capacity) {
-        // must grow cache
-        cache->capacity = cache->capacity < 32 ? 32 : 2 * cache->capacity;
-        NCCLCHECK(ncclRealloc(&cache->slots, cache->population, cache->capacity));
-      }
-      memmove(cache->slots + slot + 1, cache->slots + slot, (cache->population - slot) * sizeof(struct ncclReg*));
-      NCCLCHECK(ncclCalloc(cache->slots + slot, 1));
-      struct ncclReg* regSlot = cache->slots[slot];
-      regSlot->begAddr = begAddr;
-      regSlot->endAddr = endAddr;
-      if (isGraph) regSlot->graphRefs = 1;
-      else regSlot->localRefs = 1;
-      cache->population += 1;
-      *handle = regSlot;
-      goto exit;
-    } else if ((cache->slots[slot]->begAddr <= begAddr) && (cache->slots[slot]->endAddr >= endAddr)) {
-      if (isGraph) cache->slots[slot]->graphRefs++;
-      else cache->slots[slot]->localRefs++;
-      *handle = cache->slots[slot];
-      goto exit;
+  ncclReg* reg;
+  NCCLCHECK(ncclRegFind(comm, (void*)begAddr, endAddr - begAddr, &reg));
+  if (reg == nullptr) {
+    if (cache->population == cache->capacity) {
+      int capacity = cache->capacity < 32 ? 32 : 2 * cache->capacity;
+      NCCLCHECK(ncclRealloc(&cache->slots, cache->population, capacity));
+      cache->capacity = capacity;
     }
+    NCCLCHECK(ncclCalloc(&reg, 1));
+    reg->begAddr = begAddr;
+    reg->endAddr = endAddr;
+    auto pos = std::upper_bound(cache->slots, cache->slots + cache->population, begAddr,
+                                [](uintptr_t addr, const ncclReg* slot) { return addr < slot->begAddr; });
+    memmove(pos + 1, pos, (cache->slots + cache->population - pos) * sizeof(*pos));
+    *pos = reg;
+    cache->population++;
+    updateMaxEndAddrs(cache, pos - cache->slots);
   }
-
-exit:
+  if (isGraph) reg->graphRefs++;
+  else reg->localRefs++;
+  *handle = reg;
   return ncclSuccess;
 }
 
@@ -195,6 +201,7 @@ static ncclResult_t commDeregister(struct ncclComm* comm, bool isGraph, struct n
   free(reg);
   memmove(cache->slots + slot, cache->slots + slot + 1, (cache->population - slot - 1) * sizeof(struct ncclReg*));
   cache->population -= 1;
+  updateMaxEndAddrs(cache, slot);
   CUDACHECK(cudaSetDevice(saveDev));
 exit:
   return ncclSuccess;

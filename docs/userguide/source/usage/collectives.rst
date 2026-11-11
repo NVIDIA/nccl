@@ -20,7 +20,7 @@ where out[i] = in0[i]+in1[i]+…+in(k-1)[i].
 
  All-Reduce operation: each rank receives the reduction of input values across ranks.
 
-Related links: :c:func:`ncclAllReduce`.
+Related links: :c:func:`ncclAllReduce`, :ref:`determinism` (bitwise repeatability of floating-point reductions).
 
 .. _broadcast:
 
@@ -54,7 +54,7 @@ Important note: The root argument is one of the ranks (not a device number), and
 
 Note: A Reduce, followed by a Broadcast, is equivalent to the AllReduce operation.
 
-Related links: :c:func:`ncclReduce`.
+Related links: :c:func:`ncclReduce`, :ref:`determinism` (bitwise repeatability of floating-point reductions).
 
 .. _allgather:
 
@@ -90,7 +90,7 @@ The ReduceScatter operation is impacted by a different rank to device mapping si
  Reduce-Scatter operation: input values are reduced across ranks, with each rank receiving a subpart of the result.
 
 
-Related links: :c:func:`ncclReduceScatter`
+Related links: :c:func:`ncclReduceScatter`, :ref:`determinism` (bitwise repeatability of floating-point reductions).
 
 .. _alltoall:
 

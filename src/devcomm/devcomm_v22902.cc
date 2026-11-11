@@ -173,4 +173,5 @@ struct ncclDevCommCompat ncclDevCommCompat_v22902 = {
   ncclDevCommRequirementsFilter_v22902,           // devCommRequirementsFilter
   ncclDevCommCopyNewToOld_v22902,                 // devCommCopyNewToOld
   ncclDevCommCopyOldToNew_v22902,                 // devCommCopyOldToNew
+  ncclDevCommGinSignalsPerBarrier_v22902,         // ginSignalsPerBarrier
 };

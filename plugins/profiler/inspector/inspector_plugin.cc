@@ -102,7 +102,8 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
                                           int* eActivationMask,
                                           const char* commName,
                                           int nNodes, int nranks, int rank,
-                                          ncclDebugLogger_t logfn) {
+                                          ncclDebugLogger_t logfn,
+                                          ncclProfilerConfig_t* config) {
   inspectorResult_t res = inspectorSuccess;
   *context = nullptr;
   logFn = logfn;
@@ -132,6 +133,16 @@ __hidden ncclResult_t inspectorPluginInit(void** context, uint64_t commHash,
   *eActivationMask = ncclProfileColl | ncclProfileKernelCh;
   if (enableNcclInspectorP2p) {
     *eActivationMask |= ncclProfileP2p;
+  }
+
+  // Ask NCCL to stamp event timestamps (v8). The inspector reports epoch
+  // microseconds, so it asks for CLOCK_REALTIME, and gpuClockSync puts kernel
+  // events on that same clock. Without this the descriptors carry
+  // NCCL_PROFILER_TS_NONE and the helpers below fall back to the host clock,
+  // which is what the inspector has always used.
+  if (config && useNcclSourcedTimings) {
+    config->cpuClock = ncclProfilerCpuClockRealtime;
+    config->gpuClockSync = 1;
   }
 
   INFO(NCCL_INIT, "PROFILER/Plugin: init commName: %s commHash: %lu nranks: %d rank: %d",
@@ -233,6 +244,44 @@ static void inspectorPluginP2pInfoCleanup(struct inspectorP2pInfo *p2pInfo) {
   inspectorEventPoolReleaseP2p(p2pInfo);
 }
 
+
+/*
+ * Description:
+ *   Returns an event's start or stop time in epoch microseconds.
+ *
+ *   Prefers NCCL's stamped CLOCK_REALTIME (ns), which marks the true
+ *   event instant even when the callback fires long after the kernel
+ *   ran, and falls back to the host wall clock when NCCL did not stamp
+ *   one (older NCCL, or an event NCCL does not stamp).
+ *
+ *   CLOCK_REALTIME shares the epoch of the prior gettimeofday path, so
+ *   emitted *_timestamp_us fields and their datetime rendering are
+ *   unchanged, and durations (stop - start) stay correct because both
+ *   ends use it.
+ *
+ *   Start and stop arrive in the same descriptor type, so one accessor
+ *   serves either end.
+ *
+ * Thread Safety:
+ *   Thread-safe (reads only the caller's descriptor).
+ *
+ * Input:
+ *
+ *   const ncclProfilerEventDescr_t *eDescr - event descriptor, may be
+ *   nullptr.
+ *
+ * Output:
+ *   None.
+ *
+ * Return:
+ *   uint64_t - timestamp in epoch microseconds.
+ */
+static inline uint64_t inspectorNcclTsUsec(const ncclProfilerEventDescr_t* eDescr) {
+  return (eDescr != nullptr
+          && eDescr->tsCpu != 0) ? (eDescr->tsCpu / 1000) : inspectorGetTime();
+}
+
+
 /*
  * Description:
  *   Initializes a new inspectorCollInfo structure for a collective
@@ -264,6 +313,7 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
     return;
   }
   collInfoPtr->type = ncclProfileColl;
+  collInfoPtr->userTag = eDescr->coll.userTag;
   collInfoPtr->refCount = 0;
   inspectorPluginCollInfoRef(collInfoPtr); //self ref; no locks needed
   collInfoPtr->func = eDescr->coll.func;
@@ -274,7 +324,7 @@ static void inspectorPluginCollInfoInit(struct inspectorCollInfo **collInfo,
   if (collInfoPtr->nChannels > 0) {
     inspectorPluginCollInfoRef(collInfoPtr); //extra ref for kernel completion
   }
-  collInfoPtr->tsStartUsec = inspectorGetTime();
+  collInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   collInfoPtr->msgSizeBytes =
     ncclTypeSize(inspectorStringToDatatype(eDescr->coll.datatype)) * eDescr->coll.count;
 
@@ -299,6 +349,7 @@ static void inspectorPluginP2pInfoInit(struct inspectorP2pInfo **p2pInfo,
     return;
   }
   p2pInfoPtr->type = ncclProfileP2p;
+  p2pInfoPtr->userTag = eDescr->p2p.userTag;
   p2pInfoPtr->refCount = 0;
   inspectorPluginP2pInfoRef(p2pInfoPtr); // self ref
   p2pInfoPtr->func = eDescr->p2p.func;
@@ -307,7 +358,7 @@ static void inspectorPluginP2pInfoInit(struct inspectorP2pInfo **p2pInfo,
   if (p2pInfoPtr->nChannels > 0) {
     inspectorPluginP2pInfoRef(p2pInfoPtr); // extra ref for kernel completion
   }
-  p2pInfoPtr->tsStartUsec = inspectorGetTime();
+  p2pInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   p2pInfoPtr->msgSizeBytes =
     ncclTypeSize(inspectorStringToDatatype(eDescr->p2p.datatype)) * eDescr->p2p.count;
 
@@ -377,7 +428,7 @@ static void inspectorPluginKernelChInfoInitColl(struct inspectorKernelChInfo **k
   if (kernelChInfoPtr->stopGpuClk == 0) {
     inspectorPluginCollInfoRef(collInfo); //Pairs with Record Kernel Stop event
   }
-  kernelChInfoPtr->tsStartUsec = inspectorGetTime();
+  kernelChInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   if (collInfo->nKernelChStarted == 0) {
     collInfo->tsStartUsec = kernelChInfoPtr->tsStartUsec;
   }
@@ -407,7 +458,7 @@ static void inspectorPluginKernelChInfoInitP2p(struct inspectorKernelChInfo **ke
   if (kernelChInfoPtr->stopGpuClk == 0) {
     inspectorPluginP2pInfoRef(p2pInfo); //Pairs with Record Kernel Stop event
   }
-  kernelChInfoPtr->tsStartUsec = inspectorGetTime();
+  kernelChInfoPtr->tsStartUsec = inspectorNcclTsUsec(eDescr);
   if (p2pInfo->nKernelChStarted == 0) {
     p2pInfo->tsStartUsec = kernelChInfoPtr->tsStartUsec;
   }
@@ -495,11 +546,11 @@ static bool inspectorShouldTrackP2p(const ncclProfilerEventDescr_t* eDescr) {
 __hidden ncclResult_t inspectorPluginStartEvent(void* context,
                                                 void** eHandle,
                                                 ncclProfilerEventDescr_t* eDescr) {
+  *eHandle = nullptr;
   if (context == nullptr || eDescr == nullptr) {
     INFO(NCCL_INIT, "Profiler/Plugin: context/eDescr NULL for start event %s", __func__);
     return ncclSuccess;
   }
-  *eHandle = nullptr;
   if (eDescr->type == ncclProfileColl) {
     if (!inspectorShouldTrackColl(eDescr)) return ncclSuccess;
     struct inspectorCollInfo *collEvent = nullptr;
@@ -550,7 +601,8 @@ static ncclResult_t inspectorPluginStopEventP2p(struct inspectorP2pInfo *p2pInfo
 }
 
 static ncclResult_t inspectorPluginStopEventKernelChColl(struct inspectorKernelChInfo *kernelChInfo,
-                                                         struct inspectorCollInfo *collInfo) {
+                                                         struct inspectorCollInfo *collInfo,
+                                                         uint64_t stopUsec) {
   struct inspectorCompletedOpInfo completedOp;
   bool needsCleanup = false;
   bool doCommUpdate = false;
@@ -562,7 +614,7 @@ static ncclResult_t inspectorPluginStopEventKernelChColl(struct inspectorKernelC
   inspectorRecordEventTrace(krnlEvtTrk,
                             NCCL_INSP_EVT_TRK_KERNEL_STOP,
                             collInfo);
-  kernelChInfo->tsCompletedUsec = inspectorGetTime();
+  kernelChInfo->tsCompletedUsec = stopUsec;
   collInfo->nKernelChCompleted += 1;
 
   inspectorResult_t res = inspectorPluginCollInfoDeRef(collInfo);
@@ -606,7 +658,8 @@ done:
 }
 
 static ncclResult_t inspectorPluginStopEventKernelChP2p(struct inspectorKernelChInfo *kernelChInfo,
-                                                        struct inspectorP2pInfo *p2pInfo) {
+                                                        struct inspectorP2pInfo *p2pInfo,
+                                                        uint64_t stopUsec) {
   struct inspectorCompletedOpInfo completedOp;
   bool needsCleanup = false;
   bool doCommUpdate = false;
@@ -618,7 +671,7 @@ static ncclResult_t inspectorPluginStopEventKernelChP2p(struct inspectorKernelCh
   inspectorRecordP2pEventTrace(krnlEvtTrk,
                                NCCL_INSP_EVT_TRK_KERNEL_STOP,
                                p2pInfo);
-  kernelChInfo->tsCompletedUsec = inspectorGetTime();
+  kernelChInfo->tsCompletedUsec = stopUsec;
   p2pInfo->nKernelChCompleted += 1;
 
   inspectorResult_t res = inspectorPluginP2pInfoDeRef(p2pInfo);
@@ -661,13 +714,13 @@ done:
   return ncclSuccess;
 }
 
-static ncclResult_t inspectorPluginStopEventKernelCh(struct inspectorKernelChInfo *kernelChInfo) {
+static ncclResult_t inspectorPluginStopEventKernelCh(struct inspectorKernelChInfo *kernelChInfo, uint64_t stopUsec) {
   if (kernelChInfo->parentType == ncclProfileColl) {
     struct inspectorCollInfo *collInfo = getKernelChCollInfo(kernelChInfo);
-    if (collInfo) return inspectorPluginStopEventKernelChColl(kernelChInfo, collInfo);
+    if (collInfo) return inspectorPluginStopEventKernelChColl(kernelChInfo, collInfo, stopUsec);
   } else if (kernelChInfo->parentType == ncclProfileP2p) {
     struct inspectorP2pInfo *p2pInfo = getKernelChP2pInfo(kernelChInfo);
-    if (p2pInfo) return inspectorPluginStopEventKernelChP2p(kernelChInfo, p2pInfo);
+    if (p2pInfo) return inspectorPluginStopEventKernelChP2p(kernelChInfo, p2pInfo, stopUsec);
   }
   return ncclSuccess;
 }
@@ -753,7 +806,7 @@ static ncclResult_t inspectorPluginRecordEventStateKernelCh(struct inspectorKern
  *   ncclResult_t - success or error code.
  *
  */
-__hidden ncclResult_t inspectorPluginStopEvent(void *eHandle) {
+__hidden ncclResult_t inspectorPluginStopEvent(void *eHandle, ncclProfilerEventDescr_t* eStopDescr) {
   if (eHandle == nullptr) {
     INFO(NCCL_INIT,
          "Profiler/Plugin: Event Handle NULL for start event %s", __func__);
@@ -770,7 +823,9 @@ __hidden ncclResult_t inspectorPluginStopEvent(void *eHandle) {
   } else if (type == ncclProfileKernelCh) {
     struct inspectorKernelChInfo *kernelChInfo
       = (struct inspectorKernelChInfo *)eHandle;
-    return inspectorPluginStopEventKernelCh(kernelChInfo);
+    // KernelCh completion time comes from NCCL's stamped stop timestamp (the
+    // GPU stop mapped to CLOCK_REALTIME); fall back to the host clock if absent.
+    return inspectorPluginStopEventKernelCh(kernelChInfo, inspectorNcclTsUsec(eStopDescr));
   }
   return ncclSuccess;
 }
@@ -817,7 +872,8 @@ __hidden ncclResult_t inspectorPluginRecordEventState(void* eHandle,
   return ncclSuccess;
 }
 
-ncclProfiler_t ncclProfiler_v5 = {
+// Inspector requires profiler v8; older NCCL libraries cannot load this plugin.
+ncclProfiler_t ncclProfiler_v8 = {
   "Inspector",
   inspectorPluginInit,
   inspectorPluginStartEvent,

@@ -9,6 +9,7 @@
 #include "cudawrap.h"
 #include "graph.h"
 #include "topo.h"
+#include <cstring>
 #include "comm.h"
 #include "nccl.h"
 #include "nvmlwrap.h"
@@ -435,8 +436,8 @@ static ncclResult_t ncclTopoGetNetRailKeyIndex(struct ncclTopoNetRailKeyList* li
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, struct ncclXmlNode* xmlNet, int port,
-                                         int* rail, int* plane) {
+static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, struct ncclXmlNode* xmlNet, int* rail,
+                                         int* plane) {
   if (*rail == NCCL_TOPO_UNDEF) {
     uint64_t railKey;
     int keyIndex;
@@ -445,7 +446,19 @@ static ncclResult_t ncclTopoGetRailPlane(struct ncclTopoNetRailKeyList* list, st
     *rail = NCCL_TOPO_UNDEF_BIT | keyIndex;
   }
   if (*plane == NCCL_TOPO_UNDEF) {
-    *plane = NCCL_TOPO_UNDEF_BIT | port;
+    // Planes are obrtained as the index of this device within its PCI device.
+    // We discard devices with planes provided by the plugin and devices of different type.
+    int count = 0;
+    struct ncclXmlNode* nic = xmlNet->parent;
+    for (int s = 0; nic && s < nic->nSubs; s++) {
+      if (xmlNet == nic->subs[s]) break;
+      int subPlane = NCCL_TOPO_UNDEF;
+      NCCLCHECK(xmlGetAttrIntDefault(nic->subs[s], "plane", &subPlane, NCCL_TOPO_UNDEF));
+      if (strcmp(xmlNet->name, nic->subs[s]->name) == 0 &&
+          (subPlane == NCCL_TOPO_UNDEF || (subPlane & NCCL_TOPO_UNDEF_BIT)))
+        count++;
+    }
+    *plane = NCCL_TOPO_UNDEF_BIT | count;
   }
   return ncclSuccess;
 }
@@ -855,12 +868,14 @@ ncclResult_t ncclTopoAddCpu(struct ncclXmlNode* xmlCpu, struct ncclTopoSystem* s
       if (familyId == 7 && modelId == 0x5B) cpu->cpu.model = NCCL_TOPO_CPU_MODEL_YONGFENG;
     }
   }
+  int nicIndex = 0;
   for (int s = 0; s < xmlCpu->nSubs; s++) {
     struct ncclXmlNode* node = xmlCpu->subs[s];
     if (strcmp(node->name, "pci") == 0) NCCLCHECK(ncclTopoAddPci(node, system, cpu, systemId, numaId));
     if (strcmp(node->name, "nic") == 0) {
       struct ncclTopoNode* nic = NULL;
-      int64_t localNicId = NCCL_TOPO_LOCAL_NIC_ID(numaId, 0);
+      // NICs under <cpu> have no busid, index them to keep several on one NUMA node distinct
+      int64_t localNicId = NCCL_TOPO_LOCAL_NIC_ID(numaId, nicIndex++);
       int64_t id = NCCL_TOPO_ID(systemId, localNicId);
       NCCLCHECK(ncclTopoGetNode(system, &nic, NIC, id));
       if (nic == NULL) {
@@ -1099,17 +1114,6 @@ static ncclResult_t xmlInitAttrInt(struct ncclXmlNode* node, const char* attrNam
     strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
     node->attrs[index].key[MAX_STR_LEN] = '\0';
     snprintf(node->attrs[index].value, MAX_STR_LEN, "%d", value);
-  }
-  return ncclSuccess;
-}
-static ncclResult_t xmlInitAttrUint64(struct ncclXmlNode* node, const char* attrName, const uint64_t value) {
-  int index;
-  NCCLCHECK(xmlGetAttrIndex(node, attrName, &index));
-  if (index == -1) {
-    NCCLCHECK(xmlGetNextAttrIndex(node, &index));
-    strncpy(node->attrs[index].key, attrName, MAX_STR_LEN);
-    node->attrs[index].key[MAX_STR_LEN] = '\0';
-    snprintf(node->attrs[index].value, MAX_STR_LEN, "0x%lx", value);
   }
   return ncclSuccess;
 }
@@ -1711,7 +1715,7 @@ ncclResult_t ncclTopoMakeVNics(struct ncclXml* xml, struct ncclTopoNetInfo* netI
 out:
   free(physNetNodes);
   free(props);
-  if (placedDevs) free(placedDevs);
+  free(placedDevs);
   return res;
 }
 
@@ -1773,11 +1777,12 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
-    NCCLCHECK(xmlInitAttrUint64(netNode, "guid", props.guid));
+    // Overwrite stale GUID from topo injection if it exists
+    NCCLCHECK(xmlSetAttrUint64(netNode, "guid", props.guid));
     // Reserve bit 16 for NCCL-generated rail and plane IDs.
     int rail = (props.railId == NCCL_NET_ID_UNDEF) ? NCCL_TOPO_UNDEF : (props.railId & 0xFFFF);
     int plane = (props.planeId == NCCL_NET_ID_UNDEF) ? NCCL_TOPO_UNDEF : (props.planeId & 0xFFFF);
-    NCCLCHECK(ncclTopoGetRailPlane(netInfo->railKeyList, netNode, props.port, &rail, &plane));
+    NCCLCHECK(ncclTopoGetRailPlane(netInfo->railKeyList, netNode, &rail, &plane));
 
     int oldRail, oldPlane;
     NCCLCHECK(xmlGetAttrIntDefault(netNode, "rail", &oldRail, rail));
@@ -1993,6 +1998,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   int* localRanks = NULL;
   struct ncclXml* rankXml;
   int localRank = -1, nLocalRanks = 0;
+  int fusedMaxNodes = 0;
   int cpuArch = NCCL_TOPO_UNDEF;
   struct ncclTopoNetInfo netInfo = {0};
   struct ncclTopoNetRailKeyList railKeyList;
@@ -2040,7 +2046,7 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   {
     std::lock_guard<std::mutex> lock(netMutex);
     INFO(NCCL_GRAPH, "TOPO/NET : Importing network plugins to topology");
-    struct ncclGinState* ginState = &comm->sharedRes->ginState;
+    struct ncclGinState* ginState = &comm->ginState;
     ncclGin_t* gin = ginState->supported ? ginState->backends[0].ncclGin : NULL;
     if (gin) {
       netInfo.net = 0;
@@ -2140,13 +2146,18 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   NCCLCHECKGOTO(bootstrapIntraNodeAllGather(comm->bootstrap, localRanks, localRank, nLocalRanks, mem,
                                             xmlMemSize(NCCL_TOPO_XML_MAX_NODES)),
                 ret, fail);
-  if (comm->MNNVL) {
-    // Ensure that we have enough room when fusing topos from multiple nodes.
+  // ncclTopoFuseXml only copies existing source nodes into dst (never adds new
+  // ones), so fusedMaxNodes is a true upper bound on the fused node count.
+  for (int i = 0; i < nLocalRanks; i++) {
+    struct ncclXml* peerXml = (struct ncclXml*)(mem + xmlMemSize(NCCL_TOPO_XML_MAX_NODES) * i);
+    fusedMaxNodes += peerXml->maxIndex;
+  }
+  if (fusedMaxNodes > xml->maxNodes) {
     free(xml);
     xml = NULL;
-    NCCLCHECKGOTO(xmlAlloc(&xml, nLocalRanks * NCCL_TOPO_XML_MAX_NODES), ret, fail);
+    NCCLCHECKGOTO(xmlAlloc(&xml, fusedMaxNodes), ret, fail);
   } else {
-    // In the intra-node case there's no need to enlarge the topo xml.
+    // The original topology is preserved in mem, so reuse this allocation as the empty fusion destination.
     xml->maxIndex = 0;
   }
   for (int i = 0; i < nLocalRanks; i++) {
@@ -2169,8 +2180,8 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
   }
 
 exit:
-  if (!comm->MNNVL && localRanks) free(localRanks);
-  if (mem) free(mem);
+  if (!comm->MNNVL) free(localRanks);
+  free(mem);
   free(xml);
   return ret;
 fail:

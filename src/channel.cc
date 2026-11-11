@@ -10,6 +10,75 @@
 #include "gdrwrap.h"
 #include "transport.h"
 
+int ncclClampChannels(int nChannels, int minChannels, int maxChannels) {
+  return std::min(std::max(nChannels, minChannels), maxChannels);
+}
+
+int ncclFuncTrafficPerByte(ncclFunc_t func, int nRanks) {
+  switch (func) {
+  case ncclFuncAllReduce:
+    return 2;
+  case ncclFuncAllGather:
+  case ncclFuncAlltoAll:
+  case ncclFuncReduceScatter:
+    return nRanks;
+  default:
+    return 1;
+  }
+}
+
+size_t ncclCollTrafficPerChannel(size_t trafficBytes, int nChannels) {
+  return nChannels > 0 ? DIVUP(trafficBytes / nChannels, 16) * 16 : 0;
+}
+
+struct ncclCollChannelLayout ncclComputeCollChannelLayout(size_t count, size_t elementSize, int trafficPerByte,
+                                                          size_t trafficPerChannel, size_t currentTraffic,
+                                                          int channelId, int maxChannels) {
+  struct ncclCollChannelLayout layout = {};
+  if (count == 0 || maxChannels <= channelId) return layout;
+
+  size_t cellSize = DIVUP(DIVUP(ncclMinTrafficPerChannel, (size_t)trafficPerByte), 16) * 16;
+  layout.elementsPerCell = cellSize / elementSize;
+  size_t cells = DIVUP(count * elementSize, cellSize);
+  size_t trafficPerCell = cellSize * trafficPerByte;
+  size_t cellsPerChannel = std::min(cells, DIVUP(trafficPerChannel, trafficPerCell));
+
+  if (channelId + 1 == maxChannels) {
+    layout.cellsLo = cells;
+  } else {
+    layout.cellsLo = std::min(cells, DIVUP(trafficPerChannel - currentTraffic, trafficPerCell));
+  }
+  layout.nMidChannels = (cells - layout.cellsLo) / cellsPerChannel;
+  layout.cellsHi = (cells - layout.cellsLo) % cellsPerChannel;
+  int nChannels = (layout.cellsLo != 0 ? 1 : 0) + layout.nMidChannels + (layout.cellsHi != 0 ? 1 : 0);
+  if (maxChannels < channelId + nChannels) {
+    layout.nMidChannels = maxChannels - channelId - 2;
+    cellsPerChannel = (cells - layout.cellsLo) / (layout.nMidChannels + 1);
+    layout.cellsHi = cellsPerChannel + (cells - layout.cellsLo) % (layout.nMidChannels + 1);
+  }
+  if (layout.cellsHi == 0 && layout.nMidChannels != 0) {
+    layout.cellsHi = cellsPerChannel;
+    layout.nMidChannels -= 1;
+  }
+  if (layout.cellsLo == 0) {
+    layout.channelOffset = 1;
+    if (layout.nMidChannels == 0) {
+      layout.cellsLo = layout.cellsHi;
+      layout.cellsHi = 0;
+    } else {
+      layout.cellsLo = cellsPerChannel;
+      layout.nMidChannels -= 1;
+    }
+  }
+
+  layout.countMid = layout.nMidChannels != 0 ? cellsPerChannel * layout.elementsPerCell : 0;
+  layout.countLo = layout.cellsLo * layout.elementsPerCell;
+  layout.countHi = layout.cellsHi * layout.elementsPerCell;
+  (layout.countHi != 0 ? layout.countHi : layout.countLo) -= cells * layout.elementsPerCell - count;
+  layout.nChannels = (layout.countLo != 0 ? 1 : 0) + layout.nMidChannels + (layout.cellsHi != 0 ? 1 : 0);
+  return layout;
+}
+
 ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   struct ncclChannel* channel = &comm->channels[channelId];
   if (channel->id != -1) return ncclSuccess;
@@ -67,7 +136,10 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   return ncclSuccess;
 }
 
-ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, bool share) {
+// Set up the channel's NVLS peers, slots nRanks+1 .. nRanks+localRanks. With parentSlots NULL the channel
+// allocates its own peers; otherwise it reuses the parent's, with slot r backed by the parent's slot
+// parentSlots[r]. Slot h < nHeads is NVLS head h, so a child maps each head to the parent slot of the same GPU.
+ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclComm* parent, const int* parentSlots) {
   struct ncclChannel* channel = &comm->channels[channelId];
   struct ncclSharedResources* sharedRes = comm->sharedRes;
   cudaStream_t deviceStream;
@@ -81,11 +153,14 @@ ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclCo
 
   int nvlsRanks = comm->localRanks;
 
-  if (share) {
+  if (parentSlots != NULL) {
     channel->nvlsPeers = parent->channels[channelId].nvlsPeers;
     channel->nvlsDevPeers = parent->channels[channelId].nvlsDevPeers;
     for (int r = 0; r < nvlsRanks; ++r) {
-      int tr = comm->topParentLocalRanks[r];
+      // Index of parent slot parentSlots[r] in the resource owner's peer arrays. A parent that shares in turn may
+      // hold that slot at a remapped index, which the pointer difference follows.
+      int tr = (int)(parent->channels[channelId].peers[parent->nRanks + 1 + parentSlots[r]] -
+                     parent->channels[channelId].nvlsPeers);
       uintptr_t addr = (uintptr_t)(parent->channels[channelId].nvlsDevPeers + tr);
       channel->peers[comm->nRanks + 1 + r] = parent->channels[channelId].nvlsPeers + tr;
       NCCLCHECK(ncclCudaMemcpyAsync((uintptr_t*)(channel->devPeers + comm->nRanks + 1 + r), (uintptr_t*)&addr, 1,

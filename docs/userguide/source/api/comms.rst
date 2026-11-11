@@ -41,6 +41,18 @@ Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be
 called once when creating a communicator and the Id should be distributed to all ranks in the
 communicator before calling ncclCommInitRank. *uniqueId* should point to a ncclUniqueId object allocated by the user.
 
+ncclSetEncryption
+-----------------
+
+.. c:function:: ncclResult_t ncclSetEncryption(const ncclEncryptionConfig_t* config)
+
+Configures process-global encryption for NCCL-owned TCP sockets. A configuration with ``mode`` set to
+:c:macro:`NCCL_ENCRYPTION_MODE_PSK` requests TLS encryption using the supplied PSK.
+
+Applications should call this function before :c:func:`ncclGetUniqueId` or any other NCCL operation that may create
+network connections. All processes that communicate with each other must use the same PSK and keep it unchanged for the
+job. See :ref:`setup-label` for build requirements, traffic coverage, and operational guidance.
+
 ncclCommInitRank
 ----------------
 
@@ -146,7 +158,7 @@ It must be called by both existing ranks (from the parent communicator) and new 
 
 - *comm* should be the parent communicator
 - *rank* must be set to *-1* (existing ranks retain their original rank in the new communicator)
-- *uniqueId* should be *NULL* (existing ranks receive coordination information internally)
+- *uniqueId* unused. (existing ranks receive coordination information internally)
 - The function creates *newcomm* with the same rank as in the parent communicator
 
 **For new ranks:**
@@ -165,7 +177,7 @@ After the grow operation completes, the parent communicator should be destroyed 
 
 1. Coordinator rank calls *ncclCommGetUniqueId* to generate the grow identifier
 2. Coordinator distributes the *uniqueId* to all new ranks (out-of-band)
-3. All existing ranks call *ncclCommGrow* with *comm*\=parent, *rank*\=-1, *uniqueId*\=NULL (except for Coordinator rank which passes the *uniqueId*)
+3. All existing ranks call *ncclCommGrow* with *comm*\=parent, *rank*\=-1, *uniqueId*\=NULL
 4. All new ranks call *ncclCommGrow* with *comm*\=NULL, *rank*\=new_rank, *uniqueId*\=received_id
 
 ncclCommRevoke

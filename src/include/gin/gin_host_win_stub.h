@@ -26,7 +26,7 @@
 
 typedef void* ncclGinWindow_t;
 
-/* Config type (same layout as ncclGinConfig_v14_t in gin_v14.h) */
+/* Config type (same layout as ncclGinConfig_v15_t in gin_v15.h) */
 typedef struct {
   int nSignals;
   int nCounters;
@@ -36,7 +36,7 @@ typedef struct {
   int backendVersion;
 } ncclGinConfig_t;
 
-/* Plugin struct (same layout as ncclGin_v14_t) so gin->name, gin->regMrSym, etc. compile. Not used at runtime on
+/* Plugin struct (same layout as ncclGin_v15_t) so gin->name, gin->regMrSym, etc. compile. Not used at runtime on
  * Windows. When __CUDACC__ is defined we are in a .cu file: use a different struct tag (ncclGinHostPlugin) so the
  * name "ncclGin" is left for the device stub's type alias (ncclGin_BackendMask<...>), avoiding redefinition. */
 #if defined(__CUDACC__)
@@ -49,7 +49,8 @@ struct ncclGin {
   ncclResult_t (*devices)(int* ndev);
   ncclResult_t (*getProperties)(int dev, ncclNetProperties_t* props);
   ncclResult_t (*listen)(void* ctx, int dev, void* handle, void** listenComm);
-  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm);
+  ncclResult_t (*connect)(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                          volatile uint32_t* abortFlag);
   ncclResult_t (*createContext)(void* collComm, ncclGinConfig_t* config, void** ginCtx,
                                 ncclNetDeviceHandle_t** devHandle);
   ncclResult_t (*regMrSym)(void* collComm, void* data, size_t size, int type, uint64_t mrFlags, void** mhandle,
@@ -89,6 +90,7 @@ struct ncclGinBackendState {
   ncclNetProperties_t ginProps[NCCL_GIN_MAX_CONNECTIONS];
   bool supportsStrongSignals;
   bool supportsVASignals;
+  ncclGinBarrierOptions_t barrierOptions;
 };
 
 struct ncclGinState {
@@ -119,8 +121,14 @@ ncclResult_t ncclGetGinType(struct ncclComm* comm, ncclGinType_t* ginType);
 ncclResult_t ncclGetRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType);
 ncclResult_t ncclGinConnectOnce(struct ncclComm* comm);
 ncclResult_t ncclGinHostFinalize(struct ncclComm* comm);
+struct ncclDevCommCompat;
+struct ncclDevResourceRequirements;
+struct ncclGinBarrierReq;
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion);
+                                 struct ncclDevResourceRequirements* resReqs,
+                                 struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs,
+                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion,
+                                 struct ncclDevCommCompat const* devCompat);
 ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const* devComm);
 ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS],
@@ -134,6 +142,7 @@ ncclResult_t ncclGinSetDefaultBackend(struct ncclComm* comm, uint64_t globalBitm
 
 /* Internal GIN API (from include/gin.h); stubbed on Windows */
 ncclResult_t ncclGinInit(struct ncclComm* comm);
+ncclResult_t ncclGinInitFromParent(struct ncclComm* comm, struct ncclComm* parent);
 ncclResult_t ncclGinFinalize(struct ncclComm* comm);
 
 #endif

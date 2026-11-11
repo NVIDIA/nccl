@@ -372,7 +372,7 @@ Next, a single rank will create a unique ID and send it to all other ranks to ma
 
  ncclUniqueId id;
  if (myRank == 0) ncclGetUniqueId(&id);
- MPI_Bcast(id, sizeof(id), MPI_BYTE, 0, 0, MPI_COMM_WORLD);
+ MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD);
 
 Then, we create our ngpus communicator objects, which are part of a larger group of ngpus*nRanks:
 

@@ -431,6 +431,31 @@ ncclConfig_t
   do not affect the communicator's reported Device API multimem capability and
   do not prevent explicit Device API calls from allocating multimem resources.
 
+ncclEncryptionConfig_t
+----------------------
+
+.. c:type:: ncclEncryptionConfig_t
+
+ A structure-based configuration used by :c:func:`ncclSetEncryption`; a newly created configuration must be
+ initialized by ``NCCL_ENCRYPTION_CONFIG_INITIALIZER``.
+
+ .. c:macro:: NCCL_ENCRYPTION_CONFIG_INITIALIZER
+
+  A configuration macro initializer which must be assigned to a newly created encryption configuration.
+
+ .. c:macro:: NCCL_ENCRYPTION_MODE_PSK
+
+  Request TLS encryption for NCCL-owned TCP sockets using a pre-shared key.
+
+ .. c:macro:: mode
+
+  The encryption mode. Use :c:macro:`NCCL_ENCRYPTION_MODE_PSK` to request TLS encryption for NCCL-owned TCP sockets.
+
+ .. c:macro:: psk
+
+  Null-terminated pre-shared key string used when ``mode`` is :c:macro:`NCCL_ENCRYPTION_MODE_PSK`. The key must
+  contain at least 32 bytes.
+
 .. _ncclcollconfig:
 
 ncclCollConfig_t

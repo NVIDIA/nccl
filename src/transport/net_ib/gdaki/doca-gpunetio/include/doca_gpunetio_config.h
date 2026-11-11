@@ -28,6 +28,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 /**
  * @file doca_gpunetio_config.h
  * @brief A header file for the DOCA GPUNetIO build-time configuration. This header
@@ -42,4 +43,6 @@
 #define DOCA_GPUNETIO_HAVE_DEDICATED_NC_UAR 1
 /* DOCA_GPUNETIO_HAVE_CUDA_DMABUF support */
 #define DOCA_GPUNETIO_HAVE_CUDA_DMABUF 1
+/* DOCA_GPUNETIO_HAVE_DATA_DIRECT support */
+#define DOCA_GPUNETIO_HAVE_DATA_DIRECT 1
 #endif  // DOCA_GPUNETIO_CONFIG_H

@@ -10,6 +10,7 @@
 
 #include "dev_runtime.h"
 #include "nccl_device/core.h"
+#include "multicast.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 
@@ -21,8 +22,8 @@ struct ncclWindow_vidmem;
 struct ncclDevrTeam {
   struct ncclDevrTeam* next;
   struct ncclTeam team;
-  CUmemGenericAllocationHandle mcHandle;
-  void* mcBasePtr;
+  struct ncclMcGroup* mcGroup;         // team-owned MC object; NULL when mcPartition borrows the NVLS group
+  struct ncclMcPartition mcPartition;  // .ptr is the team's MC base VA; NULL until multimem is enabled
   ncclCftLeId ucLeId[2]; // 0: UC LE ID, 1: counted UC LE ID
   ncclCftLeId mcLeId[2]; // 0: MC LE ID, 1: counted MC LE ID
 #if defined(NCCL_OS_WINDOWS)
@@ -33,15 +34,13 @@ struct ncclDevrTeam {
 };
 
 // Non-static functions in dev_runtime.cc also called from cft_dev_runtime.cc:
-int computeLsaSize(struct ncclComm* comm);
 ncclResult_t symTeamObtain(struct ncclComm* comm, struct ncclTeam team, bool multimem, bool counted, bool wantsLeUc,
                            bool wantsLeMc, struct ncclDevrTeam** outTeam, bool* needBarrier);
 ncclResult_t findCommAndHostWindowFromDeviceWindow(ncclWindow_t devWindow, ncclComm_t* foundComm,
                                                    struct ncclDevrWindow** hostWindow);
 
 // Functions in cft_dev_runtime.cc called from dev_runtime.cc:
-int computeCftSize(struct ncclComm* comm);
-int computeCftMcSize(struct ncclComm* comm);
+ncclResult_t computeCftSizes(struct ncclComm* comm, int* cftSize, int* cftMcSize);
 ncclResult_t symBindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le);
 ncclResult_t symUnbindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le);
 ncclResult_t symTeamObtainUcLe(struct ncclComm* comm, struct ncclDevrTeam* t, struct ncclDevrState* devr,
@@ -78,10 +77,10 @@ struct ncclDevrMemory {
   // Communicator-wide aggregates over all nRanks, populated via bootstrapAllGather.
   int maxGlobalNumSegments;    // max(numSegments) across all communicator ranks
   bool globalHasSysmemSegment; // true if any communicator rank has a sysmem segment
-  // LSA-team aggregates, derived from a global allgather.
-  int* lsaNumSegments;   // numSegments for each LSA rank, length lsaSize
-  size_t lsaMinSize; // min size across ranks in the LSA team
-  size_t lsaMaxSize; // max size across LSA ranks, used for ncclSpaceAlloc/Free
+  // LSA-domain aggregates, derived from a global allgather.
+  int* lsaNumSegments; // numSegments for each LSA-domain rank, length lsaDomainSize
+  size_t lsaMinSize;   // min size across LSA-domain ranks, used for team bindings
+  size_t lsaMaxSize;   // max size across LSA-domain ranks, used for ncclSpaceAlloc/Free
   // GIN registration state.
   int numGinSegments;                              // 1 unless GIN needs multiple per-segment windows
   struct ncclDevrGinSegmentInfo* ginSegmentInfos;  // per-GIN-segment info

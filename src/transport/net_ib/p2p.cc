@@ -137,7 +137,7 @@ ncclResult_t ncclIbMultiSend(struct ncclIbSendComm* comm, int slot) {
   // - nreqs > 1
   //      Send size is still sent but receiver ignores it since the sizes are
   //      written to directly to remote completion records array
-  uint32_t immData = comm->base.recvMatchingScheme == BY_ID ? (uint32_t)(reqs[0]->id % UINT32_MAX) : reqs[0]->send.size;
+  uint32_t immData = comm->base.recvMatchingScheme == BY_ID ? (uint32_t)reqs[0]->id : reqs[0]->send.size;
 
   struct ibv_send_wr* lastWr = comm->wrs + nreqs - 1;
   if (nreqs > 1 ||
@@ -296,6 +296,8 @@ ncclResult_t ncclIbIsend(void* sendComm, void* data, size_t size, int tag, void*
     *request = NULL;
     return ncclSuccess;
   }
+  // Order the nreqs load after the idx load above; on weakly ordered CPUs it could otherwise return a stale value.
+  std::atomic_thread_fence(std::memory_order_acquire);
   nreqs = slots[0].nreqs;
   // Wait until all data has arrived
   for (int r = 1; r < nreqs; r++) {

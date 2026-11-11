@@ -106,9 +106,7 @@ ncclResult_t ncclNetSocketGetSpeed(char* devName, int* speed) {
     }
   }
 
-  if (adapterAddresses) {
-    free(adapterAddresses);
-  }
+  free(adapterAddresses);
 
   if (*speed <= 0) {
     INFO(NCCL_NET, "Could not get speed for interface %s. Defaulting to 10 Gbps.", devName);

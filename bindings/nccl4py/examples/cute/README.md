@@ -25,7 +25,7 @@ installed `nvidia-nccl-cuXX` wheel.
 | `05_barriers.py` | All three barrier session types, both factory forms, all fence levels | >=2 | GIN network, 2.31.0+ for the `Gin` factories |
 | `06_resource_buffers.py` | The five `resource_buffer_*` address translations | >=2, one node | peer access, multicast |
 | `07_compile_with_fake_args.py` | Compile with type-only arguments before creating NCCL resources, then invoke with real resources | **exactly 2** | GIN network |
-| `08_reduce_copy.py` | Device-side `ReduceCopy`: `lsa_reduce_sum` across registered windows into each rank's local buffer | >=2, one node | peer access |
+| `08_reduce_copy.py` | Device-side `ReduceCopy`: `lsa_reduce_sum`, `lsa_copy`, and SM100+ `lsa_copy_tma` | >=2, one node | peer access; TMA needs SM100+ |
 
 "Exactly 2" means the example hardcodes a rank 0 -> rank 1 transfer and
 rejects any other count rather than idling the extra ranks.
@@ -88,21 +88,14 @@ would use is unavailable, and print their own results:
 
 ```
 ===== 05_barriers.py =====
-WARNING: NCCL 2.30.7 passes ncclGin_C by value; skipping world_gin,
-rail_gin, gin_session, world_hybrid and hybrid_session
-[rank 0] [SUCCESS] LSA barriers and the GIN_ALL_CONTEXTS barrier completed
+[rank 0] [SUCCESS] LSA, GIN and hybrid barriers completed
 ```
 
 A machine that lacks a capability entirely warns and exits 0; a wrong rank
 count or topology is an `ERROR` with a non-zero exit.
 
-Two device symbols changed after 2.30.7, in different releases, so the
-affected sections check `nccl.get_version()` and skip rather than fail:
-`ncclGinGet` only gained C linkage in **2.31.1**, and the barrier-session
-entry points started taking `ncclGin_C` by pointer in **2.31.0**. The check
-reads the loaded `libnccl.so` and assumes `libnccl_device.bc` came from the
-same install -- which is how the wheel and a source build ship them. If you
-`LD_PRELOAD` one, point `NCCL_HOME` at the other's build.
+Use `libnccl.so` and `libnccl_device.bc` from the same build. If you `LD_PRELOAD`
+one, point `NCCL_HOME` at that build as well.
 
 ## API coverage
 
@@ -112,8 +105,8 @@ same install -- which is how the wheel and a source build ship them. If you
 | `DevComm.rank` / `n_ranks` / `lsa_rank` / `lsa_size` | 01 |
 | `DevComm.team_world` / `team_lsa` / `team_rail`, `team_rank_to_world` / `team_rank_to_lsa` | 01 |
 | `DevComm.gin` | 04, 05 |
-| `DevComm.lsa_barrier` / `rail_gin_barrier` / `world_gin_barrier` / `hybrid_*` | 05 |
-| `DevComm.lsa_multimem` | 03, 06 |
+| Default barrier factories (`lsa_default`, `world_gin`, `rail_gin`, `world_hybrid`) | 05 |
+| Default LSA multimem mapping and host-passed multimem handles | 03, 06 |
 | `DevComm.resource_buffer_*` (all five) | 06 |
 | `Window.tensor` | 00, 02, 04, 07 |
 | `Window.local_pointer` / `lsa_pointer` / `peer_pointer` | 02 |
@@ -130,10 +123,10 @@ same install -- which is how the wheel and a source build ship them. If you
 | `MemoryOrder` | 02-06 |
 | `ThreadScope` / `GinResourceSharingMode` | 04 |
 | `GinFenceLevel` | 05 |
-| `GinBackendMask` | 00, 04, 05, 07 |
+| `lsa_reduce_sum` / `lsa_copy` / `lsa_copy_tma` | 08 |
 
-Not exercised: `Gin.value()` and the raw `.ptr` accessors (binding
+Not exercised: the raw `.ptr` accessors (binding
 plumbing); the `is_descriptor` / `descriptor_ptr` arguments, which need an
 `ncclGinDescriptorSmem` this layer does not wrap; and pass-through knobs
 left at their defaults -- `opt_flags`, `signal_op=1` (Add), the non-GPU
-resource-sharing modes, and the individual `GinBackendMask` bits.
+resource-sharing modes.

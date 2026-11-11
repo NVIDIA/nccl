@@ -11,10 +11,69 @@
 #include "nccl_device/core.h"
 #include "device.h"
 #include "bootstrap.h"
+#include "transport.h"
 #include "argcheck.h"
 #include "param.h"
 
 NCCL_PARAM(CftEnable, "CFT_ENABLE", 1);
+NCCL_PARAM(CftUcTeamSize, "CFT_UC_TEAM_SIZE", 0);
+NCCL_PARAM(CftMcTeamSize, "CFT_MC_TEAM_SIZE", 0);
+
+ncclResult_t ncclGpuGetCliqueIds(CUdevice dev, uint32_t* unicastId, uint32_t* multicastId) {
+  *unicastId = UINT32_MAX;
+  *multicastId = UINT32_MAX;
+
+#if CUDA_VERSION >= 13040
+  if (CUPFN(cuDeviceGetCliqueCount) == nullptr || CUPFN(cuDeviceGetCliqueInfo) == nullptr) {
+    return ncclSuccess;
+  }
+
+  size_t count = 0;
+  CUresult cuRet = CUPFN(cuDeviceGetCliqueCount(&count, dev));
+  if (cuRet != CUDA_SUCCESS || count == 0) {
+    INFO(NCCL_INIT, "CUDA did not report clique information for device %d (cuDeviceGetCliqueCount returned %d)", dev,
+         cuRet);
+    return ncclSuccess;
+  }
+
+  ncclResult_t ret = ncclSuccess;
+  CUcliqueInfo* cliqueInfo = nullptr;
+  NCCLCHECKGOTO(ncclCalloc(&cliqueInfo, count), ret, exit);
+  cuRet = CUPFN(cuDeviceGetCliqueInfo(cliqueInfo, &count, dev));
+  if (cuRet != CUDA_SUCCESS) {
+    INFO(NCCL_INIT, "CUDA did not report clique information for device %d (cuDeviceGetCliqueInfo returned %d)", dev,
+         cuRet);
+    goto exit;
+  }
+  for (size_t i = 0; i < count; i++) {
+    if (cliqueInfo[i].type == CU_CLIQUE_TYPE_UNICAST_LOGICAL_ENDPOINT) *unicastId = cliqueInfo[i].id;
+    if (cliqueInfo[i].type == CU_CLIQUE_TYPE_MULTICAST_LOGICAL_ENDPOINT) *multicastId = cliqueInfo[i].id;
+  }
+
+exit:
+  free(cliqueInfo);
+  return ret;
+#endif
+
+  return ncclSuccess;
+}
+
+static int computeCftCliqueSize(struct ncclComm* comm, bool multicast) {
+  int size = 0;
+  int cliqueSize = 0;
+  uint32_t previousId = UINT32_MAX;
+  for (int rank = 0; rank < comm->nRanks; rank++) {
+    uint32_t id = multicast ? comm->peerInfo[rank].cftMulticastCliqueId : comm->peerInfo[rank].cftUnicastCliqueId;
+    if (id == UINT32_MAX) return 0;
+    if (id != previousId) {
+      size = gcd(size, cliqueSize);
+      cliqueSize = 0;
+      previousId = id;
+    }
+    cliqueSize++;
+  }
+  return gcd(size, cliqueSize);
+}
 
 ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport, bool* gpuCftMulticastSupport,
                                bool* gpuCftCountedSupport) {
@@ -48,18 +107,28 @@ ncclResult_t ncclGpuCftSupport(struct ncclComm* comm, int* gpuCftSupport, bool* 
   return ncclSuccess;
 }
 
-int computeCftSize(struct ncclComm* comm) {
-  if (comm->devrState.bigSize != 0) return comm->devrState.cftSize;
-  int res = 1;
-  if (comm->gpuCftSupport >= 13030) res = computeLsaSize(comm);
-  return res;
-}
+ncclResult_t computeCftSizes(struct ncclComm* comm, int* cftSize, int* cftMcSize) {
+  int lsaSize = computeLsaTeamSize(comm);
+  *cftSize = lsaSize;
+  *cftMcSize = lsaSize;
+  if (comm->gpuCftSupport >= 13040) {
+    int ucCliqueSize = computeCftCliqueSize(comm, /*multicast=*/false);
+    int mcCliqueSize = comm->gpuCftMulticastSupport ? computeCftCliqueSize(comm, /*multicast=*/true) : 1;
+    if (ucCliqueSize != 0 && mcCliqueSize != 0) {
+      if (ucCliqueSize % lsaSize != 0 || ucCliqueSize % mcCliqueSize != 0) {
+        WARN("CUDA logical-endpoint clique sizes are incompatible with the CFT hierarchy: UC %d, MC %d, LSA %d",
+             ucCliqueSize, mcCliqueSize, lsaSize);
+        return ncclInternalError;
+      }
 
-int computeCftMcSize(struct ncclComm* comm) {
-  if (comm->devrState.bigSize != 0) return comm->devrState.cftMcSize;
-  int res = 1;
-  if (comm->gpuCftSupport >= 13030) res = computeLsaSize(comm);
-  return res;
+      *cftSize = ucCliqueSize;
+      *cftMcSize = mcCliqueSize;
+    } // else: fallback to the LSA sizes
+  }
+
+  if (ncclParamCftUcTeamSize() > 0) *cftSize = ncclParamCftUcTeamSize();
+  if (ncclParamCftMcTeamSize() > 0) *cftMcSize = ncclParamCftMcTeamSize();
+  return ncclSuccess;
 }
 
 ncclResult_t symBindTeamLe(struct ncclComm* comm, struct ncclDevrMemory* mem, ncclCftLeId le) {
@@ -197,6 +266,10 @@ fail:
 
 ncclResult_t symTeamObtainMcLe(struct ncclComm* comm, struct ncclDevrTeam* t, struct ncclDevrState* devr,
                                bool* needBarrier, bool counted) {
+  if (!comm->gpuCftMulticastSupport) {
+    WARN("CFT multicast support requested, but not all ranks in the communicator support it.");
+    return ncclInvalidArgument;
+  }
   if (!comm->nvlsSupport) {
     WARN("CFT multicast support requested, but NVLS is disabled or unsupported.");
     return ncclInvalidArgument;

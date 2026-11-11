@@ -4,7 +4,6 @@
   - :class:`MemoryOrder`   -- argument to barrier ``arrive`` / ``wait`` / ``sync``.
   - :class:`ThreadScope`   -- release-scope argument to GIN ``put`` / ``signal``.
   - :class:`GinFenceLevel` -- fence-level argument to GIN barrier ``sync``.
-  - :class:`GinBackendMask` -- backend selection for :meth:`DevComm.gin`.
   - :class:`CftTeamMode` -- team layout for :meth:`DevComm.team_cft`.
   - :class:`GinResourceSharingMode` -- resource-sharing mode for :meth:`DevComm.gin`.
 """
@@ -67,19 +66,6 @@ class GinFenceLevel(IntFlag):
     GET = 1 << 1       # 2: drain prior gets
 
 
-class GinBackendMask(IntFlag):
-    """Mirrors the device-side GIN backend selection mask
-    (``NCCL_GIN_BACKEND_MASK_*``). Bit positions match the
-    ``NCCL_NET_DEVICE_GIN_*`` enumerators in ``net_device.h``.
-    """
-
-    PROXY = 1 << 2     # 4
-    GDAKI = 1 << 3     # 8
-    GPI = 1 << 4       # 16
-    EFA_GDA = 1 << 5   # 32 (NCCL 2.31+)
-    ALL = PROXY | GDAKI | GPI | EFA_GDA
-
-
 class CftTeamMode(IntEnum):
     """Mirrors ``enum ncclCftTeamMode_t`` -- the layout
     :meth:`DevComm.team_cft` returns.
@@ -109,7 +95,6 @@ __all__ = [
     "MemoryOrder",
     "ThreadScope",
     "GinFenceLevel",
-    "GinBackendMask",
     "GinResourceSharingMode",
     "CftTeamMode",
 ]

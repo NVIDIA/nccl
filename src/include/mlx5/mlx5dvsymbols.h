@@ -26,6 +26,12 @@ struct ncclMlx5dvSymbols {
   int (*mlx5dv_internal_query_device)(struct ibv_context* ctx_in, struct mlx5dv_context* attrs_out);
   struct ibv_qp* (*mlx5dv_internal_create_qp)(struct ibv_context* context, struct ibv_qp_init_attr_ex* qp_attr,
                                               struct mlx5dv_qp_init_attr* mlx5_qp_attr);
+  /* DevX object support */
+  struct mlx5dv_devx_obj* (*mlx5dv_internal_devx_obj_create)(struct ibv_context* context, const void* in, size_t inlen,
+                                                             void* out, size_t outlen);
+  int (*mlx5dv_internal_devx_obj_query)(struct mlx5dv_devx_obj* obj, const void* in, size_t inlen, void* out,
+                                        size_t outlen);
+  int (*mlx5dv_internal_devx_obj_destroy)(struct mlx5dv_devx_obj* obj);
 };
 
 /* Constructs MLX5 direct verbs symbols per rdma-core linking or dynamic loading mode */

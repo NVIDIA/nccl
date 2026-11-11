@@ -7,7 +7,7 @@
 
 #include "sym_kernels.h"
 #include "kernel.cuh"
-#include "primitives.cuh"
+#include "symk.cuh"
 
 template <int BytePerPack, int UnrollPacks, int UnrollPeers, typename T, bool EnableTma, typename Red>
 static __device__ void reduceDeep(ncclSymkArgsHandler const& handler, int tn, int t, bool waitNeeded,
@@ -305,11 +305,11 @@ static __device__ void reduce(ncclSymkArgsHandler const& handler, int tn, int t,
   uint32_t alignment = uint32_t(input.offset - output.offset);
   size_t nBytes = nElts * sizeof(T);
 
-  uint32_t nPreBytes = (16u - input.offset) % 16u;
+  uint32_t nPreBytes = (ncclSymkBytePerPack - input.offset) % ncclSymkBytePerPack;
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t cursor = nPreBytes;
 
-  if (alignment % 16 == 0) {
+  if (alignment % ncclSymkBytePerPack == 0) {
     constexpr int BytePerPack = ncclSymkBytePerPack,
                   UnrollPacks =
 #if __CUDA_ARCH__ >= 1000
@@ -332,9 +332,10 @@ static __device__ void reduce(ncclSymkArgsHandler const& handler, int tn, int t,
     }
   }
 
-  if (sizeof(T) == 4 || (sizeof(T) < 4 && alignment % 4 == 0)) {
-    constexpr int BytePerPack = 4, UnrollPacks = 4, UnrollPeers = 4;
-    constexpr int BytePerChunk = ncclSymkMinWarpsPerBlock * UnrollPacks * WARP_SIZE * BytePerPack;
+  if (sizeof(T) == ncclSymkSmallBytePerPack ||
+      (sizeof(T) < ncclSymkSmallBytePerPack && alignment % ncclSymkSmallBytePerPack == 0)) {
+    constexpr int BytePerPack = ncclSymkSmallBytePerPack, UnrollPacks = ncclSymkSmallUnrollPacks, UnrollPeers = 4;
+    constexpr int BytePerChunk = ncclSymkSmallBytePerChunk;
     uint32_t chunks = (nBytes - cursor) / BytePerChunk;
     chunks -= imodFast32(chunks, nRanks * nBlocks, nRanks_nBlocks_rcp32);
     if (chunks != 0) {
@@ -372,7 +373,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LD_impl(ncclSymkDevWor
 
   bool waitNeeded = !EnableProfiler;
   handler.forEachWork<T>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts, ncclSymPtr<T> input,
-                                        ncclSymPtr<T> output) {
+                                        ncclSymPtr<T> output, uint64_t /*redOpArg*/) {
         // Round robin warps over blocks.
     int t =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);
@@ -470,7 +471,7 @@ __device__ __forceinline__ void ncclSymkRun_ReduceScatter_LDMC(ncclSymkDevWorkAr
   if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
   handler.forEachWork<T>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts, ncclSymPtr<T> input,
-                                        ncclSymPtr<T> output) {
+                                        ncclSymPtr<T> output, uint64_t /*redOpArg*/) {
         // Round robin warps over blocks.
     int t =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);

@@ -979,8 +979,9 @@ int                 ginContextCount;
 bool                ginIsRailed;
 ```
 
-Device-side, ncclGinInitCommon() inside the CTA picks the right backend, handle, rank count etc. for
-the given contextIndex, and produces a lightweight ncclGinCtx.
+Device-side, the `ncclGin_BackendMask` constructor binds the given `contextIndex` to its
+connection, backend, handle and signal shadows. Its `_makeCtx()` method produces the
+lightweight `ncclGinCtx_M<beMask>` used by backend operations.
 
 ##### 1.2.3.2 Window registration
 

@@ -17,6 +17,13 @@ CUDA fabric logical endpoints. Kernels that use the CFT helpers require CUDA
 Toolkit support for fabric PTX instructions and must be compiled for
 architectures that support those instructions.
 
+CFT types
+=========
+
+.. c:type:: ncclCftLeId_t
+
+   Identifier of a CUDA fabric logical endpoint.
+
 CFT Communicator Requirements
 =============================
 
@@ -25,7 +32,8 @@ Request CFT resources when creating the device communicator with :c:func:`ncclDe
 ``cftCaps``
 -----------
 
-   Bitmask of :c:macro:`NCCL_CFT` and :c:macro:`NCCL_CFT_MULTIMEM` values.
+   Bitmask of :c:enumerator:`NCCL_CFT <ncclCftCap_t.NCCL_CFT>` and
+   :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` values.
    If CFT resources are requested on a communicator where not all ranks support
    CFT, :c:func:`ncclDevCommCreate` fails.
 
@@ -46,21 +54,29 @@ Request CFT resources when creating the device communicator with :c:func:`ncclDe
 
    NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
 
-Use :c:macro:`NCCL_CFT` to request unicast CFT logical endpoints. Use :c:macro:`NCCL_CFT_MULTIMEM`
-when the kernel also uses multicast CFT operations or multimem CFT barriers.
+Use :c:enumerator:`NCCL_CFT <ncclCftCap_t.NCCL_CFT>` to request unicast CFT logical endpoints. Use
+:c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` when the kernel also uses multicast CFT operations
+or multimem CFT barriers.
 
-.. c:macro:: NCCL_CFT_NONE
+.. c:enum:: ncclCftCap_t
 
-   No CFT capability is requested.
+   Bitmask values used in ``ncclDevCommRequirements_t.cftCaps`` to request CFT
+   capabilities during :c:func:`ncclDevCommCreate`.
 
-.. c:macro:: NCCL_CFT
+   .. c:enumerator:: NCCL_CFT_NONE
 
-   Request unicast CFT logical endpoint support.
+      No CFT capability is requested.
 
-.. c:macro:: NCCL_CFT_MULTIMEM
+   .. c:enumerator:: NCCL_CFT
 
-   Request multicast CFT logical endpoint support.
+      Request unicast CFT logical endpoint support.
 
+   .. c:enumerator:: NCCL_CFT_MULTIMEM
+
+      Request multicast CFT logical endpoint support.
+
+
+.. _device_api_cft_teams:
 
 CFT Teams
 =========
@@ -140,6 +156,31 @@ before the query is issued. Set ``hostCftMode`` in :c:type:`ncclConfig_t` when
 creating the communicator if the application needs to query CFT endpoint
 information from host code before creating a CFT-enabled device communicator.
 
+.. _device_api_cft_resource_leinfo:
+
+Resource-buffer logical endpoints
+---------------------------------
+
+The following device functions are the resource-buffer counterparts of the window queries above: they locate an
+allocation identified by a :c:type:`ncclDevResourceHandle_t` (see :ref:`device_api_resource_buffer`). Each writes a
+logical endpoint ID to *leId* and the byte offset of the allocation within that endpoint to *leOffset*. They have no
+return value; the device communicator must have the corresponding CFT capability, all pointers must be non-NULL, and
+peer indices must be valid.
+
+.. cpp:function:: void ncclGetResourceBufferCftLeInfo(ncclDevComm const& comm, ncclDevResourceHandle_t handle, int peerCft, ncclCftLeId_t* leId, size_t* leOffset)
+
+   Gets the endpoint ID and byte offset for *handle* on rank *peerCft* of the flat CFT team.
+
+.. cpp:function:: void ncclGetResourceBufferPeerLeInfo(ncclDevComm const& comm, ncclDevResourceHandle_t handle, int peerWorld, ncclCftLeId_t* leId, size_t* leOffset)
+
+   Gets the endpoint ID and byte offset for *handle* on world rank *peerWorld*. The peer must belong to the calling
+   rank's flat CFT team.
+
+.. cpp:function:: void ncclGetResourceBufferMultimemLeInfo(ncclDevComm const& comm, ncclDevResourceHandle_t handle, ncclCftLeId_t* leId, size_t* leOffset)
+
+   Gets the multicast endpoint ID and byte offset for *handle*. The device communicator must have been created with
+   :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` capability.
+
 CFT Operations
 ==============
 
@@ -175,8 +216,8 @@ CFT Operations
 
    .. cpp:function:: void putMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes)
 
-      Multicast variant of :cpp:func:`ncclCft::put` where *leId* references a logical endpoint for which the
-      the :c:macro:`NCCL_CFT_MULTIMEM` bit was set in the :c:macro:`cftCaps` bitmask at device communicator
+      Multicast variant of :cpp:func:`ncclCft::put` where *leId* references a logical endpoint for which
+      the :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device communicator
       creation time.
 
    .. cpp:function:: void putMultimemCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes, uint16_t cpMask)
@@ -203,15 +244,16 @@ CFT Operations
    .. cpp:function:: void redMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemSource, uint32_t bytes)
 
       Multicast reduction variant of :cpp:func:`ncclCft::red` where *leId* references a logical endpoint for which
-      the :c:macro:`NCCL_CFT_MULTIMEM` bit was set in the :c:macro:`cftCaps` bitmask at device communicator creation
+      the :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device communicator creation
       time.
 
    .. cpp:function:: void pullRed(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemDestination, uint32_t bytes)
 
       Initiates an asynchronous reduction operation (see :ref:`cft_reduction_operators` for reduction tags and data types)
       for *bytes* bytes from the multicast logical endpoint referenced by *leId* at offset *leOffset* to the shared memory buffer
-      referenced by *smemDestination*. *leId* references a logical endpoint for which the :c:macro:`NCCL_CFT_MULTIMEM` bit
-      was set in the :c:macro:`cftCaps` bitmask at device communicator creation time.
+      referenced by *smemDestination*. *leId* references a logical endpoint for which the
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device
+      communicator creation time.
 
       *coop* must be ncclCoopWarp.
 
@@ -253,8 +295,9 @@ CFT Operations
    .. cpp:function:: void putMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, void* smemSource, uint32_t bytes)
 
       Multicast variant of :cpp:func:`ncclCft::putCounted` where *leId* references a logical endpoint for which the symmetric
-      window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the :c:macro:`NCCL_CFT_MULTIMEM` bit was set in the
-      :c:macro:`cftCaps` bitmask at device communicator creation time.
+      window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device
+      communicator creation time.
 
    .. cpp:function:: void redCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, RedOp const& red, void* smemSource, uint32_t bytes)
 
@@ -267,8 +310,9 @@ CFT Operations
    .. cpp:function:: void redMultimemCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, RedOp const& red, void* smemSource, uint32_t bytes)
 
       Multicast variant of :cpp:func:`ncclCft::redCounted` where *leId* references a logical endpoint for which the symmetric
-      window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the :c:macro:`NCCL_CFT_MULTIMEM` bit was set in the
-      :c:macro:`cftCaps` bitmask at device communicator creation time.
+      window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device
+      communicator creation time.
 
    .. cpp:function:: void waitCounted(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer, uint64_t* counter, size_t expected, uint32_t* abortFlag)
 
@@ -322,9 +366,10 @@ the kernel.
    .. cpp:function:: ncclCftBarrierSession(Coop coop, ncclDevComm const& comm, uint32_t index, bool multimem = false)
 
       Initializes a new CFT barrier session. *coop* represents a cooperative group (see :ref:`devapi_coops`) of threads
-      that synchronize throught the barrier. *comm* is the device communicator for which barrier resources were requested.
+      that synchronize through the barrier. *comm* is the device communicator for which barrier resources were requested.
       *index* selects the barrier slot from the device communicator. *multimem* can be set to ``true`` to select multicast
-      CFT barrier resources (requires CFT barriers to be created with :c:macro:`NCCL_CFT_MULTIMEM` capability).
+      CFT barrier resources (requires CFT barriers to be created with
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` capability).
 
    .. cpp:function:: void arrive(Coop coop, cuda::memory_order order, ncclMemProxyType producer, ncclMemProxyType consumer)
 

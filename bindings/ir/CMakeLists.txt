@@ -8,7 +8,15 @@
 # LLVM IR generation for NCCL device APIs
 
 # Source and output configuration
-set(LLVM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper__impl.h)
+set(LLVM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/nccl_device_ir.cu)
+set(LLVM_IMPL_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/coop.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gin.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/barrier.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/reduce_copy.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util.h
+)
 set(OBJDIR ${CMAKE_BINARY_DIR}/obj/llvm_ir)
 set(LIBDIR ${CMAKE_BINARY_DIR}/lib)
 set(INCLUDEDIR ${CMAKE_BINARY_DIR}/include)
@@ -20,17 +28,15 @@ set(LLVM_IR_FILE ${OBJDIR}/libnccl_device.ll)
 set(FINAL_BC ${LIBDIR}/libnccl_device.bc)
 set(FINAL_LTO_IR ${LIBDIR}/libnccl_device.ltoir)
 
-set(WRAPPER_HEADER ${INCLUDEDIR}/nccl_device_wrapper.h)
+set(IR_HEADER ${INCLUDEDIR}/nccl_device_ir.h)
 
 # Build configuration
 # Select GPU arch and C++ standard based on CUDA Toolkit version
 if(CUDAToolkit_VERSION_MAJOR LESS 12)
-    set(BITCODE_LIB_ARCH sm_70 CACHE STRING "CUDA architecture for LLVM IR")
+    set(IR_ARCH sm_70 CACHE STRING "CUDA architecture for device IR")
 else()
-    set(BITCODE_LIB_ARCH sm_90 CACHE STRING "CUDA architecture for LLVM IR")
+    set(IR_ARCH sm_90 CACHE STRING "CUDA architecture for device IR")
 endif()
-
-set(LTO_IR_ARCH ${BITCODE_LIB_ARCH} CACHE STRING "CUDA architecture for LTO IR")
 
 set(BITCODE_CXX_STD gnu++17 CACHE STRING "C++ standard for LLVM IR")
 set(LTO_IR_CXX_STD c++17 CACHE STRING "C++ standard for LTO IR")
@@ -49,21 +55,11 @@ find_program(LLVM_AS_EXECUTABLE llvm-as REQUIRED)
 # Include paths
 set(NCCL_INCLUDES
     -I${CMAKE_BINARY_DIR}/include
-    -I${CMAKE_SOURCE_DIR}/src/include
-    -I${CMAKE_SOURCE_DIR}/src/include/nccl_device
-    -I${CMAKE_SOURCE_DIR}/src/device
 )
 
 set(CUDA_INCLUDES
     -I${CUDAToolkit_INCLUDE_DIRS}
     -I${CUDAToolkit_INCLUDE_DIRS}/cccl
-)
-
-# Empty stubs for headers clang's CUDA wrapper unconditionally includes but
-# CUDA 13 removed (e.g. texture_fetch_functions.h). NCCL device code doesn't
-# use the legacy texture/surface reference APIs, so it's OK to be empty.
-set(CLANG_COMPAT_INCLUDES
-    -I${CMAKE_CURRENT_SOURCE_DIR}/clang_compat
 )
 
 # Common clang flags used for both preprocessing and IR generation
@@ -73,16 +69,11 @@ set(COMMON_CLANG_FLAGS
     -x cuda
     --cuda-path=${CUDAToolkit_ROOT_DIR}
     --cuda-device-only
-    --cuda-gpu-arch=${BITCODE_LIB_ARCH}
-    ${CLANG_COMPAT_INCLUDES}
+    --cuda-gpu-arch=${IR_ARCH}
     ${NCCL_INCLUDES}
     ${CUDA_INCLUDES}
-    -D__clang_llvm_bitcode_lib__
     -D__CUDACC_EXTENDED_LAMBDA__
     ${NCCL_DEVICE_DEFINES}
-    -DCUDA_MAJOR=${CUDA_MAJOR}
-    -DCUDA_MINOR=${CUDA_MINOR}
-    -D_NV_RSQRT_SPECIFIER=
 )
 
 # Clang flags for LLVM IR generation
@@ -91,13 +82,13 @@ set(CLANG_FLAGS
     ${COMMON_CLANG_FLAGS}
 )
 
-# Copy the preauthored wrapper header to the build include directory
+# Copy the IR API header to the build include directory
 add_custom_command(
-    OUTPUT ${WRAPPER_HEADER}
+    OUTPUT ${IR_HEADER}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${INCLUDEDIR}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.h ${WRAPPER_HEADER}
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.h
-    COMMENT "Copying nccl_device_wrapper.h to build include..."
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_ir.h ${IR_HEADER}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_ir.h
+    COMMENT "Copying nccl_device_ir.h to build include..."
     VERBATIM
 )
 
@@ -106,7 +97,7 @@ add_custom_command(
     OUTPUT ${UNOPTIMIZED_BC}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${OBJDIR}
     COMMAND ${CLANG_EXECUTABLE} ${CLANG_FLAGS} ${LLVM_SRC} -o ${UNOPTIMIZED_BC}
-    DEPENDS ${LLVM_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/nccl_device_wrapper.h ${CMAKE_CURRENT_SOURCE_DIR}/util.h
+    DEPENDS ${LLVM_SRC} ${LLVM_IMPL_HEADERS} ${IR_HEADER}
     COMMENT "Generating unoptimized LLVM bitcode..."
     VERBATIM
 )
@@ -116,7 +107,7 @@ add_custom_command(
     OUTPUT ${OPTIMIZED_BC}
     COMMAND ${OPT_EXECUTABLE}
         --passes=internalize,inline,globaldce
-        -internalize-public-api-list=*nccl*
+        -internalize-public-api-list=ncclIr*
         ${UNOPTIMIZED_BC} -o ${OPTIMIZED_BC}
     DEPENDS ${UNOPTIMIZED_BC}
     COMMENT "Optimizing LLVM bitcode..."
@@ -152,7 +143,7 @@ add_custom_command(
 
 # Custom target for LLVM IR generation
 add_custom_target(llvm_ir
-    DEPENDS ${FINAL_BC} ${OPTIMIZED_BC} ${WRAPPER_HEADER}
+    DEPENDS ${FINAL_BC}
     COMMENT "LLVM IR and bitcode generated successfully"
 )
 
@@ -160,12 +151,12 @@ add_custom_target(llvm_ir
 add_custom_command(TARGET llvm_ir POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "LLVM IR and bitcode generated successfully:"
     COMMAND ${CMAKE_COMMAND} -E echo "  C++ Standard:      ${BITCODE_CXX_STD}"
-    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${BITCODE_LIB_ARCH}"
+    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${IR_ARCH}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Unoptimized:       ${UNOPTIMIZED_BC}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Optimized:         ${OPTIMIZED_BC}"
     COMMAND ${CMAKE_COMMAND} -E echo "  LLVM IR:           ${LLVM_IR_FILE}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Final BC:          ${FINAL_BC}"
-    COMMAND ${CMAKE_COMMAND} -E echo "  Wrapper Header:    ${WRAPPER_HEADER}"
+    COMMAND ${CMAKE_COMMAND} -E echo "  IR Header:         ${IR_HEADER}"
     VERBATIM
 )
 
@@ -180,26 +171,23 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${LIBDIR}
     COMMAND ${CUDAToolkit_NVCC_EXECUTABLE}
         -std=${LTO_IR_CXX_STD}
-        -arch=${LTO_IR_ARCH}
+        -arch=${IR_ARCH}
         --extended-lambda
         -dlto --ltoir
         -x cu
         ${NCCL_INCLUDES}
         ${CUDA_INCLUDES}
         ${NCCL_DEVICE_DEFINES}
-        -DCUDA_MAJOR=${CUDA_MAJOR}
-        -DCUDA_MINOR=${CUDA_MINOR}
-        -D__NCCL_DEVICE_LTOIR_LIB__
         -o ${FINAL_LTO_IR}
         ${LLVM_SRC}
-    DEPENDS ${LLVM_SRC} ${WRAPPER_HEADER} ${CMAKE_CURRENT_SOURCE_DIR}/util.h
+    DEPENDS ${LLVM_SRC} ${LLVM_IMPL_HEADERS} ${IR_HEADER}
     COMMENT "Generating LTO IR..."
     VERBATIM
 )
 
 # Custom target for LTO IR generation
 add_custom_target(ltoir
-    DEPENDS ${FINAL_LTO_IR} ${WRAPPER_HEADER}
+    DEPENDS ${FINAL_LTO_IR}
     COMMENT "LTO IR generated successfully"
 )
 
@@ -207,8 +195,8 @@ add_custom_target(ltoir
 add_custom_command(TARGET ltoir POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E echo "LTO IR generated successfully:"
     COMMAND ${CMAKE_COMMAND} -E echo "  C++ Standard:      ${LTO_IR_CXX_STD}"
-    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${LTO_IR_ARCH}"
+    COMMAND ${CMAKE_COMMAND} -E echo "  GPU Architecture:  ${IR_ARCH}"
     COMMAND ${CMAKE_COMMAND} -E echo "  Final LTO IR:      ${FINAL_LTO_IR}"
-    COMMAND ${CMAKE_COMMAND} -E echo "  Wrapper Header:    ${WRAPPER_HEADER}"
+    COMMAND ${CMAKE_COMMAND} -E echo "  IR Header:         ${IR_HEADER}"
     VERBATIM
 )

@@ -69,6 +69,7 @@ static constexpr const char* ncclCryptKdfParamInfo = "info";
   SYMBOL(SSL_CTX_free) \
   SYMBOL(SSL_CTX_new) \
   SYMBOL(SSL_CTX_set_ciphersuites) \
+  SYMBOL(SSL_CTX_set_num_tickets) \
   SYMBOL(SSL_CTX_set_psk_find_session_callback) \
   SYMBOL(SSL_CTX_set_psk_use_session_callback) \
   SYMBOL(SSL_CTX_set_verify) \
@@ -360,6 +361,13 @@ static ncclResult_t cryptInitLib() {
       goto fail;
     }
     ncclCryptOpenSsl.pfn_SSL_CTX_clear_options(contexts[i], SSL_OP_ALLOW_NO_DHE_KEX);
+  }
+  // Bootstrap connections are not resumed, and an unread TLS 1.3 session ticket can cause the
+  // client to reset a send-only connection before the server finishes receiving its payload.
+  if (ncclCryptOpenSsl.pfn_SSL_CTX_set_num_tickets(ncclCryptServerCtx, 0) != 1) {
+    WARN("ncclCrypt: disabling TLS session tickets failed");
+    ret = ncclSystemError;
+    goto fail;
   }
   ncclCryptOpenSsl.pfn_SSL_CTX_set_verify(ncclCryptClientCtx, SSL_VERIFY_PEER, nullptr);
   ncclCryptOpenSsl.pfn_SSL_CTX_set_verify(ncclCryptServerCtx, SSL_VERIFY_NONE, nullptr);

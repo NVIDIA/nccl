@@ -29,7 +29,10 @@ static ncclResult_t ncclTuner_finalize(void* ctx) {
 static ncclResult_t ncclTuner_init(void** context, uint64_t commId, size_t nRanks, size_t nNodes,
                                    ncclDebugLogger_t logfn, ncclNvlDomainInfo_v5_t* nvlDomainInfo,
                                    ncclTunerConstants_t* constants) {
-  NCCLCHECK(ncclTuner_v5->init(context, commId, nRanks, nNodes, logfn, nvlDomainInfo, constants));
+  ncclTunerConstants_v5_t constants_v5;
+  ncclTunerConstants_v7_to_v5(&constants_v5, constants);
+  NCCLCHECK(ncclTuner_v5->init(context, commId, nRanks, nNodes, logfn, nvlDomainInfo, &constants_v5));
+  ncclTunerConstants_v5_to_v7(constants, &constants_v5);
   ncclTuner.getCollInfo = ncclTuner_getCollInfo;
   ncclTuner.finalize = ncclTuner_finalize;
   ncclTuner.getChunkSize = NULL;

@@ -93,7 +93,7 @@ static_assert(offsetof(struct ncclDevComm_v23000, worldGinBarrier) == 232);
 static_assert(sizeof(struct ncclDevComm_v23000) == 240);
 
 static ncclResult_t ncclDevCommRequirementsFilter_v23000(ncclComm_t comm, ncclDevCommRequirements_t* reqs) {
-  reqs->ginType = comm->sharedRes->ginState.backends[0].ginType;
+  reqs->ginType = comm->ginState.backends[0].ginType;
   return ncclSuccess;
 }
 
@@ -196,4 +196,5 @@ struct ncclDevCommCompat ncclDevCommCompat_v23000 = {
   ncclDevCommRequirementsFilter_v23000, // devCommRequirementsFilter
   ncclDevCommCopyNewToOld_v23000,       // devCommCopyNewToOld
   ncclDevCommCopyOldToNew_v23000,       // devCommCopyOldToNew
+  ncclDevCommGinSignalsPerBarrier_v22902, // ginSignalsPerBarrier
 };

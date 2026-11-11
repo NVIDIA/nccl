@@ -67,6 +67,8 @@ impl Default for Config {
                 launchOrderImplicit: undefined,
                 numRmaSig: undefined,
                 rmaEagerInit: undefined,
+                hostCftMode: undefined,
+                nvlsHostMode: undefined,
             },
             net_name: None,
             comm_name: None,
@@ -111,6 +113,8 @@ impl std::fmt::Debug for Config {
             .field("launch_order_implicit", &self.raw.launchOrderImplicit)
             .field("rma_signals", &self.raw.numRmaSig)
             .field("rma_eager_init", &self.raw.rmaEagerInit)
+            .field("host_cft_mode", &self.raw.hostCftMode)
+            .field("nvls_host_mode", &self.raw.nvlsHostMode)
             .finish()
     }
 }
@@ -285,6 +289,8 @@ mod tests {
         assert_eq!(raw.launchOrderImplicit, undefined);
         assert_eq!(raw.numRmaSig, undefined);
         assert_eq!(raw.rmaEagerInit, undefined);
+        assert_eq!(raw.hostCftMode, undefined);
+        assert_eq!(raw.nvlsHostMode, undefined);
     }
 
     #[test]

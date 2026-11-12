@@ -44,6 +44,7 @@ static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfi
       eDescr_v4.p2p.count = eDescr->p2p.count;
       eDescr_v4.p2p.datatype = eDescr->p2p.datatype;
       eDescr_v4.p2p.peer = eDescr->p2p.peer;
+      eDescr_v4.p2p.nChannels = eDescr->p2p.nChannels;
       eDescr_v4.parentObj = eDescr->p2p.parentGroup;
     }
     break;

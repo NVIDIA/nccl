@@ -323,6 +323,29 @@ This creates a communicator with only the first 2 ranks:
  ncclCommUserRank(comm, &rank);
  ncclCommSplit(comm, rank<2 ? 0 : NCCL_SPLIT_NOCOLOR, rank, &newcomm, NULL);
 
+The examples above operate on a blocking communicator. When the parent
+communicator is nonblocking, a ncclCommSplit call is also nonblocking: it
+returns while the new communicator's initialization is still in progress in the
+background, and the parent communicator's state must be polled with
+ncclCommGetAsyncError until it reports *ncclSuccess* (see
+:ref:`communicators_abort`), regardless of the value returned by
+ncclCommSplit. Only then is *newcomm* guaranteed to hold the new communicator
+(or `NCCL_COMM_NULL` when color was NCCL_SPLIT_NOCOLOR — such ranks must poll
+as well), and only then may the parent communicator be used again.
+
+.. code:: C
+
+ ncclResult_t state;
+ ncclCommSplit(comm, color, key, &newcomm, NULL);
+ do {
+   ncclCommGetAsyncError(comm, &state);
+   // Handle outside events, timeouts, ...
+ } while (state == ncclInProgress);
+ if (state != ncclSuccess) {
+   /* Handle error, e.g. ncclCommAbort(comm); */
+ }
+ /* newcomm can now be used: it is either the new communicator
+  * or NCCL_COMM_NULL when color was NCCL_SPLIT_NOCOLOR. */
 
 Related links:
 
@@ -386,6 +409,8 @@ In all cases, ncclCommDestroy call will free the resources of the communicator a
 the communicator should no longer be accessed after ncclCommDestroy returns.
 
 Related link: :c:func:`ncclCommDestroy`
+
+.. _communicators_abort:
 
 *************************************
 Error handling and communicator abort

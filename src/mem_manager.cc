@@ -54,6 +54,7 @@ ncclResult_t ncclMemManagerInit(struct ncclComm* comm) {
   COMPILER_ATOMIC_STORE(&mgr->initialized, 1, std::memory_order_release);
 
   comm->memManager = mgr;
+  NCCLCHECK(ncclHostPinManagerCreated());
 
   INFO(NCCL_ALLOC, "MemManager: Initialized for device %d", comm->cudaDev);
   return ncclSuccess;
@@ -85,6 +86,7 @@ ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm) {
   // refCount == 0, at this point proxy threads should be joined
   INFO(NCCL_ALLOC, "MemManager: Destroying (refCount=0)");
   COMPILER_ATOMIC_STORE(&mgr->initialized, 0, std::memory_order_release);
+  NCCLCHECK(ncclHostPinManagerDestroyed(mgr->released));
 
   ncclDynMemEntry* entry = mgr->entries;
   while (entry != nullptr) {
@@ -92,7 +94,7 @@ ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm) {
 
     // Free CPU backup if exists
     if (entry->cpuBackup != nullptr) {
-      ncclCudaHostFree(entry->cpuBackup);
+      free(entry->cpuBackup);
     }
 
     // Close shareable FD if valid (defensive cleanup for POSIX FD handle type)
@@ -270,7 +272,7 @@ ncclResult_t ncclMemUntrackDynamic(struct ncclMemManager* manager, void* ptr, st
         // Free CPU backup if exists
         if (entry->cpuBackup != nullptr) {
           manager->cpuBackupUsage -= entry->size;
-          ncclCudaHostFree(entry->cpuBackup);
+          free(entry->cpuBackup);
         }
 
         // Close shareable FD if valid (defensive cleanup for POSIX FD handle type)
@@ -481,7 +483,8 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
 
     // For OFFLOAD type: copy to CPU backup first
     if (entry->memType == ncclMemOffload) {
-      NCCLCHECKGOTO(ncclCudaHostCalloc((char**)&entry->cpuBackup, entry->size), ret, fail);
+      // Pageable, so a suspended process holds no NCCL-pinned host memory.
+      entry->cpuBackup = malloc(entry->size);
       if (entry->cpuBackup == nullptr) {
         WARN("MemManager: Failed to allocate CPU backup for offload");
         ret = ncclSystemError;
@@ -491,7 +494,7 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
       // Copy GPU to CPU
       cudaError_t err = cudaMemcpy(entry->cpuBackup, entry->ptr, entry->size, cudaMemcpyDeviceToHost);
       if (err != cudaSuccess) {
-        ncclCudaHostFree(entry->cpuBackup);
+        free(entry->cpuBackup);
         entry->cpuBackup = nullptr;
         WARN("MemManager: Failed to copy to CPU backup: %s", cudaGetErrorString(err));
         ret = ncclUnhandledCudaError;
@@ -526,6 +529,13 @@ ncclResult_t ncclCommMemSuspend(struct ncclComm* comm) {
   }
 
   manager->released = 1;
+  NCCLCHECKGOTO(ncclHostPinManagerSuspended(), ret, fail);
+  if (manager->totalPersistImported > 0) {
+    // Persistent imports (e.g. net transport device buffers shared through the proxy)
+    // stay mapped; a CUDA process checkpoint cannot restore them on some drivers.
+    WARN("MemManager: rank %d keeps %zu bytes of persistent peer imports mapped while suspended", comm->rank,
+         (size_t)manager->totalPersistImported);
+  }
 
   INFO(NCCL_ALLOC,
        "MemManager: rank %d suspended %d local + %d peer entries (scratch=%zu, offload=%zu, peerImport=%zu, "
@@ -637,7 +647,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
         goto fail;
       }
       // Free CPU backup on successful restore
-      ncclCudaHostFree(entry->cpuBackup);
+      free(entry->cpuBackup);
       entry->cpuBackup = nullptr;
       manager->cpuBackupUsage -= entry->size;
     }
@@ -911,6 +921,7 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
   }
 
   manager->released = 0;
+  NCCLCHECKGOTO(ncclHostPinManagerResumed(), ret, fail);
 
   // Final barrier to ensure all ranks have completed peer import setup
   if (comm->bootstrap != nullptr) {

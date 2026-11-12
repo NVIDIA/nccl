@@ -23,7 +23,9 @@ NCCL_PARAM(SocketMaxRecvBuff, "SOCKET_RCVBUF", -1);
 NCCL_PARAM(SocketMaxSendBuff, "SOCKET_SNDBUF", -1);
 
 uint64_t ncclSocketDefaultMagic(void) {
-  /* Default is the historical constant; env may override on first init. */
+  /* Default is the historical constant; env may override on first init.
+   * First call must be on an application thread (primed in initOnceFunc):
+   * getenv() from a NCCL background thread races with setenv() on glibc < 2.41. */
   static uint64_t cached = NCCL_SOCKET_MAGIC;
   static std::once_flag once;
   std::call_once(once, []() {

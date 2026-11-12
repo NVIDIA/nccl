@@ -399,10 +399,12 @@ def summarize_data_per_comm_coll_type(output_root, comm_type, coll_type, output_
     logging.info(f"Found {len(remaining_files)} valid parquet files (moved {invalid_count} invalid files)")
 
     try:
+        parquet_glob = str(parquet_dir.resolve()) + "/*.parquet"
         duckdb.execute(
-            f"CREATE OR REPLACE VIEW logs AS SELECT * FROM read_parquet('{parquet_dir}/*.parquet')"
+            "CREATE OR REPLACE VIEW logs AS SELECT * FROM read_parquet(?)",
+            [parquet_glob]
         )
-        df = duckdb.execute(f"""
+        df = duckdb.execute("""
             SELECT
                 id,
                 coll_sn,
@@ -415,10 +417,10 @@ def summarize_data_per_comm_coll_type(output_root, comm_type, coll_type, output_
                 MAX(dump_timestamp_us) as coll_end_timestamp_us,
                 (MAX(dump_timestamp_us) - MIN(dump_timestamp_us)) as coll_duration_us
             FROM logs
-            WHERE coll = '{coll_type}' and comm_type = '{comm_type}'
+            WHERE coll = $1 and comm_type = $2
             GROUP BY id, coll_sn, coll_msg_size_bytes
             ORDER BY coll_sn
-        """).df()
+        """, [coll_type, comm_type]).df()
     except Exception as e:
         logging.error(f"Error executing DuckDB query for {comm_type} and {coll_type}: {e}")
         return None

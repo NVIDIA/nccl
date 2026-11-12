@@ -293,37 +293,6 @@ static ncclResult_t ginDevCommSetupWithBackend(
   ncclGinConfig_t ginConfig;
   struct ncclGinState* ginState = &comm->ginState;
 
-  // Must precede createContext, which allocates the signal table.
-  int ginSignalCount = 0;
-  NCCLCHECK(ginAssignSignals(comm, reqs, resReqs, barrierReqs, nBarrierReqs, backend, devCompat, &ginSignalCount));
-  INFO(NCCL_INIT, "devCommCreate: GIN backend type %d: %d signals (%d requested at id 0), %d counters",
-       backend->ginType, ginSignalCount, reqs->ginSignalCount, reqs->ginCounterCount);
-
-  devComm->backendIndex = (uint8_t)(backend - ginState->backends);
-  devComm->ginSignalCount = ginSignalCount;
-  devComm->ginCounterCount = reqs->ginCounterCount;
-  // Legacy signals default to what is specified in DevCommRequirements
-  devComm->ginStrongLegacySignals = reqs->ginStrongSignalsRequired;
-
-  // Allocate contexts
-  int nContextsTotal = reqs->ginContextCount;
-  devComm->ginConnectionCount = backend->ginCommCount;
-  if (!reqs->ginExclusiveContexts) {
-    // TODO: check if a shared devComm in the list could match our requirements.
-  }
-
-  nContextsTotal = ROUNDUP(nContextsTotal, backend->ginCommCount);
-  devComm->ginContextCount = nContextsTotal;
-  int nContextsPerComm = nContextsTotal / backend->ginCommCount;
-  INFO(NCCL_INIT,
-       "devCommCreate: creating %d contexts: %d GIN connections with %d contexts each (%d contexts total requested)",
-       nContextsTotal, backend->ginCommCount, nContextsPerComm, reqs->ginContextCount);
-
-  struct ncclGinStateDevComm* ginStateDevComm = NULL;
-  NCCLCHECK(ncclCalloc(&ginStateDevComm, 1));
-  ginStateDevComm->contextCount = nContextsTotal;
-  ginStateDevComm->backendIndex = (int)(backend - ginState->backends);
-
   const int* backendVersionArray;
   int nVersions;
   switch (backend->ginType) {
@@ -354,12 +323,42 @@ static ncclResult_t ginDevCommSetupWithBackend(
     backendVersion = i;
   }
 
+  // Must precede createContext, which allocates the signal table.
+  int ginSignalCount = 0;
+  NCCLCHECK(ginAssignSignals(comm, reqs, resReqs, barrierReqs, nBarrierReqs, backend, devCompat, &ginSignalCount));
+  INFO(NCCL_INIT, "devCommCreate: GIN backend type %d: %d signals (%d requested at id 0), %d counters",
+       backend->ginType, ginSignalCount, reqs->ginSignalCount, reqs->ginCounterCount);
+
+  devComm->backendIndex = (uint8_t)(backend - ginState->backends);
+  devComm->ginSignalCount = ginSignalCount;
+  devComm->ginCounterCount = reqs->ginCounterCount;
+  // Legacy signals default to what is specified in DevCommRequirements
+  devComm->ginStrongLegacySignals = reqs->ginStrongSignalsRequired;
+
+  // Allocate contexts
+  int nContextsTotal = reqs->ginContextCount;
+  devComm->ginConnectionCount = backend->ginCommCount;
+  if (!reqs->ginExclusiveContexts) {
+    // TODO: check if a shared devComm in the list could match our requirements.
+  }
+
+  nContextsTotal = ROUNDUP(nContextsTotal, backend->ginCommCount);
+  devComm->ginContextCount = nContextsTotal;
+  int nContextsPerComm = nContextsTotal / backend->ginCommCount;
+  INFO(NCCL_INIT,
+       "devCommCreate: creating %d contexts: %d GIN connections with %d contexts each (%d contexts total requested)",
+       nContextsTotal, backend->ginCommCount, nContextsPerComm, reqs->ginContextCount);
+
   ncclResult_t ret = ncclSuccess;
   bool needsProxyProgress = false;
   int* peerArray = nullptr;
   int peerArrayCount = 0;
-
   int connectedStride = comm->ginState.ginConnectionType == NCCL_GIN_CONNECTION_FULL ? 1 : comm->contiguousRanksPerHost;
+
+  struct ncclGinStateDevComm* ginStateDevComm = NULL;
+  NCCLCHECKGOTO(ncclCalloc(&ginStateDevComm, 1), ret, end);
+  ginStateDevComm->contextCount = nContextsTotal;
+  ginStateDevComm->backendIndex = (int)(backend - ginState->backends);
 
   if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_CUSTOM_ARRAY) {
     INFO(NCCL_INIT, "GIN: NCCL_GIN_CONNECTION_CUSTOM_ARRAY connecting to %d peer(s)", reqs->ginCustomArrayCount);
@@ -502,11 +501,16 @@ static ncclResult_t ginDevCommSetupWithBackend(
 end:
   free(peerArray);
   if (ret != ncclSuccess) {
-    for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
-      if (ginStateDevComm->ginCtx[commIdx]) backend->ncclGin->destroyContext(ginStateDevComm->ginCtx[commIdx]);
+    if (ginStateDevComm) {
+      for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
+        if (ginStateDevComm->ginCtx[commIdx]) backend->ncclGin->destroyContext(ginStateDevComm->ginCtx[commIdx]);
+      }
+      free(ginStateDevComm);
     }
-    free(ginStateDevComm);
     devComm->backendIndex = 0;
+    devComm->ginSignalCount = 0;
+    devComm->ginCounterCount = 0;
+    devComm->ginStrongLegacySignals = false;
     devComm->ginConnectionCount = 0;
     devComm->ginContextCount = 0;
     devComm->ginConnectionStride = 0;

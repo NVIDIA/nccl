@@ -278,16 +278,20 @@ void* ncclMemoryStack::allocateSpilled(struct ncclMemoryStack* me, size_t size, 
 
     // At this point we must need another hunk, either to fit the object
     // itself or its Unhunk proxy.
-    mallocSize = nextSize;
-    INFO_LOC(NCCL_ALLOC_HOST, "memory stack hunk malloc(%llu)", (unsigned long long)mallocSize);
-    struct Hunk* top1 = (struct Hunk*)malloc(mallocSize);
-    if (top1 == nullptr) goto malloc_exhausted;
-    top1->size = nextSize;
-    top1->above = nullptr;
-    if (top) top->above = top1;
+    // An empty hunk may already wait above (too small for the object): reuse it for the proxy.
+    struct Hunk* top1 = top ? top->above : nullptr;
+    if (top1 == nullptr) {
+      mallocSize = nextSize;
+      INFO_LOC(NCCL_ALLOC_HOST, "memory stack hunk malloc(%llu)", (unsigned long long)mallocSize);
+      top1 = (struct Hunk*)malloc(mallocSize);
+      if (top1 == nullptr) goto malloc_exhausted;
+      top1->size = nextSize;
+      top1->above = nullptr;
+      if (top) top->above = top1;
+    }
     top = top1;
     me->topFrame.hunk = top;
-    me->topFrame.end = reinterpret_cast<uintptr_t>(top) + nextSize;
+    me->topFrame.end = reinterpret_cast<uintptr_t>(top) + top->size;
     me->topFrame.bumper = reinterpret_cast<uintptr_t>(top) + sizeof(struct Hunk);
   }
 

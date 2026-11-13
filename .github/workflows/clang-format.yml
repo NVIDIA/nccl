@@ -1,0 +1,40 @@
+name: Format Check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  clang-format:
+    name: clang format
+    runs-on: ubuntu-latest
+    container: python:3.13-slim
+    timeout-minutes: 10
+    steps:
+      - name: Install formatting tools
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git diffutils
+          python -m pip install --no-cache-dir --disable-pip-version-check clang-format==22.1.3
+
+      - uses: actions/checkout@v6
+
+      - name: Check source formatting
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --show-toplevel
+          maint/run-clang-format.sh
+          if git diff --exit-code -- src; then
+            exit 0
+          else
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              echo "::error::Source formatting differs. Run maint/run-clang-format.sh with clang-format 22.1.3 and commit the changes."
+            else
+              echo "::error::Git failed to check source formatting (exit $status)."
+            fi
+            exit "$status"
+          fi

@@ -83,6 +83,8 @@ static inline ncclResult_t ncclTuningPipelineRingComputePipeline(struct ncclTuni
   if (inputs->func == ncclFuncAllReduce && comm->nRanks > 2 && pipeline->nSlices > 0)
     pipeline->nSlices -= 1; // ghost slice accounting
 
+  if (tuning->proto == NCCL_PROTO_SIMPLE) pipeline->maxMode = true;
+  
   return ncclSuccess;
 }
 

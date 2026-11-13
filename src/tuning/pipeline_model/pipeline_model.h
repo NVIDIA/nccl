@@ -41,6 +41,7 @@ struct ncclTuningPipeline {
   float minFifoStepTime;
   ncclTuningPipelineStep intraStep;
   ncclTuningPipelineStep interStep;
+  bool maxMode;
 };
 
 struct ncclTuningPipelineState {

@@ -26,7 +26,9 @@ static float pipelineModel(struct ncclTuningPipeline* const pipeline) {
   // T_delay: we assume s/min(bw) is the largest time
   float delay = pipeline->sliceSize * std::max((pipeline->intraStep.stepCount > 0) / pipeline->intraStep.busBw,
                                                (pipeline->interStep.stepCount > 0) / pipeline->interStep.busBw);
-  float totaltime = first + (pipeline->nSlices - 1) * delay;
+  float totaltime;
+  if (pipeline->maxMode) totaltime = std::max({first, pipeline->nSlices * delay});
+  else totaltime = first + (pipeline->nSlices - 1) * delay;
   float ratelimit_time = pipeline->minFifoStepTime * pipeline->fifoStepsNeeded;
   return std::max({totaltime, ratelimit_time});
 }

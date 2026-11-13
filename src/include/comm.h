@@ -714,6 +714,7 @@ struct ncclComm {
   int buffSizes[NCCL_NUM_PROTOCOLS];
   int p2pChunkSize;
   int nvlsChunkSize;
+  int nvlsTmaScatterTileBytes;
 
   // Cross-clique P2P: when true, use global rank for IPC buffer indexing
   bool p2pCrossClique;

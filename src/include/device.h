@@ -288,6 +288,7 @@ struct alignas(16) ncclDevWorkColl {
     } collnet;
   };
   uint64_t redOpArg;
+  uint32_t nvlsTmaScatterTileBytes;
 };
 
 struct alignas(16) ncclDevWorkBcast {
@@ -564,14 +565,22 @@ __host__ __device__ constexpr int ncclNvlsUnroll(int bytePerPack, int cudaArch =
   return ncclCalcUnroll(bytePerPack, ncclNvlsUnrollInsns(cudaArch), ncclNvlsUnrollBytes(cudaArch));
 }
 
+// Must match RUBIN_AND_LATER (cudawrap.h), in cudaArch units.
+#define NCCL_NVLS_TMA_SCATTER_ARCH(arch) ((arch) >= 1070 && (arch) != 1100 && (arch) != 1200 && (arch) != 1210)
+
+constexpr int ncclNvlsTmaScatterMinTileBytes = 8 << 10;
+constexpr int ncclNvlsTmaScatterMaxTileBytes = 64 << 10;
+constexpr int ncclNvlsTmaScatterHeaderBytes = 128;
+constexpr int ncclNvlsTmaScatterWarpScratchBytes =
+  DIVUP(ncclNvlsTmaScatterHeaderBytes + ncclNvlsTmaScatterMaxTileBytes, NCCL_MAX_NTHREADS / WARP_SIZE);
+
 // The amount of dynamic shmem per warp
 __host__ __device__ constexpr int ncclShmemScratchWarpSize(int cudaArch = NCCL_CUDA_ARCH) {
   return (max_constexpr<int>(
             /*LL    */ 0,
             /*LL128 */ (NCCL_LL128_SHMEM_ELEMS_PER_THREAD * WARP_SIZE) * sizeof(uint64_t),
             /*SIMPLE*/ (ncclCollUnroll(cudaArch) * WARP_SIZE + 1) * 16,
-            // NVLS needs an extra 16B to read unaligned data.
-            /*NVLS  */ WARP_SIZE * (cudaArch >= 900 ? ncclNvlsUnrollBytes(cudaArch) : 0) + 16) +
+            /*NVLS  */ NCCL_NVLS_TMA_SCATTER_ARCH(cudaArch) ? ncclNvlsTmaScatterWarpScratchBytes : 0) +
           15) &
          -16; // pad to 16 bytes
 }
@@ -583,6 +592,20 @@ __host__ __device__ constexpr int ncclTmaShmemScratchWarpSize(void) {
 // The amount of dynamic shmem per block
 __host__ __device__ constexpr int ncclShmemDynamicSize(int cudaArch = NCCL_CUDA_ARCH) {
   return cudaArch < 700 ? 0 : ncclShmemScratchWarpSize(cudaArch) * (NCCL_MAX_NTHREADS / WARP_SIZE);
+}
+
+__host__ __device__ constexpr bool ncclNvlsTmaScatterValidTile(int64_t bytes) {
+  return ncclNvlsTmaScatterMinTileBytes <= bytes && bytes <= ncclNvlsTmaScatterMaxTileBytes && bytes % 16 == 0;
+}
+
+static_assert(ncclNvlsTmaScatterHeaderBytes + ncclNvlsTmaScatterMaxTileBytes <= ncclShmemDynamicSize(1070),
+              "NVLS TMA scatter tile must fit in the per-warp scratch");
+
+inline bool ncclNvlsTmaScatterEligible(int cudaArch, int func, int algorithm, int protocol, int devRedOp, bool oneNode,
+                                       bool registered, int nHeads) {
+  return NCCL_NVLS_TMA_SCATTER_ARCH(cudaArch) && func == ncclFuncAllReduce && algorithm == NCCL_ALGO_NVLS &&
+         protocol == NCCL_PROTO_SIMPLE && (devRedOp == ncclDevSum || devRedOp == ncclDevMinMax) && oneNode &&
+         !registered && 0 < nHeads && nHeads <= WARP_SIZE;
 }
 
 // Host-side table of kernel function pointers.

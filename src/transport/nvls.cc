@@ -58,6 +58,8 @@ static ncclResult_t nvlsFreeUc(struct ncclComm* comm, struct ncclNvlsUcSegment* 
 
 NCCL_PARAM(NvlsEnable, "NVLS_ENABLE", 2);
 NCCL_PARAM(NvlsChunkSize, "NVLS_CHUNKSIZE", 128 * 1024);
+NCCL_PARAM(NvlsTmaScatter, "NVLS_TMA_SCATTER", 0);
+NCCL_PARAM(NvlsTmaScatterTileBytes, "NVLS_TMA_SCATTER_TILE_BYTES", 64 * 1024);
 NCCL_PARAM(NvlsTreeMaxChunkSize, "NVLSTREE_MAX_CHUNKSIZE", -2);
 // NVLS staging FIFO layout:
 //  -1: automatic (layout 2 for multi-node Rubin+, layout 1 for single-node Rubin+, layout 0 otherwise)
@@ -246,6 +248,17 @@ ncclResult_t ncclNvlsTuning(struct ncclComm* comm) {
 ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
   comm->nvlsSupport = 0;
   comm->nvlsChannels = 0;
+  comm->nvlsTmaScatterTileBytes = 0;
+
+  int64_t tmaEnabled = ncclParamNvlsTmaScatter();
+  int64_t tmaTileBytes = ncclParamNvlsTmaScatterTileBytes();
+  if ((tmaEnabled != 0 && tmaEnabled != 1) || !ncclNvlsTmaScatterValidTile(tmaTileBytes)) {
+    WARN("NVLS TMA scatter requires NCCL_NVLS_TMA_SCATTER in {0, 1} and "
+         "NCCL_NVLS_TMA_SCATTER_TILE_BYTES in [%d, %d], divisible by 16 (got %ld, %ld)",
+         ncclNvlsTmaScatterMinTileBytes, ncclNvlsTmaScatterMaxTileBytes, tmaEnabled, tmaTileBytes);
+    return ncclInvalidArgument;
+  }
+  if (tmaEnabled) comm->nvlsTmaScatterTileBytes = (int)tmaTileBytes;
 
   if (comm->hasMultiRankNvml) {
     if (ncclParamNvlsEnable() == 1) {
@@ -954,6 +967,7 @@ fail:
 
 ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
   comm->nvlsChannels = 0;
+  comm->nvlsTmaScatterTileBytes = 0;
   return ncclSuccess;
 }
 

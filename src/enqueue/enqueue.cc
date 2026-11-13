@@ -705,6 +705,12 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
     struct ncclDevWorkColl* devWork = (struct ncclDevWorkColl*)(workNode + 1);
     size_t elementSize = ncclTypeSize(task->datatype);
 
+    if (comm->nvlsTmaScatterTileBytes != 0 &&
+        ncclNvlsTmaScatterEligible(comm->cudaArch, task->func, task->algorithm, task->protocol, task->opDev.op,
+                                   devWork->oneNode, devWork->regUsed, comm->channels[0].nvls.nHeads)) {
+      devWork->nvlsTmaScatterTileBytes = comm->nvlsTmaScatterTileBytes;
+    }
+
     int kind = 2 * task->isCollnet + task->isNvls;
     if (kind != kindPrev) {
       trafficPerChannel = ncclCollTrafficPerChannel(trafficBytes[kind], nChannels[kind]);

@@ -7,6 +7,7 @@
 
 #include "network/unpack/unpack.h"
 #include "coll_sizes.h"
+#include "nvls_tma_scatter.cuh"
 #include <cassert>
 
 enum primsMode {
@@ -26,6 +27,8 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
                        ConnFifoEnabled = 0x100, DirectWrite = 0x200, DirectRead = 0x400, PatMode = 0x800,
                        NvlsMinPolling = 0x1000, NetDeviceUnpack = 0x2000, AnyNetDeviceUnpack = 0x4000,
                        RoleWaitPatNvls = 0x8000, RolePostPatNvls = 0x10000;
+  static constexpr bool NvlsTmaScatterCapable =
+    Direct == 0 && MaxRecv == 0 && SlicePerChunk == 1 && StepPerSlice == 1 && Apply_PreOp<RedOp, 1>::IsIdentity;
   const int tid, tidInBlock;
   const int nthreads;
   int nworkers;
@@ -45,6 +48,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoSimple<SlicePerChunk, StepPerSlice,
   uint32_t connStepSize; // Connection step size in elements
   void* netDeviceHandle;
   uint64_t accSize;
+#if NCCL_NVLS_TMA_SCATTER_ARCH(__CUDA_ARCH__)
+  uint8_t tmaState = 0; // 0: not set up, 1: set up, 2: set up and this thread issues TMA
+#endif
 
   // Don't use barrier 0 as it's used by the final sync
   __device__ void barrier() {
@@ -618,6 +624,57 @@ private:
     }
   }
 
+#if NCCL_NVLS_TMA_SCATTER_ARCH(__CUDA_ARCH__)
+  __device__ __forceinline__ void tmaScatter(intptr_t inpIx, ssize_t totalElem, int peerElem, ssize_t peerOffset,
+                                             int skip, int shift, uint32_t tileBytes) {
+    assert((nthreads == WARP_SIZE || nthreads == 2 * WARP_SIZE || nthreads == 3 * WARP_SIZE) &&
+           2 * fan.nsend() <= nthreads);
+
+    bool dataStored = false;
+    if (tid < nworkers) {
+      if (tmaState == 0) tmaState = ncclNvlsTmaScatterSetup(ncclShmemPerWarp, tid < WARP_SIZE) ? 2 : 1;
+      if (tid == 0) ncclShmem.groups[group].srcs[0] = (T*)ncclShmem.groups[group].userInput + inpIx;
+      int realSize = max(0, peerElem);
+      waitPeer<0, 0, 0, 1, 1, 0>(0, 0, 0, realSize);
+      subBarrier();
+      for (int j = 0; j < fan.nsend(); j++) {
+        int i = (j + shift) % fan.nsend();
+        ssize_t pOffset = i * peerOffset;
+        if (skip >= 0 && i >= skip) pOffset += peerOffset;
+        ssize_t count = ncclShmem.aborted ? 0 : max(ssize_t(0), min(ssize_t(realSize), totalElem - pOffset));
+        if (count == 0) continue;
+        T* src = (T*)ncclShmem.groups[group].srcs[0] + pOffset;
+        T* dst = (T*)ncclShmem.groups[group].dsts[i];
+        if (dst == nullptr) continue;
+
+        size_t bytes = count * sizeof(T);
+        ncclNvlsTmaScatterSpan span = ncclNvlsTmaScatterSplit(uintptr_t(dst), uintptr_t(src), bytes);
+        if (span.prefix != 0) {
+          void* src0 = src;
+          void* dst0 = dst;
+          reduceCopy<Unroll, RedOp, T, 0, 1, 1, 0, 1, 1, 0>(tid, nworkers, 0, false, 1, &src0, 1, &dst0,
+                                                            ssize_t(span.prefix / sizeof(T)));
+        }
+        if (tmaState == 2)
+          ncclNvlsTmaScatterCopy(ncclShmemPerWarp, tileBytes, (char*)dst + span.prefix, (const char*)src + span.prefix,
+                                 span.bulk);
+        __syncwarp();
+        if (span.suffix != 0) {
+          void* src0 = (char*)src + span.prefix + span.bulk;
+          void* dst0 = (char*)dst + span.prefix + span.bulk;
+          reduceCopy<Unroll, RedOp, T, 0, 1, 1, 0, 1, 1, 0>(tid, nworkers, 0, false, 1, &src0, 1, &dst0,
+                                                            ssize_t(span.suffix / sizeof(T)));
+        }
+        dataStored = true;
+      }
+      if (tmaState == 2) ncclNvlsTmaScatterWait();
+      __syncwarp();
+    }
+    dataStored = barrierAny(dataStored);
+    postPeer<0, 1>(dataStored);
+  }
+#endif
+
 public:
   __device__ Primitives(int tid, int nthreads, int const* recvPeers, int const* sendPeers, void const* inputBuf,
                         void* outputBuf, uint64_t redOpArg, uint8_t group = 0, uint8_t connIndexRecv = 0,
@@ -793,6 +850,9 @@ public:
   }
 
   __device__ ~Primitives() {
+#if NCCL_NVLS_TMA_SCATTER_ARCH(__CUDA_ARCH__)
+    if (tmaState == 2) ncclNvlsTmaScatterRelease(ncclShmemPerWarp);
+#endif
     if (flags & PatMode) {
       if (patNvlsPeer != NULL) patNvlsPeer->conn->step = patNvlsPeer->step;
       return;
@@ -1027,7 +1087,13 @@ public:
   }
 
   __device__ __forceinline__ void scatter(intptr_t inpIx, ssize_t totalElem, int peerElem, ssize_t peerOffset, int skip,
-                                          int shift) {
+                                          int shift, uint32_t tmaTileBytes = 0) {
+#if NCCL_NVLS_TMA_SCATTER_ARCH(__CUDA_ARCH__)
+    if (NvlsTmaScatterCapable && tmaTileBytes != 0) {
+      tmaScatter(inpIx, totalElem, peerElem, peerOffset, skip, shift, tmaTileBytes);
+      return;
+    }
+#endif
     ScatterGatherOp<0, 0, 0, 1>(inpIx, -1, totalElem, peerElem, peerOffset, skip, shift, /*postOp=*/false);
   }
   // Like scatter(), but remaps each peer's source offset through `remap` (e.g. the NVLS

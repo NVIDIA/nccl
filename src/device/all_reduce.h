@@ -421,13 +421,19 @@ struct RunWorkColl<ncclFuncAllReduce, T, RedOp, NCCL_ALGO_NVLS, NCCL_PROTO_SIMPL
       if (tid < tidEndScatter) {
         // Scatter
         using Proto = ProtoSimple<1, 1, COLL_UNROLL>;
-        Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0> prims(
-          tid, nThreadsScatter, NULL, nvls->up, work->sendbuff, NULL, work->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
-        for (ssize_t elemOffset = 0; elemOffset < channelCount; elemOffset += loopCount) {
-          if (channelCount - elemOffset < loopCount) chunkSize = lastChunkSize;
-          ssize_t offset = gridOffset + elemOffset;
-          int nelem = work->regUsed ? 0 : min(loopCount, channelCount - elemOffset);
-          prims.scatter(offset, nelem, chunkSize, chunkSize, -1, 0);
+        int nThreads = nThreadsScatter;
+#if NCCL_NVLS_TMA_SCATTER_ARCH(__CUDA_ARCH__)
+        if (work->nvlsTmaScatterTileBytes != 0) nThreads = 3 * WARP_SIZE;
+#endif
+        if (tid < nThreads) {
+          Primitives<T, RedOp, FanAsymmetric<0, NCCL_MAX_NVLS_ARITY>, /*Direct=*/0, Proto, 0> prims(
+            tid, nThreads, NULL, nvls->up, work->sendbuff, NULL, work->redOpArg, 0 * Proto::MaxGroupWidth, 1, 1);
+          for (ssize_t elemOffset = 0; elemOffset < channelCount; elemOffset += loopCount) {
+            if (channelCount - elemOffset < loopCount) chunkSize = lastChunkSize;
+            ssize_t offset = gridOffset + elemOffset;
+            int nelem = work->regUsed ? 0 : min(loopCount, channelCount - elemOffset);
+            prims.scatter(offset, nelem, chunkSize, chunkSize, -1, 0, work->nvlsTmaScatterTileBytes);
+          }
         }
       } else if (tid < tidEndGather) {
         // Gather

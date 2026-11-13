@@ -75,9 +75,6 @@ uint16_t translate_gid_table_size(uint16_t gid_table_size_prm) {
             // Shouldn't reach this
             return 0;
     }
-
-    // Shouldn't reach this
-    return 0;
 }
 
 } /* namespace */
@@ -314,14 +311,10 @@ doca_error_t doca_verbs_device_attr_get_is_qp_type_supported(
         case DOCA_VERBS_QP_TYPE_RC:
             return verbs_device_attr->m_is_qp_rc_supported ? DOCA_SUCCESS
                                                            : DOCA_ERROR_NOT_SUPPORTED;
-            break;
         default:
             DOCA_LOG(LOG_ERR, "Failed to check if QP type is supported. param QP type is invalid");
             return DOCA_ERROR_INVALID_VALUE;
     }
-
-    // Shouldn't reach this
-    return DOCA_ERROR_UNEXPECTED;
 }
 
 uint8_t doca_verbs_device_attr_get_send_dbr_mode_no_dbr_ext(

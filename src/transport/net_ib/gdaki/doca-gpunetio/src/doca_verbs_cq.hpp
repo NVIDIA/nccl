@@ -222,5 +222,4 @@ struct doca_verbs_comp_channel_open {
     struct ibv_context *ibv_ctx;
     struct mlx5dv_devx_event_channel *channel{};
     std::set<struct doca_verbs_cq_open *> cqs;
-    bool degraded{false};
 };

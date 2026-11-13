@@ -400,8 +400,6 @@ doca_error_t doca_verbs_srq_create(struct ibv_context *context,
     } catch (doca_error_t err) {
         return err;
     }
-
-    return DOCA_SUCCESS;
 }
 
 doca_error_t doca_verbs_srq_destroy(struct doca_verbs_srq *verbs_srq) {

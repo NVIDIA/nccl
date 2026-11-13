@@ -556,12 +556,10 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
       } else if (params->intraBatchSync) {
         // Find the maximum transfer size to determine number of rounds
         size_t maxSize = 0;
-        size_t totalSize = 0;
         for (int i = 0; i < params->numOps; i++) {
           if (params->sizes[i] > maxSize) {
             maxSize = params->sizes[i];
           }
-          totalSize += params->sizes[i];
         }
 
         size_t chunkSize = comm->ceColl.intraBatchSyncMsgThreshold / params->numOps;

@@ -1308,10 +1308,6 @@ ncclResult_t ncclGinGdakiCreateContext(void* collComm, ncclGinConfig_t* config, 
 out:
   if (status != ncclSuccess) {
     if (gdaki_ctx) {
-      if (gdaki_ctx->docaEvent) {
-        doca_verbs_comp_channel_destroy(gdaki_ctx->docaEvent);
-        gdaki_ctx->docaEvent = nullptr;
-      }
       // Clean up any allocated GPU memory
       if (gdaki_ctx->gin_gdaki_gpu_ctx_host_staging) {
         for (int ctx_idx = 0; ctx_idx < ncontexts; ctx_idx++) {
@@ -1351,6 +1347,16 @@ out:
       if (gdaki_ctx->self_companion_gqp_list) {
         doca_gpu_verbs_destroy_qp_list_hl(gdaki_ctx->self_companion_gqp_list);
         gdaki_ctx->self_companion_gqp_list = nullptr;
+      }
+
+      // The completion channel must outlive all QPs and their CQs.
+      if (gdaki_ctx->docaEvent) {
+        doca_error_t err = doca_verbs_comp_channel_destroy(gdaki_ctx->docaEvent);
+        if (err != DOCA_SUCCESS) {
+          WARN("GIN/GDAKI: failed to destroy completion channel during rollback: %d", err);
+        } else {
+          gdaki_ctx->docaEvent = nullptr;
+        }
       }
 
       if (gdaki_ctx->gqp_groups) free(gdaki_ctx->gqp_groups);
@@ -1404,11 +1410,6 @@ ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx) {
   const int nranks = cComm->nranks;
   const int ncontexts = gdaki_ctx->nContexts;
 
-  if (gdaki_ctx->docaEvent) {
-    doca_verbs_comp_channel_destroy(gdaki_ctx->docaEvent);
-    gdaki_ctx->docaEvent = nullptr;
-  }
-
   if (gdaki_ctx->gin_gdaki_gpu_ctx_host_staging) {
     struct doca_gpu_verbs_qp** gverbs_qps =
       (struct doca_gpu_verbs_qp**)calloc(nranks, sizeof(struct doca_gpu_verbs_qp*));
@@ -1457,6 +1458,12 @@ ncclResult_t ncclGinGdakiDestroyContext(void* ginCtx) {
   if (gdaki_ctx->self_companion_gqp_list) {
     DOCACHECK(doca_gpu_verbs_destroy_qp_list_hl(gdaki_ctx->self_companion_gqp_list));
     gdaki_ctx->self_companion_gqp_list = nullptr;
+  }
+
+  // The completion channel must outlive all QPs and their CQs.
+  if (gdaki_ctx->docaEvent) {
+    DOCACHECK(doca_verbs_comp_channel_destroy(gdaki_ctx->docaEvent));
+    gdaki_ctx->docaEvent = nullptr;
   }
 
   if (gdaki_ctx->gqp_groups) free(gdaki_ctx->gqp_groups);

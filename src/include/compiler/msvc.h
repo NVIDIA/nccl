@@ -151,4 +151,11 @@ inline int nccl_clzll_impl(unsigned long long x) {
 // Unused variable/parameter attribute (MSVC doesn't have __attribute__((unused)), use empty macro)
 #define COMPILER_ATTRIBUTE_UNUSED
 
+// Marks an intentional fall-through between switch labels
+#if _MSVC_LANG >= 201703L
+#define COMPILER_FALLTHROUGH [[fallthrough]]
+#else
+#define COMPILER_FALLTHROUGH
+#endif
+
 #endif // NCCL_COMPILER_MSVC_H

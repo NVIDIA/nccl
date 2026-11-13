@@ -59,7 +59,7 @@ static_assert(sizeof(ncclNetHandle_t) <= CONNECT_SIZE, "NET Connect info is too 
     } else { \
       (mapStruct)->offsets.offsetName = bank; \
     } \
-  } while (0);
+  } while (0)
 
 struct connectMapMem {
   char* gpuPtr;

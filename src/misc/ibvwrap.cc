@@ -30,10 +30,12 @@ ncclResult_t wrap_ibv_symbols(void) {
 
 /* CHECK_NOT_NULL: helper macro to check for NULL symbol */
 #define CHECK_NOT_NULL(container, internal_name) \
-  if (container.internal_name == NULL) { \
-    WARN("lib wrapper not initialized."); \
-    return ncclInternalError; \
-  }
+  do { \
+    if (container.internal_name == NULL) { \
+      WARN("lib wrapper not initialized."); \
+      return ncclInternalError; \
+    } \
+  } while (0)
 
 #define IBV_PTR_CHECK_ERRNO(container, internal_name, call, retval, error_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
@@ -42,7 +44,7 @@ ncclResult_t wrap_ibv_symbols(void) {
     WARN("Call to " name " failed with error %s", strerror(errno)); \
     return ncclSystemError; \
   } \
-  return ncclSuccess;
+  return ncclSuccess
 
 #define IBV_PTR_CHECK(container, internal_name, call, retval, error_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
@@ -51,7 +53,7 @@ ncclResult_t wrap_ibv_symbols(void) {
     WARN("Call to " name " failed"); \
     return ncclSystemError; \
   } \
-  return ncclSuccess;
+  return ncclSuccess
 
 #define IBV_INT_CHECK_RET_ERRNO_OPTIONAL(container, internal_name, call, success_retval, name, supported) \
   if (container.internal_name == NULL) { \
@@ -70,7 +72,7 @@ ncclResult_t wrap_ibv_symbols(void) {
     return ncclSystemError; \
   } \
   *supported = 1; \
-  return ncclSuccess;
+  return ncclSuccess
 
 #define IBV_INT_CHECK_RET_ERRNO(container, internal_name, call, success_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
@@ -79,7 +81,7 @@ ncclResult_t wrap_ibv_symbols(void) {
     WARN("Call to " name " failed with error %s errno %d", strerror(ret), ret); \
     return ncclSystemError; \
   } \
-  return ncclSuccess;
+  return ncclSuccess
 
 #define IBV_INT_CHECK(container, internal_name, call, error_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
@@ -88,12 +90,12 @@ ncclResult_t wrap_ibv_symbols(void) {
     WARN("Call to " name " failed"); \
     return ncclSystemError; \
   } \
-  return ncclSuccess;
+  return ncclSuccess
 
 #define IBV_PASSTHRU(container, internal_name, call) \
   CHECK_NOT_NULL(container, internal_name); \
   container.call; \
-  return ncclSuccess;
+  return ncclSuccess
 
 NCCL_PARAM(IbMQpRetryAll, "IB_MQP_RETRY_ALL", 0);
 NCCL_PARAM(IbMQpRetryCnt, "IB_MQP_RETRY_CNT", 34);

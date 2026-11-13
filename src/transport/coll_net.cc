@@ -71,7 +71,7 @@ static_assert(sizeof(collNetSendConnectInfo) <= CONNECT_SIZE, "Collnet Send Conn
     } else { \
       (mapStruct)->offsets.offsetName = bank; \
     } \
-  } while (0);
+  } while (0)
 
 struct connectMapMem {
   char* gpuPtr;

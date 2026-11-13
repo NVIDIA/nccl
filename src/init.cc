@@ -112,7 +112,7 @@ static void getEnvCtaPolicyOnce() {
     default:
       INFO(NCCL_ENV, "Unknown CTA policy; the legacy usage of NCCL_CTA_POLICY only supports the value of 0 (DEFAULT), "
                      "1 (EFFICIENCY), or 2 (ZERO). Using DEFAULT instead.");
-    };
+    }
   } else {
     // newer way allows the user to combine the modes
     char* str = strdup(env);
@@ -2367,11 +2367,13 @@ fail:
 }
 
 #define NCCL_CONFIG_DEFAULT(config, field, undef, defvalue, fieldStr, format) \
-  if (config->field == undef) { \
-    config->field = defvalue; \
-  } else { \
-    INFO(NCCL_ENV, "Comm config " fieldStr " set to " format, config->field); \
-  }
+  do { \
+    if (config->field == undef) { \
+      config->field = defvalue; \
+    } else { \
+      INFO(NCCL_ENV, "Comm config " fieldStr " set to " format, config->field); \
+    } \
+  } while (0)
 
 static ncclResult_t envConfigOverride(ncclComm_t comm) {
   ncclResult_t ret = ncclSuccess;
@@ -3063,7 +3065,7 @@ NCCL_API(ncclResult_t, ncclCommInitRank, ncclComm_t* newcomm, int nranks, ncclUn
 ncclResult_t ncclCommInitRank(ncclComm_t* newcomm, int nranks, ncclUniqueId commId, int myrank) {
   ncclResult_t ret = ncclSuccess;
   NCCLCHECK(ncclInitEnv());
-  NVTX3_RANGE(NcclNvtxParamsCommInitRank)
+  NVTX3_RANGE(NcclNvtxParamsCommInitRank);
   // Load the CUDA driver and dlsym hooks (can fail on old drivers)
   (void)ncclCudaLibraryInit();
 
@@ -3795,7 +3797,7 @@ NCCL_API(ncclResult_t, ncclCommShrink, ncclComm_t comm, int* excludeRanksList, i
          ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags);
 ncclResult_t ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm,
                             ncclConfig_t* config, int shrinkFlags) {
-  NVTX3_RANGE(NcclNvtxParamsCommShrink)
+  NVTX3_RANGE(NcclNvtxParamsCommShrink);
   ncclResult_t res = ncclSuccess;
   NCCLCHECK(ncclGroupStartInternal());
   // Handle error mode by setting abort flags and waiting for kernels to complete and unset the flags
@@ -3842,7 +3844,7 @@ NCCL_API(ncclResult_t, ncclCommGrow, ncclComm_t comm, int nRanks, const ncclUniq
          ncclComm_t* newcomm, ncclConfig_t* config);
 ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqueId, int rank, ncclComm_t* newcomm,
                           ncclConfig_t* config) {
-  NVTX3_RANGE(NcclNvtxParamsCommGrow)
+  NVTX3_RANGE(NcclNvtxParamsCommGrow);
 
   if (newcomm == NULL) return ncclInvalidArgument;
   if (nRanks <= 0) {
@@ -4018,7 +4020,7 @@ fail:
 
 NCCL_API(ncclResult_t, ncclCommSplit, ncclComm_t comm, int color, int key, ncclComm_t* newcomm, ncclConfig_t* config);
 ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t* newcomm, ncclConfig_t* config) {
-  NVTX3_RANGE(NcclNvtxParamsCommSplit)
+  NVTX3_RANGE(NcclNvtxParamsCommSplit);
 
   ncclResult_t res = ncclSuccess;
   NCCLCHECK(ncclGroupStartInternal());

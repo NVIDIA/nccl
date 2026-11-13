@@ -28,10 +28,12 @@ ncclResult_t wrap_mlx5dv_symbols(void) {
 
 /* CHECK_NOT_NULL: helper macro to check for NULL symbol */
 #define CHECK_NOT_NULL(container, internal_name) \
-  if (container.internal_name == NULL) { \
-    WARN("NET/MLX5: lib wrapper not initialized."); \
-    return ncclInternalError; \
-  }
+  do { \
+    if (container.internal_name == NULL) { \
+      WARN("NET/MLX5: lib wrapper not initialized."); \
+      return ncclInternalError; \
+    } \
+  } while (0)
 
 #define MLX5DV_PTR_CHECK_ERRNO(container, internal_name, call, retval, error_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
@@ -40,7 +42,7 @@ ncclResult_t wrap_mlx5dv_symbols(void) {
     WARN("NET/MLX5: Call to " name " failed with error %s", strerror(errno)); \
     return ncclSystemError; \
   } \
-  return ncclSuccess;
+  return ncclSuccess
 
 #define MLX5DV_INT_CHECK_RET_ERRNO(container, internal_name, call, success_retval, name) \
   CHECK_NOT_NULL(container, internal_name); \
@@ -49,7 +51,7 @@ ncclResult_t wrap_mlx5dv_symbols(void) {
     WARN("NET/MLX5: Call to " name " failed with error %s", strerror(errno)); \
     return ncclSystemError; \
   } \
-  return ncclSuccess;
+  return ncclSuccess
 
 bool wrap_mlx5dv_is_supported(struct ibv_device* device) {
   if (mlx5dvSymbols.mlx5dv_internal_is_supported == NULL) {

@@ -177,7 +177,7 @@ static inline size_t rasCollDataLength(rasCollectiveType type) {
     return offsetof(struct rasCollRequest, diag) + sizeof(data->diag);
   case RAS_MSG_NONE:
     return 0;
-  };
+  }
   return 0;
 }
 
@@ -197,7 +197,7 @@ static inline size_t rasMsgLength(rasMsgType type, rasCollectiveType collType = 
     return offsetof(struct rasMsg, collReq) + rasCollDataLength(collType);
   case RAS_MSG_COLLRESP:
     return offsetof(struct rasMsg, collResp) + sizeof(msg->collResp);
-  };
+  }
   return 0;
 }
 

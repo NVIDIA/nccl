@@ -99,9 +99,9 @@ extern char ncclLastError[];
   TRACE((FLAGS), "%s:%d (%s) " fmt, (file), (line), (fn), ##__VA_ARGS__)
 #define TRACE_LOC(FLAGS, fmt, ...) TRACE_LOC_FN((FLAGS), __FILE__, __LINE__, __func__, fmt, ##__VA_ARGS__)
 #else
-#define TRACE(...)
-#define TRACE_LOC_FN(FLAGS, file, line, fn, fmt, ...)
-#define TRACE_LOC(FLAGS, fmt, ...)
+#define TRACE(...) do { } while (0)
+#define TRACE_LOC_FN(FLAGS, file, line, fn, fmt, ...) do { } while (0)
+#define TRACE_LOC(FLAGS, fmt, ...) do { } while (0)
 #endif
 
 void ncclSetThreadName(std::thread& thread, const char* fmt, ...);

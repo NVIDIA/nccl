@@ -134,23 +134,27 @@ private:
 // @param P payload parameters/entries
 #define NVTX3_FUNC_WITH_PARAMS(N, T, P) \
   ncclOptionalNvtxScopedRange nvtx3_range__; \
-  if (!ncclParamNvtxDisable()) { \
-    constexpr uint64_t schemaId = NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START + NVTX_SID_##N; \
-    static const payload_schema schema{T##Schema, std::extent<decltype(T##Schema)>::value - 1, schemaId, sizeof(T)}; \
-    static ::nvtx3::v1::registered_string_in<nccl_domain> const nvtx3_func_name__{__func__}; \
-    const T _payload = {P}; \
-    nvtxPayloadData_t nvtx3_bpl__[] = {{schemaId, sizeof(_payload), &_payload}}; \
-    ::nvtx3::v1::event_attributes const nvtx3_func_attr__{nvtx3_func_name__, nvtx3_bpl__}; \
-    nvtx3_range__.push(nvtx3_func_attr__); \
-  }
+  do { \
+    if (!ncclParamNvtxDisable()) { \
+      constexpr uint64_t schemaId = NVTX_PAYLOAD_ENTRY_TYPE_SCHEMA_ID_STATIC_START + NVTX_SID_##N; \
+      static const payload_schema schema{T##Schema, std::extent<decltype(T##Schema)>::value - 1, schemaId, sizeof(T)}; \
+      static ::nvtx3::v1::registered_string_in<nccl_domain> const nvtx3_func_name__{__func__}; \
+      const T _payload = {P}; \
+      nvtxPayloadData_t nvtx3_bpl__[] = {{schemaId, sizeof(_payload), &_payload}}; \
+      ::nvtx3::v1::event_attributes const nvtx3_func_attr__{nvtx3_func_name__, nvtx3_bpl__}; \
+      nvtx3_range__.push(nvtx3_func_attr__); \
+    } \
+  } while (0)
 
 #define NCCL_NVTX3_FUNC_RANGE \
   ncclOptionalNvtxScopedRange nvtx3_range__; \
-  if (!ncclParamNvtxDisable()) { \
-    static ::nvtx3::v1::registered_string_in<nccl_domain> const nvtx3_func_name__{__func__}; \
-    static ::nvtx3::v1::event_attributes const nvtx3_func_attr__{nvtx3_func_name__}; \
-    nvtx3_range__.push(nvtx3_func_attr__); \
-  }
+  do { \
+    if (!ncclParamNvtxDisable()) { \
+      static ::nvtx3::v1::registered_string_in<nccl_domain> const nvtx3_func_name__{__func__}; \
+      static ::nvtx3::v1::event_attributes const nvtx3_func_attr__{nvtx3_func_name__}; \
+      nvtx3_range__.push(nvtx3_func_attr__); \
+    } \
+  } while (0)
 
 /// @brief Creates an NVTX range with extended payload using the RAII pattern.
 /// @tparam PayloadType Data type of the payload.
@@ -200,11 +204,13 @@ private:
 // @param T Type ID of the NVTX payload (pointer for variable-size payloads).
 #define NVTX3_RANGE(T) \
   ncclOptionalNvtxPayloadRange<T> nvtx3_range__; \
-  if (!ncclParamNvtxDisable()) { \
-    static ::nvtx3::v1::registered_string_in<nccl_domain> const nvtx3_func_name__{__func__}; \
-    ::nvtx3::v1::event_attributes const nvtx3_func_attr__{nvtx3_func_name__}; \
-    nvtx3_range__.push(nvtx3_func_attr__); \
-  }
+  do { \
+    if (!ncclParamNvtxDisable()) { \
+      static ::nvtx3::v1::registered_string_in<nccl_domain> const nvtx3_func_name__{__func__}; \
+      ::nvtx3::v1::event_attributes const nvtx3_func_attr__{nvtx3_func_name__}; \
+      nvtx3_range__.push(nvtx3_func_attr__); \
+    } \
+  } while (0)
 
 // Add static-size payload to the NVTX range created with `NVTX3_RANGE()`,
 // which must be in this or an outer scope.

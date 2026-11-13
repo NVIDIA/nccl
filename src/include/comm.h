@@ -931,7 +931,7 @@ inline int ncclCommNMaxChannels(struct ncclComm* comm, int isCollNet, int isNvls
   if (isCollNet && isNvls) return std::min(comm->nChannels, comm->nvlsChannels);
   if (isCollNet /* &&!isNvls */) return comm->nChannels;
   if (/* !isCollNet&& */ isNvls) return comm->nvlsChannels;
-  /*if ( !isCollNet&& !isNvls)*/ return comm->nChannels;
+  return comm->nChannels; /* !isCollNet && !isNvls */
 }
 
 inline ncclResult_t ncclCommPollEventCallbacks(struct ncclComm* comm, bool waitSome) {

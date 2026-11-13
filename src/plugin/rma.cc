@@ -52,7 +52,7 @@ typedef struct rmaPluginLib {
 } rmaPluginLib_t;
 
 static int pluginCount = 0;
-static rmaPluginLib_t pluginLibs[NCCL_RMA_MAX_PLUGINS] = {0};
+static rmaPluginLib_t pluginLibs[NCCL_RMA_MAX_PLUGINS] = {};
 static std::mutex pluginMutex;
 static std::once_flag initPluginLibsOnceFlag;
 

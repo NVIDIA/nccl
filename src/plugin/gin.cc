@@ -49,7 +49,7 @@ typedef struct ginPluginLib {
 } ginPluginLib_t;
 
 static int pluginCount = 0;
-static ginPluginLib_t pluginLibs[NCCL_GIN_MAX_PLUGINS] = {0};
+static ginPluginLib_t pluginLibs[NCCL_GIN_MAX_PLUGINS] = {};
 static std::mutex pluginMutex;
 static std::once_flag initPluginLibsOnceFlag;
 

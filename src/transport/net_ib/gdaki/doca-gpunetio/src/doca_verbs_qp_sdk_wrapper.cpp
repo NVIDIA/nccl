@@ -771,8 +771,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_create(void **qp_in
         DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH not set %s. DOCA SDK is not in use", val);
         return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
     }
-
-    return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
 }
 
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_init_attr_destroy(void *qp_init_attr) {
@@ -1256,8 +1254,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_create(void **qp_attr) {
         DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH not set %s. DOCA SDK is not in use", val);
         return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
     }
-
-    return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
 }
 
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_destroy(void *qp_attr) {
@@ -1677,8 +1673,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_ah_attr_create(doca_dev_t *net_d
         DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH not set %s. DOCA SDK is not in use", val);
         return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
     }
-
-    return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
 }
 
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_ah_attr_destroy(void *ah_attr) {
@@ -1894,8 +1888,6 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_create(doca_dev_t *net_dev,
         DOCA_LOG(LOG_WARNING, "Env var DOCA_SDK_LIB_PATH not set %s. DOCA SDK is not in use", val);
         return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
     }
-
-    return DOCA_SDK_WRAPPER_NOT_SUPPORTED;
 }
 
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_destroy(void *verbs_qp) {

@@ -605,9 +605,6 @@ bool doca_verbs_qp_open::is_qp_attr_state_valid(enum doca_verbs_qp_state state) 
             DOCA_LOG(LOG_ERR, "state is invalid (value is %u)", state);
             return false;
     }
-
-    // Shouldn't reach this
-    return true;
 }
 
 bool doca_verbs_qp_open::is_qp_attr_path_mtu_valid(enum doca_verbs_mtu_size path_mtu) noexcept {
@@ -622,9 +619,6 @@ bool doca_verbs_qp_open::is_qp_attr_path_mtu_valid(enum doca_verbs_mtu_size path
             DOCA_LOG(LOG_ERR, "path_mtu is invalid (value is %u)", path_mtu);
             return false;
     }
-
-    // Shouldn't reach this
-    return true;
 }
 
 // No value of PSN causes a value (we print a warning and mask it in case of overflow)
@@ -649,9 +643,6 @@ bool doca_verbs_qp_open::is_qp_attr_ah_add_type_valid(
             DOCA_LOG(LOG_ERR, "addr_type is invalid (value is %u)", addr_type);
             return false;
     }
-
-    // Shouldn't reach this
-    return true;
 }
 
 bool doca_verbs_qp_open::is_qp_attr_ah_sgid_index_valid(uint8_t sgid_index) noexcept {

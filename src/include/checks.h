@@ -49,7 +49,7 @@ static inline cudaError_t cuda_clear(cudaError_t err) {
 }
 
 // Check if cudaSuccess & clear CUDA error
-#define CUDASUCCESS(cmd) cuda_clear(cmd) == cudaSuccess
+#define CUDASUCCESS(cmd) (cuda_clear(cmd) == cudaSuccess)
 // Clear CUDA error, return CUDA return code
 #define CUDACLEARERROR(cmd) cuda_clear(cmd)
 

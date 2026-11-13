@@ -1519,7 +1519,6 @@ static ncclResult_t uploadWork(struct ncclComm* comm, struct ncclKernelPlan* pla
       if (!cleanup) ncclOsAlignedFree(fifoBufHost);
       goto finish_scope;
     }
-    break;
   default:
     break;
   }

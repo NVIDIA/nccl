@@ -1293,7 +1293,6 @@ static ncclResult_t socketAccept(void* commState, int peer, int tag, struct nccl
     // No match: queue for later and try next connection
     NCCLCHECKGOTO(unexpectedEnqueue(state, ack.rank, ack.tag, sock), ret, fail);
   }
-  return ncclSuccess;
 fail:
   (void)ncclSocketClose(sock);
   return ret;

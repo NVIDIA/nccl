@@ -487,8 +487,9 @@ static ncclResult_t dmaBufSupported(struct ncclComm* comm) {
   if (flag == 0) return ncclInternalError;
   INFO(NCCL_INIT, "DMA-BUF is available on GPU device %d", comm->cudaDev);
   return ncclSuccess;
-#endif
+#else
   return ncclInternalError;
+#endif
 }
 
 ncclResult_t ncclCommEnsureReady(ncclComm_t comm) {

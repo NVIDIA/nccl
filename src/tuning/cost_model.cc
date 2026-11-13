@@ -11,6 +11,7 @@
 #include "platforms/platforms.h"
 #include "comm.h"
 #include "cudawrap.h"
+#include <vector>
 
 // Parse a map of prefixes to a list of elements. The first prefix is
 // optional and, if not present, the list of elements will be applied
@@ -429,45 +430,57 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   }
 
   if (comm->rank == 0 && (algoStr || protoStr || symKernelIdStr)) {
-    constexpr int strLength = 4096;
-    char funcAlgoProtoSymKernelIdTuningStr[strLength];
+    // Each name is padded to its field width, and a longer name is printed in
+    // full, so size every column from the longer of the two. The rows print
+    // small flags, which fit their field.
+    auto column = [](const char* name, int width) { return std::max((int)strlen(name), width); };
+    int funcColumn = 13; // "     Function" in the header
+    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) funcColumn = std::max(funcColumn, column(tuningFuncStr[f], 13));
+    int lineLength = funcColumn + 3 + 3 + 3 + 1; // " | " three times and "\n"
+    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) lineLength += column(ncclProtoStr[p], 8) + 2;
+    for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) lineLength += column(ncclAlgoStr[a], 13) + 2;
+    for (int k = 0; k < ncclSymkKernelId_Count; k++) lineLength += column(ncclSymkKernelIdToString(k), 13) + 2;
+    // The header and one line per function, plus the newline that starts the
+    // header and the null terminator.
+    const int strLength = (1 + NCCL_NUM_TUNING_FUNCTIONS) * lineLength + 1 + 1;
+    std::vector<char> buffer(strLength);
+    char* funcAlgoProtoSymKernelIdTuningStr = buffer.data();
     int offset = 0;
-    offset +=
-      snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n     Function | ");
+    // snprintf returns the length it would have written, so clamp the offset to
+    // keep the next write inside the buffer.
+    auto advance = [&](int n) { offset += std::max(0, std::min(n, strLength - 1 - offset)); };
+    advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "\n     Function | "));
     for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
-      offset +=
-        snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%8s  ", ncclProtoStr[p]);
+      advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "%8s  ", ncclProtoStr[p]));
     }
-    offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
+    advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, " | "));
     for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
-      offset +=
-        snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s  ", ncclAlgoStr[a]);
+      advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "%13s  ", ncclAlgoStr[a]));
     }
-    offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
+    advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, " | "));
     for (int k = 0; k < ncclSymkKernelId_Count; k++) {
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s  ",
-                         ncclSymkKernelIdToString(k));
+      advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "%13s  ",
+                       ncclSymkKernelIdToString(k)));
     }
-    offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n");
+    advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "\n"));
 
     for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s | ",
-                         tuningFuncStr[f]);
+      advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "%13s | ", tuningFuncStr[f]));
       for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
-        offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%8d  ",
-                           f < NCCL_NUM_FUNCTIONS ? protoEnable[f * NCCL_NUM_PROTOCOLS + p] : -1);
+        advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "%8d  ",
+                         f < NCCL_NUM_FUNCTIONS ? protoEnable[f * NCCL_NUM_PROTOCOLS + p] : -1));
       }
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
+      advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, " | "));
       for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
-        offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13d  ",
-                           f < NCCL_NUM_FUNCTIONS ? algoEnable[f * NCCL_NUM_ALGORITHMS + a] : -1);
+        advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "%13d  ",
+                         f < NCCL_NUM_FUNCTIONS ? algoEnable[f * NCCL_NUM_ALGORITHMS + a] : -1));
       }
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
+      advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, " | "));
       for (int k = 0; k < ncclSymkKernelId_Count; k++) {
-        offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13d  ",
-                           symKernelIdEnable[f * ncclSymkKernelId_Count + k]);
+        advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "%13d  ",
+                         symKernelIdEnable[f * ncclSymkKernelId_Count + k]));
       }
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n");
+      advance(snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, strLength - offset, "\n"));
     }
 
     INFO(NCCL_ENV, "Enabled NCCL Func/Proto/Algo Matrix:%s", funcAlgoProtoSymKernelIdTuningStr);

@@ -475,6 +475,26 @@ inline struct ncclTaskColl* ncclTaskCollSorterDequeueAll(struct ncclTaskCollSort
   return head;
 }
 
+// Restore descending size-bin order, preserving the input order within each bin.
+// The sorter must be empty on entry.
+inline struct ncclTaskColl* ncclTaskCollSorterStableSort(
+    struct ncclTaskCollSorter* me, struct ncclTaskColl* head) {
+  struct ncclTaskColl* reversed = nullptr;
+  while (head != nullptr) {
+    struct ncclTaskColl* next = head->next;
+    head->next = reversed;
+    reversed = head;
+    head = next;
+  }
+  while (reversed != nullptr) {
+    struct ncclTaskColl* next = reversed->next;
+    ncclTaskCollSorterInsert(me, reversed, reversed->trafficBytes);
+    reversed = next;
+  }
+  return ncclTaskCollSorterDequeueAll(me);
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////
 
 struct ncclCudaStreamList {

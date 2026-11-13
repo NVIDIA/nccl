@@ -485,6 +485,8 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
   // Skip symmetric kernels for cross-clique
   if (comm->symmetricSupport && !comm->p2pCrossClique) {
     NCCLCHECK(ncclMakeSymmetricTaskList(comm, task, &planner->collSymTaskQueue, &task, needGenkDevComm));
+    // Symmetric fallback may disturb the descending size-bin order.
+    task = ncclTaskCollSorterStableSort(&planner->collSorter, task);
   }
 
   // Walk the size sorted tasks, binning them by (fn,op,ty).

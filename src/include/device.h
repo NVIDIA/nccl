@@ -601,11 +601,10 @@ __host__ __device__ constexpr bool ncclNvlsTmaScatterValidTile(int64_t bytes) {
 static_assert(ncclNvlsTmaScatterHeaderBytes + ncclNvlsTmaScatterMaxTileBytes <= ncclShmemDynamicSize(1070),
               "NVLS TMA scatter tile must fit in the per-warp scratch");
 
-inline bool ncclNvlsTmaScatterEligible(int cudaArch, int func, int algorithm, int protocol, int devRedOp, bool oneNode,
+inline bool ncclNvlsTmaScatterEligible(int cudaArch, int func, int algorithm, int protocol, bool oneNode,
                                        bool registered, int nHeads) {
   return NCCL_NVLS_TMA_SCATTER_ARCH(cudaArch) && func == ncclFuncAllReduce && algorithm == NCCL_ALGO_NVLS &&
-         protocol == NCCL_PROTO_SIMPLE && (devRedOp == ncclDevSum || devRedOp == ncclDevMinMax) && oneNode &&
-         !registered && 0 < nHeads && nHeads <= WARP_SIZE;
+         protocol == NCCL_PROTO_SIMPLE && oneNode && !registered && 0 < nHeads && nHeads <= WARP_SIZE;
 }
 
 // Host-side table of kernel function pointers.

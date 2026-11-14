@@ -705,11 +705,11 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
     struct ncclDevWorkColl* devWork = (struct ncclDevWorkColl*)(workNode + 1);
     size_t elementSize = ncclTypeSize(task->datatype);
 
-    if (comm->nvlsTmaScatterTileBytes != 0 &&
-        ncclNvlsTmaScatterEligible(comm->cudaArch, task->func, task->algorithm, task->protocol, task->opDev.op,
-                                   devWork->oneNode, devWork->regUsed, comm->channels[0].nvls.nHeads)) {
-      devWork->nvlsTmaScatterTileBytes = comm->nvlsTmaScatterTileBytes;
-    }
+    task->nvlsTmaScatter =
+      comm->nvlsTmaScatterTileBytes != 0 &&
+      ncclNvlsTmaScatterEligible(comm->cudaArch, task->func, task->algorithm, task->protocol, devWork->oneNode,
+                                 devWork->regUsed, comm->channels[0].nvls.nHeads);
+    if (task->nvlsTmaScatter) devWork->nvlsTmaScatterTileBytes = comm->nvlsTmaScatterTileBytes;
 
     int kind = 2 * task->isCollnet + task->isNvls;
     if (kind != kindPrev) {
@@ -2516,7 +2516,8 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
                                      struct ncclProxyOp* proxyOp) {
   int chunkSize, chunkSteps, stepSize;
   NCCLCHECK(ncclTuningComputeChunkSize(comm, nChannels, nBytes, info->func, info->algorithm, info->protocol,
-                                       info->chunkSteps, info->regBufType, &chunkSize, &chunkSteps, &stepSize));
+                                       info->chunkSteps, info->regBufType, info->nvlsTmaScatter, &chunkSize,
+                                       &chunkSteps, &stepSize));
   int sliceSteps = ncclGetSliceSteps(info->protocol, info->algorithm, info->sliceSteps);
   calcCollDirectFlags(info, outDirectFlags);
   NCCLCHECK(calcCollProxyOp(comm, info, nChannels, nBytes, chunkSize, chunkSteps, sliceSteps, stepSize, proxyOp));

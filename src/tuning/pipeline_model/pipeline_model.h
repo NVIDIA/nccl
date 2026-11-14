@@ -80,9 +80,12 @@ inline ncclResult_t ncclTuningPipelineComputeChunkSize(struct ncclTuningInput_t*
   int chunkSteps;
   int stepSize;
   int chunkSize;
+  bool nvlsTmaScatter = comm->nvlsTmaScatterTileBytes != 0 &&
+                        ncclNvlsTmaScatterEligible(comm->cudaArch, inputs->func, tuning->algo, tuning->proto,
+                                                   comm->nNodes == 1, false, comm->channels[0].nvls.nHeads);
   NCCLCHECK(ncclTuningComputeChunkSize(comm, tuning->nChannels, ncclTuningGeneralBytes(inputs), inputs->func,
-                                       tuning->algo, tuning->proto, inputs->chunkSteps, /*regBufType=*/0, &chunkSize,
-                                       &chunkSteps, &stepSize));
+                                       tuning->algo, tuning->proto, inputs->chunkSteps, /*regBufType=*/0,
+                                       nvlsTmaScatter, &chunkSize, &chunkSteps, &stepSize));
   pipeline->nominalChunkSize = chunkSize;
   pipeline->chunkSize = std::min(pipeline->nominalChunkSize, pipeline->channelSize);
 

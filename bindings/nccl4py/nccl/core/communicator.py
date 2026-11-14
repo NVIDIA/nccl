@@ -2109,7 +2109,7 @@ class Communicator:
         s, r = NcclBuffer(sendbuf), None
         self._validate_buffer_device(s, "sendbuf")
         if root is None or root == self.rank:
-            r = NcclBuffer(recvbuf)
+            r = s if recvbuf is sendbuf else NcclBuffer(recvbuf)
             self._validate_buffer_device(r, "recvbuf")
 
         if r is not None:

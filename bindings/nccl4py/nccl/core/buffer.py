@@ -12,6 +12,7 @@ pointers, counts, and dtypes required by NCCL operations.
 
 from __future__ import annotations
 import math
+import sys
 
 from cuda.core import Buffer
 from cuda.core.utils import StridedMemoryView, args_viewable_as_strided_memory
@@ -111,19 +112,23 @@ class NcclBuffer:
 
         resolved = None
 
-        try:
-            from nccl.core.interop.torch import resolve_tensor
+        # Framework objects already have their defining module loaded. Leave
+        # optional frameworks unloaded when resolving a CUDA array or DLPack buffer.
+        torch = sys.modules.get("torch")
+        cupy = sys.modules.get("cupy")
+        if isinstance(buffer, getattr(torch, "Tensor", ())):
+            try:
+                from nccl.core.interop.torch import resolve_tensor
 
-            resolved = resolve_tensor(buffer)
-        except (ImportError, ModuleNotFoundError, NcclInvalid):
-            pass
-
-        if resolved is None:
+                resolved = resolve_tensor(buffer)
+            except (ImportError, NcclInvalid):
+                pass
+        elif isinstance(buffer, getattr(cupy, "ndarray", ())):
             try:
                 from nccl.core.interop.cupy import resolve_array
 
                 resolved = resolve_array(buffer)
-            except (ImportError, ModuleNotFoundError, NcclInvalid):
+            except (ImportError, NcclInvalid):
                 pass
 
         if resolved is not None:

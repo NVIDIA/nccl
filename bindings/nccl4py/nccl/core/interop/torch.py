@@ -11,6 +11,8 @@ memory, enabling zero-copy integration between NCCL operations and PyTorch workf
 
 from __future__ import annotations
 
+from functools import cache
+
 import numpy as np
 from typing import Literal
 
@@ -28,6 +30,7 @@ except ImportError:
     _torch_enabled = False
 
 
+@cache
 def _to_nccl_dtype(torch_dtype) -> NcclDataType:
     """Converts a PyTorch dtype to NcclDataType.
 

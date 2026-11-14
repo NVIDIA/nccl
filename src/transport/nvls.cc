@@ -58,11 +58,11 @@ static ncclResult_t nvlsFreeUc(struct ncclComm* comm, struct ncclNvlsUcSegment* 
 
 NCCL_PARAM(NvlsEnable, "NVLS_ENABLE", 2);
 NCCL_PARAM(NvlsChunkSize, "NVLS_CHUNKSIZE", 128 * 1024);
-NCCL_PARAM(NvlsTmaScatter, "NVLS_TMA_SCATTER", 0);
+NCCL_PARAM(NvlsTmaScatter, "NVLS_TMA_SCATTER", -1);
 NCCL_PARAM(NvlsTmaScatterTileBytes, "NVLS_TMA_SCATTER_TILE_BYTES", 64 * 1024);
 NCCL_PARAM(NvlsTreeMaxChunkSize, "NVLSTREE_MAX_CHUNKSIZE", -2);
 // NVLS staging FIFO layout:
-//  -1: automatic (layout 2 for multi-node Rubin+, layout 1 for single-node Rubin+, layout 0 otherwise)
+//  -1: automatic (layout 2 for Rubin+, layout 0 otherwise)
 //   0: [head][dir][channel][slot]
 //   1: [channel][slot][head][dir]   (all streams of a channel at one step are contiguous)
 //   2: [slot][channel][head][dir]   (all streams of all channels at one step are contiguous)
@@ -81,8 +81,7 @@ static ncclResult_t ncclNvlsGetFifoLayout(struct ncclComm* comm, int* layout) {
     return ncclSuccess;
   }
 
-  // On Rubin and later, use layout 2 for multi-node and layout 1 for single-node communicators.
-  *layout = (comm->nNodes == 1) ? 1 : 2;
+  *layout = 2;
   for (int r = 0; r < comm->nRanks; r++) {
     if (!RUBIN_AND_LATER(comm->peerInfo[r].cudaCompCap)) {
       *layout = 0;
@@ -252,13 +251,13 @@ ncclResult_t ncclNvlsInit(struct ncclComm* comm) {
 
   int64_t tmaEnabled = ncclParamNvlsTmaScatter();
   int64_t tmaTileBytes = ncclParamNvlsTmaScatterTileBytes();
-  if ((tmaEnabled != 0 && tmaEnabled != 1) || !ncclNvlsTmaScatterValidTile(tmaTileBytes)) {
-    WARN("NVLS TMA scatter requires NCCL_NVLS_TMA_SCATTER in {0, 1} and "
+  if (tmaEnabled < -1 || tmaEnabled > 1 || !ncclNvlsTmaScatterValidTile(tmaTileBytes)) {
+    WARN("NVLS TMA scatter requires NCCL_NVLS_TMA_SCATTER in {-1, 0, 1} and "
          "NCCL_NVLS_TMA_SCATTER_TILE_BYTES in [%d, %d], divisible by 16 (got %ld, %ld)",
          ncclNvlsTmaScatterMinTileBytes, ncclNvlsTmaScatterMaxTileBytes, tmaEnabled, tmaTileBytes);
     return ncclInvalidArgument;
   }
-  if (tmaEnabled) comm->nvlsTmaScatterTileBytes = (int)tmaTileBytes;
+  if (tmaEnabled == 1) comm->nvlsTmaScatterTileBytes = (int)tmaTileBytes;
 
   if (comm->hasMultiRankNvml) {
     if (ncclParamNvlsEnable() == 1) {
@@ -711,6 +710,9 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     comm->nvlsResources->nvlsShmem.round = 0;
     comm->nvlsResources->nvlsShmem.maxTypeSize = typeSize;
   }
+
+  if (ncclParamNvlsTmaScatter() == -1 && comm->nvlsResources->fifoLayout == 2)
+    comm->nvlsTmaScatterTileBytes = (int)ncclParamNvlsTmaScatterTileBytes();
 
 exit:
   free(parentSlots);

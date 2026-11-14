@@ -571,6 +571,7 @@ __host__ __device__ constexpr int ncclNvlsUnroll(int bytePerPack, int cudaArch =
 constexpr int ncclNvlsTmaScatterMinTileBytes = 8 << 10;
 constexpr int ncclNvlsTmaScatterMaxTileBytes = 64 << 10;
 constexpr int ncclNvlsTmaScatterHeaderBytes = 128;
+constexpr size_t ncclNvlsTmaScatterMinBytes = size_t(1) << 30;
 constexpr int ncclNvlsTmaScatterWarpScratchBytes =
   DIVUP(ncclNvlsTmaScatterHeaderBytes + ncclNvlsTmaScatterMaxTileBytes, NCCL_MAX_NTHREADS / WARP_SIZE);
 
@@ -602,9 +603,10 @@ static_assert(ncclNvlsTmaScatterHeaderBytes + ncclNvlsTmaScatterMaxTileBytes <= 
               "NVLS TMA scatter tile must fit in the per-warp scratch");
 
 inline bool ncclNvlsTmaScatterEligible(int cudaArch, int func, int algorithm, int protocol, bool oneNode,
-                                       bool registered, int nHeads) {
+                                       bool registered, int nHeads, size_t nBytes) {
   return NCCL_NVLS_TMA_SCATTER_ARCH(cudaArch) && func == ncclFuncAllReduce && algorithm == NCCL_ALGO_NVLS &&
-         protocol == NCCL_PROTO_SIMPLE && oneNode && !registered && 0 < nHeads && nHeads <= WARP_SIZE;
+         protocol == NCCL_PROTO_SIMPLE && oneNode && !registered && 0 < nHeads && nHeads <= WARP_SIZE &&
+         nBytes >= ncclNvlsTmaScatterMinBytes;
 }
 
 // Host-side table of kernel function pointers.

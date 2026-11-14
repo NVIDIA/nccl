@@ -708,7 +708,7 @@ static ncclResult_t scheduleCollTasksToPlan(struct ncclComm* comm, struct ncclKe
     task->nvlsTmaScatter =
       comm->nvlsTmaScatterTileBytes != 0 &&
       ncclNvlsTmaScatterEligible(comm->cudaArch, task->func, task->algorithm, task->protocol, devWork->oneNode,
-                                 devWork->regUsed, comm->channels[0].nvls.nHeads);
+                                 devWork->regUsed, comm->channels[0].nvls.nHeads, task->count * elementSize);
     if (task->nvlsTmaScatter) devWork->nvlsTmaScatterTileBytes = comm->nvlsTmaScatterTileBytes;
 
     int kind = 2 * task->isCollnet + task->isNvls;

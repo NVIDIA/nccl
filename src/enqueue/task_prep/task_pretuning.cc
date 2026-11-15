@@ -230,6 +230,23 @@ static ncclResult_t mergeBcastTasks(struct ncclComm* comm, ncclRawTaskBcastQueue
                                     struct ncclTaskTuningInfoQueue* tiq) {
   if (bcastQueue == nullptr) return ncclSuccess;
 
+  // Broadcasts from a single root gain nothing from an AllGatherV. As on the legacy enqueue
+  // path, tune them as regular collectives so they stay eligible for the general (GENK)
+  // broadcast kernels and for NCCL_SYM_KERNEL forcing.
+  int nRoots = 0;
+  for (auto& kv : *bcastQueue) {
+    if (!ncclIntruQueueEmpty(&kv.second)) nRoots++;
+  }
+  if (nRoots <= 1) {
+    for (auto& kv : *bcastQueue) {
+      while (!ncclIntruQueueEmpty(&kv.second)) {
+        NCCLCHECK(prepareTaskTuningInfo(comm, ncclIntruQueueDequeue(&kv.second), tiq));
+      }
+    }
+    bcastQueue->clear();
+    return ncclSuccess;
+  }
+
   // Each pass builds one AllGatherV by taking a single broadcast from every non-empty root
   // bucket. Repeat until every bucket is empty.
   while (!bcastQueue->empty()) {

@@ -1530,6 +1530,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     NCCLCHECKGOTO(ncclTopoRankToIndex(comm->topo, comm->rank, &gpu, false), ret, fail);
     NCCLCHECKGOTO(ncclTopoGetLocalNetCountByBw(comm->topo, gpu, &localNetCountByBw, &localNetBw), ret, fail);
     for (int n = 0; n < comm->topo->nodes[NET].count; n++) {
+      if (NCCL_TOPO_ID_SYSTEM_ID(comm->topo->nodes[NET].nodes[n].id) != comm->topo->systemId) continue;
       ncclNetProperties_t props;
       NCCLCHECKGOTO(comm->ncclNet->getProperties(comm->topo->nodes[NET].nodes[n].net.dev, &props), ret, fail);
       allGather3Data[rank].maxDevsPerNic = std::max(allGather3Data[rank].maxDevsPerNic, props.vProps.ndevs);

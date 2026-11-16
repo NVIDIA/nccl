@@ -113,6 +113,10 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
       if (comm->nNodes > 1) comm->tuningContext.generalLatencies[c][algo][proto] += interLat;
       // CTA-limited ReduceScatter also runs slower than the flat NVLS latency (measured on GB200/GB300, 32 GPUs).
       if (ctaLimited && c == ncclFuncReduceScatter) comm->tuningContext.generalLatencies[c][algo][proto] += 5.0f;
+      // Measured slower than modelled on GB200/GB300 at 16 GPUs.
+      if (singleNvlDomainAgRs && !ctaLimited && comm->minCompCap >= 100 && !RUBIN_AND_LATER(comm->minCompCap) &&
+          comm->localRanks > 8)
+        comm->tuningContext.generalLatencies[c][algo][proto] += 5.0f;
     } else if (algo == NCCL_ALGO_NVLS_TREE) {
       comm->tuningContext.generalLatencies[c][algo][proto] += intraLat + 2 * log2i(comm->nNodes) * interLat;
     }

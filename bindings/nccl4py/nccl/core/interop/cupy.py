@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Literal
 
-from nccl.core.buffer import mem_alloc
+from nccl.core.buffer import _check_dense_layout, mem_alloc
 from nccl.core.typing import NcclInvalid, NcclDataType
 
 __all__ = ["empty", "resolve_array"]
@@ -158,13 +158,16 @@ def resolve_array(array: cupy.ndarray) -> tuple[int, int, NcclDataType, int]:
 
     Raises:
         ModuleNotFoundError: If CuPy is not installed.
-        NcclInvalid: If array is not a CuPy ndarray or its dtype has no
-            NCCL equivalent.
+        NcclInvalid: If array is not a CuPy ndarray, its dtype has no
+            NCCL equivalent, or its layout has gaps or overlapping elements.
     """
     if not _cupy_enabled:
         raise ModuleNotFoundError("CuPy is not installed")
 
     if not isinstance(array, cupy.ndarray):
         raise NcclInvalid(f"array must be a CuPy array, got {type(array).__name__}")
+
+    if not (array.flags.c_contiguous or array.flags.f_contiguous):
+        _check_dense_layout(array.shape, array.strides, array.itemsize)
 
     return (array.data.ptr, array.size, _to_nccl_dtype(array.dtype), array.device.id)

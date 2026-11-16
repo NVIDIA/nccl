@@ -1375,7 +1375,6 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
         }
         ncclProfilerRecordProxyStepEventState(s, args, postedStepId, ncclProfilerProxyStepSendGPUWait);
         args->idle = 0;
-        continue;
       }
       // Check whether we received data from the GPU and send it to the network
       if (sub->transmitted < sub->posted && sub->transmitted < sub->done + NCCL_STEPS) {
@@ -1449,13 +1448,12 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
               sub->transmitted += args->sliceSteps;
               ncclProfilerRecordProxyStepEventState(s, args, transmittedStepId, ncclProfilerProxyStepSendWait);
               args->idle = 0;
-              continue;
             }
           }
         }
       }
       // Check whether the network has completed some send operations.
-      if (sub->done < sub->transmitted) {
+      if (sub->done < transmittedStepId) {
         int done;
         int size;
         int buffSlot = (sub->base + sub->done) % NCCL_STEPS;
@@ -1545,6 +1543,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
     int maxDepth = std::min(NCCL_STEPS, NCCL_SHARED_STEPS / args->nsubs);
     for (int s = 0; s < args->nsubs; s += args->subs[s].groupSize) {
       struct ncclProxySubArgs* subGroup = args->subs + s;
+      uint64_t postedBefore = subGroup->posted;
+      uint64_t receivedBefore = subGroup->received;
       int subCount = 0;
       void* ptrs[NCCL_PROXY_MAX_SUBS];
       size_t sizes[NCCL_PROXY_MAX_SUBS];
@@ -1637,12 +1637,8 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
           args->idle = 0;
         }
       }
-    }
-    if (args->idle == 0) return ncclSuccess;
 
-    for (int s = 0; s < args->nsubs; s += args->subs[s].groupSize) {
-      struct ncclProxySubArgs* subGroup = args->subs + s;
-      if (subGroup->posted > subGroup->received) {
+      if (postedBefore > subGroup->received) {
         uint64_t step = subGroup->received;
         int done;
         void* ptrs[NCCL_PROXY_MAX_SUBS];
@@ -1716,39 +1712,33 @@ static ncclResult_t recvProxyProgress(struct ncclProxyState* proxyState, struct 
           args->idle = 0;
         }
       }
-    }
-    if (args->idle == 0) return ncclSuccess;
 
-    for (int s = 0; s < args->nsubs; s += args->subs[s].groupSize) {
-      struct ncclProxySubArgs* subGroup = args->subs + s;
       if (subGroup->received > subGroup->transmitted) {
         uint64_t step = subGroup->transmitted;
         int done = 1;
         void* request = subGroup->requests[step % NCCL_STEPS];
-        if (request) NCCLCHECK(proxyState->ncclNet->test(request, &done, NULL));
-        if (done) {
-          for (int i = 0; i < subGroup->groupSize; i++) {
-            struct ncclProxySubArgs* sub = subGroup + i;
-            int transmittedStepId = sub->transmitted;
+        if (request == NULL || receivedBefore > subGroup->transmitted) {
+          if (request) NCCLCHECK(proxyState->ncclNet->test(request, &done, NULL));
+          if (done) {
+            for (int i = 0; i < subGroup->groupSize; i++) {
+              struct ncclProxySubArgs* sub = subGroup + i;
+              int transmittedStepId = sub->transmitted;
 
-            sub->transmitted += args->sliceSteps;
-            ncclProfilerRecordProxyStepEventState(s + i, args, transmittedStepId, ncclProfilerProxyStepRecvGPUWait);
-            if (step < sub->nsteps) {
-              std::atomic_thread_fence(std::memory_order_seq_cst);
-              struct recvNetResources* resources = (struct recvNetResources*)(sub->connection->transportResources);
-              volatile uint64_t* recvTail = resources->gdcSync ? resources->gdcSync : &resources->recvMem->tail;
-              *recvTail = sub->base + sub->transmitted;
-              if (resources->gdcSync) wc_store_fence(); // Flush out WC write
+              sub->transmitted += args->sliceSteps;
+              ncclProfilerRecordProxyStepEventState(s + i, args, transmittedStepId, ncclProfilerProxyStepRecvGPUWait);
+              if (step < sub->nsteps) {
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+                struct recvNetResources* resources = (struct recvNetResources*)(sub->connection->transportResources);
+                volatile uint64_t* recvTail = resources->gdcSync ? resources->gdcSync : &resources->recvMem->tail;
+                *recvTail = sub->base + sub->transmitted;
+                if (resources->gdcSync) wc_store_fence(); // Flush out WC write
+              }
             }
+            args->idle = 0;
           }
-          args->idle = 0;
         }
       }
-    }
-    if (args->idle == 0) return ncclSuccess;
 
-    for (int s = 0; s < args->nsubs; s += args->subs[s].groupSize) {
-      struct ncclProxySubArgs* subGroup = args->subs + s;
       for (int i = 0; i < subGroup->groupSize; i++) {
         struct ncclProxySubArgs* sub = subGroup + i;
         if (sub->done == sub->nsteps) continue;

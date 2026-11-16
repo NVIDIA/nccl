@@ -140,6 +140,9 @@ struct ncclSharedResources {
   struct ncclComm* owner; /* comm which creates this shared res. */
   struct ncclChannelPeer* peers[MAXCHANNELS];
   struct ncclDevChannelPeer* devPeers[MAXCHANNELS];
+  struct ncclDevChannelPeer* devPeersSlab;
+  int devPeersSlabChannels;
+  bool devPeersInSlab[MAXCHANNELS];
   /* P2P operation counter, one per channel */
   uint64_t p2pOpCount[MAXCHANNELS];
   /* Collective operation counter */
@@ -185,6 +188,7 @@ struct ncclChannel {
   struct ncclDevChannelPeer* collnetDevPeers;
   struct ncclChannelPeer* nvlsPeers;
   struct ncclDevChannelPeer* nvlsDevPeers;
+  bool nvlsDevPeersInSlab;
 };
 
 struct ncclWorkBatchList {
@@ -594,6 +598,10 @@ struct ncclComm {
   int* topParentRanks;
   int* topParentLocalRanks;
   struct ncclChannel channels[MAXCHANNELS];
+  char* channelMetadata;
+  size_t channelMetadataStride;
+  size_t channelMetadataRingOffset;
+  int channelMetadataChannels;
   struct ncclPeerInfo* peerInfo;
   struct ncclTopoSystem* topo;
   struct ncclProxyConnector* gproxyConn;
@@ -762,6 +770,7 @@ struct ncclComm {
   int nvlsRegSupport; // host NVLS user-buffer registration supported
   /* sharable NVLS resource. */
   struct ncclNvlsSharedRes* nvlsResources;
+  struct ncclDevChannelPeer* nvlsDevPeersSlab;
 
   // pools backed by comm->memPermanent
   struct ncclMemoryPool memPool_ncclTaskBcast;

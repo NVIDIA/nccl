@@ -447,6 +447,26 @@ fail:
   goto exit;
 }
 
+// The peer slab follows the NVLS shared-resource lifetime. Channels only keep slices.
+static ncclResult_t nvlsAllocPeerSlab(struct ncclComm* comm, int nChannels) {
+  struct ncclDevChannelPeer* peers = nullptr;
+  cudaStream_t stream;
+  ncclResult_t result = ncclSuccess;
+  NCCLCHECK(ncclStrongStreamAcquire(ncclCudaGraphNone(comm->config.graphUsageMode), &comm->sharedRes->deviceStream,
+                                    /*concurrent=*/false, &stream));
+  NCCLCHECKGOTO(ncclCudaCallocAsync(&peers, (size_t)nChannels * comm->localRanks, stream, comm->memManager), result,
+                release);
+  comm->nvlsResources->devPeersSlab = peers;
+  comm->nvlsDevPeersSlab = peers;
+release:
+  NCCLCHECKIGNORE(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode),
+                                          &comm->sharedRes->deviceStream,
+                                          /*concurrent=*/false),
+                  result);
+  if (result == ncclSuccess) NCCLCHECK(ncclStrongStreamSynchronize(&comm->sharedRes->deviceStream));
+  return result;
+}
+
 // Fill parentSlots[r] with the parent NVLS slot that backs child slot r when the child shares the parent's
 // NVLS resources. Slot h < nHeads belongs to head h, so each child head maps to the parent slot whose head
 // is the same GPU; heads are distinct GPUs, so this pairs the head slots one-to-one and the remaining
@@ -507,12 +527,13 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
      * NVLS buffers, which were allocated and laid out based on these values. */
     comm->nvlsChunkSize = parent->nvlsResources->chunkSize;
     comm->nvlsTreeMaxChunkSize = parent->nvlsResources->treeMaxChunkSize;
+    // Hold a reference before channel setup so partial failure can be cleaned up.
+    comm->nvlsResources = parent->nvlsResources;
+    ncclAtomicRefCountIncrement(&comm->nvlsResources->refCount);
+    comm->nvlsDevPeersSlab = parent->nvlsDevPeersSlab;
     for (int c = 0; c < comm->nvlsChannels; c++) {
       NCCLCHECKGOTO(initNvlsChannel(comm, c, parent, parentSlots), res, fail);
     }
-
-    comm->nvlsResources = parent->nvlsResources;
-    ncclAtomicRefCountIncrement(&parent->nvlsResources->refCount);
   } else {
     struct ncclNvlsSharedRes* resources = NULL;
     int nHeads = comm->channels[0].nvls.nHeads;
@@ -550,6 +571,7 @@ ncclResult_t ncclNvlsSetup(struct ncclComm* comm, struct ncclComm* parent) {
     comm->nvlsResources->treeMaxChunkSize = comm->nvlsTreeMaxChunkSize;
     resources = comm->nvlsResources;
 
+    NCCLCHECKGOTO(nvlsAllocPeerSlab(comm, nChannels), res, fail);
     for (int c = 0; c < nChannels; c++) {
       NCCLCHECKGOTO(initNvlsChannel(comm, c, NULL, NULL), res, fail);
     }
@@ -701,6 +723,7 @@ ncclResult_t ncclNvlsFree(struct ncclComm* comm) {
   if (resources == NULL) return ncclSuccess;
 
   if (ncclAtomicRefCountDecrement(&resources->refCount) == 0) {
+    if (resources->devPeersSlab) NCCLCHECKIGNORE(ncclCudaFree(resources->devPeersSlab, comm->memManager), ret);
     if (!comm->MNNVL && resources->nvlsShmemHandle) NCCLCHECKIGNORE(ncclShmClose(resources->nvlsShmemHandle), ret);
 
     if (resources->creditUc.ptr) {

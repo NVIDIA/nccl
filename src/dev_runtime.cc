@@ -1082,14 +1082,22 @@ fail:
 static ncclResult_t symWindowCreate(struct ncclComm* comm, struct ncclDevrMemory* mem, size_t memOffset, void* userPtr,
                                     size_t userSize, int winFlags, void* localReg, struct ncclWindow_vidmem** outWinDev,
                                     struct ncclDevrWindow** outWin, cudaStream_t stream) {
+  ncclResult_t ret = ncclSuccess;
   uintptr_t userAddr = reinterpret_cast<uintptr_t>(userPtr);
   struct ncclDevrState* devr = &comm->devrState;
-  struct ncclDevrWindow* win;
+  struct ncclDevrWindow* win = nullptr;
+  struct ncclWindow_vidmem* winDev = nullptr;
+  struct ncclWindow_vidmem* winDevHost = nullptr;
+  struct ncclDevCommWindowTable* tableDev = nullptr;
+  struct ncclDevCommWindowTable::Entry* pendingEntryDev = nullptr;
+  struct ncclDevCommWindowTable::Entry* pendingEntryHost = nullptr;
+  struct ncclDevCommWindowTable** pendingNextHost = nullptr;
+  struct ncclDevCommWindowTable* pendingNextDev = nullptr;
+  int lsaDomainTeamRank0 = devr->lsaDomainSelf - devr->lsaTeamSelf;
 
   NCCLCHECK(symLsaPeerDelta4GInitOnce(comm, stream));
 
-  win = (struct ncclDevrWindow*)malloc(sizeof(struct ncclDevrWindow));
-  memset(win, 0, sizeof(*win));
+  NCCLCHECKGOTO(ncclCalloc(&win, 1), ret, fail);
   win->memory = mem;
   win->size = userSize;
   win->bigOffset = mem->bigOffset + memOffset;
@@ -1103,11 +1111,8 @@ static ncclResult_t symWindowCreate(struct ncclComm* comm, struct ncclDevrMemory
     win->userPtr = userPtr;
   }
 
-  struct ncclWindow_vidmem* winDev;
-  struct ncclWindow_vidmem* winDevHost;
-  NCCLCHECK(ncclShadowPoolAlloc(&devr->shadows, &winDev, &winDevHost, stream));
+  NCCLCHECKGOTO(ncclShadowPoolAlloc(&devr->shadows, &winDev, &winDevHost, stream), ret, fail);
   win->vidmem = winDev;
-  int lsaDomainTeamRank0 = devr->lsaDomainSelf - devr->lsaTeamSelf;
   winDevHost->lsaFlatBase = (char*)devr->lsaFlatBase + lsaDomainTeamRank0 * devr->bigSize + win->bigOffset;
   winDevHost->mcOffset4K = win->bigOffset >> 12;
   winDevHost->stride4G = devr->bigSize >> 32;
@@ -1120,29 +1125,40 @@ static ncclResult_t symWindowCreate(struct ncclComm* comm, struct ncclDevrMemory
   winDevHost->ginOffset4K = memOffset >> 12;
   winDevHost->ucLeIdBase = winFlags & NCCL_WIN_CFT_COUNTED ? devr->le[1].baseId : devr->le[0].baseId;
   if (devr->ginEnabled) {
-    NCCLCHECK(symWindowInitGin(devr, mem, winDevHost, stream));
+    NCCLCHECKGOTO(symWindowInitGin(devr, mem, winDevHost, stream), ret, fail);
   }
-  CUDACHECK(cudaMemcpyAsync(winDev, winDevHost, sizeof(struct ncclWindow_vidmem), cudaMemcpyHostToDevice, stream));
+  CUDACHECKGOTO(cudaMemcpyAsync(winDev, winDevHost, sizeof(struct ncclWindow_vidmem), cudaMemcpyHostToDevice, stream),
+                ret, fail);
 
-  NCCLCHECK(symWindowTableInitOnce(comm, stream)); // ensure devr->windowTable exists
-  struct ncclDevCommWindowTable* tableDev = devr->windowTable;
+  // Ensure devr->windowTable exists.
+  NCCLCHECKGOTO(symWindowTableInitOnce(comm, stream), ret, fail);
+  tableDev = devr->windowTable;
   while (true) {
     struct ncclDevCommWindowTable* tableHost;
-    NCCLCHECK(ncclShadowPoolToHost(&devr->shadows, tableDev, &tableHost));
+    NCCLCHECKGOTO(ncclShadowPoolToHost(&devr->shadows, tableDev, &tableHost), ret, fail);
     int i = 0;
     while (i < 32 && tableHost->entries[i].window != nullptr) i += 1;
     if (i < 32) {
-      tableHost->entries[i].base = userAddr;
-      tableHost->entries[i].size = userSize;
-      tableHost->entries[i].window = winDev;
-      CUDACHECK(cudaMemcpyAsync(&tableDev->entries[i], &tableHost->entries[i], sizeof(tableHost->entries[i]),
-                                cudaMemcpyHostToDevice, stream));
+      pendingEntryHost = &tableHost->entries[i];
+      pendingEntryHost->base = userAddr;
+      pendingEntryHost->size = userSize;
+      pendingEntryHost->window = winDev;
+      CUDACHECKGOTO(cudaMemcpyAsync(&tableDev->entries[i], pendingEntryHost, sizeof(*pendingEntryHost),
+                                    cudaMemcpyHostToDevice, stream),
+                    ret, fail);
+      pendingEntryDev = &tableDev->entries[i];
       break;
     }
     if (tableHost->next == nullptr) {
-      NCCLCHECK(ncclShadowPoolAlloc<ncclDevCommWindowTable>(&devr->shadows, &tableHost->next, nullptr, stream));
-      CUDACHECK(cudaMemcpyAsync(&tableDev->next, &tableHost->next, sizeof(tableHost->next), cudaMemcpyHostToDevice,
-                                stream));
+      pendingNextHost = &tableHost->next;
+      NCCLCHECKGOTO(ncclShadowPoolAlloc<ncclDevCommWindowTable>(&devr->shadows, &pendingNextDev, nullptr, stream), ret,
+                    fail);
+      *pendingNextHost = pendingNextDev;
+      CUDACHECKGOTO(cudaMemcpyAsync(&tableDev->next, pendingNextHost, sizeof(*pendingNextHost), cudaMemcpyHostToDevice,
+                                    stream),
+                    ret, fail);
+      pendingNextHost = nullptr;
+      pendingNextDev = nullptr;
     }
     tableDev = tableHost->next;
   }
@@ -1156,9 +1172,32 @@ static ncclResult_t symWindowCreate(struct ncclComm* comm, struct ncclDevrMemory
     listInsert(&devr->winSorted, &devr->winSortedCapacity, &devr->winSortedCount, i, winSort);
   }
 
+exit:
   if (outWinDev) *outWinDev = winDev;
   if (outWin) *outWin = win;
-  return ncclSuccess;
+  return ret;
+
+fail:
+  if (pendingEntryHost != nullptr) {
+    memset(pendingEntryHost, 0, sizeof(*pendingEntryHost));
+    if (pendingEntryDev != nullptr) {
+      CUDACHECKIGNORE(cudaMemsetAsync(pendingEntryDev, 0, sizeof(*pendingEntryDev), stream));
+    }
+  }
+  if (pendingNextHost != nullptr) {
+    *pendingNextHost = nullptr;
+  }
+  if (pendingNextDev != nullptr) {
+    NCCLCHECKIGNORE(ncclShadowPoolFree(&devr->shadows, pendingNextDev, stream), ret);
+  }
+  if (winDevHost != nullptr && winDevHost->ginMultiSegmentWins != nullptr) {
+    NCCLCHECKIGNORE(ncclShadowPoolFree(&devr->shadows, winDevHost->ginMultiSegmentWins, stream), ret);
+  }
+  NCCLCHECKIGNORE(ncclShadowPoolFree(&devr->shadows, winDev, stream), ret);
+  winDev = nullptr;
+  free(win);
+  win = nullptr;
+  goto exit;
 }
 
 static ncclResult_t symWindowDestroy(struct ncclComm* comm, struct ncclWindow_vidmem* winDev, cudaStream_t stream) {

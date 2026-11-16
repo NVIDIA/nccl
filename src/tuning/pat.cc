@@ -81,6 +81,12 @@ ncclResult_t ncclTuningPatModelInit(struct ncclComm* comm, int id, int enabled[N
 ncclResult_t ncclTuningPatModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
                                    struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
+  // PAT ReduceScatter doesn't support scaling yet.
+  if (inputs->func == ncclFuncReduceScatter &&
+      (inputs->devRedOp == ncclDevPreMulSum || inputs->devRedOp == ncclDevSumPostDiv)) {
+    tuning->valid = 0;
+    return ret;
+  }
   if (inputs->func == ncclFuncReduceScatter && !inputs->comm->isOneRPN &&
       !ncclNvlsSupported(inputs->devRedOp, inputs->datatype)) {
     tuning->valid = 0;

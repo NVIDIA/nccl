@@ -351,7 +351,7 @@ below.
 
 * **Architecture:** Device code must be compiled and the kernel launched on SM 10.0 or later. On older architectures
   the call is a no op.
-* **Coop:** *Coop* must be ``ncclCoopThread``, ``ncclCoopWarp``, or ``ncclCoopCta``.
+* **Coop:** *Coop* must be ``ncclCoopThread``, ``ncclCoopWarp``, ``ncclCoopWarpSpan``, or ``ncclCoopCta``.
 * **Element type:** ``sizeof(T)`` must divide 16 (the TMA transfer unit). This holds for the types listed under
   :ref:`common template parameters <device_api_reducecopy_common_params>`.
 * **Count:** ``count * sizeof(T)`` must be a multiple of 16.

@@ -55,11 +55,10 @@ NCCL_DEVICE_INLINE IntCount reduceCopyLoopCoreImpl(Coop coop, SrcLambda srcLambd
   constexpr int warpSize = 32;
   constexpr int coopStride = CoopStride<Coop>::value;
   constexpr int stride = (coopStride != 0) ? coopStride : warpSize;
-  const int threadRank = coop.thread_rank();
   const int coopSize = coop.size();
   const int runtimeStride = (coopStride != 0) ? coopStride : min(coopSize, warpSize);
-  const int laneId = threadRank % runtimeStride;
-  const int groupId = threadRank / runtimeStride;
+  const int laneId = coop.thread_rank() % runtimeStride;
+  const int groupId = coop.thread_rank() / runtimeStride;
 
   IntCount groupBasePackIdx = basePackIdx + groupId * (stride * UNROLL_PACKS);
   IntCount groupLanePackIdx = groupBasePackIdx + laneId;
@@ -425,92 +424,167 @@ NCCL_DEVICE_INLINE void reduceCopy(Coop coop, SrcLambda srcLambda, int nSrc, Dst
 }
 
 #if __CUDA_ARCH__ >= 1000
-// TMA-based Copy (Broadcast) Loop (sm100+ only). smemBytesTotal is the size of the caller's staging
-// buffer for the whole coop. It is split into as many 16B-aligned [data tile][mbarrier] slots as
-// fit (each at least 32B). Extra warps stay idle and rejoin at coop.sync().
+// cuda::ptx::elect_sync is absent from the CUDA 12.9 CCCL used by the cu12 CI build
+NCCL_DEVICE_INLINE bool electSync() {
+  const unsigned mask = __activemask();
+  int elected = 0;
+  asm volatile("{\n\t"
+               ".reg .pred p;\n\t"
+               "elect.sync _|p, %1;\n\t"
+               "selp.b32 %0, 1, 0, p;\n\t"
+               "}"
+               : "=r"(elected)
+               : "r"(mask));
+  return elected != 0;
+}
+
+// Serial TMA copy for coops with fewer than 2 warps (Thread, Warp, or a single-warp CTA).
+// One elected thread loops over one 16B-aligned [mbarrier][data tile] slot.
 template <typename T, typename IntCount, typename Coop, typename DstLambda>
-NCCL_DEVICE_INLINE void lsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count, char* smemPtr,
-                                   int smemBytesTotal) {
-  using Pack = EltPackForBytes<T, 16>;
-  using Bar = cuda::barrier<cuda::thread_scope_block>;
-  constexpr int warpSize = 32;
-  constexpr int barFootprint = (int)((sizeof(Bar) + 15) & ~size_t(15)); // rounds sizeof(Bar) up to a multiple of 16
+NCCL_DEVICE_INLINE void lsaCopyTmaLeaderWarp(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count,
+                                             char* smemPtr, int smemBytesTotal) {
+  constexpr int barFootprint = 16;
   constexpr int minSlotBytes = barFootprint + 16;
+  constexpr int warpSize = 32;
+  const int warpId = coop.thread_rank() / warpSize;
 
   if (smemBytesTotal < minSlotBytes) {
 #if NCCL_DEVICE_DEBUG_CHECKS
-    if (coop.thread_rank() == 0) {
+    if (warpId == 0 && electSync()) {
       assert(false && "smemBytesTotal must be at least 32 bytes");
     }
 #endif
     return;
   }
 
-  const IntCount totalPacks = safeDiv<IntCount>(count, Pack::Count);
-  const int nWarps = (coop.size() + warpSize - 1) / warpSize;
-  const int laneId = coop.thread_rank() % warpSize;
-  const int groupId = coop.thread_rank() / warpSize;
+  bool isLeader;
+  if NCCL_IF_CONSTEXPR (std::is_same<Coop, ncclCoopThread>::value) {
+    // if coop is thread, electSync() would pick one lane per warp and drop the other ncclCoopThread coops in the warp.
+    isLeader = coop.thread_rank() == 0;
+  } else {
+    isLeader = (warpId == 0 && electSync());
+  }
 
-  // We try to use as many warps as we can to get a minSlotBytes slice
-  const int nActiveWarps = (nWarps < smemBytesTotal / minSlotBytes) ? nWarps : (smemBytesTotal / minSlotBytes);
-  const int smemBytesPerWarp = (smemBytesTotal / nActiveWarps) & ~15;
-  const size_t tileSize = (size_t)(smemBytesPerWarp - barFootprint);
-  const IntCount packsPerWarpTile = (IntCount)(tileSize / sizeof(Pack));
-  const IntCount packsPerIter = (IntCount)nActiveWarps * packsPerWarpTile;
+  if (isLeader) {
+    using Bar = cuda::barrier<cuda::thread_scope_block>;
+    Bar* bar = reinterpret_cast<Bar*>(smemPtr);
+    char* buf = smemPtr + barFootprint;
+    const size_t totalBytes = (size_t)count * sizeof(T); // total amount of data we must copy
+    const size_t smemStageTile = (size_t)((smemBytesTotal - barFootprint) & ~15); // amount of staging smem available
+    char* src = reinterpret_cast<char*>(srcPtr);
 
-  if (groupId < nActiveWarps && laneId == 0) {
-    char* slot = smemPtr + groupId * smemBytesPerWarp;
-    Pack* tmaBuff = reinterpret_cast<Pack*>(slot);
-    Bar* tmaBar = reinterpret_cast<Bar*>(slot + tileSize);
-    init(tmaBar, 1);
+    init(bar, 1);
 
-    Pack* srcPack = (Pack*)srcPtr;
-    // nBytes should always be a multiple of 16
-    auto loadTile = [&](IntCount packIdx, size_t nBytes) {
-      cuda::device::memcpy_async_tx(tmaBuff, srcPack + packIdx, cuda::aligned_size_t<16>(nBytes), *tmaBar);
-      typename Bar::arrival_token token = cuda::device::barrier_arrive_tx(*tmaBar, 1, nBytes);
-      tmaBar->wait(std::move(token));
-    };
-    auto storeTile = [&](IntCount packIdx, size_t nBytes) {
-      NVCC_PRAGMA_UNROLL(4)
+    for (size_t offset = 0; offset < totalBytes; offset += smemStageTile) {
+      const uint32_t nBytes = (uint32_t)((totalBytes - offset < smemStageTile) ? (totalBytes - offset) : smemStageTile);
+
+      // load tile GMEM -> SMEM, then wait for it to land
+      cuda::device::memcpy_async_tx(buf, src + offset, cuda::aligned_size_t<16>(nBytes), *bar);
+      typename Bar::arrival_token token = cuda::device::barrier_arrive_tx(*bar, 1, nBytes);
+      bar->wait(std::move(token));
+
+      // store tile SMEM -> GMEM to every destination, then wait for the buffer to drain
       for (int dstIdx = 0; dstIdx < nDst; dstIdx++) {
-        Pack* dstPtr = (Pack*)dstLambda(dstIdx);
-        ptx::cp_async_bulk(ptx::space_global, ptx::space_shared, dstPtr + packIdx, tmaBuff, nBytes);
+        char* dst = reinterpret_cast<char*>(dstLambda(dstIdx));
+        ptx::cp_async_bulk(ptx::space_global, ptx::space_shared, dst + offset, buf, nBytes);
       }
       ptx::cp_async_bulk_commit_group();
       ptx::cp_async_bulk_wait_group_read(ptx::n32_t<0>());
-    };
-
-    IntCount basePackIdx = 0;
-    IntCount groupBasePackIdx = groupId * packsPerWarpTile;
-
-    // PHASE 1: bulk load GMEM -> SMEM, then wait for it to land.
-    if (packsPerIter <= totalPacks) {
-      loadTile(groupBasePackIdx, tileSize);
     }
+  }
+  coop.sync();
+}
 
-    // PHASE 2: bulk store SMEM -> peer GMEM for each destination, then wait for the buffer to drain.
-    while (basePackIdx + packsPerIter <= totalPacks) {
-      storeTile(groupBasePackIdx, tileSize);
+// TMA-based Copy (Broadcast) Loop (sm100+ only): warp-specialized pipeline over nStages smem tiles.
+// Warp 0 does TMA load of tiles from GMEM -> SMEM over nStages, warp 1 stores each landed tile SMEM -> GMEM over nStages.
+// Each stage has a "full" mbarrier (load landed, tracked via tx-count) and an "empty" mbarrier (stores finished reading the tile).
+template <typename T, typename IntCount, typename Coop, typename DstLambda>
+NCCL_DEVICE_INLINE void lsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count, char* smemPtr,
+                                   int smemBytesTotal) {
+  constexpr int nStages = 4;
+  constexpr int warpSize = 32;
+  constexpr int barBytes = (int)((2 * nStages * sizeof(uint64_t) + 15) & ~size_t(15));
+  // 8 barriers * 8 bytes/barrier + 4 stages * 16 bytes/stage = 128 byte minimum for the pipelined path.
+  constexpr int minSmemBytes = barBytes + nStages * 16;
 
-      basePackIdx += packsPerIter;
-      groupBasePackIdx += packsPerIter;
-      if (basePackIdx + packsPerIter > totalPacks) break;
+  // Coops with fewer than 2 warps (thread, warp, lanes, or a small warp span / CTA), or too little smem for nStages
+  // tiles, run the serialized single-thread TMA load-store path.
+  if (ncclCoopWithinWarp(coop) || coop.size() < 2 * warpSize || smemBytesTotal < minSmemBytes) {
+    lsaCopyTmaLeaderWarp<T, IntCount, Coop, DstLambda>(coop, srcPtr, dstLambda, nDst, count, smemPtr, smemBytesTotal);
+    return;
+  }
 
-      loadTile(groupBasePackIdx, tileSize); // (back to) PHASE 1 for the next tile
-    }
+  // smem layout: [fullBar x nStages][emptyBar x nStages] (padded to 16B) then nStages data tiles ("buf").
+  using Bar = cuda::barrier<cuda::thread_scope_block>;
+  Bar* fullBar = reinterpret_cast<Bar*>(smemPtr);
+  Bar* emptyBar = fullBar + nStages;
+  char* buf = smemPtr + barBytes;
+  const size_t smemStageTile =
+    (size_t)(((smemBytesTotal - barBytes) / nStages) & ~15); // size of a single SMEM stage tile
 
-    // PHASE 3: at the end the tail warp may be less than packsPerIter. In that case only a
-    // prefix of the active warps participate, and the last of those transfers "avail" packs.
-    const IntCount tailPacks = totalPacks - basePackIdx;
-    const IntCount myTailOffset = (IntCount)groupId * packsPerWarpTile;
-    if (myTailOffset < tailPacks) {
-      const IntCount avail = tailPacks - myTailOffset;
-      const IntCount myTailPacks = (avail < packsPerWarpTile) ? avail : packsPerWarpTile;
-      const size_t tailBytes = (size_t)myTailPacks * sizeof(Pack);
+  const int warpId = coop.thread_rank() / warpSize;
+  const int laneId = coop.thread_rank() % warpSize;
 
-      loadTile(groupBasePackIdx, tailBytes);
-      storeTile(groupBasePackIdx, tailBytes);
+  static_assert(nStages <= warpSize, "stage pipeline length must be less than 32.");
+  if (warpId == 0 && laneId < nStages) {
+    init(&fullBar[laneId], 1);
+    init(&emptyBar[laneId], 1);
+    ptx::fence_mbarrier_init(ptx::sem_release, ptx::scope_cluster);
+  }
+  coop.sync();
+
+  if (warpId < 2 && electSync()) {
+    const size_t totalBytes = (size_t)count * sizeof(T);
+    const size_t nTiles = (totalBytes + smemStageTile - 1) / smemStageTile;
+    char* src = reinterpret_cast<char*>(srcPtr);
+
+    if (warpId == 0) { // loader warp
+      for (size_t i = 0; i < nTiles; i++) {
+        // every data tile i is pre-assigned a stage, phase the loader waits for, and byte offset.
+        const int stage = (int)(i % nStages);
+        const uint32_t phase = (uint32_t)((i / nStages) & 1);
+        const size_t offset = i * smemStageTile;
+        const uint32_t nBytes =
+          (uint32_t)((totalBytes - offset < smemStageTile) ? (totalBytes - offset) : smemStageTile);
+        char* tile = buf + stage * smemStageTile;
+
+        // wait until the store warp has drained this stage before issuing the next load, notifying, and moving on.
+        while (!ptx::mbarrier_try_wait_parity(reinterpret_cast<uint64_t*>(&emptyBar[stage]), phase ^ 1)) {
+        }
+        cuda::device::memcpy_async_tx(tile, src + offset, cuda::aligned_size_t<16>(nBytes), fullBar[stage]);
+        (void)cuda::device::barrier_arrive_tx(fullBar[stage], 1, nBytes);
+      }
+    } else { // storer warp
+      constexpr int K = (nStages >= 3) ? 1 : 0; // max store-group-operations that can get left outstanding
+
+      for (size_t i = 0; i < nTiles; i++) {
+        // every data tile i is pre-assigned a stage, phase the loader waits for, and byte offset.
+        const int stage = (int)(i % nStages);
+        const uint32_t phase = (uint32_t)((i / nStages) & 1);
+        const size_t offset = i * smemStageTile;
+        const uint32_t nBytes =
+          (uint32_t)((totalBytes - offset < smemStageTile) ? (totalBytes - offset) : smemStageTile);
+        char* tile = buf + stage * smemStageTile;
+
+        // wait until this storer warp's stage is available
+        while (!ptx::mbarrier_try_wait_parity(reinterpret_cast<uint64_t*>(&fullBar[stage]), phase)) {
+        }
+
+        // issue TMA stores to each dst and commit the group
+        for (int dstIdx = 0; dstIdx < nDst; dstIdx++) {
+          char* dst = reinterpret_cast<char*>(dstLambda(dstIdx));
+          ptx::cp_async_bulk(ptx::space_global, ptx::space_shared, dst + offset, tile, nBytes);
+        }
+        ptx::cp_async_bulk_commit_group();
+
+        if (i >= (size_t)K) {
+          // Only the K most recently enqueued tiles may still be unfinished (not yet read out of smem).
+          ptx::cp_async_bulk_wait_group_read(ptx::n32_t<K>());
+          // After enqueueing tile i, wait until tile (i - K) is read out, then free its stage.
+          (void)ptx::mbarrier_arrive(reinterpret_cast<uint64_t*>(&emptyBar[(i - K) % nStages]));
+        }
+      }
+      ptx::cp_async_bulk_wait_group_read(ptx::n32_t<0>());
     }
   }
   coop.sync();

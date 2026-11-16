@@ -306,8 +306,8 @@ template <typename T, typename Coop, typename DstLambda, typename IntCount>
 NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, DstLambda dstLambda, int nDst, IntCount count,
                                        char* smemPtr, int smemBytesTotal) {
   static_assert(std::is_same<Coop, ncclCoopThread>::value || std::is_same<Coop, ncclCoopWarp>::value ||
-                  std::is_same<Coop, ncclCoopCta>::value,
-                "ncclLsaCopyTma requires Thread, Warp, or CTA");
+                  std::is_same<Coop, ncclCoopWarpSpan>::value || std::is_same<Coop, ncclCoopCta>::value,
+                "ncclLsaCopyTma requires Thread, Warp, WarpSpan, or CTA");
   static_assert(16 % sizeof(T) == 0, "ncclLsaCopyTma requires a type whose size divides the 16-byte TMA pack");
 #if NCCL_DEVICE_DEBUG_CHECKS
   if ((count * sizeof(T)) % 16 != 0) {
@@ -342,8 +342,8 @@ template <typename T, typename Coop, typename IntCount>
 NCCL_DEVICE_INLINE void ncclLsaCopyTma(Coop coop, T* srcPtr, ncclSymPtr<T> dst, IntCount count, ncclTeam team,
                                        char* smemPtr, int smemBytesTotal) {
   static_assert(std::is_same<Coop, ncclCoopThread>::value || std::is_same<Coop, ncclCoopWarp>::value ||
-                  std::is_same<Coop, ncclCoopCta>::value,
-                "ncclLsaCopyTma requires Thread, Warp, or CTA");
+                  std::is_same<Coop, ncclCoopWarpSpan>::value || std::is_same<Coop, ncclCoopCta>::value,
+                "ncclLsaCopyTma requires Thread, Warp, WarpSpan, or CTA");
   static_assert(16 % sizeof(T) == 0, "ncclLsaCopyTma requires a type whose size divides the 16-byte TMA pack");
 #if NCCL_DEVICE_DEBUG_CHECKS
   if ((count * sizeof(T)) % 16 != 0) {

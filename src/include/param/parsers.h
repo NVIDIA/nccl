@@ -11,6 +11,7 @@
 #include "param/parser_common.h"
 #include "param/parser_default.h"
 #include "param/parser_enum.h"
+#include "param/parser_combo.h"
 #include "param/parser_bitset.h"
 #include "param/parser_list.h"
 

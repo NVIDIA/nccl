@@ -289,7 +289,7 @@ Most of the fields should be fairly self-explanatory, with the possible exceptio
   ``cuda_dev`` may not be unique among ranks on a single node, whereas ``nvml_dev`` always is).
 * ``init_state``: ``0`` (`ncclSuccess`) if a rank is fully initialized, ``7`` (`ncclInProgress`) if initialization is
   still ongoing; any other value indicates an error.
-* ``async_error``: the value that would be returned if the rank called `ncclGetAsyncError`.
+* ``async_error``: the value that would be returned if the rank called `ncclCommGetAsyncError`.
 * ``unresponsive``: `true` if RAS was unable to reach the rank when collecting data -- this is the most common
   reason why a rank would be considered missing.  There are, however, corner cases during communicator initialization
   and termination when a process may be reachable but does not consider itself to be a member of a given communicator.
@@ -375,7 +375,7 @@ RAS Diagnostics
 ---------------
 
 RAS diagnostics provide a readiness probe for NCCL jobs by comparing GPU inventory, PCI configuration, CUDA and
-NVIDIA graphics driver versions, and NCCL configuration across ranks.
+NVIDIA graphics driver versions, network devices, and NCCL configuration across ranks.
 
 RAS diagnostics run asynchronously, so collection and reporting may be delayed. For short-lived communicators, this may
 result in incomplete information.
@@ -396,6 +396,11 @@ The report includes results for the following checks:
   `Fabric Manager guide <https://docs.nvidia.com/hgx-platforms/fabric-manager-user-guide/index.html>`_.
 * **NVLink state:** Checks that ranks report the same number of NVLinks, that every link is active, and that all active
   links run at the same speed.
+* **Network-device consistency:** Checks that each network device the plugin exposes is present on every node, that its
+  type, speed, link layer, port state and Data Direct use are consistent across ranks, that any port whose state can
+  be read is active, and that the devices used within one node are consistent with each other. The report shows one
+  line per communicator when the check passes. Per-device details are available with ``NCCL_DEBUG=INFO`` and
+  ``NCCL_DEBUG_SUBSYS=DIAG``.
 * **NCCL environment:** Checks that ``NCCL_*`` environment-variable names and values are consistent across ranks.
 * **PCI configuration:** Runs ``rdma_topo check`` to validate the PCI topology and PCI Access Control Services (ACS)
   configuration used for GPUDirect RDMA.
@@ -496,25 +501,32 @@ Output Format
 
 Each report line starts with the host name and process ID of the NCCL process that initiated the request, followed by
 ``NCCL DIAG``. A report includes a header, result lines organized by check and communicator, and a completion line.
+These reports bypass ``NCCL_DEBUG`` and ``NCCL_DEBUG_SUBSYS`` filtering and are not redirected by
+``NCCL_DEBUG_FILE``. The DIAG debug subsystem covers detailed information from both active and RAS diagnostics;
+select it with ``NCCL_DEBUG=INFO`` (or ``TRACE``) and ``NCCL_DEBUG_SUBSYS=DIAG`` (or ``ALL``).
+General RAS subsystem debug messages use the RAS subsystem.
+
 For example, an on-demand report with no reported issues might look like:
 
 .. code::
 
   node042:12345 NCCL DIAG === RAS Diagnostics ===
-  node042:12345 NCCL DIAG [OK]   GPU inventory: 8x NVIDIA H100 per node consistent across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   GPU inventory: 4x NVIDIA H100 per node consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   CUDA driver version: 13000 consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   ECC: no uncorrected volatile errors across 8 ranks in comm 0x1234
-  node042:12345 NCCL DIAG [OK]   Xid/SXid: no events requiring immediate attention across 2 hosts
   node042:12345 NCCL DIAG [OK]   NVLink: 18 links per GPU, all active at consistent speed across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   NCCL environment: NCCL_* env vars consistent across 8 ranks in comm 0x1234
   node042:12345 NCCL DIAG [OK]   rdma_topo check: passed on 8/8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   Xid/SXid: no events requiring immediate attention across 2 hosts
   node042:12345 NCCL DIAG [OK]   NVIDIA graphics driver version: 610.47.03 consistent across 8 ranks in comm 0x1234
+  node042:12345 NCCL DIAG [OK]   Net device: NIC configuration consistent across 2 nodes in comm 0x1234
   node042:12345 NCCL DIAG RAS diagnostics completed in 12.3 ms across 8 RAS peers
 
 .. note::
 
    Some checks may be omitted from the report when they are not applicable. For example, the NVLink check is omitted
-   on PCIe-only systems.
+   on PCIe-only systems and the network-device check is skipped for network plugins other than the recognized
+   verbs-based InfiniBand/RoCE plugins.
 
 Result lines use the following tags:
 

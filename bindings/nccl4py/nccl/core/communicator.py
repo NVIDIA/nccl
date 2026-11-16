@@ -56,7 +56,7 @@ from nccl.core.typing import (
     NcclInvalid,
     NcclCommMemStat,
 )
-from nccl.core.utils import UniqueId
+from nccl.core.utils import UniqueId, require_compatible_nccl
 
 _Result = _nccl_bindings.Result
 
@@ -674,6 +674,12 @@ class NCCLDevCommRequirements(LowppSpec, lowpp_cls=_nccl_bindings.DevCommRequire
     :py:attr:`NcclGinConnectionType.CUSTOM_STRIDE`, and must be a multiple of
     :py:attr:`NCCLCommProperties.gin_min_stride`. If unset, NCCL uses 1."""
 
+    gin_custom_peers: Sequence[int] | None = None
+    """World ranks to connect for GIN when :py:attr:`gin_connection_type` is
+    :py:attr:`NcclGinConnectionType.CUSTOM_ARRAY`. Order does not matter. Use
+    an empty sequence for no peer connections. Both ranks of each pair must
+    list each other. Ignored if gin_connection_type is not NcclGinConnectionType.CUSTOM_ARRAY."""
+
     gin_type: NcclGinType | None = None
     """GIN transport to require. If unset, NCCL uses
     :py:attr:`NcclGinType.NONE`, accepting any available transport."""
@@ -752,6 +758,23 @@ def _materialize_coll_config(
         cfg.ext = nodes[0].ptr
 
     return cfg, keepalive
+
+
+def _materialize_gin_custom_peers(
+    peers: Sequence[int] | None,
+) -> _np.ndarray | None:
+    """Build a contiguous ``int32`` peer-rank buffer for ``NCCL_GIN_CONNECTION_CUSTOM_ARRAY``.
+
+    Returns ``None`` when ``peers`` is unset or empty.
+    """
+    if peers is None:
+        return None
+    arr = _np.asarray(peers, dtype=_np.int32)
+    if arr.ndim != 1:
+        raise ValueError("gin_custom_peers must be a one-dimensional sequence of ranks")
+    if arr.size == 0:
+        return None
+    return arr
 
 
 def _materialize_team_requirements(
@@ -1232,37 +1255,36 @@ class Communicator:
     ) -> Communicator:
         """Grows the communicator by adding new ranks.
 
-        Creates a new communicator that includes both existing ranks from
-        this communicator and new ranks joining the group. There are three
-        roles:
+        Creates a **new** communicator that includes both existing ranks from
+        this communicator and new ranks joining the group. The original
+        communicator is unchanged.  There are two roles in grow:
 
-            - Existing root: the one existing rank that called
-              :py:meth:`get_unique_id`.
-            - Existing non-root: all other existing ranks.
-            - New ranks: ranks joining via a null communicator
-              (``Communicator()``).
+            - Existing ranks: ranks already in an existing communicator.
+            - New ranks: ranks joining the existing communicator.
 
-        This is a collective operation. All ranks (existing and new) must
+        ``grow()`` is a collective operation. All ranks (existing and new) must
         call this method. Usage by role:
 
-            - Existing root: ``new_comm = existing_comm.grow(nranks, uid)``
-            - Existing non-root: ``new_comm = existing_comm.grow(nranks)``
-            - New rank: ``new_comm = Communicator().grow(nranks, uid, rank=assigned_rank)``
+            - Existing rank: ``new_comm = existing_comm.grow(nranks)``
+            - New rank: ``new_comm = Communicator().grow(nranks, uid,
+              rank=assigned_rank)``
 
-        The UID is consumed upon successful grow and cannot be reused.
+        The UID is consumed upon successful grow and cannot be reused.  Exactly
+        one UID should be generated before each grow.
 
         Args:
             nranks: Total number of ranks in the new communicator (existing
                 plus new). All roles must pass the same value.
             unique_id: Unique identifier from :py:meth:`get_unique_id`.
-                Existing root and new ranks must pass the
-                :py:class:`~nccl.core.UniqueId`; existing non-root must pass
-                ``None``. Defaults to ``None``.
+                New ranks must pass the :py:class:`~nccl.core.UniqueId`.
+                Existing ranks may leave this as ``None`` because NCCL does not
+                use this parameter for existing ranks. Defaults to ``None``.
             rank: This rank's ID in the new communicator. New ranks must
                 pass their assigned rank, which must be ``>=`` the parent
-                communicator size. Existing ranks must pass ``None``.
-                Defaults to ``None``.
-            config: Configuration for the new communicator. Defaults to ``None``.
+                communicator size. Existing ranks must pass ``None``. Defaults
+                to ``None``.
+            config: Configuration for the new communicator. Defaults to
+                ``None``.
 
         Returns:
             New :py:class:`Communicator` containing all ranks.
@@ -1468,6 +1490,7 @@ class Communicator:
         return self._rank
 
     @property
+    @require_compatible_nccl
     def properties(self) -> NCCLCommProperties:
         """All properties NCCL reports for this communicator.
 
@@ -2718,6 +2741,12 @@ class Communicator:
         ) = None
 
         reqs = requirements._to_lowpp()
+        
+        if requirements.gin_connection_type == NcclGinConnectionType.CUSTOM_ARRAY:
+            peer_array = _materialize_gin_custom_peers(requirements.gin_custom_peers)
+            reqs.gin_custom_array = 0 if peer_array is None else int(peer_array.ctypes.data)
+            reqs.gin_custom_array_count = 0 if peer_array is None else int(peer_array.size)
+
         if requirements.teams:
             team_nodes, multimem_handles = _materialize_team_requirements(requirements.teams)
             reqs.team_requirements_list = team_nodes[0].ptr

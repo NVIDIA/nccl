@@ -8,6 +8,14 @@ GIN
 
 **Device functions.** The following are callable from device (GPU) code only. GIN is supported since NCCL 2.28.7.
 
+Types and limits
+----------------
+
+.. cpp:type:: ncclGinRequest_t
+
+   Opaque request storage initialized by a GIN operation (e.g., :cpp:func:`ncclGin::flushAsync`) and
+   consumed by :cpp:func:`ncclGin::wait`.
+
 ncclGin
 -------
 
@@ -279,6 +287,10 @@ ncclGinBarrierSession
       The fence values are bit flags and compose via bitwise OR. To request both ``Put`` and ``Get`` semantics, pass
       ``ncclGinFenceLevel::Put | ncclGinFenceLevel::Get``. ``ncclGinFenceLevel::Relaxed`` is preserved as a deprecated alias
       for ``None`` for source-level backward compatibility; new code should use ``None``.
+
+.. c:type:: ncclGinBarrierHandle_t
+
+   Opaque handle that identifies a set of GIN barriers. It is valid until the device communicator is destroyed.
 
 ncclBarrierSession
 ------------------

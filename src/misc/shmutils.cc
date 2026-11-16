@@ -35,6 +35,7 @@ ncclResult_t ncclShmemAllgather(struct ncclComm* comm, struct ncclShmemCollBuff*
   int curIndex = shmem->round % 2;
   bool done;
   int index = 0;
+  unsigned int abortCounter = 0;
   size_t maxTypeSize = shmem->maxTypeSize;
 
   if (comm == NULL || shmem == NULL || sendbuff == NULL || recvbuff == NULL || maxTypeSize < typeSize) {
@@ -47,7 +48,15 @@ ncclResult_t ncclShmemAllgather(struct ncclComm* comm, struct ncclShmemCollBuff*
   COMPILER_ATOMIC_STORE((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * comm->localRank), nextRound,
                         std::memory_order_release);
 
+  // Honor ncclCommAbort while spinning: a local peer that stops participating would
+  // otherwise leave this rank waiting forever for its arrival counter. Poll the flag
+  // once every 256 passes so the common pass where every peer has already arrived
+  // never reads it and the steady-state spin stays cheap.
   do {
+    if ((++abortCounter & 0xFF) == 0 && COMPILER_ATOMIC_LOAD(comm->abortFlag, std::memory_order_acquire)) {
+      ret = ncclInternalError;
+      goto exit;
+    }
     done = true;
     for (int i = index; i < comm->localRanks; ++i) {
       if (i != comm->localRank && COMPILER_ATOMIC_LOAD((int*)((char*)shmem->cnt[curIndex] + CACHE_LINE_SIZE * i),

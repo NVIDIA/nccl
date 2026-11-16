@@ -5,9 +5,9 @@
  * See LICENSE.txt for more license information
  *************************************************************************/
 
-// Shared NVSwitch multicast (MC) group: one MC object per NVLS domain whose full
-// VA is mapped once and bump-allocated to consumers (credit, data, ...) as
-// immutable slices, replacing one MC object (and slot) per consumer.
+// NVSwitch multicast (MC) group: one MC object over a set of ranks whose full VA
+// is mapped once and bump-allocated to consumers (credit, data, ...) as immutable
+// slices, replacing one MC object (and slot) per consumer.
 
 #include "multicast.h"
 #include "comm.h"
@@ -17,8 +17,8 @@
 
 #if CUDART_VERSION >= 12010
 
-ncclResult_t ncclMcCreate(struct ncclComm* comm, CUmulticastObjectProp* prop, int rank, unsigned int nranks,
-                          CUmemGenericAllocationHandle* mcHandle, char* shareableHandle) {
+static ncclResult_t mcCreate(struct ncclComm* comm, CUmulticastObjectProp* prop, int rank, unsigned int nranks,
+                             CUmemGenericAllocationHandle* mcHandle, char* shareableHandle) {
   CUmemAllocationHandleType type = ncclCuMemHandleType;
   size_t size = prop->size;
 
@@ -38,8 +38,8 @@ ncclResult_t ncclMcCreate(struct ncclComm* comm, CUmulticastObjectProp* prop, in
   return ncclSuccess;
 }
 
-ncclResult_t ncclMcImport(struct ncclComm* comm, char* shareableHandle, int rank,
-                          CUmemGenericAllocationHandle* mcHandle) {
+static ncclResult_t mcImport(struct ncclComm* comm, char* shareableHandle, int rank,
+                             CUmemGenericAllocationHandle* mcHandle) {
   CUmemAllocationHandleType type = ncclCuMemHandleType;
   ncclIpcFd fd = NCCL_INVALID_IPC_FD;
   ncclResult_t ret = ncclSuccess;
@@ -76,7 +76,8 @@ struct ncclMcGroup {
   int dev;                           // local device, for unbind
 };
 
-ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct ncclMcRequest* requests, int nRequests,
+ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct ncclMcRankSet* ranks,
+                                        const struct ncclMcRequest* requests, int nRequests,
                                         struct ncclMcGroup** outGroup, struct ncclMcPartition* outPartitions) {
   ncclResult_t ret = ncclSuccess;
   CUmulticastObjectProp mcprop = {};
@@ -86,12 +87,12 @@ ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct nccl
   CUmemGenericAllocationHandle mcHandle = 0;
   CUdeviceptr base = 0;
   struct ncclMcGroup* group = NULL;
-  size_t recGran, minGran, capacity = 0;
+  size_t recGran, minGran, capacity = 0, baseAlign;
   int mcCreated = 0, mapped = 0;
 
   *outGroup = NULL;
 
-  mcprop.numDevices = comm->localRanks;
+  mcprop.numDevices = ranks->nRanks;
   mcprop.handleTypes = ncclCuMemHandleType;
   mcprop.flags = 0;
   mcprop.size = 0;
@@ -102,10 +103,14 @@ ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct nccl
   // Bump-allocate an immutable slice per request. Offsets and sizes are rounded
   // to the recommended granularity (a multiple of the MC minimum) so every slice
   // boundary is a valid bind offset.
+  baseAlign = recGran;
   for (int i = 0; i < nRequests; i++) {
     outPartitions[i] = {};
     if (requests[i].size == 0) continue;
     size_t align = requests[i].alignment > recGran ? requests[i].alignment : recGran;
+    // The VA base is aligned to the strictest request so an aligned partition offset
+    // yields an equally aligned partition pointer.
+    if (align > baseAlign) baseAlign = align;
     ALIGN_SIZE(capacity, align);
     size_t slice = requests[i].size;
     ALIGN_SIZE(slice, recGran);
@@ -122,18 +127,17 @@ ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct nccl
 
   // Own the MC handle the instant it exists so every later failure path releases
   // the scarce MC slot.
-  if (comm->localRank == 0) {
-    NCCLCHECKGOTO(ncclMcCreate(comm, &mcprop, comm->localRank, comm->localRanks, &mcHandle, shareableHandle), ret,
-                  fail);
+  if (ranks->rank == 0) {
+    NCCLCHECKGOTO(mcCreate(comm, &mcprop, ranks->rank, ranks->nRanks, &mcHandle, shareableHandle), ret, fail);
     mcCreated = 1;
-    NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
-                                              0, shareableHandle, NVLS_HANDLE_SIZE),
+    NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, ranks->rankToWorld, ranks->rank, ranks->nRanks, 0,
+                                              shareableHandle, NVLS_HANDLE_SIZE),
                   ret, fail);
   } else {
-    NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
-                                              0, shareableHandle, NVLS_HANDLE_SIZE),
+    NCCLCHECKGOTO(bootstrapIntraNodeBroadcast(comm->bootstrap, ranks->rankToWorld, ranks->rank, ranks->nRanks, 0,
+                                              shareableHandle, NVLS_HANDLE_SIZE),
                   ret, fail);
-    NCCLCHECKGOTO(ncclMcImport(comm, shareableHandle, comm->localRankToRank[0], &mcHandle), ret, fail);
+    NCCLCHECKGOTO(mcImport(comm, shareableHandle, ranks->rankToWorld[0], &mcHandle), ret, fail);
     mcCreated = 1;
   }
   CUCHECKGOTO(cuMulticastAddDevice(mcHandle, comm->cudaDev), ret, fail);
@@ -141,12 +145,12 @@ ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct nccl
   // cuMemMap of an MC object blocks until every device has been added. This
   // abort-aware barrier makes a peer failing before cuMulticastAddDevice trip the
   // abort flag here instead of stranding survivors in the blocking cuMemMap.
-  NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, comm->localRankToRank, comm->localRank, comm->localRanks,
-                                          comm->localRankToRank[0]),
+  NCCLCHECKGOTO(bootstrapIntraNodeBarrier(comm->bootstrap, ranks->rankToWorld, ranks->rank, ranks->nRanks,
+                                          ranks->rankToWorld[0]),
                 ret, fail);
 
   // Reserve and map the whole MC VA once; each consumer slice is a view into it.
-  CUCHECKGOTO(cuMemAddressReserve(&base, capacity, recGran, 0U, 0), ret, fail);
+  CUCHECKGOTO(cuMemAddressReserve(&base, capacity, baseAlign, 0U, 0), ret, fail);
   CUCHECKGOTO(cuMemMap(base, capacity, 0, mcHandle, 0), ret, fail);
   mapped = 1;
   desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
@@ -169,7 +173,7 @@ ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct nccl
     outPartitions[i].dev = comm->cudaDev;
   }
 
-  INFO(NCCL_NVLS, "NVLS rank %d MC group %llx capacity %zu over %d consumers", comm->localRank, mcHandle, capacity,
+  INFO(NCCL_NVLS, "NVLS rank %d MC group %llx capacity %zu over %d consumers", ranks->rank, mcHandle, capacity,
        nRequests);
   for (int i = 0; i < nRequests; i++)
     TRACE(NCCL_NVLS, "NVLS MC group %llx slice %d offset %zu size %zu ptr %p", mcHandle, i, outPartitions[i].offset,

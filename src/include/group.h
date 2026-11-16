@@ -22,6 +22,7 @@ void ncclGroupCommPreconnect(struct ncclComm* comm);
 ncclResult_t ncclGroupCommLeave(struct ncclComm* comm);
 ncclResult_t ncclGroupJobAbort(struct ncclGroupJob* groupJob);
 ncclResult_t ncclGroupJobComplete(struct ncclGroupJob* groupJob);
+int64_t ncclParamSingleProcMemRegEnable();
 
 typedef ncclResult_t (*ncclInitFunc_t)(ncclComm_t* newcomm, int ndev, ncclUniqueId commId, int myrank, int cudaDev);
 

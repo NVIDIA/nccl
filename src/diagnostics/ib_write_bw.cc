@@ -31,7 +31,7 @@
 #include <string.h>
 #include <unistd.h>
 
-extern int64_t ncclParamIbQpsPerConn();
+USE_NCCL_PARAM(ncclParamIbQpsPerConn, int32_t);
 
 NCCL_PARAM(DiagIbBwTimeout, "DIAGNOSTICS_IB_BW_TIMEOUT", 5);
 
@@ -62,6 +62,13 @@ struct LocalInfo {
   char hostname[IB_BW_HOSTNAME_SIZE];
   char device[IB_BW_NAME_SIZE];
 };
+
+// Hostnames and device names must be terminated and safe as a single, non-option shell argument.
+static bool isSafeShellArgument(const char* name, size_t size) {
+  size_t length = strnlen(name, size);
+  if (length == 0 || length == size || name[0] == '-') return false;
+  return strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == length;
+}
 
 struct RankBandwidth {
   double direct;
@@ -291,9 +298,12 @@ static void discoverLocal(ncclComm* comm, LocalInfo* local) {
 }
 
 // Builds the ib_write_bw command line; the client form appends the server hostname (the connect
-// target). Returns false on truncation.
+// target). Returns false on unsafe names or truncation.
 static bool buildCommand(char* out, int outSize, bool server, const LocalInfo& local, const LocalInfo& serverInfo,
                          bool cudaEnabled, bool dmabufEnabled, int cudaDev, int port, int qps) {
+  if (!isSafeShellArgument(local.device, sizeof(local.device)) ||
+      (!server && !isSafeShellArgument(serverInfo.hostname, sizeof(serverInfo.hostname))))
+    return false;
   char cuda[80] = "";
   if (cudaEnabled) {
     snprintf(cuda, sizeof(cuda), " --use_cuda=%d%s", cudaDev, dmabufEnabled ? " --use_cuda_dmabuf" : "");
@@ -419,7 +429,7 @@ static double runPair(ncclComm* comm, const LocalInfo* rankInfo, int serverRank,
   const LocalInfo& local = rankInfo[comm->rank];
   int port = benchmarkPort(comm, comm->peerInfo[serverRank].nvmlDev);
   if (ncclParamIbQpsPerConn() < 1) {
-    DIAG_PRINT("NCCL DIAG [INFO] net bw: invalid qps parameter=%ld in comm 0x%lx", ncclParamIbQpsPerConn(),
+    DIAG_PRINT("NCCL DIAG [INFO] net bw: invalid qps parameter=%d in comm 0x%lx", ncclParamIbQpsPerConn(),
                (unsigned long)comm->commHash);
     return -1;
   }
@@ -561,10 +571,20 @@ void ncclDiagRunIbWriteBw(ncclComm* comm) {
   }
   // Gathered data is identical everywhere, so all ranks take this exit together.
   for (int rank = 0; rank < comm->nRanks; rank++) {
-    if (!rankInfo[rank].setupFailed) continue;
-    if (comm->rank == 0)
-      DIAG_PRINT("NCCL DIAG [INFO] net bw: setup failed on rank %d in comm 0x%lx", rank, (unsigned long)comm->commHash);
-    goto cleanup;
+    if (rankInfo[rank].setupFailed) {
+      if (comm->rank == 0)
+        DIAG_PRINT("NCCL DIAG [INFO] net bw: setup failed on rank %d in comm 0x%lx", rank,
+                   (unsigned long)comm->commHash);
+      goto cleanup;
+    }
+    // Validate received strings before comparisons, logging, or command construction.
+    if (!isSafeShellArgument(rankInfo[rank].hostname, sizeof(rankInfo[rank].hostname)) ||
+        !isSafeShellArgument(rankInfo[rank].device, sizeof(rankInfo[rank].device))) {
+      if (comm->rank == 0)
+        DIAG_PRINT("NCCL DIAG [INFO] net bw: invalid hostname or device on rank %d in comm 0x%lx", rank,
+                   (unsigned long)comm->commHash);
+      goto cleanup;
+    }
   }
 
   if (comm->rank == 0) {

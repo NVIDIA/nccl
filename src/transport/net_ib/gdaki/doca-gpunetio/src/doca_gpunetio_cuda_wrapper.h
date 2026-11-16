@@ -83,6 +83,9 @@ CUresult doca_gpu_cuda_wrapper_cuMemGetHandleForAddressRange(int *pHandle, CUdev
                                                              CUmemRangeHandleType handleType,
                                                              unsigned long long flags);
 CUresult doca_gpu_cuda_wrapper_cuCtxGetCurrent(CUcontext *pctx);
+CUresult doca_gpu_cuda_wrapper_cuCtxSetCurrent(CUcontext pctx);
+CUresult doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRetain(CUcontext *pctx, CUdevice dev);
+CUresult doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRelease(CUdevice dev);
 
 #else
 
@@ -93,6 +96,9 @@ CUresult doca_gpu_cuda_wrapper_cuCtxGetCurrent(CUcontext *pctx);
 #define doca_gpu_cuda_wrapper_cuPointerSetAttribute cuPointerSetAttribute
 #define doca_gpu_cuda_wrapper_cuMemGetHandleForAddressRange cuMemGetHandleForAddressRange
 #define doca_gpu_cuda_wrapper_cuCtxGetCurrent cuCtxGetCurrent
+#define doca_gpu_cuda_wrapper_cuCtxSetCurrent cuCtxSetCurrent
+#define doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRetain cuDevicePrimaryCtxRetain
+#define doca_gpu_cuda_wrapper_cuDevicePrimaryCtxRelease cuDevicePrimaryCtxRelease
 
 #endif
 

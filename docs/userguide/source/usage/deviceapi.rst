@@ -28,7 +28,7 @@ Requirements
 
 The device API relies on symmetric memory (see :ref:`window_reg`), which in turn depends on GPU virtual memory
 management (see :ref:`env_NCCL_CUMEM_ENABLE`) and optionally -- for multimem support -- on NVLink SHARP (see
-:ref:`env_NCCL_NVLS_ENABLE`). GIN supports muiltiple networking backends, each with their own set of requirements.
+:ref:`env_NCCL_NVLS_ENABLE`). GIN supports multiple networking backends, each with their own set of requirements.
 
 GIN has the following requirements:
 
@@ -40,6 +40,7 @@ The GIN **CPU Proxy** backend has the following requirements:
 
 * NVIDIA NICs: CX4 or newer
 * GPUDirect RDMA with the internal plugin:
+
   * If using DMA-BUF, rdma-core >= 34.0.
   * If using nvidia-peermem, Mellanox OFED >= 5.0 or DOCA.
 
@@ -47,6 +48,7 @@ The GIN **GDAKI** backend has the following requirements:
 
 * NVIDIA NICs: CX4 or newer. rdma-core >= 44.0
 * GPU Direct RDMA:
+
   * If using DMA-BUF, linux kernel >= 6.1.
   * If using nvidia-peermem on baremetal, linux kernel >= 5.12 and either Mellanox OFED or DOCA driver.
   * If using nvidia-peermem on virtualized environments, linux kernel >= 6.1 and either Mellanox OFED or DOCA driver.
@@ -61,7 +63,7 @@ When using host-backed buffers, the following additional limitations apply:
 
 Using the host RMA API requires CUDA 12.5 or greater.
 
-Building with EMIT_LLVM_IR=1 (to generate readable LLVM intermediate representation code) requires CUDA 12.
+Building with NCCL_EMIT_LLVM_IR=1 (to generate readable LLVM intermediate representation code) requires CUDA 12.
 
 CFT has the following requirements:
 
@@ -272,6 +274,105 @@ always contiguous (stride ``1``), whereas the rail team is typically not -- its 
 (the assumption is thus that each rank *n* within the local LSA team has direct network connectivity with corresponding
 ranks *n* of all remote LSA teams).
 
+Team descriptor
+^^^^^^^^^^^^^^^
+
+Team functions are available in host code with a :c:type:`ncclComm_t`
+argument and, where noted, in device code with a :cpp:type:`ncclDevComm`
+argument.
+
+.. cpp:struct:: ncclTeam
+
+   Describes a team relative to the calling rank.
+
+   .. cpp:member:: int nRanks
+
+      Number of ranks in the team.
+
+   .. cpp:member:: int rank
+
+      Index of the calling rank in the team.
+
+   .. cpp:member:: int stride
+
+      Distance, in world ranks, between consecutive team ranks.
+
+   ``ncclTeam_t`` is a typedef of ``ncclTeam``.
+
+Team tags
+^^^^^^^^^
+
+.. cpp:struct:: ncclTeamTagWorld
+.. cpp:struct:: ncclTeamTagLsa
+.. cpp:struct:: ncclTeamTagRail
+
+   Empty tag types selecting the world, LSA, or rail team in APIs whose
+   overload is chosen by team kind, such as barrier-session constructors.
+
+CFT teams
+^^^^^^^^^
+
+CFT-specific teams and layout modes are documented under
+:ref:`CFT Teams <device_api_cft_teams>`.
+
+Rank conversion
+^^^^^^^^^^^^^^^
+
+The following functions do not communicate or synchronize. They perform
+arithmetics on team descriptors. Except where explicitly stated, callers must
+provide a valid rank in the source team. :cpp:func:`ncclTeamRankIsMember` and
+:cpp:func:`ncclTeamRankToTeam` are callable from host and device code.
+
+.. cpp:function:: bool ncclTeamRankIsMember(ncclTeam_t a, ncclTeam_t b, int bPeer)
+
+   Returns ``true`` if rank *bPeer* of team *b* is also a member of team *a*.
+
+.. cpp:function:: int ncclTeamRankToTeam(ncclTeam_t a, ncclTeam_t b, int bPeer)
+
+   Converts rank *bPeer* in team *b* to its rank index in team *a*. Call
+   :cpp:func:`ncclTeamRankIsMember` first if membership is not already known.
+   The result is undefined if the rank is not a member of *a*.
+
+.. cpp:function:: int ncclTeamRankToWorld(ncclDevComm const& comm, ncclTeam team, int rank)
+.. c:function:: int ncclTeamRankToWorld(ncclComm_t comm, ncclTeam_t team, int rank)
+
+   Converts *rank* in *team* to a world rank in *comm*. The input rank must be
+   a valid member of *team*.
+
+.. cpp:function:: int ncclTeamRankToLsa(ncclDevComm const& comm, ncclTeam team, int rank)
+.. c:function:: int ncclTeamRankToLsa(ncclComm_t comm, ncclTeam_t team, int rank)
+
+   Converts *rank* in *team* to a rank in the calling rank's LSA team. The
+   result is meaningful only when that rank belongs to the LSA team. The host
+   overload returns ``-1`` if initialization of the communicator's device
+   state fails.
+
+Team construction
+^^^^^^^^^^^^^^^^^
+
+.. cpp:function:: ncclTeam_t ncclTeamInnerFactor(ncclTeam_t parent, int innerSize)
+
+   Splits the *parent* team into inner teams of *innerSize* consecutive ranks and
+   returns the inner team containing the calling rank. The returned team has
+   *innerSize* ranks and stride ``parent.stride``. *innerSize* must be positive
+   and divide ``parent.nRanks``.
+
+.. cpp:function:: ncclTeam_t ncclTeamOuterFactor(ncclTeam_t parent, int innerSize)
+
+   Treats consecutive groups of *innerSize* ranks as inner teams and returns
+   the outer team containing the calling rank's position across those groups.
+   The result has ``parent.nRanks / innerSize`` ranks and stride
+   ``parent.stride * innerSize``. *innerSize* must be positive and divide
+   ``parent.nRanks``.
+
+.. cpp:function:: int ncclTeamRankInDifference(ncclTeam_t parent, ncclTeam_t subset, int index)
+
+   Interprets *parent* and *subset* as sets of ranks and returns, as an index in
+   *parent*, element *index* of ``parent - subset``. *subset* must be a subset
+   of *parent*, and *index* must be in
+   ``[0, parent.nRanks - subset.nRanks)``. The function does not validate
+   these preconditions.
+
 .. _devapi_segment_types:
 
 Segment Types
@@ -440,6 +541,71 @@ commit outstanding outgoing :c:func:`put` operations. While :c:func:`flush` does
 side effect, it does ensure the local send buffer is safe to reuse from this kernel's perspective. After :c:func:`waitSignal`
 and :c:func:`flush`, :c:func:`bar.sync` runs again. The barrier is added so that all ranks complete the collective before any
 rank exits the kernel.
+
+.. _deviceapi_gin_multi_backend:
+
+Multiple GIN Backends
+^^^^^^^^^^^^^^^^^^^^^
+
+A single communicator can load more than one GIN backend at a time (for example, both
+:c:enumerator:`NCCL_GIN_TYPE_PROXY <ncclGinType_t.NCCL_GIN_TYPE_PROXY>` and
+:c:enumerator:`NCCL_GIN_TYPE_GDAKI <ncclGinType_t.NCCL_GIN_TYPE_GDAKI>`).
+Each :c:type:`ncclDevComm` only supports a single backend. To use several backends concurrently,
+create one device communicator per backend and drive each with its own :c:type:`ncclGin` object.
+
+Call :c:func:`ncclCommQueryProperties` and inspect :c:member:`ncclCommProperties_t.ginSupport` to discover which
+backends are available before requesting one:
+
+.. code-block:: C
+
+  ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;
+  NCCLCHECK(ncclCommQueryProperties(comm, &props));
+
+  bool hasProxy = props.ginSupport[NCCL_GIN_TYPE_PROXY];
+  bool hasGdaki = props.ginSupport[NCCL_GIN_TYPE_GDAKI];
+
+Request a specific backend for a device communicator by setting :c:member:`ncclDevCommRequirements.ginType`; leave
+it at the default :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>` to accept whichever backend
+the communicator picks. :c:func:`ncclDevCommCreate` fails if the requested backend is not supported.
+
+.. code-block:: C
+
+  ncclDevCommRequirements reqsProxy = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+  reqsProxy.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+  reqsProxy.ginSignalCount = 1;
+  reqsProxy.ginType = NCCL_GIN_TYPE_PROXY;
+  NCCLCHECK(ncclDevCommCreate(comm, &reqsProxy, &devCommProxy));
+
+  ncclDevCommRequirements reqsGdaki = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+  reqsGdaki.ginConnectionType = NCCL_GIN_CONNECTION_FULL;
+  reqsGdaki.ginSignalCount = 1;
+  reqsGdaki.ginType = NCCL_GIN_TYPE_GDAKI;
+  NCCLCHECK(ncclDevCommCreate(comm, &reqsGdaki, &devCommGdaki));
+
+On the device, construct one :c:type:`ncclGin` per device communicator. Signal and counter indices are local
+to each device communicator, so ``signal 0`` on ``devCommProxy`` is independent from ``signal 0`` on
+``devCommGdaki``:
+
+.. code-block:: C
+
+  __global__ void multiBackendPutKernel(ncclDevComm devCommProxy, ncclDevComm devCommGdaki,
+                                        ncclWindow_t window, size_t offsetProxy, size_t offsetGdaki) {
+    ncclTeam world = ncclTeamWorld(devCommProxy);
+    ncclGin ginProxy { devCommProxy, 0 };
+    ncclGin ginGdaki { devCommGdaki, 0 };
+    ncclGinSignal_t sig = 0; // signal 0 in each devComm's own signal table
+
+    if (world.rank == 0) {
+      ginProxy.put(world, 1, window, offsetProxy, window, offsetProxy, sizeof(uint64_t),
+                   ncclGin_WeakSignalInc{sig});
+      ginGdaki.put(world, 1, window, offsetGdaki, window, offsetGdaki, sizeof(uint64_t),
+                   ncclGin_WeakSignalInc{sig});
+    }
+    if (world.rank == 1) {
+      ginProxy.waitSignal(ncclCoopThread(), sig, 1);
+      ginGdaki.waitSignal(ncclCoopThread(), sig, 1);
+    }
+  }
 
 .. _deviceapi_gin_compat:
 

@@ -19,6 +19,7 @@ struct ncclGinIbCollComm {
   void* recvComm;
   void* sendComm;
   int dev;
+  volatile uint32_t* abortFlag;
   struct {
     struct ibv_context* context;
     struct ibv_pd* pd;
@@ -28,6 +29,7 @@ struct ncclGinIbCollComm {
   ncclResult_t (*allToAll)(struct ncclGinIbCollComm* cComm, void* srcBuf, void* recvBuf, size_t len);
   ncclResult_t (*getGidIndex)(struct ibv_context* context, uint8_t portNum, struct ibv_port_attr* portAttr,
                               int* gidIndex);
+  bool gdakiUnsupported;
 };
 
 #endif

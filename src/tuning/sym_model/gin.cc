@@ -18,6 +18,7 @@
 #define NCCL_NVLINK_BW_IDX_HOPPER 0
 #define NCCL_NVLINK_BW_IDX_BLACKWELL 1
 #define NCCL_NVLINK_BW_IDX_NUM 2
+#define NCCL_SM_PENALTY_IDX_NUM 2
 
 // NVLS max bws NCCL can achieve.
 static const float nvlinkBws[NCCL_NVLINK_BW_IDX_NUM] = {
@@ -73,6 +74,73 @@ double ncclTuningGetSmLatReduceScatterRailA2A(struct ncclComm* comm, bool ldmc) 
   return 10.e-6;
 }
 
+// Time penalty per SM/CTA for resource use. Keep the standard 2.5% penalty
+// except for Blackwell unicast RS+GIN, where the max penalty makes MC win.
+static const float smPenalty[NCCL_SM_PENALTY_IDX_NUM][2] = {
+  {.025f, .025f}, // Hopper
+  {.025f, 1.0f}, // Blackwell
+};
+
+static double ncclTuningGetSmPenalty(struct ncclComm* comm, enum ncclSymkKernelId kernelId) {
+  int compCapIndex = comm->minCompCap >= 100 ? NCCL_NVLINK_BW_IDX_BLACKWELL : NCCL_NVLINK_BW_IDX_HOPPER;
+  int slot = kernelId == ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD ? 1 : 0;
+  return smPenalty[compCapIndex][slot];
+}
+
+// Initial SM100 fit from the GB200-CX8-NVL4 AlltoAll_LL sweep. Bandwidths
+// are physical LL-line GB/s; every 8-byte payload line occupies 16 wire bytes.
+static constexpr double alltoAllLLLsaBaseLatUs = 7.47960;
+static constexpr double alltoAllLLGinBaseLatUs = 11.37416;
+static constexpr double alltoAllLLGinPeerLatUs = 0.12808;
+static constexpr double alltoAllLLGinWaveLatUs = 5.02774;
+static constexpr double alltoAllLLLsaCtaBwGBps = 9.50640;
+static constexpr double alltoAllLLGinCtaBwGBps = 7.09306;
+static constexpr double alltoAllLLSelfCtaBwGBps = 213.60945;
+// Normalize the fitted 438.33/46.05 GB/s ceilings by this topology's
+// 720 GB/s LSA and 96 GB/s GIN rates.
+static constexpr double alltoAllLLLsaPeakEfficiency = 0.60880;
+static constexpr double alltoAllLLGinPeakEfficiency = 0.47968;
+
+static bool ncclSymkAlltoAllLLModel(struct ncclTuningInput_t* input, size_t payloadBytes, int activeBlocks,
+                                    int warpsPerBlock, float* timeUs) {
+  struct ncclComm* comm = input->comm;
+  if (activeBlocks < 1 || warpsPerBlock < 1 || payloadBytes == 0) return false;
+
+  int lsaRanks = ncclTeamLsa(comm).nRanks;
+  int lsaPeerCount = std::max(0, lsaRanks - 1);
+  int ginPeerCount = comm->nRanks - lsaRanks;
+  int ginLinesPerWarp = ncclSymkAlltoAllLLGinLinesPerWarp(payloadBytes);
+  size_t ginChunkCount = ncclSymkAlltoAllLLChunkCount(ginPeerCount, payloadBytes, ginLinesPerWarp);
+  int activeWarps = activeBlocks * warpsPerBlock;
+  size_t ginWaves = ginChunkCount == 0 ? 0 : divUp(ginChunkCount, (size_t)activeWarps);
+  size_t wireBytesPerPeer = ncclSymkAlltoAllLLWireBytes(payloadBytes);
+
+  // The CTA term models LL publication and consumption. LSA and GIN have
+  // separate per-CTA rates because GIN also packs staging and posts puts.
+  constexpr double bytesPerUsPerGBps = 1000.0;
+  double ctaTimeUs = lsaPeerCount * wireBytesPerPeer / (activeBlocks * alltoAllLLLsaCtaBwGBps * bytesPerUsPerGBps) +
+                     ginPeerCount * wireBytesPerPeer / (activeBlocks * alltoAllLLGinCtaBwGBps * bytesPerUsPerGBps) +
+                     payloadBytes / (activeBlocks * alltoAllLLSelfCtaBwGBps * bytesPerUsPerGBps);
+
+  // LSA stores and GIN puts run concurrently, so the slower physical fabric
+  // ceiling bounds the transfer rather than their sum.
+  double lsaPeakBwGBps = ncclTuningGetLsaBw(comm) * alltoAllLLLsaPeakEfficiency / 1.e9;
+  double ginPeakBwGBps = ncclTuningGetGinBw(comm) * alltoAllLLGinPeakEfficiency / 1.e9;
+  if ((lsaPeerCount != 0 && lsaPeakBwGBps <= 0.0) || (ginPeerCount != 0 && ginPeakBwGBps <= 0.0)) return false;
+  double lsaTimeUs = lsaPeerCount == 0 ? 0.0 : lsaPeerCount * wireBytesPerPeer / (lsaPeakBwGBps * bytesPerUsPerGBps);
+  double ginTimeUs = ginPeerCount == 0 ? 0.0 : ginPeerCount * wireBytesPerPeer / (ginPeakBwGBps * bytesPerUsPerGBps);
+
+  double latencyUs = alltoAllLLLsaBaseLatUs;
+  if (ginPeerCount != 0) {
+    latencyUs += alltoAllLLGinBaseLatUs + ginPeerCount * alltoAllLLGinPeerLatUs;
+    latencyUs += (ginWaves > 0 ? ginWaves - 1 : 0) * alltoAllLLGinWaveLatUs;
+  }
+  double estimateUs = latencyUs + std::max(ctaTimeUs, std::max(lsaTimeUs, ginTimeUs));
+  if (!std::isfinite(estimateUs) || estimateUs <= 0.0) return false;
+  *timeUs = (float)estimateUs;
+  return true;
+}
+
 // Calculate saturation block count.
 int ncclTuningCalcSatBlocksReduceScatterRailA2A(struct ncclComm* comm, bool ldmc) {
   double lsaBw = ncclTuningGetLsaBw(comm);
@@ -107,11 +175,42 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   nMinBlocks = std::min(nMinBlocks, nMaxBlocks);
   // NCCL_SYM_CTAS is an explicit override of the resolved bounds.
   int nUserCTAs = ncclSymkModelCtasEnvOverride();
-  if (nUserCTAs > 0) nMinBlocks = nMaxBlocks = nUserCTAs;
+  if (nUserCTAs > 0) {
+    if (kernelId == ncclSymkKernelId_AlltoAll_LL) {
+      // AlltoAll_LL defines NCCL_SYM_CTAS as a cap on useful CTAs.
+      nMaxBlocks = std::min(nMaxBlocks, nUserCTAs);
+      nMinBlocks = std::min(nMinBlocks, nMaxBlocks);
+    } else {
+      nMinBlocks = nMaxBlocks = nUserCTAs;
+    }
+  }
 
+  bool applySmPenalty = true;
   *timeUs = FLT_MAX;
   *nBlocks = 0;
   switch (kernelId) {
+  case ncclSymkKernelId_AlltoAll_LL:
+    {
+      // AlltoAll_LL is opt-in. Report it unavailable unless forced.
+      if (!ncclSymkAlltoAllLLForced(comm)) break;
+      // Tuning nBytes is the total AlltoAll send/receive span. The kernel's
+      // chunk and scratch formulas consume the payload sent to each peer.
+      size_t payloadBytes = nBytes / comm->nRanks;
+      int lsaRanks = ncclTeamLsa(comm).nRanks;
+      int lsaPeerCount = std::max(0, lsaRanks - 1);
+      int ginPeerCount = comm->nRanks - lsaRanks;
+      int warpsPerBlock = ncclSymkKernelMaxWarps(kernelId, input->devRedOp, input->datatype);
+      int ginLinesPerWarp = ncclSymkAlltoAllLLGinLinesPerWarp(payloadBytes);
+      *nBlocks =
+        ncclSymkAlltoAllLLSelectedBlockCount(lsaPeerCount, ginPeerCount, payloadBytes,
+                                             ncclSymkAlltoAllLLLsaLinesPerWarp, ginLinesPerWarp, warpsPerBlock,
+                                             symk->alltoAllLLMaxResidentCtas, nMaxBlocks, /*userBlockLimit=*/0);
+      if (!ncclSymkAlltoAllLLModel(input, payloadBytes, *nBlocks, warpsPerBlock, timeUs)) *nBlocks = 0;
+      // Report predicted latency directly. The generic GIN SM penalty is a
+      // selection heuristic and was not part of this forced-CTA fit.
+      applySmPenalty = false;
+    }
+    break;
   case ncclSymkKernelId_AllGather_RailRing_LsaSTMC:
     {
       constexpr int railChunkSize = ncclSymkAllGather_RailRing_ChunkSize;
@@ -153,9 +252,8 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     break;
   }
 
-  if (*nBlocks > 0 && std::isfinite(*timeUs)) {
-    constexpr float smPenalty = .025f; // 2.5% increase in time per SM.
-    *timeUs *= 1.0f + smPenalty * (*nBlocks);
+  if (applySmPenalty && *nBlocks > 0 && std::isfinite(*timeUs)) {
+    *timeUs *= 1.0f + ncclTuningGetSmPenalty(comm, kernelId) * (*nBlocks);
   }
   return ncclSuccess;
 }

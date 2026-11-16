@@ -726,6 +726,6 @@ ncclResult_t ncclNdFinalizeDevices(void) {
 
 // Release one plugin context and drop its shared device-state reference.
 ncclResult_t ncclNdFinalize(void* ctx) {
-  if (ctx) free(ctx);
+  free(ctx);
   return ncclNdFinalizeDevices();
 }

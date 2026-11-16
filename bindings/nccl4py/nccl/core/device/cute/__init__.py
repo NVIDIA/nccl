@@ -28,7 +28,7 @@ except ImportError as e:
     ) from e
 
 from . import types, coop, handles, comm, window, gin, barrier, reduce_copy, runtime
-from .types import *    # MemoryOrder, ThreadScope, GinFenceLevel, GinBackendMask, GinResourceSharingMode
+from .types import *    # MemoryOrder, ThreadScope, GinFenceLevel, GinResourceSharingMode
 from .coop import *     # Coop, cta, warp, thread, lanes, warp_span
 from .handles import *  # MultimemHandle, LsaBarrierHandle, GinBarrierHandle
 from .comm import *     # Team, DevComm

@@ -1,10 +1,9 @@
 """Pythonic wrappers for ``ncclDevComm`` and ``ncclTeam``.
 
 :class:`DevComm` is an explicit CuTeDSL view over a host-side
-``DevCommResource``. Its JIT protocol passes a :py:class:`DevCommValue`
-native struct by value and reconstructs the same public type in value mode
-while tracing. Pointer storage is materialized lazily for device APIs whose
-FFI ABI requires a pointer or reference.
+``DevCommResource``. Its JIT protocol passes opaque :py:class:`ncclIrDevComm`
+storage by value and reconstructs the same public type while tracing.
+Pointer storage is materialized lazily for IR calls.
 """
 
 import cutlass
@@ -14,30 +13,21 @@ from cutlass.cutlass_dsl import dsl_user_op
 
 from ...resources import DevCommResource
 from . import _bindings
-from ._helpers import _alloca_cft_le_info, _alloca_struct, _load_cft_le_info, _to_value
+from ._helpers import (
+    _alloca_cft_le_info,
+    _alloca_struct,
+    _device_function_entry_block,
+    _load_cft_le_info,
+    _to_struct_ptr,
+)
 from ._structs import (
-    DevCommValue,
-    ncclGin_C,
+    ncclIrDevComm,
+    ncclIrGin,
     ncclTeam as Team,
 )
 from .gin import Gin
-from .handles import GinBarrierHandle, LsaBarrierHandle, MultimemHandle
-from .types import CftLeInfo, CftTeamMode, GinBackendMask, GinResourceSharingMode
-
-
-def _device_function_entry_block():
-    """Return the enclosing device function's entry block."""
-    op = ir.InsertionPoint.current.block.owner
-    while op is not None:
-        parent = op.parent
-        if parent is not None and parent.name == "gpu.module":
-            if len(op.regions) == 0 or len(op.regions[0].blocks) == 0:
-                break
-            return op.regions[0].blocks[0]
-        op = parent
-    raise cutlass.DSLRuntimeError(
-        "Unable to find the device function entry block for DevComm.ptr"
-    )
+from .handles import MultimemHandle
+from .types import CftLeInfo, CftTeamMode, GinResourceSharingMode
 
 
 @dsl_user_op
@@ -48,7 +38,7 @@ def _materialize_dev_comm(value, *, loc=None, ip=None) -> ir.Value:
     # ip is not forwarded: the alloca must land at entry-block begin so the
     # pointer dominates every use, not at the caller's position.
     with ir.InsertionPoint.at_block_begin(entry_block):
-        ptr = _alloca_struct(DevCommValue, alignment=8, loc=loc)
+        ptr = _alloca_struct(ncclIrDevComm, loc=loc)
 
     # The store has to follow both operands. The struct is a block argument
     # while it stays within one block, and then it already dominates the
@@ -67,9 +57,10 @@ class DevComm:
 
     ``DevComm(resource)`` creates a host-mode JIT argument that keeps the
     resource alive. CuTeDSL reconstructs value-mode instances without calling
-    ``__init__``. The native struct is exposed as ``value`` for field reads
-    while tracing; mutating it is unsupported. ``ptr`` is materialized once,
-    on demand, and is never included in the JIT or kernel ABI.
+    ``__init__``. ``value`` is opaque storage; fields are queried through IR
+    accessors. ``ptr`` is materialized once, on demand, and
+    is never included in the JIT or kernel ABI. The host bindings and device
+    IR must come from the same NCCL build.
     """
 
     def __init__(self, resource: DevCommResource):
@@ -92,7 +83,7 @@ class DevComm:
 
     @staticmethod
     def __get_mlir_types__():
-        return DevCommValue.__get_mlir_types__()
+        return ncclIrDevComm.__get_mlir_types__()
 
     def __extract_mlir_values__(self):
         return self.value.__extract_mlir_values__()
@@ -100,16 +91,16 @@ class DevComm:
     def __new_from_mlir_values__(self, values):
         obj = object.__new__(type(self))
         obj._resource = None
-        obj._value = DevCommValue(values[0])
+        obj._value = ncclIrDevComm(values[0])
         obj._materialized_ptr = None
         return obj
 
     @property
-    def value(self) -> DevCommValue:
-        """Value-mode native struct backing the field reads."""
+    def value(self) -> ncclIrDevComm:
+        """Opaque, by-value communicator storage available while tracing."""
         if self._value is None:
             raise cutlass.DSLRuntimeError(
-                "DevComm fields are only available while tracing CuTeDSL code"
+                "DevComm storage is only available while tracing CuTeDSL code"
             )
         return self._value
 
@@ -124,78 +115,60 @@ class DevComm:
 
     @property
     def rank(self) -> cutlass.Int32:
-        return self.value.rank
+        return _bindings.nccl_dev_comm_rank(self.ptr)
 
     @property
     def n_ranks(self) -> cutlass.Int32:
-        return self.value.n_ranks
+        return _bindings.nccl_dev_comm_n_ranks(self.ptr)
 
     @property
     def lsa_rank(self) -> cutlass.Int32:
-        return self.value.lsa_rank
+        return _bindings.nccl_dev_comm_lsa_rank(self.ptr)
 
     @property
     def lsa_size(self) -> cutlass.Int32:
-        return self.value.lsa_size
-
-    # === Embedded barrier handles ===
-
-    # Wrapped so an embedded handle and a host-passed one are the same type.
+        return _bindings.nccl_dev_comm_lsa_size(self.ptr)
 
     @property
-    def lsa_barrier(self) -> LsaBarrierHandle:
-        return LsaBarrierHandle.from_native_struct(self.value.lsa_barrier)
-
-    @property
-    def rail_gin_barrier(self) -> GinBarrierHandle:
-        return GinBarrierHandle.from_native_struct(self.value.rail_gin_barrier)
-
-    @property
-    def hybrid_lsa_barrier(self) -> LsaBarrierHandle:
-        return LsaBarrierHandle.from_native_struct(
-            self.value.hybrid_lsa_barrier)
-
-    @property
-    def hybrid_rail_gin_barrier(self) -> GinBarrierHandle:
-        return GinBarrierHandle.from_native_struct(
-            self.value.hybrid_rail_gin_barrier)
-
-    @property
-    def world_gin_barrier(self) -> GinBarrierHandle:
-        return GinBarrierHandle.from_native_struct(
-            self.value.world_gin_barrier)
-
-    @property
-    def lsa_multimem(self) -> MultimemHandle:
-        return MultimemHandle.from_native_struct(self.value.lsa_multimem)
+    def gin_context_count(self) -> cutlass.Uint32:
+        return _bindings.nccl_dev_comm_gin_context_count(self.ptr)
 
     # === Team factories ===
 
     @property
     def team_world(self) -> Team:
-        return Team(_bindings.nccl_team_world(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_world(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     @property
     def team_lsa(self) -> Team:
-        return Team(_bindings.nccl_team_lsa(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_lsa(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     @property
     def team_rail(self) -> Team:
-        return Team(_bindings.nccl_team_rail(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_rail(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     def team_cft(self, mode: CftTeamMode = CftTeamMode.FLAT) -> Team:
         """The CFT team, in the requested layout.
 
         Args:
-            mode: Team layout. Defaults to :py:attr:`CftTeamMode.FLAT`,
-                matching the C default argument.
+            mode: Team layout. Defaults to :py:attr:`CftTeamMode.FLAT`.
         """
-        return Team(_bindings.nccl_team_cft(self.ptr, cutlass.Int32(int(mode))))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_cft(self.ptr, out_team, cutlass.Int32(int(mode)))
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     @property
     def team_cft_multimem(self) -> Team:
         """The CFT multimem team."""
-        return Team(_bindings.nccl_team_cft_multimem(self.ptr))
+        out_team = _alloca_struct(Team, at_entry=True)
+        _bindings.nccl_team_cft_multimem(self.ptr, out_team)
+        return Team(llvm.load(Team.__get_mlir_types__()[0], out_team))
 
     def team_rank_to_world(self, team: Team, rank: int) -> cutlass.Int32:
         """Translate ``rank`` within ``team`` to its world rank.
@@ -208,7 +181,7 @@ class DevComm:
             Corresponding rank in the world team.
         """
         return cutlass.Int32(_bindings.nccl_team_rank_to_world(
-            self.ptr, _to_value(team), cutlass.Int32(rank)))
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(rank)))
 
     def team_rank_to_lsa(self, team: Team, rank: int) -> cutlass.Int32:
         """Translate ``rank`` within ``team`` to its LSA rank.
@@ -225,7 +198,7 @@ class DevComm:
             Corresponding rank in the LSA team.
         """
         return cutlass.Int32(_bindings.nccl_team_rank_to_lsa(
-            self.ptr, _to_value(team), cutlass.Int32(rank)))
+            self.ptr, _to_struct_ptr(team), cutlass.Int32(rank)))
 
     # === Resource buffer pointers ===
 
@@ -268,7 +241,7 @@ class DevComm:
             ``!llvm.ptr`` MLIR value.
         """
         return _bindings.nccl_get_resource_buffer_peer_pointer(
-            self.ptr, cutlass.Uint32(handle), _to_value(team),
+            self.ptr, cutlass.Uint32(handle), _to_struct_ptr(team),
             cutlass.Int32(peer))
 
     def resource_buffer_multimem_pointer(
@@ -278,15 +251,15 @@ class DevComm:
 
         Args:
             handle: ``ncclDevResourceHandle`` from ``DevCommResource``.
-            mm_handle: Multimem handle covering the resource window --
-                :py:attr:`lsa_multimem`, or one passed in from the host for
-                a non-LSA team.
+            mm_handle: host-passed multimem handle covering the resource
+                window. For the built-in LSA mapping, use
+                :meth:`resource_buffer_lsa_multimem_pointer` instead.
 
         Returns:
             ``!llvm.ptr`` MLIR value.
         """
         return _bindings.nccl_get_resource_buffer_multimem_pointer(
-            self.ptr, cutlass.Uint32(handle), _to_value(mm_handle))
+            self.ptr, cutlass.Uint32(handle), _to_struct_ptr(mm_handle))
 
     def resource_buffer_lsa_multimem_pointer(self, handle: int) -> ir.Value:
         """Translate a resource handle to its LSA multimem buffer address.
@@ -363,15 +336,13 @@ class DevComm:
 
     def gin(
         self,
-        backend: GinBackendMask,
         context_id: int,
         *,
         resource_sharing_mode: GinResourceSharingMode = GinResourceSharingMode.GPU,
     ) -> Gin:
-        """Allocate and initialize a :class:`Gin` rooted on this comm.
+        """Allocate and initialize an ALL-mask :class:`Gin` rooted on this comm.
 
         Args:
-            backend: backend selection mask.
             context_id: GIN context id.
             resource_sharing_mode: scope at which GIN network resources are
                 shared: across the GPU, within each CTA, or exclusively by
@@ -381,9 +352,9 @@ class DevComm:
         Returns:
             Initialized :class:`Gin`.
         """
-        storage = _alloca_struct(ncclGin_C)
-        _bindings.nccl_gin_c_init(
-            storage, cutlass.Int32(int(backend)), self.ptr,
+        storage = _alloca_struct(ncclIrGin)
+        _bindings.nccl_ir_gin_init(
+            storage, self.ptr,
             cutlass.Int32(context_id), cutlass.Uint8(int(resource_sharing_mode)))
         return Gin(ptr=storage)
 

@@ -6,6 +6,10 @@
 #
 .PHONY : all clean
 
+# debian.build and txz.build both recurse into the top-level src.build; running
+# them concurrently makes two sub-makes compile the same objects at once.
+.NOTPARALLEL:
+
 default : build
 build : debian.build txz.build
 

@@ -24,7 +24,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <cstring>
-#include <cstdbool>
 #include "socket.h"
 #include "utils.h"
 #include "checks.h"
@@ -692,6 +691,7 @@ ncclResult_t ncclOsGetPciDeviceClassByBusId(const char* busId, char* deviceClass
 }
 
 ncclResult_t ncclOsGetBcmLinks(const char* busId, int* nlinks, char** peers) {
+  ncclResult_t ret = ncclSuccess;
   *nlinks = 0;
   *peers = NULL;
 
@@ -712,13 +712,15 @@ ncclResult_t ncclOsGetBcmLinks(const char* busId, int* nlinks, char** peers) {
       free(path);
 
       // Add to peers list
-      NCCLCHECK(ncclRealloc(peers, (*nlinks) * BUSID_SIZE, ((*nlinks) + 1) * BUSID_SIZE));
+      NCCLCHECKGOTO(ncclRealloc(peers, (*nlinks) * BUSID_SIZE, ((*nlinks) + 1) * BUSID_SIZE), ret, exit);
       memcpy((*peers) + BUSID_SIZE * (*nlinks)++, file->d_name, BUSID_SIZE);
     }
-    closedir(dir);
   }
 
-  return ncclSuccess;
+exit:
+  if (dir) closedir(dir);  // also on the realloc failure path
+
+  return ret;
 }
 
 ncclResult_t ncclOsGetNumaNodeAffinity(unsigned int numaId, char* affinityStr, size_t maxLen, int* cpuOffset) {

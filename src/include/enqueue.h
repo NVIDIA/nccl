@@ -47,17 +47,21 @@ ncclResult_t ncclLaunchKernel(struct ncclComm* comm, struct ncclKernelPlan* plan
 ncclResult_t ncclLaunchKernelAfter_NoCuda(struct ncclComm* comm, struct ncclKernelPlan* plan);
 ncclResult_t ncclLaunchFinish(struct ncclComm* comm);
 ncclResult_t ncclValidateCollConfigLaunchCompletionEvents(struct ncclComm* comm);
-ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool* needConnect, ncclSimInfo_t* simInfo);
+ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool* needConnect, bool* needGenkDevComm,
+                              ncclSimInfo_t* simInfo);
 ncclResult_t ncclTasksRegAndEnqueue(struct ncclComm* comm);
 
 static inline size_t ncclFuncSendCount(ncclFunc_t func, int nRanks, size_t count) {
-  return func == ncclFuncReduceScatter ? nRanks * count : count;
+  if (func == ncclFuncReduceScatter || func == ncclFuncAlltoAll) return nRanks * count;
+  return count;
 }
 static inline size_t ncclFuncRecvCount(ncclFunc_t func, int nRanks, size_t count) {
-  return func == ncclFuncAllGather ? nRanks * count : count;
+  if (func == ncclFuncAllGather || func == ncclFuncAlltoAll) return nRanks * count;
+  return count;
 }
 static inline size_t ncclFuncMaxSendRecvCount(ncclFunc_t func, int nRanks, size_t count) {
-  return func == ncclFuncAllGather || func == ncclFuncReduceScatter ? nRanks * count : count;
+  if (func == ncclFuncAllGather || func == ncclFuncReduceScatter || func == ncclFuncAlltoAll) return nRanks * count;
+  return count;
 }
 // Match the public AllGather in-place convention: each rank's input aliases
 // its own slice of the aggregate receive buffer.

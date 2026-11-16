@@ -224,7 +224,7 @@ ncclResult_t ncclReallocDebug(T** ptr, size_t oldNelem, size_t nelem, const char
     return ncclSystemError;
   }
   if (oldp && oldNelem) memcpy(p, oldp, oldNelem * ncclSizeOfT<T>());
-  if (oldp) free(oldp);
+  free(oldp);
   memset(p + oldNelem, 0, (nelem - oldNelem) * ncclSizeOfT<T>());
   *ptr = (T*)p;
   if (logHostAlloc)
@@ -575,6 +575,17 @@ ncclResult_t ncclCudaMemcpyAsync(T* dst, T* src, size_t nelem, cudaStream_t stre
   cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   CUDACHECKGOTO(cudaMemcpyAsync(dst, src, nelem * ncclSizeOfT<T>(), cudaMemcpyDefault, stream), result, finish);
+finish:
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  return result;
+}
+
+static inline ncclResult_t ncclCudaMemsetSync(void* ptr, int value, size_t size, cudaStream_t stream) {
+  ncclResult_t result = ncclSuccess;
+  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+  CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  CUDACHECKGOTO(cudaMemsetAsync(ptr, value, size, stream), result, finish);
+  CUDACHECKGOTO(cudaStreamSynchronize(stream), result, finish);
 finish:
   CUDACHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   return result;

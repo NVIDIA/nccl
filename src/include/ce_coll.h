@@ -11,6 +11,7 @@
 #include "nccl.h"
 #include "nccl_common.h"
 #include "bitops.h"
+#include "profiler_event.h"
 
 // Memory operations per rank for different synchronization protocols
 #define NCCL_CE_SYNC_OPS_PER_RANK_MC 2
@@ -52,8 +53,8 @@ struct alignas(16) ncclCeCollArgs {
   uint8_t* recvBuff;
   struct ncclDevrWindow* sendWin;
   struct ncclDevrWindow* recvWin;
-  void* collApiEventHandle;  // Parent API event handle for profiler hierarchy
-  void* ceCollProfHandle;     // CE collective profiler event handle
+  struct ncclProfilerEventRef collApiEventHandle;
+  struct ncclProfilerEventRef ceCollProfHandle;
   uint64_t userTag;           // Per-call profiler annotation (0 == untagged)
 };
 

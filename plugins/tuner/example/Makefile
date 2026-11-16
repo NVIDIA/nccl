@@ -5,7 +5,7 @@
 # See LICENSE.txt for more license information
 #
 
-.DEFAULT_GOAL: build
+.DEFAULT_GOAL := build
 PLUGIN_SO:=libnccl-tuner-example.so
 include ../../../makefiles/common.mk
 SRCDIR   ?= $(abspath ../../..)

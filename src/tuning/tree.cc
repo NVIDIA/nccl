@@ -8,7 +8,8 @@
 #include "cost_model.h"
 #include "comm.h"
 
-ncclResult_t ncclTuningTreeModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS]) {
+ncclResult_t ncclTuningTreeModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                     struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   int algo, proto;
   NCCLCHECK(ncclTuningExpandId(id, &algo, &proto, nullptr, nullptr));
@@ -60,7 +61,8 @@ ncclResult_t ncclTuningTreeModelInit(struct ncclComm* comm, int id, int enabled[
   return ret;
 }
 
-ncclResult_t ncclTuningTreeModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning) {
+ncclResult_t ncclTuningTreeModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                    struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   if (inputs->func != ncclFuncAllReduce) {
     tuning->valid = 0;
@@ -77,6 +79,6 @@ ncclResult_t ncclTuningTreeModelSim(struct ncclTuningInput_t* const inputs, stru
   float lat = inputs->comm->tuningContext.generalLatencies[inputs->func][tuning->algo][tuning->proto];
   if (inputs->func == ncclFuncAllReduce && logSize >= 0 && logSize < 23)
     bw *= treeCorrectionFactor[tuning->proto][logSize];
-  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, &lat, &bw);
+  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, lat, bw);
   return ret;
 }

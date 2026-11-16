@@ -34,8 +34,16 @@
 #include <stdio.h>
 #include <syslog.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void doca_gpu_log_print(int log_level, const char *file, int line, const char *func,
                         const char *fmt, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #define DOCA_LOG(LOG_LEVEL, fmt, ...)                                                    \
     do {                                                                                 \

@@ -7,7 +7,7 @@
 
 #include "sym_kernels.h"
 #include "kernel.cuh"
-#include "primitives.cuh"
+#include "symk.cuh"
 #include "gin_scratch__types.h"
 
 template <bool EnableProfiler>

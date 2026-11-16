@@ -10,14 +10,196 @@
 #include "plugin/profiler/profiler_v7.h"
 #include "checks.h"
 #include "os.h"
+#include "profiler_shim.h"
 
-static ncclProfiler_v7_t* ncclProfiler_v7;
+// Adapter: the internal interface is v8, which can stamp NCCL timestamps on
+// every event. v7 plugins predate that, so this adapter forwards the v8 calls
+// to a v7 plugin by dropping the timestamp fields on startEvent, the stop
+// descriptor argument on stopEvent, and the config argument on init -- with no
+// config to write, the plugin leaves cpuClock at its default of None and keeps
+// computing its own timestamps internally, exactly as before.
+// Everything else -- including the v7 userTag, kernelVariant/isSymColl and the
+// kernel phase sub-event -- is carried through unchanged, since the descriptor
+// union is identical in the two versions.
 
-ncclProfiler_t* getNcclProfiler_v7(void* lib) {
-  ncclProfiler_v7 = (ncclProfiler_v7_t*)ncclOsDlsym(lib, "ncclProfiler_v7");
-  if (ncclProfiler_v7) {
-    INFO(NCCL_INIT, "PROFILER/Plugin: Loaded %s (v7)", ncclProfiler_v7->name);
-    return ncclProfiler_v7;
+NCCL_PROFILER_SHIM_BEGIN(7)
+
+static ncclResult_t ncclProfiler_startEvent(void* ctx, void** eHandle, ncclProfilerEventDescr_t* eDescr) {
+  ncclProfilerShim_t* p = getActiveProfiler();
+  if (p == nullptr) return ncclInternalError;
+  ncclProfilerEventDescr_v7_t eDescr_v7 = {};
+  eDescr_v7.type = eDescr->type;
+  eDescr_v7.parentObj = eDescr->parentObj;
+  eDescr_v7.rank = eDescr->rank;
+  // The v8-only top-level tsCpu/tsCpuUncertainty fields are dropped.
+
+  switch (eDescr->type) {
+  case ncclProfileGroup:
+    break;
+  case ncclProfileGroupApi:
+    eDescr_v7.groupApi.graphCaptured = eDescr->groupApi.graphCaptured;
+    eDescr_v7.groupApi.groupDepth = eDescr->groupApi.groupDepth;
+    break;
+  case ncclProfileCollApi:
+    eDescr_v7.collApi.func = eDescr->collApi.func;
+    eDescr_v7.collApi.count = eDescr->collApi.count;
+    eDescr_v7.collApi.datatype = eDescr->collApi.datatype;
+    eDescr_v7.collApi.root = eDescr->collApi.root;
+    eDescr_v7.collApi.stream = eDescr->collApi.stream;
+    eDescr_v7.collApi.graphCaptured = eDescr->collApi.graphCaptured;
+    eDescr_v7.collApi.userTag = eDescr->collApi.userTag;
+    break;
+  case ncclProfileP2pApi:
+    eDescr_v7.p2pApi.func = eDescr->p2pApi.func;
+    eDescr_v7.p2pApi.count = eDescr->p2pApi.count;
+    eDescr_v7.p2pApi.datatype = eDescr->p2pApi.datatype;
+    eDescr_v7.p2pApi.stream = eDescr->p2pApi.stream;
+    eDescr_v7.p2pApi.graphCaptured = eDescr->p2pApi.graphCaptured;
+    eDescr_v7.p2pApi.userTag = eDescr->p2pApi.userTag;
+    break;
+  case ncclProfileKernelLaunch:
+    eDescr_v7.kernelLaunch.stream = eDescr->kernelLaunch.stream;
+    break;
+  case ncclProfileColl:
+    eDescr_v7.coll.seqNumber = eDescr->coll.seqNumber;
+    eDescr_v7.coll.func = eDescr->coll.func;
+    eDescr_v7.coll.sendBuff = eDescr->coll.sendBuff;
+    eDescr_v7.coll.recvBuff = eDescr->coll.recvBuff;
+    eDescr_v7.coll.count = eDescr->coll.count;
+    eDescr_v7.coll.root = eDescr->coll.root;
+    eDescr_v7.coll.datatype = eDescr->coll.datatype;
+    eDescr_v7.coll.nChannels = eDescr->coll.nChannels;
+    eDescr_v7.coll.nWarps = eDescr->coll.nWarps;
+    eDescr_v7.coll.algo = eDescr->coll.algo;
+    eDescr_v7.coll.proto = eDescr->coll.proto;
+    eDescr_v7.coll.parentGroup = eDescr->coll.parentGroup;
+    eDescr_v7.coll.kernelVariant = eDescr->coll.kernelVariant;
+    eDescr_v7.coll.isSymColl = eDescr->coll.isSymColl;
+    eDescr_v7.coll.userTag = eDescr->coll.userTag;
+    break;
+  case ncclProfileP2p:
+    eDescr_v7.p2p.func = eDescr->p2p.func;
+    eDescr_v7.p2p.buff = eDescr->p2p.buff;
+    eDescr_v7.p2p.datatype = eDescr->p2p.datatype;
+    eDescr_v7.p2p.count = eDescr->p2p.count;
+    eDescr_v7.p2p.peer = eDescr->p2p.peer;
+    eDescr_v7.p2p.nChannels = eDescr->p2p.nChannels;
+    eDescr_v7.p2p.parentGroup = eDescr->p2p.parentGroup;
+    eDescr_v7.p2p.userTag = eDescr->p2p.userTag;
+    break;
+  case ncclProfileProxyOp:
+    eDescr_v7.proxyOp.pid = eDescr->proxyOp.pid;
+    eDescr_v7.proxyOp.channelId = eDescr->proxyOp.channelId;
+    eDescr_v7.proxyOp.peer = eDescr->proxyOp.peer;
+    eDescr_v7.proxyOp.nSteps = eDescr->proxyOp.nSteps;
+    eDescr_v7.proxyOp.chunkSize = eDescr->proxyOp.chunkSize;
+    eDescr_v7.proxyOp.isSend = eDescr->proxyOp.isSend;
+    break;
+  case ncclProfileProxyStep:
+    eDescr_v7.proxyStep.step = eDescr->proxyStep.step;
+    break;
+  case ncclProfileProxyCtrl:
+    break;
+  case ncclProfileKernelCh:
+    eDescr_v7.kernelCh.channelId = eDescr->kernelCh.channelId;
+    eDescr_v7.kernelCh.pTimer = eDescr->kernelCh.pTimer;
+    break;
+  case ncclProfileNetPlugin:
+    eDescr_v7.netPlugin.id = eDescr->netPlugin.id;
+    eDescr_v7.netPlugin.data = eDescr->netPlugin.data;
+    break;
+  case ncclProfileCeColl:
+    eDescr_v7.ceColl.seqNumber = eDescr->ceColl.seqNumber;
+    eDescr_v7.ceColl.func = eDescr->ceColl.func;
+    eDescr_v7.ceColl.sendBuff = eDescr->ceColl.sendBuff;
+    eDescr_v7.ceColl.recvBuff = eDescr->ceColl.recvBuff;
+    eDescr_v7.ceColl.count = eDescr->ceColl.count;
+    eDescr_v7.ceColl.root = eDescr->ceColl.root;
+    eDescr_v7.ceColl.datatype = eDescr->ceColl.datatype;
+    eDescr_v7.ceColl.syncStrategy = eDescr->ceColl.syncStrategy;
+    eDescr_v7.ceColl.intraBatchSync = eDescr->ceColl.intraBatchSync;
+    eDescr_v7.ceColl.batchSize = eDescr->ceColl.batchSize;
+    eDescr_v7.ceColl.numBatches = eDescr->ceColl.numBatches;
+    eDescr_v7.ceColl.ceSeqNum = eDescr->ceColl.ceSeqNum;
+    eDescr_v7.ceColl.stream = eDescr->ceColl.stream;
+    eDescr_v7.ceColl.userTag = eDescr->ceColl.userTag;
+    break;
+  case ncclProfileCeSync:
+    eDescr_v7.ceCollSync.isComplete = eDescr->ceCollSync.isComplete;
+    eDescr_v7.ceCollSync.nRanks = eDescr->ceCollSync.nRanks;
+    break;
+  case ncclProfileCeBatch:
+    eDescr_v7.ceCollBatch.numOps = eDescr->ceCollBatch.numOps;
+    eDescr_v7.ceCollBatch.totalBytes = eDescr->ceCollBatch.totalBytes;
+    eDescr_v7.ceCollBatch.useIntraSync = eDescr->ceCollBatch.useIntraSync;
+    break;
+  case ncclProfileKernelPhase:
+    eDescr_v7.kernelPhase.channelId = eDescr->kernelPhase.channelId;
+    eDescr_v7.kernelPhase.phaseId = eDescr->kernelPhase.phaseId;
+    eDescr_v7.kernelPhase.phaseName = eDescr->kernelPhase.phaseName;
+    eDescr_v7.kernelPhase.pTimer = eDescr->kernelPhase.pTimer;
+    break;
+  default:
+    return ncclSuccess;
   }
-  return NULL;
+
+  return p->startEvent(ctx, eHandle, &eDescr_v7);
 }
+
+static ncclResult_t ncclProfiler_stopEvent(void* eHandle, ncclProfilerEventDescr_t* eStopDescr) {
+  // v7 plugins don't take stop timestamps; drop the stop descriptor.
+  (void)eStopDescr;
+  NCCL_PROFILER_SHIM_CALL(stopEvent, eHandle);
+}
+
+static ncclResult_t ncclProfiler_recordEventState(void* eHandle, ncclProfilerEventState_t eState,
+                                                  ncclProfilerEventStateArgs_t* eStateArgs) {
+  // v8 put the timestamp ahead of the union, so the two are no longer
+  // layout-compatible; field-copy the payload and drop the timestamp, which
+  // v7 plugins have no field for.
+  ncclProfilerEventStateArgs_v7_t eStateArgs_v7 = {};
+  if (eStateArgs) {
+    switch (eState) {
+    case ncclProfilerProxyStepSendGPUWait:
+    case ncclProfilerProxyStepSendPeerWait_v4:
+    case ncclProfilerProxyStepSendWait:
+    case ncclProfilerProxyStepRecvWait:
+    case ncclProfilerProxyStepRecvFlushWait:
+    case ncclProfilerProxyStepRecvGPUWait:
+      eStateArgs_v7.proxyStep.transSize = eStateArgs->proxyStep.transSize;
+      break;
+    case ncclProfilerProxyCtrlIdle:
+    case ncclProfilerProxyCtrlActive:
+    case ncclProfilerProxyCtrlSleep:
+    case ncclProfilerProxyCtrlWakeup:
+    case ncclProfilerProxyCtrlAppend:
+    case ncclProfilerProxyCtrlAppendEnd:
+      eStateArgs_v7.proxyCtrl.appendedProxyOps = eStateArgs->proxyCtrl.appendedProxyOps;
+      break;
+    case ncclProfilerNetPluginUpdate:
+      eStateArgs_v7.netPlugin.data = eStateArgs->netPlugin.data;
+      break;
+    case ncclProfilerKernelChStop:
+    case ncclProfilerKernelPhaseStop:
+      eStateArgs_v7.kernelCh.pTimer = eStateArgs->kernelCh.pTimer;
+      break;
+    default:
+      break;
+    }
+  }
+  NCCL_PROFILER_SHIM_CALL(recordEventState, eHandle, (ncclProfilerEventState_v7_t)eState, &eStateArgs_v7);
+}
+
+static ncclResult_t ncclProfiler_init(void** ctx, uint64_t commId, int* eActivationMask, const char* commName,
+                                      int nNodes, int nRanks, int rank, ncclDebugLogger_t logfn,
+                                      ncclProfilerConfig_t* config __attribute__((unused))) {
+  ncclProfilerShim_t* p = getActiveProfiler();
+  if (p == nullptr) return ncclInternalError;
+  return p->init(ctx, commId, eActivationMask, commName, nNodes, nRanks, rank, logfn);
+}
+
+static ncclResult_t ncclProfiler_finalize(void* context) {
+  NCCL_PROFILER_SHIM_CALL(finalize, context);
+}
+
+NCCL_PROFILER_SHIM_END(7)

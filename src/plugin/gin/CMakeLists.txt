@@ -2,6 +2,7 @@
 set(PLUGIN_GIN_SOURCES
 ${CMAKE_CURRENT_SOURCE_DIR}/gin_v13.cc
 ${CMAKE_CURRENT_SOURCE_DIR}/gin_v14.cc
+${CMAKE_CURRENT_SOURCE_DIR}/gin_v15.cc
 )
 
 # Add plugin sources to parent scope

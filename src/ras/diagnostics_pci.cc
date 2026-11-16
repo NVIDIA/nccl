@@ -655,7 +655,7 @@ ncclResult_t rasDiagnosticsRdmaTopoCollectLocal(const struct rasDiagnosticsConte
 
   const struct rasDiagnosticsRdmaTopoCache* rdmaTopo = rasDiagnosticsRdmaTopoResult();
   if (rdmaTopo->state != RAS_DIAG_RDMA_TOPO_RAN) {
-    INFO(NCCL_RAS, "rdma_topo check not usable (%s): %s", rasDiagnosticsRdmaTopoStateName(rdmaTopo->state),
+    INFO(NCCL_DIAG, "rdma_topo check not usable (%s): %s", rasDiagnosticsRdmaTopoStateName(rdmaTopo->state),
          rdmaTopo->sample);
   }
   return ncclSuccess;

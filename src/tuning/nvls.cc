@@ -7,16 +7,10 @@
 
 #include "cost_model.h"
 #include "comm.h"
+#include "model.h"
 
-// NVLS efficiency factor.
-static const float nvlsEfficiency[NCCL_NUM_COMPCAPS] = {
-  0.0f, // Volta
-  0.0f, // Ampere
-  0.85f, // Hopper
-  0.74f, // Blackwell
-};
-
-ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS]) {
+ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[NCCL_NUM_FUNCTIONS],
+                                     struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   if (!ncclNvlsTransportEnabled(comm)) {
     memset(enabled, 0, NCCL_NUM_FUNCTIONS * sizeof(int));
@@ -60,6 +54,12 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
       continue;
     }
     int nSteps = ncclTuningGetNsteps(c, comm->nRanks);
+    // A single NVL domain has one NVLS head per GPU, but the kernel only launches comm->nvlsChannels CTAs (24 by
+    // default on Blackwell). With more heads than CTAs, AllGather/ReduceScatter bandwidth follows the CTAs.
+    bool singleNvlDomainAgRs = (algo == NCCL_ALGO_NVLS && c != ncclFuncAllReduce && comm->nNodes == 1);
+    bool ctaLimited =
+      singleNvlDomainAgRs && (comm->minCompCap >= 100) && (comm->nvlsChannels < comm->graphs[algo].nChannels);
+    int effChannels = ctaLimited ? comm->nvlsChannels : comm->graphs[algo].nChannels;
     float intraBw = comm->graphs[algo].bwIntra * nvlsEfficiency[compCapIndex] * (comm->graphs[algo].nChannels - 1) /
                     comm->graphs[algo].nChannels;
     if (c == ncclFuncAllReduce) {
@@ -71,21 +71,15 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
     float interBw = comm->graphs[algo].bwInter * ((comm->nNodes <= 2 && algo == NCCL_ALGO_NVLS_TREE) ? 2 : 1);
     bw = std::min({intraBw, interBw,
                    algo == NCCL_ALGO_NVLS_TREE ? (float)perChMaxNVLSTreeBw : std::numeric_limits<float>::max()});
-    bw = bw * comm->graphs[algo].nChannels;
+    bw = bw * effChannels;
 
     if (comm->nNodes > 1 && algo == NCCL_ALGO_NVLS && (c == ncclFuncAllGather || c == ncclFuncReduceScatter)) {
-      int nHeads = 0;
+      int nHeads = comm->collNetHeadsNum;
       if (c == ncclFuncAllGather && (!comm->ncclCollNet || !comm->ncclCollNet->iallgather)) {
         bw = -1.0;
         enabled[c] = 0; // Hard disable
       }
       if (c == ncclFuncReduceScatter && (!comm->ncclCollNet || !comm->ncclCollNet->ireducescatter)) {
-        bw = -1.0;
-        enabled[c] = 0; // Hard disable
-      }
-      if (comm->config.collnetEnable) {
-        nHeads = comm->collNetHeadsNum;
-      } else {
         bw = -1.0;
         enabled[c] = 0; // Hard disable
       }
@@ -117,6 +111,8 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
     if (algo == NCCL_ALGO_NVLS) {
       comm->tuningContext.generalLatencies[c][algo][proto] = intraLat;
       if (comm->nNodes > 1) comm->tuningContext.generalLatencies[c][algo][proto] += interLat;
+      // CTA-limited ReduceScatter also runs slower than the flat NVLS latency (measured on GB200/GB300, 32 GPUs).
+      if (ctaLimited && c == ncclFuncReduceScatter) comm->tuningContext.generalLatencies[c][algo][proto] += 5.0f;
     } else if (algo == NCCL_ALGO_NVLS_TREE) {
       comm->tuningContext.generalLatencies[c][algo][proto] += intraLat + 2 * log2i(comm->nNodes) * interLat;
     }
@@ -124,7 +120,8 @@ ncclResult_t ncclTuningNvlsModelInit(struct ncclComm* comm, int id, int enabled[
   return ret;
 }
 
-ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning) {
+ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                    struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   float lat = inputs->comm->tuningContext.generalLatencies[inputs->func][tuning->algo][tuning->proto];
   float bw = inputs->comm->tuningContext.generalBandwidths[inputs->func][tuning->algo][tuning->proto];
@@ -158,11 +155,14 @@ ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, stru
   int logSize = log2i(inputs->nBytes >> 6);
   bool nvlsTreeCorrection = tuning->algo == NCCL_ALGO_NVLS_TREE && inputs->func == ncclFuncAllReduce && logSize >= 0 &&
                             logSize < 24 && inputs->comm->minCompCap >= 100;
-  if (nvlsTreeCorrection && (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_X86 ||
-                             (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && inputs->comm->minNetBw >= 96.0f &&
-                              inputs->comm->minLocalRanks == 4 && inputs->comm->maxLocalRanks == 4 &&
-                              (logSize < 20 || inputs->comm->nNodes > 2))))
+  // On two-node ARM systems, apply the correction below 64 MiB, or below 512 MiB for PIX.
+  if (nvlsTreeCorrection &&
+      (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_X86 ||
+       (inputs->comm->cpuArch == NCCL_TOPO_CPU_ARCH_ARM && inputs->comm->minNetBw >= 96.0f &&
+        inputs->comm->minLocalRanks == 4 && inputs->comm->maxLocalRanks == 4 &&
+        (inputs->nBytes < 64 * 1024 * 1024 || inputs->comm->nNodes > 2 ||
+         (inputs->comm->graphs[tuning->algo].typeInter == PATH_PIX && inputs->nBytes < 512 * 1024 * 1024)))))
     bw *= treeCorrectionFactor[tuning->proto][logSize];
-  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, &lat, &bw);
+  tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, lat, bw);
   return ret;
 }

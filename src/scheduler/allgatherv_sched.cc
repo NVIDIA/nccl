@@ -43,6 +43,8 @@ ncclResult_t ncclScheduleBcastTasksToPlan(struct ncclComm* comm, struct ncclKern
       return ncclSuccess;
     }
 
+    int chunkSteps = 1;
+    int sliceSteps = 1;
     // find best protocol
     struct ncclTaskColl tcoll;
     memset(&tcoll, 0, sizeof(tcoll));
@@ -51,13 +53,15 @@ ncclResult_t ncclScheduleBcastTasksToPlan(struct ncclComm* comm, struct ncclKern
     tcoll.datatype = ncclInt8;
     tcoll.algorithm = NCCL_ALGO_RING;
     tcoll.protocol = NCCL_PROTO_UNDEF;
+    tcoll.chunkSteps = chunkSteps;
+    tcoll.sliceSteps = sliceSteps;
+    tcoll.minCTAs = comm->config.minCTAs;
+    tcoll.maxCTAs = comm->config.maxCTAs;
     NCCLCHECK(ncclGetAlgoInfo(comm, &tcoll, /*collNetSupport=*/0, /*nvlsSupport=*/0, /*nTasksPerChannel=*/1,
                               /*simInfo=*/nullptr));
 
     // calculate chunk size
     int proto = tcoll.protocol;
-    int chunkSteps = 1;
-    int sliceSteps = 1;
     int stepSize = comm->buffSizes[proto] / NCCL_STEPS;
     int chunkSize = chunkSteps * stepSize;
     if (proto == NCCL_PROTO_LL) chunkSize = chunkSize / 2;

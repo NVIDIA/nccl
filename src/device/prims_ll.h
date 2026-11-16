@@ -8,15 +8,8 @@
 template <typename T, typename RedOp, typename Fan, int Direct, int P2p, bool isNetOffload>
 class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   : public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>> {
-  // In the case of Fan::MaxRecv == 0, we need to force MaxRecv to 1 for this to compile
-  // This is because of a recv buffer which is allocated to MaxRecv length in send-only cases.
-  static constexpr int MaxRecv = Fan::MaxRecv > 1 ? Fan::MaxRecv : 1;
-#if defined(NCCL_OS_WINDOWS)
-  // MSVC rejects zero-length arrays; clamp to 1 on Windows only.
-  static constexpr int MaxSend = Fan::MaxSend > 1 ? Fan::MaxSend : 1;
-#else
+  static constexpr int MaxRecv = Fan::MaxRecv;
   static constexpr int MaxSend = Fan::MaxSend;
-#endif
   static constexpr int Input = 0, Output = 1;
   RedOp redOp;
   const int tid;
@@ -36,10 +29,11 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   uint64_t sendConnHead;
   uint64_t sendConnHeadCache; // Cache last seen value
 
-  uint64_t recvStep[MaxRecv];
-  uint64_t sendStep[MaxSend];
-  union ncclLLFifoLine* recvBuff[MaxRecv];
-  union ncclLLFifoLine* sendBuff[MaxSend];
+  // Avoid zero-length arrays while keeping the logical fan sizes unchanged.
+  uint64_t recvStep[MaxRecv ? MaxRecv : 1];
+  uint64_t sendStep[MaxSend ? MaxSend : 1];
+  union ncclLLFifoLine* recvBuff[MaxRecv ? MaxRecv : 1];
+  union ncclLLFifoLine* sendBuff[MaxSend ? MaxSend : 1];
 
   inline __device__ int recvOffset(int i) {
     return (recvStep[i] % NCCL_STEPS) * stepLines;
@@ -122,7 +116,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
   }
 
   template <int BeginIx>
-  __device__ void readLLBeginAll(int offset, ncclLLFifoLine (&line)[MaxRecv]) {
+  __device__ void readLLBeginAll(int offset, ncclLLFifoLine (&line)[MaxRecv ? MaxRecv : 1]) {
     NVCC_PRAGMA_UNROLL_AUTO
     for (int i = BeginIx; i < MaxRecv; i++) {
       // Yes, for some template arguments this code will be unreachable.  That's fine.
@@ -136,7 +130,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       }
     }
   }
-  __device__ uint64_t readLLFinish(int offset, ncclLLFifoLine (&line)[MaxRecv], int i) {
+  __device__ uint64_t readLLFinish(int offset, ncclLLFifoLine (&line)[MaxRecv ? MaxRecv : 1], int i) {
     union ncclLLFifoLine* src = recvPtr(i) + offset;
     uint32_t flag = recvFlag(i);
     int spins = 0;
@@ -261,7 +255,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       int eltInLine = EltPerLine < nelem ? EltPerLine : nelem;
 
       DataLoader dl;
-      ncclLLFifoLine line[MaxRecv];
+      ncclLLFifoLine line[MaxRecv ? MaxRecv : 1];
       uint64_t data, peerData;
       if (SRC) {
         dl.loadBegin(srcElts, eltInLine);
@@ -277,7 +271,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>
       }
       if (RECV) {
         data = !SRC ? peerData : applyReduce(redOp, peerData, data);
-        NVCC_PRAGMA_UNROLL(MaxRecv)
+        NVCC_PRAGMA_UNROLL(MaxRecv ? MaxRecv : 1)
         // Yes, for some template arguments this code will be unreachable.  That's fine.
         // coverity[dead_error_line]
         for (int i = 1; i < MaxRecv && i < fan.nrecv(); i++) {
@@ -351,10 +345,9 @@ public:
     auto* channel = &ncclShmem.channel;
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv = 0, nsend = 0;
-    // We compare with Fan::MaxRecv here because this->MaxRecv is always at least 1
     // Yes, for some template arguments this code will be unreachable.  That's fine.
     // coverity[dead_error_line]
-    while (nrecv < Fan::MaxRecv && recvPeers[nrecv] >= 0) {
+    while (nrecv < MaxRecv && recvPeers[nrecv] >= 0) {
       loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv);
       nrecv++;
     }

@@ -11,6 +11,7 @@
 
 #include "comm.h"
 #include "core.h"
+#include "group.h"
 
 #include <cfloat>
 #include <cmath>
@@ -37,7 +38,8 @@ static ncclResult_t queryModel(struct ncclTuningInput_t* input, enum ncclSymkKer
   return ncclSuccess;
 }
 
-ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning) {
+ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
+                                    struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   tuning->selectionTimeUs = NCCL_TUNING_IGNORE;
 
@@ -53,29 +55,55 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
     return ncclSuccess;
   }
 
-  uint32_t tuning_kmask = (1 << tuning->symKernelId);
-  uint32_t valid_kmask = ncclSymkMask(inputs->comm, inputs->func, inputs->devRedOp, inputs->datatype, inputs->countMax,
-                                      inputs->symAligned16B);
+  ncclSymkKernelMask tuning_kmask = 1ull << tuning->symKernelId;
+  ncclSymkKernelMask valid_kmask = ncclSymkMask(inputs->comm, inputs->func, inputs->devRedOp, inputs->datatype,
+                                                inputs->countMax, inputs->symAligned16B);
+  ncclSymkKernelMask window_optional_kmask = ncclSymkLLKernelMask() | ncclGenkKernelMask();
+  // Kernels that don't support grouping -- these are symmetric LL kernels.
+  ncclSymkKernelMask ungrouped_kmask = ncclSymkLLKernelMask() & ~ncclGenkKernelMask();
+  // Symmetric subset of window_optional_kmask.  These kernels may not be available with multiple GPUs per thread,
+  // unless the symk devComm has already been initialized.
+  ncclSymkKernelMask window_optional_symk_kmask = ungrouped_kmask;
+  // Kernels that don't require symmetric user buffers but that have this capability disabled by default.
+  ncclSymkKernelMask nowin_kmask = (ncclParamSymNoWinEnable() ? 0 : ungrouped_kmask);
   if ((tuning_kmask & valid_kmask) == 0) {
     tuning->valid = 0;
     tuning->timeUs = -1.0;
     return ncclSuccess;
   }
 
-  if ((inputs->nWorks > 1 &&
-       ((tuning_kmask & ncclSymkLLKernelMask()) != 0)) // We currently don't support grouping for LL kernels.
-      || (inputs->func == ncclFuncAllReduce && inputs->winRegType != ncclSymSendRegRecvReg &&
-          (tuning_kmask & ncclSymkLLKernelMask()) == 0) ||
-      (inputs->func == ncclFuncAllGather && inputs->winRegType != ncclSymSendRegRecvReg &&
-       inputs->winRegType != ncclSymSendNonregRecvReg && (tuning_kmask & ncclSymkLLKernelMask()) == 0) ||
-      (inputs->func == ncclFuncReduceScatter && inputs->winRegType != ncclSymSendRegRecvReg &&
-       inputs->winRegType != ncclSymSendRegRecvNonreg && (tuning_kmask & ncclSymkLLKernelMask()) == 0) ||
+  // The specialized LL kernels do not support grouping; Flow protocols do.
+  // While the specialized LL kernels don't require symmetric windows, we currently disable them by default if neither
+  // input nor output is symmetric, to avoid performance regressions in common cases (only until the new symmetric cost
+  // model is complete).  They can be enabled via NCCL_SYM_NOWIN_ENABLE=1, with the exception of the case of multiple
+  // GPUs per thread if the internal symk devComm is not yet initialized (restriction to be removed when the new enqueue
+  // becomes the default).
+  bool isOneThreadMultiGpus = (inputs->comm->intraRanks > 1 && !ncclParamSingleProcMemRegEnable());
+  if ((inputs->nWorks > 1 && (tuning_kmask & ungrouped_kmask) != 0) ||
+      (inputs->winRegType == ncclSymSendNonregRecvNonreg &&
+       ((tuning_kmask & nowin_kmask) != 0 || ((tuning_kmask & window_optional_symk_kmask) != 0 &&
+                                              isOneThreadMultiGpus && !inputs->comm->symkState.initialized)))) {
+    tuning->valid = 0;
+    tuning->timeUs = -1.0;
+    return ncclSuccess;
+  }
+
+  if ((inputs->func == ncclFuncAllReduce && inputs->winRegType != ncclSymSendRegRecvReg &&
+       (tuning_kmask & window_optional_kmask) == 0) ||
+      ((inputs->func == ncclFuncBroadcast || inputs->func == ncclFuncAllGather) &&
+       inputs->winRegType != ncclSymSendRegRecvReg && inputs->winRegType != ncclSymSendNonregRecvReg &&
+       (tuning_kmask & window_optional_kmask) == 0) ||
+      ((inputs->func == ncclFuncReduce || inputs->func == ncclFuncReduceScatter) &&
+       inputs->winRegType != ncclSymSendRegRecvReg && inputs->winRegType != ncclSymSendRegRecvNonreg &&
+       (tuning_kmask & window_optional_kmask) == 0) ||
       (inputs->func == ncclFuncAllGather && inputs->winRegType != ncclSymSendRegRecvReg && inputs->comm->nNodes > 1 &&
        (tuning_kmask & ncclSymkGinKernelMask()) != 0)) {
     tuning->valid = 0;
     tuning->timeUs = -1.0;
     return ncclSuccess;
   }
+
+  if ((tuning_kmask & ncclGenkKernelMask()) != 0) return ncclTuningGenkModelSim(inputs, tuning);
 
   float kTime = FLT_MAX;
   float kSelectionTime = FLT_MAX;
@@ -92,6 +120,8 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
   tuning->timeUs = kTime;
   tuning->selectionTimeUs = kSelectionTime;
   tuning->nChannels = kBlocks;
-  tuning->nWarps = 16;
+  tuning->nWarps = tuning->symKernelId == ncclSymkKernelId_AlltoAll_LL ?
+                     ncclSymkKernelMaxWarps(ncclSymkKernelId_AlltoAll_LL, inputs->devRedOp, inputs->datatype) :
+                     ncclSymkMaxThreads / WARP_SIZE;
   return ret;
 }

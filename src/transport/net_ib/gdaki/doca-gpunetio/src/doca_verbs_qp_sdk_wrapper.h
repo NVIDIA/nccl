@@ -138,6 +138,8 @@ doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_set_max_rd_atomic(void *
                                                                           uint8_t max_rd_atomic);
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_set_max_dest_rd_atomic(
     void *qp_attr, uint8_t max_dest_rd_atomic);
+doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_set_lag_tx_port_affinity(
+    void *qp_attr, uint8_t lag_tx_port_affinity);
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_set_ah_attr(void *qp_attr,
                                                                     doca_verbs_ah_attr_t *ah_attr);
 doca_sdk_wrapper_error_t doca_verbs_sdk_wrapper_qp_attr_set_cc_group(

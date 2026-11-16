@@ -9,7 +9,8 @@ include ../../makefiles/common.mk
 # LLVM IR generation
 
 # Source and target files
-LLVM_SRC := nccl_device_wrapper__impl.h
+LLVM_SRC := src/nccl_device_ir.cu
+LLVM_IMPL_HEADERS := src/core.h src/coop.h src/gin.h src/barrier.h src/reduce_copy.h src/util.h
 BUILDDIR ?= $(abspath ../../build)
 OBJDIR := $(BUILDDIR)/obj/llvm_ir
 LIBDIR := $(BUILDDIR)/lib
@@ -23,12 +24,10 @@ FINAL_LTO_IR := $(LIBDIR)/libnccl_device.ltoir
 
 # Build configuration
 ifeq ($(shell test "0$(CUDA_MAJOR)" -lt 12; echo $$?),0)
-	BITCODE_LIB_ARCH ?= sm_70
+	IR_ARCH ?= sm_70
 else
-	BITCODE_LIB_ARCH ?= sm_90
+	IR_ARCH ?= sm_90
 endif
-
-LTO_IR_ARCH ?= $(BITCODE_LIB_ARCH)
 
 # Notes:
 # Device API code follows C++17
@@ -46,41 +45,33 @@ PYTHON ?= python3
 NCCL_DEVICE_DEFINES := -DNCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1
 
 # Include paths
-NCCL_INCLUDES := -I$(BUILDDIR)/include -I../../src/include -I../../src/include/nccl_device -I../../src/device
+NCCL_INCLUDES := -I$(BUILDDIR)/include
 CUDA_INCLUDES := -I$(CUDA_INC) -I$(CUDA_INC)/cccl
-# Empty stubs for headers clang's CUDA wrapper unconditionally includes but
-# CUDA 13 removed (e.g. texture_fetch_functions.h). NCCL device code doesn't
-# use the legacy texture/surface reference APIs, so it's OK to be empty.
-CLANG_COMPAT_INCLUDES := -Iclang_compat
 
 # Clang flags for LLVM IR generation
 # Clang supports extended device lambdas but does not define nvcc's feature macro.
 COMMON_CLANG_FLAGS := -std=$(BITCODE_CXX_STD) -x cuda \
-               		  --cuda-path=$(CUDA_HOME) --cuda-device-only \
-               		  --cuda-gpu-arch=$(BITCODE_LIB_ARCH) \
-               		  $(CLANG_COMPAT_INCLUDES) \
-               		  $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
-               		  -D__clang_llvm_bitcode_lib__ \
+                      --cuda-path=$(CUDA_HOME) --cuda-device-only \
+                      --cuda-gpu-arch=$(IR_ARCH) \
+                      $(NCCL_INCLUDES) $(CUDA_INCLUDES) \
                       -D__CUDACC_EXTENDED_LAMBDA__ \
-                      $(NCCL_DEVICE_DEFINES) \
-               		  -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
-               		  -D_NV_RSQRT_SPECIFIER=
+                      $(NCCL_DEVICE_DEFINES)
 
 CLANG_FLAGS := -c -emit-llvm -O1 $(COMMON_CLANG_FLAGS)
 
 # Optimization passes
 OPT_PASSES := --passes='internalize,inline,globaldce' \
-              -internalize-public-api-list='*nccl*'
+              -internalize-public-api-list='ncclIr*'
 
 # Build rules
-WRAPPER_HEADER := $(BUILDDIR)/include/nccl_device_wrapper.h
+IR_HEADER := $(BUILDDIR)/include/nccl_device_ir.h
 
-$(WRAPPER_HEADER): nccl_device_wrapper.h
+$(IR_HEADER): nccl_device_ir.h
 	@mkdir -p $(BUILDDIR)/include
-	@echo "Copying nccl_device_wrapper.h to build include..."
+	@echo "Copying nccl_device_ir.h to build include..."
 	cp -f $< $@
 
-$(UNOPTIMIZED_BC): $(LLVM_SRC) nccl_device_wrapper.h util.h
+$(UNOPTIMIZED_BC): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER)
 	@mkdir -p $(OBJDIR)
 	@echo "Generating unoptimized LLVM bitcode..."
 	$(CLANG) $(CLANG_FLAGS) $(LLVM_SRC) -o $@
@@ -107,43 +98,41 @@ $(FINAL_BC): $(LLVM_IR_FILE)
 	@echo "Generating final bitcode from cleaned LLVM IR..."
 	$(LLVM_AS) $< -o $@
 
-llvm_ir: $(FINAL_BC) $(OPTIMIZED_BC) $(WRAPPER_HEADER)
+llvm_ir: $(FINAL_BC)
 	@echo "LLVM IR and bitcode generated successfully:"
 	@echo "  C++ Standard: $(BITCODE_CXX_STD)"
-	@echo "  GPU Architecture: $(BITCODE_LIB_ARCH)"
+	@echo "  GPU Architecture: $(IR_ARCH)"
 	@echo "  Unoptimized: $(UNOPTIMIZED_BC)"
 	@echo "  Optimized: $(OPTIMIZED_BC)"
 	@echo "  LLVM IR (Human-readable): $(LLVM_IR_FILE)"
 	@echo "  Final BC: $(FINAL_BC)"
-	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
+	@echo "  IR Header: $(IR_HEADER)"
 
 # LTO IR generation
-$(FINAL_LTO_IR): $(LLVM_SRC) $(WRAPPER_HEADER) util.h
+$(FINAL_LTO_IR): $(LLVM_SRC) $(LLVM_IMPL_HEADERS) $(IR_HEADER)
 	@mkdir -p $(LIBDIR)
 	@echo "Generating LTO IR..."
-	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(LTO_IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
+	$(NVCC) -std=$(LTO_IR_CXX_STD) -arch=$(IR_ARCH) --extended-lambda -dlto --ltoir -x cu \
 		$(NCCL_INCLUDES) $(CUDA_INCLUDES) \
 		$(NCCL_DEVICE_DEFINES) \
-		-DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) \
-		-D__NCCL_DEVICE_LTOIR_LIB__ \
 		-o $@ $(LLVM_SRC)
 
-ltoir: $(FINAL_LTO_IR) $(WRAPPER_HEADER)
+ltoir: $(FINAL_LTO_IR)
 	@echo "LTO IR generated successfully:"
 	@echo "  C++ Standard: $(LTO_IR_CXX_STD)"
-	@echo "  GPU Architecture: $(LTO_IR_ARCH)"
+	@echo "  GPU Architecture: $(IR_ARCH)"
 	@echo "  Final LTO IR: $(FINAL_LTO_IR)"
-	@echo "  Wrapper Header: $(WRAPPER_HEADER)"
+	@echo "  IR Header: $(IR_HEADER)"
 
 build: llvm_ir ltoir
 
 clean:
-	rm -rf $(OBJDIR) $(FINAL_BC) $(FINAL_LTO_IR) $(WRAPPER_HEADER)
+	rm -rf $(OBJDIR) $(FINAL_BC) $(FINAL_LTO_IR) $(IR_HEADER)
 
 .PHONY: llvm_ir ltoir build clean
 
 # Serialize IR-gen to avoid race
-ifneq ($(EMIT_LLVM_IR), 0)
+ifneq ($(NCCL_EMIT_LLVM_IR), 0)
 ifneq ($(NCCL_EMIT_LTO_IR), 0)
 $(FINAL_LTO_IR): | $(FINAL_BC)
 endif

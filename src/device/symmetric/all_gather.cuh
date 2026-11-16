@@ -7,7 +7,7 @@
 
 #include "sym_kernels.h"
 #include "kernel.cuh"
-#include "primitives.cuh"
+#include "symk.cuh"
 
 template <int BytePerPack, int UnrollPacks, int UnrollPeers, bool EnableTma>
 static __device__ void bcastDeep(ncclSymkArgsHandler const& handler, int tn, int t, bool waitNeeded,
@@ -179,18 +179,40 @@ static __device__ void bcast(ncclSymkArgsHandler const& handler, int tn, int t, 
   uint32_t nBlocks_rcp32 = nccl::utility::idivRcp32_upto64(nBlocks);
 
   uint32_t alignment = uint32_t(input.offset - output.offset);
+#if __CUDA_ARCH__ >= 1000
+  // 256B TMA.store(s) on Rubin require 256B alignment. For in-place buffers
+  // '(input.offset - output.offset) = 0' always meets the alignment, thus removing
+  // the leading non-256B-aligned part of the input buffer '(256 - input.offset) % 256'
+  // is sufficient to align the remainder to 256B, compatible with 256B TMA.store(s).
+  // For out-of-place buffers, however, the previous condition could cause some ranks
+  // to select an offset ('output + rank * nAllElts') that is 256B-aligned, even
+  // though the output buffer itself is not 256B aligned. This happens when the
+  // output buffer is aligned to a divisor of 256 (e.g., 128). In this case, for odd
+  // ranks, 'output + rank * nAllElts' brings the buffer's offset to 256B alignment.
+  // The following check guarantees that for any buffer, the 256B-aligned path is taken
+  // whenever there is a minimal alignment requirement (16B) and there is at least 256B
+  // of data per block for every rank (excluding the leading non-256B-aligned part).
+  uint32_t nTmaPreBytes = (256 - output.offset) % 256;
+  bool useTma256 =
+#if __CUDA_ARCH__ == 1070
+    alignment % 16 == 0 &&
+    (alignment % 256 == 0 || nBytes >= nTmaPreBytes + size_t(ncclSymkAlign256BDeepBytePerChunk) * nBlocks);
+#else
+    alignment % 256 == 0;
+#endif
+#endif // __CUDA_ARCH__ >= 1000
   uint32_t nPreBytes =
 #if __CUDA_ARCH__ >= 1000
-    (EnableTma && alignment % 256 == 0) ? (256 - input.offset) % 256 :
+    EnableTma && useTma256 ? nTmaPreBytes :
 #endif
-                                          (16 - input.offset) % 16;
+                             (16 - input.offset) % 16;
 
   nPreBytes = min((size_t)nPreBytes, nBytes);
   uintptr_t cursor = nPreBytes;
 
 #if __CUDA_ARCH__ >= 1000
   if NCCL_IF_CONSTEXPR (EnableTma) {
-    if (alignment % 256 == 0) {
+    if (useTma256) {
       constexpr int BytePerPack = ncclSymkBytePerPack, UnrollPacks = ncclSymkAlign256BDeepUnrollPacks, UnrollPeers = 2;
       constexpr int BytePerChunk = ncclSymkAlign256BDeepBytePerChunk;
       uint32_t chunks = (nBytes - cursor) / BytePerChunk;
@@ -263,7 +285,7 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_ST_impl(ncclSymkDevWorkArg
 
   bool waitNeeded = !EnableProfiler;
   handler.forEachWork<char>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts,
-                                           ncclSymPtr<char> input, ncclSymPtr<char> output) {
+                                           ncclSymPtr<char> input, ncclSymPtr<char> output, uint64_t /*redOpArg*/) {
         // Threads numbered over rank.
     int bt =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);
@@ -296,7 +318,7 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_STMC_impl(ncclSymkDevWorkA
   if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
   handler.forEachWork<char>([&] __device__(int block, int nBlocks, size_t nElts, size_t nAllElts,
-                                           ncclSymPtr<char> input, ncclSymPtr<char> output) {
+                                           ncclSymPtr<char> input, ncclSymPtr<char> output, uint64_t /*redOpArg*/) {
     // Round robin memory to blocks.
     int t =
       flattenIx(threadIdx.x % WARP_SIZE, WARP_SIZE, block, nBlocks, threadIdx.x / WARP_SIZE, blockDim.x / WARP_SIZE);

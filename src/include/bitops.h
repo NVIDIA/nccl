@@ -12,7 +12,7 @@
 #include <string.h>
 #include "compiler.h"
 
-#if !__NVCC__
+#ifndef __CUDACC__
 #ifndef __host__
 #define __host__
 #endif

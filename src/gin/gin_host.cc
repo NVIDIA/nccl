@@ -13,6 +13,7 @@
 #include "register_inline.h"
 #include "gin/gin_host.h"
 #include "gin/gin_host_proxy.h"
+#include "dev_runtime.h"
 #include "compiler.h"
 #include <cmath>
 
@@ -27,16 +28,16 @@ constexpr int efaGdaBackendMinVersions[] = {0, NCCL_VERSION(2, 31, 0), NCCL_VERS
 ncclResult_t ncclGetGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
   if (comm == nullptr || ginType == nullptr) return ncclInternalError;
 
-  *ginType = comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL ? NCCL_GIN_TYPE_NONE :
-                                                                  comm->sharedRes->ginState.backends[0].ginType;
+  *ginType =
+    comm->globalGinSupport != NCCL_GIN_CONNECTION_FULL ? NCCL_GIN_TYPE_NONE : comm->ginState.backends[0].ginType;
   return ncclSuccess;
 }
 
 ncclResult_t ncclGetRailedGinType(struct ncclComm* comm, ncclGinType_t* ginType) {
   if (comm == nullptr || ginType == nullptr) return ncclInternalError;
 
-  *ginType = comm->globalGinSupport == NCCL_GIN_CONNECTION_NONE ? NCCL_GIN_TYPE_NONE :
-                                                                  comm->sharedRes->ginState.backends[0].ginType;
+  *ginType =
+    comm->globalGinSupport == NCCL_GIN_CONNECTION_NONE ? NCCL_GIN_TYPE_NONE : comm->ginState.backends[0].ginType;
   return ncclSuccess;
 }
 
@@ -91,7 +92,7 @@ NCCL_PARAM(GinProxyNthreads, "GIN_PROXY_NTHREADS", 1);
 
 ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
   ncclTeam_t ginTeam;
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
 
   if (ginState->connected) return ncclSuccess;
 
@@ -182,6 +183,9 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
     // on NCCL_GIN_PROXY_NTHREADS (atypical — env vars are normally uniform across a job).
     // Extra threads simply idle in the stride loop; no correctness issue.
 
+    // At most NCCL_GIN_MAX_CONNECTIONS (4) entries
+    // bounded snprintf truncates oversized names without overflowing.
+    char devNames[1024] = "";
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
       NCCLCHECKGOTO(backend->ncclGin->listen(backend->ginInstance, localGinDevs[commIdx % nLocalGinDevs],
                                              allHandles + NCCL_NET_HANDLE_MAXSIZE * comm->rank,
@@ -191,15 +195,29 @@ ncclResult_t ncclGinConnectOnce(struct ncclComm* comm) {
       NCCLCHECKGOTO(backend->ncclGin->getProperties(localGinDevs[commIdx % nLocalGinDevs], backend->ginProps + commIdx),
                     ret, fail);
 
+      // Topo logic queries backend 0 and assumes the device set and ordering is consistent across backends. Log if this is not true.
+      if (backendIdx && commIdx < ginState->backends[0].ginCommCount &&
+          (backend->ginProps[commIdx].guid != ginState->backends[0].ginProps[commIdx].guid ||
+           backend->ginProps[commIdx].port != ginState->backends[0].ginProps[commIdx].port)) {
+        ATTN("GIN: backend %s device order differs from backend %s at local index %d."
+             "This may cause performance degredation. Please report this to the NCCL developers.",
+             backend->ncclGin->name, ginState->backends[0].ncclGin->name, commIdx);
+      }
+
       NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allHandles, NCCL_NET_HANDLE_MAXSIZE), ret, fail);
 
       NCCLCHECKGOTO(backend->ncclGin->connect(backend->ginInstance, handles, ginTeam.nRanks, ginTeam.rank,
-                                              listenComms[backendIdx], backend->ginComms + commIdx),
+                                              listenComms[backendIdx], backend->ginComms + commIdx, comm->abortFlag),
                     ret, fail);
 
       NCCLCHECKGOTO(backend->ncclGin->closeListen(listenComms[backendIdx]), ret, fail);
       listenComms[backendIdx] = NULL;
+
+      snprintf(devNames + strlen(devNames), sizeof(devNames) - strlen(devNames), " [%d]%s",
+               localGinDevs[commIdx % nLocalGinDevs], backend->ginProps[commIdx].name);
     }
+    INFO(NCCL_INIT, "GIN: backend %s using %d connections on devices%s", backend->ncclGin->name, backend->ginCommCount,
+         devNames);
   }
 
 exit:
@@ -242,14 +260,39 @@ ncclResult_t ncclGinValidateSignalRequest(struct ncclDevCommRequirements const* 
   return ncclSuccess;
 }
 
-static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                               struct ncclDevComm* devComm, uint32_t deviceCodeVersion,
-                                               struct ncclGinBackendState* backend) {
+// Sizes NCCL's own barrier requirements for `backend`, then assigns every requirement its first signal id.
+static ncclResult_t ginAssignSignals(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
+                                     struct ncclDevResourceRequirements* resReqs,
+                                     struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs,
+                                     struct ncclGinBackendState const* backend,
+                                     struct ncclDevCommCompat const* devCompat, int* outSignalCount) {
+  for (int i = 0; i < nBarrierReqs; i++) {
+    NCCLCHECK(ncclGinBarrierSizeRequirement(comm, backend, devCompat, &barrierReqs[i]));
+  }
+  int total = reqs->ginSignalCount;
+  for (struct ncclDevResourceRequirements* rr = resReqs; rr != nullptr; rr = rr->next) {
+    if (rr->outGinSignalStart != nullptr) *rr->outGinSignalStart = total;
+    total += rr->ginSignalCount;
+  }
+  *outSignalCount = total;
+  return ncclSuccess;
+}
+
+static ncclResult_t ginDevCommSetupWithBackend(
+  struct ncclComm* comm, struct ncclDevCommRequirements const* reqs, struct ncclDevResourceRequirements* resReqs,
+  struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs, struct ncclDevComm* devComm,
+  uint32_t deviceCodeVersion, struct ncclDevCommCompat const* devCompat, struct ncclGinBackendState* backend) {
   ncclGinConfig_t ginConfig;
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
+
+  // Must precede createContext, which allocates the signal table.
+  int ginSignalCount = 0;
+  NCCLCHECK(ginAssignSignals(comm, reqs, resReqs, barrierReqs, nBarrierReqs, backend, devCompat, &ginSignalCount));
+  INFO(NCCL_INIT, "devCommCreate: GIN backend type %d: %d signals (%d requested at id 0), %d counters",
+       backend->ginType, ginSignalCount, reqs->ginSignalCount, reqs->ginCounterCount);
 
   devComm->backendIndex = (uint8_t)(backend - ginState->backends);
-  devComm->ginSignalCount = reqs->ginSignalCount;
+  devComm->ginSignalCount = ginSignalCount;
   devComm->ginCounterCount = reqs->ginCounterCount;
   // Legacy signals default to what is specified in DevCommRequirements
   devComm->ginStrongLegacySignals = reqs->ginStrongSignalsRequired;
@@ -305,48 +348,104 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
 
   ncclResult_t ret = ncclSuccess;
   bool needsProxyProgress = false;
+  int* peerArray = nullptr;
+  int peerArrayCount = 0;
 
-  int connectedStride =
-    comm->sharedRes->ginState.ginConnectionType == NCCL_GIN_CONNECTION_FULL ? 1 : comm->contiguousRanksPerHost;
-  int requestedStride = 1;
-  if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_CUSTOM_STRIDE) {
-    requestedStride = reqs->ginCustomStride;
-  } else if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_RAIL) {
-    requestedStride = ncclTeamRail(comm).stride;
-  }
+  int connectedStride = comm->ginState.ginConnectionType == NCCL_GIN_CONNECTION_FULL ? 1 : comm->contiguousRanksPerHost;
 
-  if (requestedStride == 0) {
-    WARN("Cannot create DevComm with a GIN rank stride of 0. To disable GIN, set reqs->ginConnectionType to "
-         "NCCL_GIN_CONNECTION_NONE.");
-    ret = ncclInvalidUsage;
-    goto end;
-  }
-  if (requestedStride > ncclTeamRail(comm).stride) {
-    // Hierarchical barriers assume GIN is at least RAIL connected.
-    WARN("Cannot create DevComm with a GIN rank stride %d greater than the rail team stride %d", requestedStride,
-         ncclTeamRail(comm).stride);
-    ret = ncclInvalidUsage;
-    goto end;
-  }
-  if (requestedStride % connectedStride != 0) {
-    WARN("Cannot create DevComm with the requested GIN rank stride %d, this comm only supports strides that are "
-         "multiples of %d",
-         requestedStride, connectedStride);
-    ret = ncclInvalidUsage;
-    goto end;
-  }
+  if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_CUSTOM_ARRAY) {
+    INFO(NCCL_INIT, "GIN: NCCL_GIN_CONNECTION_CUSTOM_ARRAY connecting to %d peer(s)", reqs->ginCustomArrayCount);
 
+    if (connectedStride == 1) {
+      NCCLCHECKGOTO(ncclCalloc(&peerArray, reqs->ginCustomArrayCount), ret, end);
+      if (reqs->ginCustomArrayCount > 0) {
+        memcpy(peerArray, reqs->ginCustomArray, reqs->ginCustomArrayCount * sizeof(int));
+      }
+      peerArrayCount = reqs->ginCustomArrayCount;
+    } else {
+      // Cluster only supports RAIL connectivity. Validate and translate to connectedStride indexing.
+      NCCLCHECKGOTO(ncclCalloc(&peerArray, reqs->ginCustomArrayCount), ret, end);
+      for (int i = 0; i < reqs->ginCustomArrayCount; i++) {
+        int peer = reqs->ginCustomArray[i];
+        if ((peer % connectedStride) != (comm->rank % connectedStride)) {
+          WARN("Cannot create DevComm with requested connectivity: requested peer %d is not reachable (connections "
+               "must be within stride %d)",
+               peer, connectedStride);
+          ret = ncclInvalidUsage;
+          goto end;
+        }
+        peerArray[peerArrayCount++] = peer / connectedStride;
+      }
+    }
+    // -1 is valid; ginContextStride is only used for barriers, which are not supported by
+    // NCCL_GIN_CONNECTION_CUSTOM_ARRAY.
+    devComm->ginContextStride = -1;
+  } else {
+    int requestedStride = 1;
+    if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_CUSTOM_STRIDE) {
+      requestedStride = reqs->ginCustomStride;
+    } else if (reqs->ginConnectionType == NCCL_GIN_CONNECTION_RAIL) {
+      requestedStride = ncclTeamRail(comm).stride;
+    }
+
+    if (requestedStride == 0) {
+      WARN("Cannot create DevComm with a GIN rank stride of 0. To disable GIN, set reqs->ginConnectionType to "
+           "NCCL_GIN_CONNECTION_NONE.");
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+    if (requestedStride > ncclTeamRail(comm).stride) {
+      // Hierarchical barriers assume GIN is at least RAIL connected.
+      WARN("Cannot create DevComm with a GIN rank stride %d greater than the rail team stride %d", requestedStride,
+           ncclTeamRail(comm).stride);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+    if (requestedStride % connectedStride != 0) {
+      WARN("Cannot create DevComm with the requested GIN rank stride %d, this comm only supports strides that are "
+           "multiples of %d",
+           requestedStride, connectedStride);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+
+    if (requestedStride <= 0 || comm->nRanks % requestedStride != 0) {
+      WARN("invalid rank stride %d for nranks %d", requestedStride, comm->nRanks);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+
+    devComm->ginContextStride = requestedStride;
+
+    int nPeers = comm->nRanks / requestedStride;
+    NCCLCHECKGOTO(ncclCalloc(&peerArray, nPeers), ret, end);
+    for (int i = 0; i < nPeers; i++) {
+      int peer = (comm->rank + i * requestedStride) % comm->nRanks;
+      peerArray[peerArrayCount++] = peer / connectedStride;
+    }
+  }
   devComm->ginConnectionStride = connectedStride;
   devComm->ginConnectionStride_rcp32 = idivRcp32(connectedStride);
-  devComm->ginContextStride = requestedStride;
+  qsort(peerArray, peerArrayCount, sizeof(int), compareInts);
+  for (int i = 0; i < peerArrayCount; i++) {
+    if (peerArray[i] < 0 || peerArray[i] >= DIVUP(comm->nRanks, connectedStride) ||
+        (i > 0 && peerArray[i] == peerArray[i - 1])) {
+      WARN("Cannot create DevComm with requested connectivity: ginCustomArray must list distinct ranks in [0, %d)",
+           comm->nRanks);
+      ret = ncclInvalidUsage;
+      goto end;
+    }
+  }
+
   ginConfig = {
-    reqs->ginSignalCount,
+    ginSignalCount,
     reqs->ginCounterCount,
     nContextsPerComm,
     reqs->ginQueueDepth,
     reqs->ginTrafficClass != NCCL_CONFIG_UNDEF_INT ? reqs->ginTrafficClass : comm->config.trafficClass,
     backendVersion,
-    /*rankStride*/ requestedStride / connectedStride,
+    peerArray,
+    peerArrayCount,
   };
 
   for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
@@ -392,6 +491,7 @@ static ncclResult_t ginDevCommSetupWithBackend(struct ncclComm* comm, struct ncc
   }
 
 end:
+  free(peerArray);
   if (ret != ncclSuccess) {
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {
       if (ginStateDevComm->ginCtx[commIdx]) backend->ncclGin->destroyContext(ginStateDevComm->ginCtx[commIdx]);
@@ -410,8 +510,11 @@ end:
 }
 
 ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequirements const* reqs,
-                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion) {
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+                                 struct ncclDevResourceRequirements* resReqs,
+                                 struct ncclGinBarrierReq const* barrierReqs, int nBarrierReqs,
+                                 struct ncclDevComm* devComm, uint32_t deviceCodeVersion,
+                                 struct ncclDevCommCompat const* devCompat) {
+  struct ncclGinState* ginState = &comm->ginState;
   ncclGinType_t reqGinType = reqs->ginType;
   int64_t envGinType = ncclParamGinType();
 
@@ -434,7 +537,8 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
       continue;
     }
 
-    if (ncclSuccess == ginDevCommSetupWithBackend(comm, reqs, devComm, deviceCodeVersion, candidate)) {
+    if (ncclSuccess == ginDevCommSetupWithBackend(comm, reqs, resReqs, barrierReqs, nBarrierReqs, devComm,
+                                                  deviceCodeVersion, devCompat, candidate)) {
       return ncclSuccess;
     }
 
@@ -448,7 +552,7 @@ ncclResult_t ncclGinDevCommSetup(struct ncclComm* comm, struct ncclDevCommRequir
 // Called from main thread.
 ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const* devComm) {
   // Find the resource associated with this devComm. Use the gin handle as key.
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
 
   struct ncclGinStateDevComm *dc = ginState->devComms, *prevDc = NULL;
   while (1) {
@@ -478,7 +582,7 @@ ncclResult_t ncclGinDevCommFree(struct ncclComm* comm, struct ncclDevComm const*
 }
 
 ncclResult_t ncclGinHostFinalize(struct ncclComm* comm) {
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
   if (!ginState->connected) return ncclSuccess;
 
   if (ginState->proxyThreadsCreated) {
@@ -497,7 +601,7 @@ ncclResult_t ncclGinHostFinalize(struct ncclComm* comm) {
       }
     }
   }
-  memset((void*)ginState, 0, sizeof(*ginState));
+  ginState->connected = false;
   return ncclSuccess;
 }
 
@@ -505,7 +609,7 @@ ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
                              void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS],
                              ncclGinWindow_t ginDevWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS],
                              int winFlags, bool multiSegment, int memType) {
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
   int mrFlags = (winFlags & NCCL_WIN_STRICT_ORDERING) ? NCCL_NET_MR_FLAG_FORCE_SO : 0;
   for (int backendIdx = 0; backendIdx < ginState->numActiveBackends; backendIdx++) {
     struct ncclGinBackendState* backend = &ginState->backends[backendIdx];
@@ -534,7 +638,7 @@ ncclResult_t ncclGinRegister(struct ncclComm* comm, void* address, size_t size,
 
 ncclResult_t ncclGinDeregister(struct ncclComm* comm,
                                void* ginHostWins[NCCL_GIN_MAX_CONNECTIONS * NCCL_GIN_MAX_ACTIVE_BACKENDS]) {
-  struct ncclGinState* ginState = &comm->sharedRes->ginState;
+  struct ncclGinState* ginState = &comm->ginState;
   for (int backendIdx = 0; backendIdx < ginState->numActiveBackends; backendIdx++) {
     struct ncclGinBackendState* backend = &ginState->backends[backendIdx];
     for (int commIdx = 0; commIdx < backend->ginCommCount; commIdx++) {

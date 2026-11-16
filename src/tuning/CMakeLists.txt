@@ -3,6 +3,7 @@ set(TUNING_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ce_model.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/collnet.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/cost_model.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/genk_model.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/nvls.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/pat.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/ring.cc
@@ -14,6 +15,10 @@ set(TUNING_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tree.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/tuning_general.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/tuning.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/ring.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/tree.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/nvls.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/pipeline_model/pipeline_model.cc
 )
 
 # Add tuning sources to parent scope

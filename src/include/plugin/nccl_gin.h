@@ -29,12 +29,13 @@
 #else
 #include "gin/gin_v13.h"
 #include "gin/gin_v14.h"
+#include "gin/gin_v15.h"
 
-typedef ncclGin_v14_t ncclGin_t;
-typedef ncclGinConfig_v14_t ncclGinConfig_t;
-typedef ncclGinProperties_v14_t ncclGinProperties_t;
+typedef ncclGin_v15_t ncclGin_t;
+typedef ncclGinConfig_v15_t ncclGinConfig_t;
+typedef ncclGinProperties_v15_t ncclGinProperties_t;
 
-#define NCCL_GIN_PLUGIN_SYMBOL ncclGinPlugin_v14
+#define NCCL_GIN_PLUGIN_SYMBOL ncclGinPlugin_v15
 #endif
 
 #endif // end include guard

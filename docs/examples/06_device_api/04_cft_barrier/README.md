@@ -11,7 +11,7 @@ This example shows how to create and use a CFT barrier session.
 
 ## Overview
 
-Large multi-node NVLink domains need the Cuda Fabric Transport (CFT) programming model
+Large multi-node NVLink domains need the Compute Fabric Transport (CFT) programming model
 to share and access peer GPU memory across the NCCL ranks. NCCL exposes this new
 programming model through appropriate CFT handles and CFT synchronization primitives.
 This example shows users how resources for CFT barriers are created and used.
@@ -24,12 +24,13 @@ The CFT programming model requires CUDA TK 13.3 and SM\_100 architectures.
 
 ## What This Example Does
 
-1. **Create barrier requirement** for CFT barrier session
-2. **Create team requirement** for CFT ranks with unicast or multicast capabilities
-3. **Create device communicator** to allocate barrier and team requirements
-4. **Launch GPU kernel** that performs:
-   - Create barrier session with the resource handle for the barrier provided by the user
-   - Use the barrier session to synchronize all the ranks in the communicator
-5. **Print test result** and clean up resources
+1. **Request CFT capabilities** with `cftCaps = NCCL_CFT | NCCL_CFT_MULTIMEM`
+2. **Request barriers** with `cftBarrierCount = NCCL_DEVICE_CTA_COUNT`, one per CTA
+3. **Create device communicator** to allocate the requested CFT resources
+4. **Launch GPU kernels** that perform:
+   - Create a barrier session using the device communicator and `blockIdx.x` as its barrier index
+   - Set `multimem=true` for the multicast variant
+   - Use the barrier session to synchronize ranks
+5. **Report kernel completion** and clean up resources
 
 ## Key concepts

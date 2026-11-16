@@ -37,6 +37,15 @@ struct ncclMcPartition {
 
 struct ncclMcGroup;
 
+// The ranks a group spans: the comm's NVLS-local ranks, or a symmetric team.
+// rankToWorld maps a set index to its comm rank; index 0 is the root that creates
+// the MC object and exports its handle to the rest.
+struct ncclMcRankSet {
+  int rank;     // this rank's index within the set
+  int nRanks;
+  int* rankToWorld;
+};
+
 // How a best-effort driver bind ended
 enum ncclMcBindStatus {
   ncclMcBindStatusOk = 0,    // Bind succeeded
@@ -46,17 +55,11 @@ enum ncclMcBindStatus {
 
 #if CUDART_VERSION >= 12010
 
-// Create one MC object and export its shareable handle (root rank), or import
-// that handle on the other ranks.
-ncclResult_t ncclMcCreate(struct ncclComm* comm, CUmulticastObjectProp* prop, int rank, unsigned int nranks,
-                          CUmemGenericAllocationHandle* mcHandle, char* shareableHandle);
-ncclResult_t ncclMcImport(struct ncclComm* comm, char* shareableHandle, int rank,
-                          CUmemGenericAllocationHandle* mcHandle);
-
-// Collectively create one MC object over the comm's NVLS local ranks, sized to
-// the aligned sum of requests, map its full VA once, and return one resolved
-// slice per request. On failure everything is unwound and *outGroup stays NULL.
-ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct ncclMcRequest* requests, int nRequests,
+// Collectively create one MC object over ranks, sized to the aligned sum of
+// requests, map its full VA once, and return one resolved slice per request. On
+// failure everything is unwound and *outGroup stays NULL.
+ncclResult_t ncclMcGroupBuildPartitions(struct ncclComm* comm, const struct ncclMcRankSet* ranks,
+                                        const struct ncclMcRequest* requests, int nRequests,
                                         struct ncclMcGroup** outGroup, struct ncclMcPartition* outPartitions);
 
 // Unmap the VA and release the MC handle (drops any bindings still present).

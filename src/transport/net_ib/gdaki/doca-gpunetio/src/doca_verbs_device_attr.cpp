@@ -33,6 +33,9 @@
 #include <mutex>
 #include <time.h>
 #include <string.h>
+#include <memory>
+#include <string>
+#include <unordered_map>
 
 #include "host/mlx5_prm.h"
 #include "host/mlx5_ifc.h"
@@ -117,6 +120,8 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
     m_max_qp_init_rd_atom = device_attr.max_qp_init_rd_atom;
     m_max_qp_rd_atom = device_attr.max_qp_rd_atom;
     m_send_dbr_mode_no_dbr_ext = 0;
+    m_dp_ordering_rc = DOCA_VERBS_QP_ORDERING_SEMANTIC_IBTA;
+    m_dp_ordering_force = 0;
 
     uint32_t in[MLX5_ST_SZ_DW(query_hca_cap_in)] = {0};
     uint32_t out[MLX5_ST_SZ_DW(query_hca_cap_out)] = {0};
@@ -148,6 +153,12 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
     m_max_sq_desc_size = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.max_wqe_sz_sq);
     m_max_rq_desc_size = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.max_wqe_sz_rq);
     m_max_send_wqebb = 1 << DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.log_max_qp_sz);
+
+    if (DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.dp_ordering_ooo_all_rc))
+        m_dp_ordering_rc = DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_ALL;
+    /* multi_path_rc_rdma is the OOO_RW capability bit for RC. */
+    else if (DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.multi_path_rc_rdma))
+        m_dp_ordering_rc = DOCA_VERBS_QP_ORDERING_SEMANTIC_OOO_RW;
 
     has_hca_cap_2 = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.hca_cap_2);
 
@@ -189,12 +200,18 @@ void doca_verbs_device_attr::query_caps(struct ibv_context *ibv_ctx) {
 
         m_send_dbr_mode_no_dbr_ext =
             DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap_2.send_dbr_mode_no_dbr_ext);
+
+        m_dp_ordering_force =
+            DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap_2.dp_ordering_force);
     }
 }
 
 /**********************************************************************************************************************
  * Public API functions
  *********************************************************************************************************************/
+
+static std::mutex device_attr_cache_mutex;
+static std::unordered_map<std::string, std::unique_ptr<doca_verbs_device_attr>> device_attr_cache;
 
 doca_error_t doca_verbs_query_device(struct ibv_context *context,
                                      struct doca_verbs_device_attr **verbs_device_attr) {
@@ -208,8 +225,18 @@ doca_error_t doca_verbs_query_device(struct ibv_context *context,
         return DOCA_ERROR_INVALID_VALUE;
     }
 
+    const char *device_name = nullptr;
+    doca_error_t status = doca_verbs_wrapper_ibv_get_device_name(context->device, &device_name);
+    if (status != DOCA_SUCCESS) {
+        DOCA_LOG(LOG_ERR, "Failed to query doca_verbs_device_attr. Failed to get device name");
+        return status;
+    }
+
     try {
-        *verbs_device_attr = new doca_verbs_device_attr(context);
+        std::lock_guard<std::mutex> lock(device_attr_cache_mutex);
+        std::unique_ptr<doca_verbs_device_attr> &cached = device_attr_cache[device_name];
+        if (cached == nullptr) cached.reset(new doca_verbs_device_attr(context));
+        *verbs_device_attr = new doca_verbs_device_attr(*cached);
         return DOCA_SUCCESS;
     } catch (doca_error_t err) {
         return err;
@@ -312,7 +339,7 @@ uint8_t doca_verbs_device_attr_get_max_qp_rd_atom(
     return verbs_device_attr->m_max_qp_rd_atom;
 }
 
-uint8_t doca_verbs_device_attr_get_lag_tx_port_affinity(
+uint8_t doca_verbs_device_attr_get_is_lag_tx_port_affinity_supported(
     const struct doca_verbs_device_attr *verbs_device_attr) {
     return verbs_device_attr->m_is_lag_tx_port_affinity_supported;
 }
@@ -322,12 +349,12 @@ uint8_t doca_verbs_device_attr_get_num_lag_ports(
     return verbs_device_attr->m_num_lag_ports;
 }
 
-uint8_t doca_verbs_device_attr_get_init2_lag_tx_port_affinity(
+uint8_t doca_verbs_device_attr_get_is_init2_lag_tx_port_affinity_supported(
     const struct doca_verbs_device_attr *verbs_device_attr) {
     return verbs_device_attr->m_is_init2_lag_tx_port_affinity_supported;
 }
 
-uint8_t doca_verbs_device_attr_get_rts2rts_lag_tx_port_affinity(
+uint8_t doca_verbs_device_attr_get_is_rts2rts_lag_tx_port_affinity_supported(
     const struct doca_verbs_device_attr *verbs_device_attr) {
     return verbs_device_attr->m_is_rts2rts_lag_tx_port_affinity_supported;
 }

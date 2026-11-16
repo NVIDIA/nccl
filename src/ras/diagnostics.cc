@@ -74,6 +74,7 @@ static const struct rasDiagnosticsCheck rasDiagnosticsChecks[RAS_DIAG_CHECK_COUN
   {RAS_DIAG_CHECK_NVIDIA_DRIVER_VERSION, rasDiagnosticsNvidiaDriverVersionCollectLocal,
    rasDiagnosticsNvidiaDriverVersionSummarize},
   {RAS_DIAG_CHECK_PATHS, rasDiagnosticsPathsCollectLocal, rasDiagnosticsPathsSummarize},
+  {RAS_DIAG_CHECK_NET_DEVICE, rasDiagnosticsNetDeviceCollectLocal, rasDiagnosticsNetDeviceSummarize},
 };
 
 static ncclResult_t rasDiagnosticsSummarizePeerPayloads(

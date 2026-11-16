@@ -20,7 +20,7 @@ endif
 
 LIBSRCFILES := \
 	bootstrap.cc channel.cc collectives.cc debug.cc group.cc \
-	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc cft_dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc ce_coll.cc mem_manager.cc \
+	init.cc proxy.cc transport.cc mnnvl.cc allocator.cc dev_runtime.cc cft_dev_runtime.cc dev_runtime_segments.cc sym_kernels.cc genk_runtime.cc ce_coll.cc mem_manager.cc \
 	$(wildcard config/*.cc) \
 	$(wildcard graph/*.cc) \
 	$(wildcard enqueue/*.cc) \
@@ -48,6 +48,7 @@ LIBSRCFILES := \
 	$(wildcard devcomm/*.cc) \
 	$(wildcard tuning/*.cc) \
 	$(wildcard tuning/sym_model/*.cc) \
+	$(wildcard tuning/pipeline_model/*.cc) \
 	$(filter-out param/ncclparam.cc,$(wildcard param/*.cc)) \
 	$(filter-out ras/client.cc,$(wildcard ras/*.cc))
 BINSRCFILES := ras/client.cc
@@ -84,7 +85,9 @@ CUDARTLIB  ?= cudart_static
 
 # Use compatibility shim only with static cudart; see https://github.com/NVIDIA/nccl/issues/658
 ifeq ($(CUDARTLIB), cudart_static)
-	LIBSRCFILES += enhcompat.cc
+ifeq ($(NCCL_OS_LINUX), 1)
+	LIBSRCFILES += os/linux_enhcompat.cc
+endif
 endif
 
 INCTARGETS := $(INCEXPORTS:%=$(INCDIR)/%)
@@ -110,7 +113,7 @@ endif
 GIT_VERSION_FILE := $(OBJDIR)/include/nccl_git_version.h
 $(GIT_VERSION_FILE): ALWAYS_REBUILD
 	@mkdir -p $(dir $@)
-	@./misc/generate_git_version.py $@
+	@python3 ./misc/generate_git_version.py $@
 
 # DOCA GPUNetIO definitions
 DOCA_HOME        ?= transport/net_ib/gdaki/doca-gpunetio
@@ -119,7 +122,7 @@ DOCA_OBJDIR      := $(OBJDIR)/transport/net_ib/gdaki/doca-gpunetio
 DOCA_INCLUDES    := $(DOCA_HOME)/include/doca_gpunetio_device.h $(wildcard $(DOCA_HOME)/include/common/*.h) $(wildcard $(DOCA_HOME)/include/device/*.cuh)
 DOCA_INCTARGETS  := $(DOCA_INCLUDES:$(DOCA_HOME)/include/%=$(DOCA_INC_INSTALL)/%)
 INCTARGETS       += $(DOCA_INCTARGETS)
-DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_verbs_dev.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp doca_gpunetio_sdk_wrapper.cpp doca_verbs_dev_sdk_wrapper.cpp doca_verbs_umem_sdk_wrapper.cpp doca_verbs_uar_sdk_wrapper.cpp doca_verbs_cq_sdk_wrapper.cpp doca_verbs_qp_sdk_wrapper.cpp
+DOCA_LIBSRC      := doca_verbs_qp.cpp doca_verbs_cq.cpp doca_verbs_device_attr.cpp doca_verbs_umem.cpp doca_verbs_srq.cpp doca_verbs_uar.cpp doca_verbs_dev.cpp doca_gpunetio.cpp doca_gpunetio_log.cpp doca_gpunetio_high_level.cpp doca_gpunetio_cuda_wrapper.cpp doca_verbs_mlx5dv_wrapper.cpp doca_verbs_ibv_wrapper.cpp doca_gpunetio_gdrcopy.cpp doca_gpunetio_signal_map.cpp doca_verbs_utils.cpp doca_gpunetio_sdk_wrapper.cpp doca_verbs_dev_sdk_wrapper.cpp doca_verbs_umem_sdk_wrapper.cpp doca_verbs_uar_sdk_wrapper.cpp doca_verbs_cq_sdk_wrapper.cpp doca_verbs_qp_sdk_wrapper.cpp
 DOCA_LIBOBJ      := $(DOCA_LIBSRC:%.cpp=$(DOCA_OBJDIR)/%.o)
 LIBOBJ           += $(DOCA_LIBOBJ)
 

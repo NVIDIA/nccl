@@ -23,7 +23,7 @@ The following sample code shows how to capture computational kernels and NCCL op
   cudaStreamBeginCapture(stream);
   kernel_A<<< ..., stream >>>(...);
   kernel_B<<< ..., stream >>>(...);
-  ncclAllreduce(..., stream);
+  ncclAllReduce(..., stream);
   kernel_C<<< ..., stream >>>(...);
   cudaStreamEndCapture(stream, &graph);
 

@@ -8,6 +8,7 @@
 #ifndef NCCL_INT_SYM_MODEL_MODEL_H_
 #define NCCL_INT_SYM_MODEL_MODEL_H_
 
+#include "../model.h"
 #include "sym_kernels.h"
 #include "tuning.h"
 
@@ -25,7 +26,10 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
                               float* timeUs, int* nBlocks);
 ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
                               float* timeUs, float* selectionTimeUs, int* nBlocks);
-bool ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes, int nBlocks,
-                          struct ncclSymkLsaEstimate* estimate);
+ncclResult_t ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
+                                  int nBlocks, struct ncclSymkLsaEstimate* estimate, bool* modeled);
+
+ncclResult_t ncclSymkLsaA2AModel(const struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId,
+                                 int requestedCtas, float* timeUs, bool* modeled);
 
 #endif // NCCL_INT_SYM_MODEL_MODEL_H_

@@ -280,6 +280,7 @@ Note that the total time spent waiting for a response is the product of
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value used by NCCL is 20 (since 2.23; it was 18 since 2.14, and 14 before that).
+Since 2.32u1, invalid values fall back to the default value of 20.
 
 Values can be 0-31.
 
@@ -300,6 +301,7 @@ For more information, see section 12.7.38 of the InfiniBand specification Volume
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value is 7. Valid values are 0-7.
+Since 2.32u1, invalid values fall back to the default value of 7.
 
 NCCL_IB_GID_INDEX
 -----------------
@@ -313,7 +315,9 @@ or vendor documentation.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is -1.
+The default value is AUTO (since 2.32u1), which lets NCCL automatically determine the GID.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_ADDR_FAMILY
 -------------------
@@ -352,6 +356,7 @@ unset.
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value is 2.
+Since 2.32u1, invalid values fall back to the default value of 2.
 
 NCCL_IB_PKEY
 ------------
@@ -371,6 +376,7 @@ or vendor documentation.
 Values accepted
 ^^^^^^^^^^^^^^^
 The default value is 0 (the first entry of the PKey table).
+Since 2.32u1, invalid values fall back to the default value of 0.
 
 NCCL_IB_PKEY_VALUE
 ------------------
@@ -403,7 +409,11 @@ or vendor documentation.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is 0.
+The default value is AUTO (since 2.32u1).
+If set to AUTO, NCCL uses 0 as the Service Level unless the communicator's traffic class is configured,
+in which case it uses that value as the Service Level.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_TC
 ----------
@@ -416,7 +426,11 @@ or vendor documentation.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is 0.
+The default value is AUTO (since 2.32u1).
+If set to AUTO, NCCL uses a traffic class of 0 unless the communicator's traffic class is configured,
+in which case it uses that value.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_FIFO_TC
 ---------------
@@ -431,7 +445,10 @@ avoid being delayed by the rest of the traffic.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The default value is the traffic class set by NCCL_IB_TC, which defaults to 0 if not set.
+The default value is AUTO (since 2.32u1).
+If set to AUTO, NCCL will use communicator's traffic class which is determined by NCCL_IB_TC.
+-1 is a legacy alias for AUTO, retained for backward compatibility.
+Since 2.32u1, invalid values fall back to the default value of AUTO.
 
 NCCL_IB_RETURN_ASYNC_EVENTS
 ---------------------------
@@ -618,19 +635,27 @@ Plugin suffix, plugin file name, or "none".
 NCCL_PROFILER_PLUGIN
 --------------------
 
-Set it to either a suffix string or to a library name to choose among multiple NCCL profiler plugins. This setting will cause NCCL to look for the profiler plugin library using the following strategy:
- - If NCCL_PROFILER_PLUGIN is set, attempt loading the library with name specified by NCCL_PROFILER_PLUGIN;
- - If NCCL_PROFILER_PLUGIN is set and previous failed, attempt loading libnccl-profiler-<NCCL_PROFILER_PLUGIN>.so;
- - If NCCL_PROFILER_PLUGIN is not set, attempt loading libnccl-profiler.so;
+Set it to a comma-separated list of up to two suffix strings or library names. NCCL loads the
+entries in list order and sends each event to the plugins that enabled that event type. Empty,
+missing, unsupported, and duplicate entries are skipped without preventing later entries from
+loading. Whitespace around commas is ignored. This setting causes NCCL to look for each profiler
+plugin library using the following strategy:
+
+ - For each entry, attempt loading the library with the specified name;
+ - If that fails, attempt loading libnccl-profiler-<entry>.so;
+ - If NCCL_PROFILER_PLUGIN is unset or empty, attempt loading libnccl-profiler.so;
  - If no plugin was found (neither user defined nor default), do not enable profiling.
  - If NCCL_PROFILER_PLUGIN is set to ``STATIC_PLUGIN``, the plugin symbols are searched in the program binary.
+ - If every explicit entry fails, NCCL tries the profiler symbol exported by the network plugin as a final entry.
 
-For example, setting ``NCCL_PROFILER_PLUGIN=foo`` will cause NCCL to try to load ``foo`` and, if ``foo`` cannot be found, ``libnccl-profiler-foo.so`` (provided that it exists on the system).
+For example, ``NCCL_PROFILER_PLUGIN=telemetry,libnccl-profiler-trace.so`` loads the telemetry
+suffix plugin followed by the explicitly named trace plugin.
 
 Values accepted
 ^^^^^^^^^^^^^^^
 
-Plugin suffix, plugin file name, or "none".
+Comma-separated plugin suffixes or plugin file names, or ``none``.
+Unset or empty loads ``libnccl-profiler.so``.
 
 NCCL_ENV_PLUGIN
 ---------------
@@ -770,8 +795,8 @@ ALLOC (non-host memory allocations, typically device-side), ALLOC_HOST (host mem
 CALL (stands for function calls), PROXY (stands for the proxy thread operations), NVLS
 (stands for NVLink SHARP), BOOTSTRAP (stands for early initialization), REG (stands for memory registration), PROFILE
 (stands for coarse-grained profiling of initialization), RAS (stands for reliability, availability, and serviceability
-subsystem), DESTROY (stands for communicator destroy, abort, revoke, and plugin unload/close operations)
-and ALL (includes every subsystem).
+subsystem), DESTROY (stands for communicator destroy, abort, revoke, and plugin unload/close operations),
+DIAG (stands for detailed information from active and RAS diagnostics) and ALL (includes every subsystem).
 
 .. _NCCL_DEBUG_TIMESTAMP_FORMAT:
 
@@ -953,7 +978,7 @@ A path to a file which will be created or overwritten.
 
 The dumped file reflects the topology as seen by NCCL. For multi-node NVLink systems, the file
 contains the topology from all the hosts that are part of the same NVLink domain. This file is
-useful for debugging and inspection, but should be reduced to a sigle host before use with
+useful for debugging and inspection, but should be reduced to a single host before use with
 ``NCCL_TOPO_FILE`` (see the notes above).
 
 
@@ -1204,6 +1229,7 @@ NetworkDirect reuses this variable as the QP count per physical adapter in a con
 Values accepted
 ^^^^^^^^^^^^^^^
 Number between 1 and 128, default is 1.
+Since 2.32u1, invalid values fall back to the default value of 1.
 
 NCCL_IB_SPLIT_DATA_ON_QPS
 -------------------------
@@ -1260,6 +1286,9 @@ Enable the use of Enhanced Connection Establishment (ECE) on IB/RoCE Verbs netwo
 Values accepted
 ^^^^^^^^^^^^^^^
 Enabled (1) by default (since 2.19). Set to 0 to disable use of ECE network capabilities.
+Since 2.32u1, accepts 1/T/TRUE as enabled, 0/F/FALSE as disabled, strings are case-insensitive.
+
+Since 2.32u1, invalid values fall back to the default value of enabled (1).
 
 Note: Incorrect configuration of the ECE parameters on a system can adversely affect NCCL performance. Administrators should ensure ECE is correctly configured if it is enabled at the system level.
 
@@ -1474,6 +1503,8 @@ The default is dependent on the number of ranks.
 
 Values are integers, in bytes.
 
+.. _NCCL_ALGO:
+
 NCCL_ALGO
 ----------
 (since 2.5)
@@ -1538,6 +1569,8 @@ algorithms available except tree.
 The default is unset, which causes NCCL to automatically choose the available
 algorithms based on the node topology and architecture.
 
+.. _NCCL_PROTO:
+
 NCCL_PROTO
 ----------
 (since 2.5)
@@ -1561,7 +1594,7 @@ The default behavior enables all supported algorithms: equivalent to
 otherwise.
 
 (since 2.24) The accepted values are expanded to allow more flexibility,
-just as decribed for ``NCCL_ALGO`` above, allowing the user to specify
+just as described for ``NCCL_ALGO`` above, allowing the user to specify
 protocols for each function.
 
 NCCL_NVB_DISABLE
@@ -1613,7 +1646,7 @@ NCCL_RUNTIME_CONNECT
 --------------------
 (since 2.22)
 
-Dynamically connect peers during runtime (e.g., calling `ncclAllreduce()`) instead of init stage.
+Dynamically connect peers during runtime (e.g., calling `ncclAllReduce()`) instead of init stage.
 
 Value accepted
 ^^^^^^^^^^^^^^
@@ -1693,7 +1726,7 @@ NCCL_GRAPH_MIXING_SUPPORT
 -------------------------
 (since 2.13)
 
-Enable/disable support for multiple outstanding NCCL calls from parallel CUDA graphs or a CUDA graph and non-captured NCCL calls. NCCL calls are considered outstanding starting from their host-side launch (e.g., a call to `ncclAllreduce()` for non-captured calls or `cudaGraphLaunch()` for captured calls) and ending when the device kernel execution completes. With graph mixing support disabled, the following use cases are NOT supported:
+Enable/disable support for multiple outstanding NCCL calls from parallel CUDA graphs or a CUDA graph and non-captured NCCL calls. NCCL calls are considered outstanding starting from their host-side launch (e.g., a call to `ncclAllReduce()` for non-captured calls or `cudaGraphLaunch()` for captured calls) and ending when the device kernel execution completes. With graph mixing support disabled, the following use cases are NOT supported:
 
 1. Using a NCCL communicator (or split-shared communicators) from parallel graph launches, where parallel means on different streams without dependencies that would serialize their execution.
 
@@ -1819,11 +1852,16 @@ NCCL_P2P_LL_THRESHOLD
 ---------------------
 (since 2.14)
 
-The ``NCCL_P2P_LL_THRESHOLD`` is the maximum message size that NCCL will use the LL protocol for P2P operations.
+The ``NCCL_P2P_LL_THRESHOLD`` is the per-channel message size threshold that NCCL uses when selecting the LL protocol
+for P2P operations. The effective cutoff depends on the number of P2P channels considered by the protocol selector.
+The cutoff selects LL for eligible transfers at or below it, but it is not a strict upper bound: larger transfers may
+still use LL when they fit in one LL data step across the selected P2P channels.
+For collective operations implemented with P2P transfers, the size compared against this cutoff is the per-peer P2P
+transfer size, not the total collective buffer size.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-Decimal number. Default is 16384.
+Decimal number, in bytes. Default is 16384.
 
 NCCL_ALLOC_P2P_NET_LL_BUFFERS
 -----------------------------
@@ -2048,6 +2086,40 @@ socket timeouts.
 Values accepted
 ^^^^^^^^^^^^^^^
 Default is 1. A positive floating-point number. Values less than or equal to 0 are ignored and replaced with 1.
+
+.. _env_NCCL_RUN_RAS_DIAGNOSTICS:
+
+NCCL_RUN_RAS_DIAGNOSTICS
+------------------------
+(since 2.31)
+
+Run the passive RAS diagnostics automatically at each communicator initialization. The diagnostics collect and compare
+system information across ranks without exercising NCCL data paths, and print a report whose lines are prefixed with
+``NCCL DIAG`` (see :ref:`ras_diagnostics`). This variable only controls the automatic init-time trigger; RAS diagnostics
+can still be requested on demand through the ``ncclras`` client regardless of its value. Requires the RAS subsystem to
+be enabled (see :ref:`env_NCCL_RAS_ENABLE`). This variable is independent of :ref:`env_NCCL_RUN_DIAGNOSTICS`; set both
+to 1 to run both levels.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Default is 0 (disabled). Set to 1 to run RAS diagnostics at every communicator initialization.
+
+.. _env_NCCL_RUN_DIAGNOSTICS:
+
+NCCL_RUN_DIAGNOSTICS
+--------------------
+(since 2.31)
+
+Run the active diagnostics synchronously during communicator initialization, before the application can issue operations
+on the communicator. Active diagnostics exercise the actual communication paths between GPUs (e.g., the P2P check and,
+across hosts, the network bandwidth check) and report the results in ``NCCL DIAG`` lines on the standard output of the
+process hosting rank 0 of the communicator (see :doc:`troubleshooting/diagnostics`). Diagnostics are informational only
+and never abort initialization. They add to initialization time. This variable is independent of
+:ref:`env_NCCL_RUN_RAS_DIAGNOSTICS`; set both to 1 to run both levels.
+
+Values accepted
+^^^^^^^^^^^^^^^
+Default is 0 (disabled). Set to 1 to run active diagnostics at every communicator initialization.
 
 .. _NCCL_LAUNCH_ORDER_IMPLICIT:
 

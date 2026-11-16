@@ -97,6 +97,8 @@ impl Default for DeviceCommRequirements {
                 useRuntimeVersion: false,
                 cftCaps: sys::NCCL_CFT_NONE as i32,
                 cftBarrierCount: 0,
+                ginCustomArray: ptr::null_mut(),
+                ginCustomArrayCount: 0,
             },
         }
     }
@@ -131,6 +133,7 @@ impl std::fmt::Debug for DeviceCommRequirements {
             .field("use_runtime_version", &self.raw.useRuntimeVersion)
             .field("cft_caps", &self.raw.cftCaps)
             .field("cft_barrier_count", &self.raw.cftBarrierCount)
+            .field("gin_custom_array_count", &self.raw.ginCustomArrayCount)
             .finish()
     }
 }

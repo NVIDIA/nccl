@@ -93,9 +93,10 @@ if (mpi_rank == 0) {
 }
 
 // Broadcast to all processes
-MPI_Bcast(&nccl_id, sizeof(ncclUniqueId), MPI_BYTE, 0, MPI_COMM_WORLD);
+MPI_Bcast(&nccl_id, NCCL_UNIQUE_ID_BYTES, MPI_CHAR, 0, MPI_COMM_WORLD);
 
 // Each process initializes its communicator
+ncclComm_t comm;
 ncclCommInitRank(&comm, mpi_size, nccl_id, mpi_rank);
 ```
 
@@ -105,11 +106,12 @@ The example automatically determines local rank on each node:
 
 ```c
 // Split by node to get local rank
-MPI_Comm local_comm;
-MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0,
-                    MPI_INFO_NULL, &local_comm);
+MPI_Comm node_comm;
+MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, mpi_rank,
+                    MPI_INFO_NULL, &node_comm);
 int local_rank;
-MPI_Comm_rank(local_comm, &local_rank);
+MPI_Comm_rank(node_comm, &local_rank);
+MPI_Comm_free(&node_comm);
 
 // Set GPU based on local rank
 cudaSetDevice(local_rank);

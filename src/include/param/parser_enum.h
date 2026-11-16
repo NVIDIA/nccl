@@ -15,6 +15,15 @@ namespace nccl {
 namespace param {
 namespace parser {
 
+// Return the name of the option whose value equals `value`, or nullptr if none.
+template <typename T, size_t N>
+const char* oneOfLookup(const ncclOptionSet<T, N>& opts, const T& value) {
+  for (const auto& opt : opts) {
+    if (opt.value == value) return opt.name;
+  }
+  return nullptr;
+}
+
 template <typename T, size_t N>
 ncclResult_t oneOfResolve(const void* ctx, const char* input, T& out) {
   if (input == nullptr) return ncclInvalidArgument;
@@ -38,10 +47,8 @@ bool oneOfValidate(const void*, const T&) {
 template <typename T, size_t N>
 std::string oneOfToString(const void* ctx, const T& value) {
   auto& opts = *static_cast<const ncclOptionSet<T, N>*>(ctx);
-  for (const auto& opt : opts) {
-    if (opt.value == value) return opt.name;
-  }
-  return "<unknown>";
+  const char* name = oneOfLookup(opts, value);
+  return name ? std::string(name) : std::string("<unknown>");
 }
 
 } // namespace parser

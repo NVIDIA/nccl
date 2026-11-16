@@ -96,17 +96,25 @@ struct ncclIntegerParser {
     if NCCL_PARAM_IF_CONSTEXPR (std::is_signed<T>::value) {
       long long val = std::strtoll(input, &endPtr, 10);
       if (endPtr == input || *endPtr != '\0' || errno == ERANGE || errno == EINVAL) return ncclInvalidArgument;
-      out = static_cast<T>(val);
+      if (val >= std::numeric_limits<T>::min() && val <= std::numeric_limits<T>::max()) {
+        out = static_cast<T>(val);
+      } else {
+        return ncclInvalidArgument;
+      }
     } else {
       unsigned long long val = std::strtoull(input, &endPtr, 10);
       if (endPtr == input || *endPtr != '\0' || errno == ERANGE || errno == EINVAL) return ncclInvalidArgument;
-      out = static_cast<T>(val);
+      if (val >= std::numeric_limits<T>::min() && val <= std::numeric_limits<T>::max()) {
+        out = static_cast<T>(val);
+      } else {
+        return ncclInvalidArgument;
+      }
     }
     return ncclSuccess;
   }
 
   static bool validate(const T& val) {
-    return val >= std::numeric_limits<T>::min() && val <= std::numeric_limits<T>::max();
+    return true;
   }
 
   static std::string toString(const T& value) {

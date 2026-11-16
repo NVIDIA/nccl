@@ -485,10 +485,9 @@ void printEvent(FILE* fh, void* handle) {
   } else if (type == ncclProfileProxyStep) {
     struct proxyStep* p = (struct proxyStep *)handle;
     printProxyStepEventHeader(fh, p);
-    for (int q = 0; q < p->nNetEvents; q++) {
-      printNetPluginEvent(fh, &p->net[q]);
-    }
     printProxyStepEventTrailer(fh, p);
+  } else if (type == ncclProfileNetPlugin) {
+    printNetPluginEvent(fh, (struct netPlugin *)handle);
   } else if (type == ncclProfileProxyCtrl) {
     struct proxyCtrl* p = (struct proxyCtrl *)handle;
     printProxyCtrlEvent(fh, p);

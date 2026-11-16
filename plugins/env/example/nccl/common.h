@@ -36,6 +36,7 @@ typedef enum {
   NCCL_RAS=32768,
   NCCL_DESTROY=65536,
   NCCL_ALLOC_HOST=131072,
+  NCCL_DIAG=262144,
   NCCL_ALL=~0
 } ncclDebugLogSubSys;
 

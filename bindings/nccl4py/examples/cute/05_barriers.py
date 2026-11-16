@@ -7,17 +7,9 @@
 #
 """Every barrier session type, built both ways.
 
-LSA (intra-node), GIN (inter-node) and hybrid (LSA inner stage + GIN
-outer stage). Each has a convenience factory that pulls the team and
-handle out of the devcomm, and an explicit factory that takes them as
-arguments; this runs both spellings of all three.
-
-The factories that take a :class:`Gin` need NCCL 2.31.0, where the C
-entry points behind them changed from taking ``ncclGin_C`` by value to
-taking a pointer. Below that they are skipped -- passing a pointer to the
-older entry point corrupts memory instead of failing to link.
-``GIN_ALL_CONTEXTS`` goes through a different, unchanged entry point and
-always runs.
+LSA (intra-node), GIN (inter-node) and hybrid barriers. Convenience
+factories select built-in teams and barrier resources; explicit factories
+take teams and host-requested handles. This runs both forms of all three.
 
 Needs a GIN-capable network; two nodes exercise it for real::
 
@@ -47,20 +39,6 @@ import nccl.core.device.cute as nccl_cute
 NAME = os.path.basename(__file__)
 
 
-# Always available.
-
-# Need the 2.31.0 pointer ABI for ncclGin_C.
-
-# ncclGinBarrierSessionInit / ncclBarrierSessionInit took ncclGin_C by value up
-# to 2.30.7 and take a pointer from 2.31.0. The bindings pass a pointer, which
-# an older library reads as the struct's first field -- silent corruption, so it
-# must be guarded rather than caught. ncclGinBarrierSessionInitAllContexts is
-# unchanged, so the GIN_ALL_CONTEXTS form works either way.
-# get_version() reports the loaded libnccl, which is what the device
-# bitcode is expected to match.
-NCCL_VERSION = nccl.get_version().libnccl.version
-NCCL_GIN_SESSION_TAKES_PTR = NCCL_VERSION.release >= (2, 31, 0)
-
 THREADS = 128
 INDEX = 0
 N_EXTRA_BARRIERS = 2
@@ -81,7 +59,7 @@ def barriers_kernel(
     """
     tidx, _, _ = cute.arch.thread_idx()
     coop = nccl_cute.cta()
-    gin = dev_comm.gin(nccl_cute.GinBackendMask.ALL, 0)
+    gin = dev_comm.gin(0)
 
     if 0 == tidx:
         # The LSA handle names a slice of the devcomm's resource buffer; the
@@ -90,13 +68,10 @@ def barriers_kernel(
             f"requested lsa handle: buf_handle={lsa_handle.buf_handle} "
             f"n_barriers={lsa_handle.n_barriers}")
         cute.printf(f"requested gin handle: signal0={gin_handle.signal0}")
-        cute.printf(
-            f"embedded lsa handle:  buf_handle={dev_comm.lsa_barrier.buf_handle} "
-            f"n_barriers={dev_comm.lsa_barrier.n_barriers}")
 
     # === LSA ===
 
-    # Convenience form: team_lsa + dev_comm.lsa_barrier.
+    # Convenience form selects the built-in LSA team and barrier.
     default_lsa = nccl_cute.lsa_default(coop, dev_comm, index=INDEX)
     default_lsa.sync(coop, nccl_cute.MemoryOrder.ACQ_REL)
     default_lsa.destroy()
@@ -112,8 +87,8 @@ def barriers_kernel(
     # === GIN ===
 
     # GIN_ALL_CONTEXTS fences every context on the comm rather than the one
-    # `gin` is bound to -- needed when puts span several, at a flush per
-    # (context, peer). The fence level says what the barrier drains besides
+    # `gin` is bound to -- needed when puts span several contexts.
+    # The fence level says what the barrier drains besides
     # synchronizing: NONE nothing, PUT inbound puts, GET this rank's gets.
     all_contexts = nccl_cute.world_gin(
         coop, nccl_cute.GIN_ALL_CONTEXTS, dev_comm, index=INDEX)
@@ -121,49 +96,47 @@ def barriers_kernel(
         coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
     all_contexts.destroy()
 
-    if NCCL_GIN_SESSION_TAKES_PTR:
-        world = nccl_cute.world_gin(coop, gin, dev_comm, index=INDEX)
-        world.sync(coop, nccl_cute.MemoryOrder.ACQ_REL,
-                   nccl_cute.GinFenceLevel.PUT)
-        world.destroy()
+    world = nccl_cute.world_gin(coop, gin, dev_comm, index=INDEX)
+    world.sync(coop, nccl_cute.MemoryOrder.ACQ_REL,
+               nccl_cute.GinFenceLevel.PUT)
+    world.destroy()
 
-        rail = nccl_cute.rail_gin(coop, gin, dev_comm, index=INDEX)
-        rail.sync(
-            coop, nccl_cute.MemoryOrder.ACQ_REL,
-            nccl_cute.GinFenceLevel.PUT | nccl_cute.GinFenceLevel.GET)
-        rail.destroy()
+    rail = nccl_cute.rail_gin(coop, gin, dev_comm, index=INDEX)
+    rail.sync(
+        coop, nccl_cute.MemoryOrder.ACQ_REL,
+        nccl_cute.GinFenceLevel.PUT | nccl_cute.GinFenceLevel.GET)
+    rail.destroy()
 
-        # Explicit form: any team, any GIN barrier handle.
-        explicit_gin = nccl_cute.gin_session(
-            coop, gin, dev_comm, dev_comm.team_world, gin_handle, index=INDEX)
-        explicit_gin.sync(
-            coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
-        explicit_gin.destroy()
+    # Explicit form: a team and its host-requested GIN barrier handle.
+    explicit_gin = nccl_cute.gin_session(
+        coop, gin, dev_comm, dev_comm.team_world, gin_handle, index=INDEX)
+    explicit_gin.sync(
+        coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
+    explicit_gin.destroy()
 
-        # === Hybrid ===
+    # === Hybrid ===
 
-        # LSA within the node, GIN across nodes: one rank per node carries
-        # the outer stage.
-        world_hybrid = nccl_cute.world_hybrid(
-            coop, gin, dev_comm, index=INDEX)
-        world_hybrid.sync(
-            coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
-        world_hybrid.destroy()
+    # Built-in world barrier selects its LSA/GIN algorithm based on the
+    # connections, backend capabilities and requested fence.
+    world_hybrid = nccl_cute.world_hybrid(
+        coop, gin, dev_comm, index=INDEX)
+    world_hybrid.sync(
+        coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.PUT)
+    world_hybrid.destroy()
 
-        # Both stages named explicitly; the handles come from the devcomm's
-        # hybrid pair, sized by requirements.barrier_count.
-        explicit_hybrid = nccl_cute.hybrid_session(
-            coop,
-            dev_comm.team_lsa,
-            dev_comm.team_world,
-            gin,
-            dev_comm.hybrid_lsa_barrier,
-            dev_comm.hybrid_rail_gin_barrier,
-            index=INDEX,
-        )
-        explicit_hybrid.sync(
-            coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
-        explicit_hybrid.destroy()
+    # Both stages named explicitly, using the separately requested handles.
+    explicit_hybrid = nccl_cute.hybrid_session(
+        coop,
+        dev_comm.team_lsa,
+        dev_comm.team_world,
+        gin,
+        lsa_handle,
+        gin_handle,
+        index=INDEX,
+    )
+    explicit_hybrid.sync(
+        coop, nccl_cute.MemoryOrder.ACQ_REL, nccl_cute.GinFenceLevel.NONE)
+    explicit_hybrid.destroy()
 
     if 0 == tidx:
         cute.printf(f"rank {dev_comm.rank}: barrier sessions completed")
@@ -207,10 +180,6 @@ def main():
 
     if rank == root:
         print(f"\n===== {NAME} =====", flush=True)
-        if not NCCL_GIN_SESSION_TAKES_PTR:
-            print(f"WARNING: NCCL {NCCL_VERSION} passes "
-                  "ncclGin_C by value; skipping world_gin, rail_gin, "
-                  "gin_session, world_hybrid and hybrid_session", flush=True)
 
     device = Device(rank % system.get_num_devices())
     device.set_current()
@@ -228,13 +197,13 @@ def main():
         nccl_comm.destroy()
         return 0
 
-    # The counts size the handles NCCL embeds in the devcomm; `resources`
-    # asks for standalone ones, returned in resource_handles in order.
+    # Counts request built-in barrier resources; `resources` requests
+    # standalone ones, returned in resource_handles in order.
     reqs = nccl.NCCLDevCommRequirements(
-        lsa_barrier_count=1,          # dev_comm.lsa_barrier
-        rail_gin_barrier_count=1,     # dev_comm.rail_gin_barrier
-        world_gin_barrier_count=1,    # dev_comm.world_gin_barrier
-        barrier_count=1,              # dev_comm.hybrid_{lsa,rail_gin}_barrier
+        lsa_barrier_count=1,          # built-in LSA barrier
+        rail_gin_barrier_count=1,     # built-in rail GIN barrier
+        world_gin_barrier_count=1,    # built-in world GIN barrier
+        barrier_count=1,              # built-in world/hybrid barrier resources
         gin_connection_type=nccl.NcclGinConnectionType.FULL,
         resources=(
             nccl.LsaBarrierRequirement(
@@ -258,9 +227,7 @@ def main():
     device.sync()
     comm_mpi.Barrier()
 
-    ran = ("LSA, GIN and hybrid barriers" if NCCL_GIN_SESSION_TAKES_PTR
-           else "LSA barriers and the GIN_ALL_CONTEXTS barrier")
-    print(f"[rank {rank}] [SUCCESS] {ran} completed")
+    print(f"[rank {rank}] [SUCCESS] LSA, GIN and hybrid barriers completed")
 
 
     dev_comm_resource.close()

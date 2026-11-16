@@ -6,12 +6,20 @@
 #
 .PHONY: all clean ir-emit
 
-EMIT_LLVM_IR ?= 0
+# Every goal in this Makefile recurses into a sub-directory, and several of
+# those sub-makes write to shared locations (build/include, build/lib,
+# build/test/gtest.a, build/test/os, ...). Run the top-level goals serially so
+# two sub-makes never race on those files, e.g.
+# `make -j test.perf.build test.apitest.build`. Each sub-make still runs its
+# own recipes in parallel with the -j setting passed down through the jobserver.
+.NOTPARALLEL:
+
+NCCL_EMIT_LLVM_IR ?= 0
 NCCL_EMIT_LTO_IR ?= 0
 
 # Set up one make target to avoid race
 IR_GOALS :=
-ifneq ($(EMIT_LLVM_IR), 0)
+ifneq ($(NCCL_EMIT_LLVM_IR), 0)
 IR_GOALS += llvm_ir
 endif
 ifneq ($(NCCL_EMIT_LTO_IR), 0)
@@ -28,6 +36,11 @@ BUILDDIR ?= $(abspath ./build)
 ABSBUILDDIR := $(abspath $(BUILDDIR))
 TARGETS := src pkg nccl4py ir
 clean: ${TARGETS:%=%.clean}
+TEST_BUILD_DEPS := src.build
+ifneq ($(IR_GOALS),)
+TEST_BUILD_DEPS += ir-emit
+endif
+test.build: $(TEST_BUILD_DEPS)
 examples.build: src.build
 ir.build: src.build
 ir.llvm_ir: src.build
@@ -43,6 +56,12 @@ ${BUILDDIR}/%.txt: %.txt
 
 src.%:
 	${MAKE} -C src $* BUILDDIR=${ABSBUILDDIR}
+
+# Individual test sub-targets (test.perf.build, test.apitest.build, ...) need the
+# exported headers and libnccl, just like test.build does. Build device IR
+# libraries only when the corresponding IR tests are enabled.
+test.%.build: $(TEST_BUILD_DEPS)
+	${MAKE} -C test $*.build BUILDDIR=${ABSBUILDDIR}
 
 examples: src.build
 	${MAKE} -C docs/examples NCCL_HOME=${ABSBUILDDIR}

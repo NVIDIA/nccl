@@ -21,6 +21,9 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
   ASSIGN_SYM(mlx5dvSymbols, mlx5dv_reg_dmabuf_mr, mlx5dv_internal_reg_dmabuf_mr);
   ASSIGN_SYM(mlx5dvSymbols, mlx5dv_query_device, mlx5dv_internal_query_device);
   ASSIGN_SYM(mlx5dvSymbols, mlx5dv_create_qp, mlx5dv_internal_create_qp);
+  ASSIGN_SYM(mlx5dvSymbols, mlx5dv_devx_obj_create, mlx5dv_internal_devx_obj_create);
+  ASSIGN_SYM(mlx5dvSymbols, mlx5dv_devx_obj_query, mlx5dv_internal_devx_obj_query);
+  ASSIGN_SYM(mlx5dvSymbols, mlx5dv_devx_obj_destroy, mlx5dv_internal_devx_obj_destroy);
   return ncclSuccess;
 }
 
@@ -78,6 +81,11 @@ ncclResult_t buildMlx5dvSymbols(struct ncclMlx5dvSymbols* mlx5dvSymbols) {
   LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_query_device", mlx5dvSymbols->mlx5dv_internal_query_device, "MLX5_1.0");
   // mlx5dv_create_qp is versioned at MLX5_1.3
   LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_create_qp", mlx5dvSymbols->mlx5dv_internal_create_qp, "MLX5_1.3");
+  // DevX object APIs are versioned at MLX5_1.7
+  LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_devx_obj_create", mlx5dvSymbols->mlx5dv_internal_devx_obj_create, "MLX5_1.7");
+  LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_devx_obj_query", mlx5dvSymbols->mlx5dv_internal_devx_obj_query, "MLX5_1.7");
+  LOAD_SYM_VERSION(mlx5dvhandle, "mlx5dv_devx_obj_destroy", mlx5dvSymbols->mlx5dv_internal_devx_obj_destroy,
+                   "MLX5_1.7");
 
   return ncclSuccess;
 
@@ -87,6 +95,9 @@ teardown:
   mlx5dvSymbols->mlx5dv_internal_reg_dmabuf_mr = NULL;
   mlx5dvSymbols->mlx5dv_internal_query_device = NULL;
   mlx5dvSymbols->mlx5dv_internal_create_qp = NULL;
+  mlx5dvSymbols->mlx5dv_internal_devx_obj_create = NULL;
+  mlx5dvSymbols->mlx5dv_internal_devx_obj_query = NULL;
+  mlx5dvSymbols->mlx5dv_internal_devx_obj_destroy = NULL;
 
   if (mlx5dvhandle != NULL) dlclose(mlx5dvhandle);
   return ncclSystemError;

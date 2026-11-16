@@ -7,3 +7,21 @@
     margin-top: 0;
     margin-bottom: 0;
 }
+
+/* The RTD theme sets white-space: nowrap on table cells, which makes tables with
+   long text (e.g. list-tables) unreadably wide. Let cell text wrap instead. */
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+    white-space: normal;
+}
+
+/* Green check / red cross markers used in the determinism tables. */
+.rst-content .guaranteed,
+.rst-content .not-guaranteed {
+    font-weight: bold;
+    font-size: 1.2em;
+    text-align: center;
+    display: block;
+}
+.rst-content .guaranteed { color: #2e8b57; }
+.rst-content .not-guaranteed { color: #c62828; }

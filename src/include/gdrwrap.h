@@ -33,9 +33,12 @@ std::mutex& getGdrMutex();
 } while(false)
 
 // This is required as the GDR memory is mapped WC
-#if !defined(__NVCC__)
+#if !defined(__CUDACC__)
 #if defined(__PPC__)
 static inline void wc_store_fence(void) { asm volatile("sync" : : : "memory"); }
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+#include <intrin.h>
+static inline void wc_store_fence(void) { __dsb(_ARM64_BARRIER_ST); }
 #elif defined(__x86_64__) || (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64)))
 #include <immintrin.h>
 static inline void wc_store_fence(void) { _mm_sfence(); }
@@ -288,8 +291,12 @@ static ncclResult_t allocMemCPUAccessible(T **ptr, T **devPtr, size_t nelem, int
   if (ncclGdrCopy && !forceHost) {
     NCCLCHECK(ncclGdrCudaCalloc(ptr, devPtr, nelem, gdrHandle, manager));
   } else {
-    NCCLCHECK(ncclCuMemHostAlloc((void **)ptr, NULL, nelem * sizeof(T)));
-    memset((void *)*ptr, 0, nelem * sizeof(T));
+    if (ncclCuMemHostEnable()) {
+      NCCLCHECK(ncclCuMemHostAlloc((void **)ptr, NULL, nelem * sizeof(T)));
+      memset((void *)*ptr, 0, nelem * sizeof(T));
+    } else {
+      NCCLCHECK(ncclCudaHostCalloc(ptr, nelem));
+    }
     *devPtr = *ptr;
     if (gdrHandle) *gdrHandle = NULL;  // Mark as host allocated by nulling GDR handle
   }
@@ -302,9 +309,10 @@ static ncclResult_t freeMemCPUAccessible(T *ptr, void *gdrHandle, struct ncclMem
   if (gdrHandle != NULL) {
     // If a GDR handle exists, it was GDR memory
     NCCLCHECK(ncclGdrCudaFree(gdrHandle, manager));
-  } else {
-    // Otherwise, it was host memory (or GDR was off)
+  } else if (ncclCuMemHostEnable()) {
     NCCLCHECK(ncclCuMemHostFree(ptr));
+  } else {
+    NCCLCHECK(ncclCudaHostFree(ptr));
   }
   return ncclSuccess;
 }

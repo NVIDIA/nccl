@@ -378,6 +378,16 @@ ncclResult_t ceProfilerStartCeCollEvent(struct context* ctx, void** eHandle, ncc
   // parent CeSync/CeBatch to, so a path that creates no event must leave it NULL.
   *eHandle = NULL;
   if (ctx->ceCollPoolSize <= 0) return ncclSuccess;
+  // CE events are timed with CUDA events recorded on the collective's stream. While that
+  // stream is being captured into a graph the record is captured too (or rejected, which
+  // invalidates the capture) and can never be queried, so skip the event. NCCL starts the
+  // CeSync/CeBatch children only under a live CeColl, so they are skipped as well.
+  cudaStreamCaptureStatus captureStatus = cudaStreamCaptureStatusNone;
+  if (cudaStreamIsCapturing((cudaStream_t)eDescr->ceColl.stream, &captureStatus) != cudaSuccess) {
+    (void)cudaGetLastError();
+  } else if (captureStatus != cudaStreamCaptureStatusNone) {
+    return ncclSuccess;
+  }
 
   struct ceColl* event;
   int ceCollId = __atomic_fetch_add(&ctx->ceCollPoolIndex, 1, __ATOMIC_RELAXED);

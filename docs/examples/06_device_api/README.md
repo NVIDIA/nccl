@@ -35,7 +35,7 @@ enabling users to perform inter-GPU communication within their own kernels.
   - Pure GIN implementation (no LSA optimizations)
   - Network barriers for cross-node synchronization (acquire before puts, release after flush)
   - Signal-based completion detection
-  - Baseline network performance measurements
+  - Verification of exchanged data
 
 ### [03_alltoall_hybrid](03_alltoall_hybrid/)
 **Hybrid AlltoAll - Optimized Communication**
@@ -84,8 +84,10 @@ bottlenecks and enables lower-latency collective operations. See each example's
 ### Checking for Device API and GIN Support
 
 These examples require communicator support for the relevant device-side
-capabilities. The C/CUDA examples check communicator properties with
-`ncclCommQueryProperties` before launching the device kernels:
+capabilities. The LSA, GIN, and CFT barrier examples check communicator
+properties with `ncclCommQueryProperties` before launching the device kernels.
+The CFT counted examples check the CUDA Toolkit version and GPU compute
+capability instead:
 
 ```cpp
 ncclCommProperties_t props = NCCL_COMM_PROPERTIES_INITIALIZER;

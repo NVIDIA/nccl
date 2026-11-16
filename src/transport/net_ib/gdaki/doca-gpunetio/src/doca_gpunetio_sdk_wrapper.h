@@ -69,6 +69,13 @@ doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_dmabuf_fd(void *gpu, void *memptr_
                                                         int *dmabuf_fd);
 doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_verbs_req_notify_cq(void *gpu_dev, void *verbs_cq);
 
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_gpu_mem_umem_supported(void *gpu_dev,
+                                                                            void *net_dev);
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_host_mem_umem_supported(void *gpu_dev,
+                                                                             void *net_dev);
+doca_sdk_wrapper_error_t doca_gpu_sdk_wrapper_cap_is_nic_handler_gpu_sm_db_supported(void *gpu_dev,
+                                                                                     void *net_dev);
+
 #ifdef __cplusplus
 }
 #endif

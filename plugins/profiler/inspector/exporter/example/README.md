@@ -115,7 +115,7 @@ The tool generates:
     "nnodes": 4
   },
   "metadata": {
-    "inspector_output_format_version": "v4.0",
+    "inspector_output_format_version": "v4.3",
     "git_rev": "75e61acda-dirty",
     "rec_mechanism": "nccl_profiler_interface",
     "dump_timestamp_us": 1749490229087081,
@@ -125,6 +125,7 @@ The tool generates:
   "coll_perf": {
     "coll": "ReduceScatter",
     "coll_sn": 129,
+    "coll_user_tag": "1234",
     "coll_msg_size_bytes": 65536,
     "coll_exec_time_us": 110,
     "coll_timing_source": "kernel_gpu",

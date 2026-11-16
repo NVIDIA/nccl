@@ -17,7 +17,7 @@ When a single thread is managing multiple devices, group semantics must be used.
 This is because every NCCL call may have to block, waiting for other threads/ranks to arrive, before effectively posting the NCCL operation on the given stream. Hence, a simple loop on multiple devices like shown below could block on the first call waiting for the other ones:
 
 .. warning::
-   We do not recommed using CUDA graph capture when managing multiple GPUs from one thread. In some cases ``cudaGraphLaunch`` may block, preventing the launch across all GPUs. See :ref:`using-nccl-with-cuda-graphs` for details.
+   We do not recommend using CUDA graph capture when managing multiple GPUs from one thread. In some cases ``cudaGraphLaunch`` may block, preventing the launch across all GPUs. See :ref:`using-nccl-with-cuda-graphs` for details.
 
 .. code:: C
 

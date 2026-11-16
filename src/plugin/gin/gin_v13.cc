@@ -16,10 +16,17 @@ static ncclGin_t ncclGin;
 ncclResult_t ncclGin_getGinProperties(ncclGinProperties_t* ginProps) {
   ginProps->supportsStrongSignals = true;
   ginProps->supportsVASignals = true;
+  ginProps->barrierOptions = NCCL_GIN_BARRIER_DEFAULT;
   return ncclSuccess;
 }
 
-static ncclResult_t ncclGin_createContext(void* collComm, ncclGinConfig_v14_t* config, void** ginCtx,
+static ncclResult_t ncclGin_connect(void* ctx, void* handles[], int nranks, int rank, void* listenComm, void** collComm,
+                                    volatile uint32_t* abortFlag) {
+  (void)abortFlag;
+  return ncclGin_v13->connect(ctx, handles, nranks, rank, listenComm, collComm);
+}
+
+static ncclResult_t ncclGin_createContext(void* collComm, ncclGinConfig_v15_t* config, void** ginCtx,
                                           ncclNetDeviceHandle_v11_t** devHandle) {
   ncclGinConfig_v13_t config_v13;
   memset(&config_v13, 0, sizeof(config_v13));
@@ -41,7 +48,7 @@ ncclGin_t* getNcclGin_v13(void* lib) {
     ncclGin.getGinProperties = ncclGin_getGinProperties;
     ncclGin.getProperties = ncclGin_v13->getProperties;
     ncclGin.listen = ncclGin_v13->listen;
-    ncclGin.connect = ncclGin_v13->connect;
+    ncclGin.connect = ncclGin_connect;
     ncclGin.createContext = ncclGin_createContext;
     ncclGin.regMrSym = ncclGin_v13->regMrSym;
     ncclGin.regMrSymDmaBuf = ncclGin_v13->regMrSymDmaBuf;

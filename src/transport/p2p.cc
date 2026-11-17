@@ -1372,10 +1372,14 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
   bool* mapped = nullptr;
   bool* imported = nullptr;
   CUmemGenericAllocationHandle* segmentHandles = nullptr;
+  struct proxyMemHandle* memHandle = nullptr;
+  struct ncclIpcImpInfo* ipcInfo = nullptr;
   size_t totalSize = 0;
   NCCLCHECKGOTO(ncclCalloc(&segmentHandles, numSegments), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&mapped, numSegments), ret, fail);
   NCCLCHECKGOTO(ncclCalloc(&imported, numSegments), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&memHandle, 1), ret, fail);
+  NCCLCHECKGOTO(ncclCalloc(&ipcInfo, 1), ret, fail);
   for (int segment = 0; segment < numSegments; segment++) {
     totalSize += ipcExpInfo[segment].size;
   }
@@ -1435,10 +1439,6 @@ static ncclResult_t p2pProxyRegister(struct ncclProxyConnection* connection, str
 
 exit:
   if (regAddr) {
-    struct proxyMemHandle* memHandle;
-    struct ncclIpcImpInfo* ipcInfo;
-    NCCLCHECK(ncclCalloc(&memHandle, 1));
-    NCCLCHECK(ncclCalloc(&ipcInfo, 1));
     ipcInfo->rmtRegAddr = regAddr;
     ipcInfo->offset = ipcExpInfo[0].offset;
     ipcInfo->legacyIpcCap = ipcExpInfo->legacyIpcCap;
@@ -1465,6 +1465,8 @@ fail:
     }
     if (regAddr) CUCHECKIGNORE(cuMemAddressFree((CUdeviceptr)regAddr, totalSize));
   }
+  free(ipcInfo);
+  free(memHandle);
   regAddr = NULL;
   goto exit;
 }

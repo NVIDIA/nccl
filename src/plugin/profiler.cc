@@ -850,6 +850,7 @@ static void profilerStampArgs(ncclProfilerEventStateArgs_t* args, uint32_t mode,
   }
 }
 
+// Callers must check that a profiler plugin is loaded before dispatching events.
 // count==1 preserves the legacy fast path: ctx is the plugin's own context,
 // including a legal NULL context, and callers already gate delivery with the
 // process-wide mask (including a RAS override). count>1 uses NCCL's own
@@ -903,7 +904,6 @@ static void profilerStartGpu(void* ctx, struct ncclProfilerEventRef* out, ncclPr
 
 static void profilerStopDispatch(struct ncclProfilerEventRef* event, profilerTimestampKind timestampKind,
                                  uint64_t tsGpu) {
-  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return;
   if (COMPILER_EXPECT(profilerPluginCount <= 1, 1)) {
     if (event->h[0]) {
       ncclProfilerEventDescr_t descr = {};
@@ -1426,6 +1426,7 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
 }
 
 ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(taskStop);
   struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
   while (ct) {
@@ -1612,7 +1613,7 @@ static struct ncclProfilerWorkOp* profilerAllocOp(struct ncclProfilerThread* pt)
 static void profilerRecycleList(struct ncclProfilerThread* pt, struct ncclProfilerWorkOp* head) {
   while (head) {
     struct ncclProfilerWorkOp* next = head->next;
-    profilerStop(&head->kernelEventHandle);
+    if (ncclProfilerPluginLoaded()) profilerStop(&head->kernelEventHandle);
     ncclMemoryPoolFree(&pt->opPool, head);
     if (pt->inflight > 0) pt->inflight--;
     head = next;
@@ -1886,7 +1887,7 @@ static struct ncclProfilerWorkOp* profilerPurgeByContext(struct ncclProfilerThre
     if ((*link)->profilerContext == ctx) {
       struct ncclProfilerWorkOp* dead = *link;
       *link = dead->next;
-      profilerStop(&dead->kernelEventHandle);
+      if (ncclProfilerPluginLoaded()) profilerStop(&dead->kernelEventHandle);
       ncclMemoryPoolFree(&pt->opPool, dead);
       if (pt->inflight > 0) pt->inflight--;
     } else {

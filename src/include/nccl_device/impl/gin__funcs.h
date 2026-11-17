@@ -479,6 +479,30 @@ NCCL_DEVICE_INLINE constexpr bool ncclGin_isDeviceOnly(ncclGin_SegmentMixed) {
 NCCL_DEVICE_INLINE constexpr bool ncclGin_isDeviceOnly(ncclGin_SegmentHostNuma) {
   return false;
 }
+
+NCCL_DEVICE_INLINE bool ncclGin_fitsOneSegment(ncclWindow_t win, size_t offset, size_t bytes) {
+  int seg;
+  size_t segOffset;
+  nccl::gin::internal::findSegmentFromWindow(win, offset, &seg, &segOffset);
+  return segOffset + bytes <= win->ginMultiSegmentWins[seg].segmentSize;
+}
+
+template <typename Coop, typename SegmentType>
+NCCL_DEVICE_INLINE uint32_t ncclGin_resolveWarpFlag(uint32_t optFlags, SegmentType bufType, ncclWindow_t win0,
+                                                    size_t off0, ncclWindow_t win1, size_t off1, size_t bytes) {
+  if (!(optFlags & ncclGinOptFlagWarp)) return optFlags;
+  if NCCL_IF_CONSTEXPR (!std::is_same<Coop, ncclCoopThread>::value) {
+    return optFlags & ~uint32_t(ncclGinOptFlagWarp);
+  } else {
+    if (ncclGin_isDeviceOnly(bufType)) return optFlags;
+    const bool multi = win0->numSegments != 1 || win1->numSegments != 1;
+    const bool fits =
+      !multi || (ncclGin_fitsOneSegment(win0, off0, bytes) && ncclGin_fitsOneSegment(win1, off1, bytes));
+    const bool samePath = __all_sync(~0u, multi) || !__any_sync(~0u, multi);
+    if (!__all_sync(~0u, fits) || !samePath) return optFlags & ~uint32_t(ncclGinOptFlagWarp);
+    return optFlags;
+  }
+}
 #endif
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -497,6 +521,11 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::put(
   using nccl::utility::loadConst;
   using nccl::gin::internal::teamRankToGinRank;
   ncclGinCtx_M<beMask> ctx = this->_makeCtx();
+  if (ncclGin_isCounter(localAction) ||
+      ncclGin_getSignalDescriptor(*this, remoteAction).type != NCCL_GIN_SIGNAL_TYPE_NONE) {
+    optFlags &= ~uint32_t(ncclGinOptFlagWarp);
+  }
+  optFlags = ncclGin_resolveWarpFlag<Coop>(optFlags, bufType, dstWin, dstOffset, srcWin, srcOffset, bytes);
   coop.sync();
   if (coop.thread_rank() == 0) {
     if (ncclGin_isDeviceOnly(bufType)) {
@@ -534,8 +563,9 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::put(
         bool doneSysmemFence = false;
         size_t remaining = bytes;
         cuda::thread_scope localRequiredRelease = requiredRelease;
+        const bool oneCall = optFlags & ncclGinOptFlagWarp;
 
-        while (remaining > 0) {
+        while (remaining > 0 || oneCall) {
           struct ncclSegmentWindow const& dstSegmentWindow = dstWin->ginMultiSegmentWins[dstSeg];
           struct ncclSegmentWindow const& srcSegmentWindow = srcWin->ginMultiSegmentWins[srcSeg];
           if (!doneSysmemFence && srcSegmentWindow.memType == CU_MEM_LOCATION_TYPE_HOST_NUMA) {
@@ -565,6 +595,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::put(
           nccl::gin::internal::advanceSegmentCursor(&srcSeg, &srcSegOffset, putSize, srcSegmentWindow.segmentSize);
           nccl::gin::internal::advanceSegmentCursor(&dstSeg, &dstSegOffset, putSize, dstSegmentWindow.segmentSize);
           localRequiredRelease = cuda::thread_scope_thread;
+          if (oneCall) break;
         }
       }
     }
@@ -829,6 +860,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::get(ncclTeam team, int peer
   using nccl::utility::loadConst;
   using nccl::gin::internal::teamRankToGinRank;
   ncclGinCtx_M<beMask> ctx = this->_makeCtx();
+  optFlags = ncclGin_resolveWarpFlag<Coop>(optFlags, bufType, remoteWnd, remoteOffset, localWnd, localOffset, bytes);
   coop.sync();
   if (ncclGin_isDeviceOnly(bufType)) {
     ncclGinCall<ncclGinApi_Get>(
@@ -853,8 +885,9 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::get(ncclTeam team, int peer
       size_t remoteSegOffset, localSegOffset;
       nccl::gin::internal::findSegmentFromWindow(remoteWnd, remoteOffset, &remoteSeg, &remoteSegOffset);
       nccl::gin::internal::findSegmentFromWindow(localWnd, localOffset, &localSeg, &localSegOffset);
+      const bool oneCall = optFlags & ncclGinOptFlagWarp;
       size_t remaining = bytes;
-      while (remaining > 0) {
+      while (remaining > 0 || oneCall) {
         struct ncclSegmentWindow const& remoteSegmentWindow = remoteWnd->ginMultiSegmentWins[remoteSeg];
         struct ncclSegmentWindow const& localSegmentWindow = localWnd->ginMultiSegmentWins[localSeg];
         const size_t remoteRemaining = remoteSegmentWindow.segmentSize - remoteSegOffset;
@@ -872,6 +905,7 @@ NCCL_DEVICE_INLINE void ncclGin_BackendMask<beMask>::get(ncclTeam team, int peer
         nccl::gin::internal::advanceSegmentCursor(&remoteSeg, &remoteSegOffset, getSize,
                                                   remoteSegmentWindow.segmentSize);
         nccl::gin::internal::advanceSegmentCursor(&localSeg, &localSegOffset, getSize, localSegmentWindow.segmentSize);
+        if (oneCall) break;
       }
     }
   }

@@ -49,6 +49,7 @@ enum ncclGinOptFlags {
   ncclGinOptFlagsDefault = 0,
   ncclGinOptFlagsMaySkipCreditCheck = (1 << 0),
   ncclGinOptFlagsAggregateRequests = (1 << 1),
+  ncclGinOptFlagWarp = (1 << 2),
 };
 
 #define NCCL_GIN_BACKEND_MASK_ALL \

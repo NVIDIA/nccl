@@ -95,7 +95,13 @@ NCCL_DEVICE_INLINE static void putImplMode(
       doca_gpu_dev_verbs_fence_release<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS>();
     }
 
-    if (hasWins) {
+    const bool warpPut = (optFlags & ncclGinOptFlagWarp) && hasWins && !hasSignal && !hasCounter &&
+                         __all_sync(~0u, bytes <= DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE);
+
+    if (warpPut) {
+      doca_gpu_dev_verbs_ticket_t ticket;
+      doca_gpu_dev_verbs_put_warp<resource_sharing_mode>(qp, raddr, laddr, bytes, &ticket, codeOpt);
+    } else if (hasWins) {
       if (hasSignal && hasCounter) {
         doca_gpu_dev_verbs_put_signal_counter<DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD, resource_sharing_mode>(
           qp, raddr, laddr, bytes, sig_raddr, sig_laddr, signalOpArg, companion_qp, counter_raddr, counter_laddr, 1,
@@ -276,9 +282,17 @@ NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer, 
     doca_gpu_dev_verbs_addr uninitialized_daddr{};
     doca_gpu_dev_verbs_ticket_t out_ticket;
     uint32_t codeOpt = nccl::gin::gdaki::docaOptFlagsFromGinOptFlags(optFlags);
-    doca_gpu_dev_verbs_get<doca_sharing_mode>(qp, raddr, laddr, bytes, uninitialized_daddr, &out_ticket, codeOpt);
-    // +1 so 0 means no gets; must be after get to avoid race with concurrent flushes
-    atomicMaxAtIndex<gin_sharing_mode>(loadConst(&gdaki->last_issued_get), peer, out_ticket + 1);
+    if ((optFlags & ncclGinOptFlagWarp) && __all_sync(~0u, bytes <= DOCA_GPUNETIO_VERBS_MAX_TRANSFER_SIZE)) {
+      doca_gpu_dev_verbs_get_warp<doca_sharing_mode>(qp, raddr, laddr, bytes, uninitialized_daddr, &out_ticket,
+                                                     codeOpt);
+      if (doca_gpu_dev_verbs_get_lane_id() == DOCA_GPUNETIO_VERBS_WARP_SIZE - 1)
+        atomicMaxAtIndex<gin_sharing_mode>(loadConst(&gdaki->last_issued_get), peer, out_ticket + 1);
+      __syncwarp();
+    } else {
+      doca_gpu_dev_verbs_get<doca_sharing_mode>(qp, raddr, laddr, bytes, uninitialized_daddr, &out_ticket, codeOpt);
+      // +1 so 0 means no gets; must be after get to avoid race with concurrent flushes
+      atomicMaxAtIndex<gin_sharing_mode>(loadConst(&gdaki->last_issued_get), peer, out_ticket + 1);
+    }
   }
   coop.sync();
 }

@@ -104,19 +104,19 @@ address peers.
 
    Returns the device-side multicast CFT team containing all the ranks that are part of the CFT multicast group.
 
-.. c:type:: ncclCftTeamMode_t
+.. c:enum:: ncclCftTeamMode_t
 
    Selects the CFT team layout returned by :c:func:`ncclTeamCft`.
 
-   .. c:macro:: NCCL_CFT_TEAM_FLAT
+   .. c:enumerator:: NCCL_CFT_TEAM_FLAT
 
       Flat CFT team includes all the ranks that are part of the CFT unicast group.
 
-   .. c:macro:: NCCL_CFT_TEAM_HIER_MULTIMEM
+   .. c:enumerator:: NCCL_CFT_TEAM_HIER_MULTIMEM
 
       Hierarchical CFT team includes ranks that are part of the CFT unicast group and share the same index across different multicast CFT groups.
 
-   .. c:macro:: NCCL_CFT_TEAM_HIER_LSA
+   .. c:enumerator:: NCCL_CFT_TEAM_HIER_LSA
 
       Hierarchical CFT team includes ranks that are part of the CFT unicast group and share the same index across different LSA groups.
 
@@ -217,7 +217,7 @@ CFT Operations
    .. cpp:function:: void putMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes)
 
       Multicast variant of :cpp:func:`ncclCft::put` where *leId* references a logical endpoint for which
-      the :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device communicator
+      the :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the :c:member:`ncclDevCommRequirements.cftCaps` bitmask at device communicator
       creation time.
 
    .. cpp:function:: void putMultimemCpMask(OpCoop coop, ncclCftLeId leId, size_t leOffset, void* smemSource, uint32_t bytes, uint16_t cpMask)
@@ -244,7 +244,7 @@ CFT Operations
    .. cpp:function:: void redMultimem(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemSource, uint32_t bytes)
 
       Multicast reduction variant of :cpp:func:`ncclCft::red` where *leId* references a logical endpoint for which
-      the :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device communicator creation
+      the :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the :c:member:`ncclDevCommRequirements.cftCaps` bitmask at device communicator creation
       time.
 
    .. cpp:function:: void pullRed(OpCoop coop, ncclCftLeId leId, size_t leOffset, RedOp const& red, void* smemDestination, uint32_t bytes)
@@ -252,10 +252,10 @@ CFT Operations
       Initiates an asynchronous reduction operation (see :ref:`cft_reduction_operators` for reduction tags and data types)
       for *bytes* bytes from the multicast logical endpoint referenced by *leId* at offset *leOffset* to the shared memory buffer
       referenced by *smemDestination*. *leId* references a logical endpoint for which the
-      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the :c:member:`ncclDevCommRequirements.cftCaps` bitmask at device
       communicator creation time.
 
-      *coop* must be ncclCoopWarp.
+      *coop* must be ``ncclCoopWarp``.
 
    .. cpp:function:: void submit(OpCoop coop)
 
@@ -282,7 +282,7 @@ CFT Operations
       *hasReport* is set to ``true`` and *report* is set to an error code that can be decoded via
       the ``cudaFabricOpErrorStatusGet/Count``.
 
-.. _cft_counted_operations:
+   .. _cft_counted_operations:
 
    .. cpp:function:: void putCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, void* smemSource, uint32_t bytes)
 
@@ -296,7 +296,7 @@ CFT Operations
 
       Multicast variant of :cpp:func:`ncclCft::putCounted` where *leId* references a logical endpoint for which the symmetric
       window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the
-      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the :c:member:`ncclDevCommRequirements.cftCaps` bitmask at device
       communicator creation time.
 
    .. cpp:function:: void redCounted(OpCoop coop, ncclCftLeId leId, size_t leOffset, size_t counterOffset, RedOp const& red, void* smemSource, uint32_t bytes)
@@ -311,7 +311,7 @@ CFT Operations
 
       Multicast variant of :cpp:func:`ncclCft::redCounted` where *leId* references a logical endpoint for which the symmetric
       window was registered using the :c:macro:`NCCL_WIN_CFT_COUNTED` flag and the
-      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the ``cftCaps`` bitmask at device
+      :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` bit was set in the :c:member:`ncclDevCommRequirements.cftCaps` bitmask at device
       communicator creation time.
 
    .. cpp:function:: void waitCounted(OpCoop coop, cuda::memory_order order, ncclMemProxyType consumer, uint64_t* counter, size_t expected, uint32_t* abortFlag)
@@ -328,7 +328,7 @@ CFT Operations
       used to order memory accesses from the *consumer* proxy after the wait. *counter* is a VA pointer referencing
       a user-managed counter in the symmetric window. *expected* indicates the number of bytes that the wait expects
       the *counter* to reach before returning control to the caller. *timeoutCycles* allows the wait to be interrupted
-      after the specified number of cycles has elapsed. If the wait is interrupted, the *ncclTimeout* code is returned.
+      after the specified number of cycles has elapsed. If the wait is interrupted, the ``ncclTimeout`` code is returned.
 
 ``smemSource`` and ``smemDestination`` pointers must be 16-byte aligned, and ``bytes`` must be a multiple of 16.
 CFT operates on shared memory; a typical kernel stages data through shared memory, issues one or more operations,

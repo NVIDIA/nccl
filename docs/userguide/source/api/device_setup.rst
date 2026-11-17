@@ -10,6 +10,14 @@ Host-Side Setup
 querying properties, and the requirement and property types. The :c:type:`ncclDevComm` structure is then passed to
 device code.
 
+ncclTeam
+--------
+
+.. c:type:: ncclTeam_t
+
+   Host-side typedef for ``struct ncclTeam``, describing a subset of communicator ranks.
+   See :cpp:struct:`ncclTeam` for its fields and :ref:`devapi_teams` for the predefined teams.
+
 ncclDevComm
 -----------
 
@@ -80,7 +88,7 @@ ncclDevCommRequirements
    .. c:member:: int lsaBarrierCount
 
       Specifies the number of memory barriers to allocate (see :cpp:class:`ncclLsaBarrierSession`). These barriers are
-      necessary to write fused kernel and may be required by building blocks such as those in :ref:`device_api_reducecopy`.
+      necessary to write fused kernels and may be required by building blocks such as those in :ref:`device_api_reducecopy`.
 
    .. c:member:: int railGinBarrierCount
 
@@ -90,6 +98,27 @@ ncclDevCommRequirements
    .. c:member:: int barrierCount
 
       Specifies the number of network/rail hybrid barriers to allocate (see :cpp:class:`ncclBarrierSession`; available since NCCL 2.28.7).
+
+   .. c:member:: int ginContextCount
+
+      Requested number of GIN contexts. The default is ``4``. This is a hint; after creation, use
+      :c:member:`ncclDevComm.ginContextCount` to obtain the available count.
+
+   .. c:member:: int ginQueueDepth
+
+      Requested GIN queue depth. The default, ``0``, leaves selection to the GIN provider.
+      Supported depths depend on the provider. When using ``ncclGinOptFlagsMaySkipCreditCheck``, callers
+      must keep outstanding requests within the queue's available capacity.
+
+   .. c:member:: bool ginExclusiveContexts
+
+      Leave this option at its initializer default, ``false``.
+
+   .. c:member:: int lsaLLA2ABlockCount
+   .. c:member:: int lsaLLA2ASlotCount
+
+      Leave these fields at their initializer defaults, ``0``. Request low-latency exchange resources
+      with :c:func:`ncclLLA2ACreateRequirement` instead.
 
    .. c:member:: int ginSignalCount
 
@@ -101,18 +130,18 @@ ncclDevCommRequirements
 
    .. c:member:: bool ginForceEnable
 
-      **Deprecated.** Forces GIN (GPU-Initiated Networking) support to be enabled by automatically setting
+      **Deprecated since NCCL 2.29.7.** Forces GIN (GPU-Initiated Networking) support to be enabled by automatically setting
       ``ginConnectionType`` to :c:enumerator:`NCCL_GIN_CONNECTION_FULL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_FULL>`. This field is deprecated in favor of explicitly
       setting :c:member:`ginConnectionType` to the desired value. When set to ``true``, it overrides the
       ``ginConnectionType`` field. New code should use :c:member:`ginConnectionType` directly instead of this field.
-      Available since NCCL 2.28.7, deprecated since NCCL 2.29.7.
+      Available since NCCL 2.28.7.
 
    .. c:member:: ncclGinConnectionType_t ginConnectionType
 
       Specifies the type of GIN connection to establish (see :c:enum:`ncclGinConnectionType_t`).
       If GIN resources are requested (e.g., ``ginSignalCount``, ``ginCounterCount``, ``barrierCount``, or
       ``railGinBarrierCount``) while this field is :c:enumerator:`NCCL_GIN_CONNECTION_NONE <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_NONE>`, device communicator
-      creation fails with :c:macro:`ncclInvalidArgument`. Available since NCCL 2.29.7.
+      creation fails with :c:enumerator:`ncclInvalidArgument <ncclResult_t.ncclInvalidArgument>`. Available since NCCL 2.29.7.
 
    .. c:member:: int ginCustomStride
 
@@ -121,7 +150,7 @@ ncclDevCommRequirements
 
    .. c:member:: int* ginCustomArray
 
-      An array of length :c:member:`ginCustomArrayCount` which contains a list peers to connect to.
+      An array of length :c:member:`ginCustomArrayCount` which contains a list of peers to connect to.
       This array is only valid when :c:member:`ginConnectionType` is
       :c:enumerator:`NCCL_GIN_CONNECTION_CUSTOM_ARRAY <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_CUSTOM_ARRAY>`.
       Connection requests must be bi-directional: if rank *j* appears in rank *i*'s array, rank *i* must also appear
@@ -133,11 +162,13 @@ ncclDevCommRequirements
 
    .. c:member:: ncclDevResourceRequirements_t* resourceRequirementsList
 
-      Specifies a list of resource requirements.  This is best set to NULL for now.
+      Linked list of additional resources to allocate during :c:func:`ncclDevCommCreate`. Use ``NULL``
+      when no additional resources are needed; see :ref:`device_api_resource_requirements`.
 
    .. c:member:: ncclTeamRequirements_t* teamRequirementsList
 
-      Specifies a list of requirements for particular teams.  This is best set to NULL for now.
+      Linked list of additional team requirements. Use ``NULL`` when no additional teams need resources;
+      see :c:type:`ncclTeamRequirements_t`.
 
    .. c:member:: int ginTrafficClass
 
@@ -239,9 +270,9 @@ ncclCommProperties_t
 
    .. c:member:: ncclGinType_t ginType
 
-      **Deprecated.** The GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
+      **Deprecated since NCCL 2.31.** The GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
       :c:type:`ncclDevComm` cannot be created with GIN connection type :c:enumerator:`NCCL_GIN_CONNECTION_FULL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_FULL>`.
-      Available since NCCL 2.29, deprecated since NCCL 2.31.
+      Available since NCCL 2.29.2.
       This field only reports a single GIN type and predates multi-backend GIN support. New code should use
       :c:member:`ginConnectionType` together with :c:member:`ginSupport` instead.
 
@@ -255,9 +286,9 @@ ncclCommProperties_t
 
    .. c:member:: ncclGinType_t railedGinType
 
-      **Deprecated.** The railed GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
+      **Deprecated since NCCL 2.31.** The railed GIN type supported by the communicator. If equal to :c:enumerator:`NCCL_GIN_TYPE_NONE <ncclGinType_t.NCCL_GIN_TYPE_NONE>`, a
       :c:type:`ncclDevComm` cannot be created with GIN connection type :c:enumerator:`NCCL_GIN_CONNECTION_RAIL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_RAIL>`.
-      Available since NCCL 2.29.7, deprecated since NCCL 2.31.
+      Available since NCCL 2.29.7.
       This field only reports a single GIN type and predates multi-backend GIN support. New code should use
       :c:member:`ginConnectionType` together with :c:member:`ginSupport` instead.
 
@@ -267,7 +298,7 @@ ncclCommProperties_t
 
    .. c:member:: int ginMinStride
 
-      The minimum value allowed for :c:member:`ginCustomStride`. This value is based
+      The minimum value allowed for :c:member:`ginCustomStride <ncclDevCommRequirements.ginCustomStride>`. This value is based
       on the network connectivity. For example, when :ref:`env_NCCL_CROSS_NIC` is ``0``, ``ginMinStride`` is increased so
       that strides spanning rail boundaries are not possible. ``ginMinStride`` is ``INT_MAX`` if GIN connectivity
       does not follow a uniform stride pattern, in which case :c:enumerator:`NCCL_GIN_CONNECTION_CUSTOM_STRIDE <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_CUSTOM_STRIDE>` cannot
@@ -281,14 +312,14 @@ ncclCommProperties_t
       :c:enumerator:`NCCL_GIN_CONNECTION_FULL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_FULL>`, or
       :c:enumerator:`NCCL_GIN_CONNECTION_RAIL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_RAIL>`). Use this field together with
       :c:member:`ginSupport` to determine which GIN backends are available before setting
-      :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>` on :c:type:`ncclDevCommRequirements_t`.
+      :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>` on :c:type:`ncclDevCommRequirements`.
       Available since NCCL 2.31.
 
    .. c:member:: bool ginSupport[64]
 
       Determines which GIN backends are supported.
       If ``ginSupport[gin_type]`` is ``true``, then ``gin_type`` is supported by every rank of the communicator.
-      The value ``gin_type`` is one of the values from :c:type:`ncclGinType_t`.
+      The value ``gin_type`` is one of the values from :c:enum:`ncclGinType_t`.
       See :ref:`deviceapi_gin_multi_backend`. Available since NCCL 2.31.
 
    .. c:member:: size_t devCommRuntimeVersionSize
@@ -376,6 +407,102 @@ ncclGinConnectionType_t
    .. c:enumerator:: NCCL_GIN_CONNECTION_CUSTOM_ARRAY
 
       Custom GIN connectivity. Each rank is connected to an arbitrary, user-specified set of peers. Available since NCCL 2.32.4.
+
+.. _device_api_resource_requirements:
+
+Additional Resource Requirements
+=================================
+
+Applications can request resources for custom teams or device communication sessions before calling
+:c:func:`ncclDevCommCreate`. Link resource requirements through ``resourceRequirementsList`` and team requirements
+through ``teamRequirementsList``. Keep the list entries and the objects referenced by their output pointers valid
+until communicator creation has completed. Resource handles and signal/counter ranges are ready for use after
+successful creation and remain valid until :c:func:`ncclDevCommDestroy`.
+
+.. c:type:: ncclDevResourceRequirements_t
+
+   A linked-list entry describing an additional allocation and GIN signals or counters.
+   Initialize the entry to zero before setting its fields, or use one of the requirement helpers below.
+
+   .. c:member:: ncclDevResourceRequirements_t* next
+
+      Next entry, or ``NULL`` to terminate the list.
+
+   .. c:member:: size_t bufferSize
+   .. c:member:: size_t bufferAlign
+
+      Allocation size and alignment in bytes.
+
+   .. c:member:: ncclDevResourceHandle_t* outBufferHandle
+
+      Optional output location for the allocation's resource handle.
+
+   .. c:member:: int ginSignalCount
+   .. c:member:: int ginCounterCount
+
+      Additional indexed GIN signals and counters required by the caller.
+
+   .. c:member:: ncclGinSignal_t* outGinSignalStart
+   .. c:member:: ncclGinCounter_t* outGinCounterStart
+
+      Optional output locations for the first index of each allocated range.
+
+.. c:type:: ncclTeamRequirements_t
+
+   A linked-list entry requesting resources for a team. Initialize the entry to zero before setting its fields.
+
+   .. c:member:: ncclTeamRequirements_t* next
+
+      Next entry, or ``NULL`` to terminate the list.
+
+   .. c:member:: ncclTeam_t team
+
+      Team for which resources are requested.
+
+   .. c:member:: bool multimem
+
+      Whether the team requires a multicast mapping.
+
+   .. c:member:: ncclMultimemHandle_t* outMultimemHandle
+
+      Optional output location for the multicast handle assigned during communicator creation.
+
+Barrier requirements
+---------------------
+
+.. c:function:: ncclResult_t ncclLsaBarrierCreateRequirement(ncclTeam_t team, int nBarriers, ncclLsaBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq)
+
+   Prepares *outReq* for *nBarriers* memory barriers over *team*. All team members must be load/store accessible.
+   Link *outReq* into the resource-requirements list before creating the device communicator. Keep *outHandle*
+   valid through creation, then pass it to an explicit-team :cpp:class:`ncclLsaBarrierSession` constructor.
+
+.. c:function:: ncclResult_t ncclGinBarrierCreateRequirement(ncclComm_t comm, ncclTeam_t team, int nBarriers, ncclGinBarrierHandle_t* outHandle, ncclDevResourceRequirements_t* outReq)
+
+   Prepares *outReq* for *nBarriers* GIN barriers over *team*. Request GIN connectivity covering every member
+   of *team*. Link *outReq* into the resource-requirements list and keep *outHandle* valid through creation.
+   The resulting handle can be passed to an explicit-team :cpp:class:`ncclGinBarrierSession` constructor.
+
+These helpers initialize *outReq*, including its ``next`` field. Link entries after calling the helper.
+All output pointers must be non-NULL, barrier counts must be non-negative, and the team layout must match
+across participating ranks. These calls prepare requirements; they do not create a device communicator.
+
+Low-latency exchange requirements
+----------------------------------
+
+.. c:type:: ncclLLA2AHandle_t
+
+   A handle for resources used by :cpp:class:`ncclLLA2ASession`.
+
+.. c:function:: int ncclLLA2ACalcSlots(int maxElts, int maxEltSize)
+
+   Returns the slot count needed for up to *maxElts* elements, each at most *maxEltSize* bytes.
+   Pass this result to :c:func:`ncclLLA2ACreateRequirement`. Include all element positions that the session will use.
+
+.. c:function:: ncclResult_t ncclLLA2ACreateRequirement(int nBlocks, int nSlots, ncclLLA2AHandle_t* outHandle, ncclDevResourceRequirements_t* outReq)
+
+   Prepares resources for *nBlocks* independent low-latency sessions with *nSlots* slots per block.
+   Both output pointers must be non-NULL. Link *outReq* into the resource-requirements list after this call
+   and keep *outHandle* valid until device communicator creation completes.
 
 .. _device_api_host_functions:
 

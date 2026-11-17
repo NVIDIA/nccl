@@ -16,6 +16,25 @@ Types and limits
    Opaque request storage initialized by a GIN operation (e.g., :cpp:func:`ncclGin::flushAsync`) and
    consumed by :cpp:func:`ncclGin::wait`.
 
+Shared-memory descriptors
+--------------------------
+
+.. cpp:struct:: ncclGinDescriptorSmem
+
+   Optional shared-memory storage for a GIN operation descriptor. Use of caller-supplied storage depends
+   on the backend and operation; backends that do not use it ignore it. For operations that use this storage,
+   declare an object in CUDA shared memory and keep it available until the operation has completed.
+   Concurrent operations must not reuse the same descriptor storage.
+
+.. cpp:struct:: ncclGin_DescriptorSmem
+
+   .. cpp:member:: ncclGinDescriptorSmem* descriptor
+
+      Pointer to the shared-memory descriptor storage supplied by the caller.
+
+Pass ``ncclGin_DescriptorSmem{&storage}`` as the *descriptor* argument of a GIN operation to use that storage.
+The default ``ncclGin_None{}`` requests no caller-supplied descriptor.
+
 ncclGin
 -------
 
@@ -23,13 +42,17 @@ ncclGin
 
    A class encompassing major elements of the GIN support.
 
-   .. cpp:function:: ncclGin(ncclDevComm const& comm, int contextIndex)
+   .. cpp:function:: ncclGin(ncclDevComm const&, int contextIndex, ncclGinResourceSharingMode resourceSharingMode = NCCL_GIN_RESOURCE_SHARING_GPU)
 
-      Initializes a new ``ncclGin`` object. *comm* is the device communicator created using :c:func:`ncclDevCommCreate`.
+      Initializes a new ``ncclGin`` object. The first argument is the device communicator created using :c:func:`ncclDevCommCreate`.
       *contextIndex* is the index of the GIN context -- a network communication channel.  Using multiple GIN contexts allows
       the implementation to spread traffic onto multiple connections, avoiding locking and bottlenecks.  Therefore,
       performance-oriented kernels should cycle among the available contexts to improve resource utilization (the number of
-      available contexts is available via :c:macro:`ginContextCount`).
+      available contexts is available via :c:member:`ncclDevComm.ginContextCount`).
+
+      *resourceSharingMode* selects the scope of resource sharing for this object: GPU-wide
+      (``NCCL_GIN_RESOURCE_SHARING_GPU``, the default), within a CTA (``NCCL_GIN_RESOURCE_SHARING_CTA``),
+      or per thread (``NCCL_GIN_RESOURCE_SHARING_THREAD``). It is selected per object, not per context.
 
       ``ncclGin`` always represents one specific context. To run a barrier whose fence covers every GIN context on the comm
       (useful when operations have been sharded across multiple contexts -- e.g. multi-NIC), pass
@@ -37,8 +60,11 @@ ncclGin
 
    .. cpp:function:: void put(ncclTeam team, int peer, ncclWindow_t dstWnd, size_t dstOffset, ncclWindow_t srcWnd, \
       size_t srcOffset, size_t bytes, \
-      RemoteAction remoteAction, LocalAction localAction, Coop coop, DescriptorSmem descriptor, \
-                      cuda::thread_scope alreadyReleased, cuda::thread_scope expected_scope, SegmentType bufType)
+      RemoteAction remoteAction = ncclGin_None{}, LocalAction localAction = ncclGin_None{}, \
+      Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, \
+      cuda::thread_scope givenRelease = cuda::thread_scope_thread, \
+      cuda::thread_scope requiredRelease = cuda::thread_scope_device, \
+      uint32_t optFlags = ncclGinOptFlagsDefault, SegmentType bufType = ncclGin_SegmentDevice{}) const
 
       Schedules a device-initiated, one-sided data transfer operation from a local buffer to a remote buffer on a peer.
 
@@ -47,14 +73,31 @@ ncclGin
       *srcOffset*).  *bytes* specifies the data transfer count in bytes. If GIN is initialized with connection
       type :c:enumerator:`NCCL_GIN_CONNECTION_RAIL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_RAIL>`, *peer* must be within the same rail team as the local rank.
 
-      Arguments beyond the first seven are optional.  *remoteAction* and *localAction* specify actions
-      to undertake on the destination peer and on the local rank when the payload has been settled and the input has been
-      consumed (respectively).  They default to ``ncclGin_None`` (no action); other options include
-      ``ncclGin_Signal{Inc|Add}`` (for *remoteAction*) and ``ncclGin_CounterInc`` (for *localAction*); see
-      :ref:`devapi_signals` below for more details.  *coop* indicates the set of threads participating in this operation (see
+      Arguments beyond the first seven are optional. *remoteAction* and *localAction* default to
+      ``ncclGin_None{}`` (no action). Other action types leave signals and counters unchanged.
+
+      *remoteAction* specifies a signal update on the destination peer after the payload has settled. Supported
+      signal actions include:
+
+      * Indexed signals: :cpp:struct:`ncclGin_StrongSignalInc`, :cpp:struct:`ncclGin_StrongSignalAdd`,
+        :cpp:struct:`ncclGin_WeakSignalInc`, and :cpp:struct:`ncclGin_WeakSignalAdd`.
+      * VA signals: :cpp:struct:`ncclGin_StrongVASignalInc`, :cpp:struct:`ncclGin_StrongVASignalAdd`,
+        :cpp:struct:`ncclGin_WeakVASignalInc`, and :cpp:struct:`ncclGin_WeakVASignalAdd`.
+
+      The :cpp:struct:`ncclGin_SignalInc`, :cpp:struct:`ncclGin_SignalAdd`,
+      :cpp:struct:`ncclGin_VASignalInc`, and :cpp:struct:`ncclGin_VASignalAdd` actions have been deprecated since NCCL 2.30.5
+      and remain supported.
+
+      *localAction* specifies a local counter update after the input has been consumed. The supported counter
+      actions are :cpp:struct:`ncclGin_WeakCounterInc` and :cpp:struct:`ncclGin_CounterInc`
+      (deprecated since NCCL 2.30.5).
+      See :ref:`Signals and Counters <devapi_signals>` below for the completion guarantees of signals and counters.
+
+      *coop* indicates the set of threads participating in this operation (see
       :ref:`devapi_coops`); it defaults to ``ncclCoopThread`` (a single device thread), which is the recommended model.
       *bufType* specifies the physical memory composition of the source and destination buffers (see
-      :ref:`devapi_segment_types`); it defaults to ``ncclGin_SegmentDevice``.
+      :ref:`devapi_segment_types`); it defaults to ``ncclGin_SegmentDevice``. *optFlags* is a bitwise OR of backend optimization flags
+      (see :ref:`gin_opt_flags`) and defaults to ``ncclGinOptFlagsDefault``.
 
       The visibility of the signal on the destination peer implies the visibility of the put data it is
       attached to. Depending on the signal type, the visibility of the signal may also imply the visibility
@@ -64,9 +107,21 @@ ncclGin
       buffers and expects size to be conveyed in terms of the number of elements instead of the byte count.  There are also
       two ``putValue`` variants that take a single element at a time (no greater than eight bytes), passed by value.
 
+   .. cpp:function:: template<typename T> void put(ncclTeam team, int peer, ncclSymPtr<T> dstElts, ncclSymPtr<T> srcElts, size_t nElts, RemoteAction remoteAction = ncclGin_None{}, LocalAction localAction = ncclGin_None{}, Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, cuda::thread_scope givenRelease = cuda::thread_scope_thread, cuda::thread_scope requiredRelease = cuda::thread_scope_device, uint32_t optFlags = ncclGinOptFlagsDefault, SegmentType bufType = ncclGin_SegmentDevice{}) const
+
+      Transfers *nElts* elements of type *T* between symbolic pointers. The remaining arguments have the same
+      meaning as in the window-and-offset overload; *peer* is a rank within *team*.
+
+   .. cpp:function:: template<typename T> void putValue(ncclTeam team, int peer, ncclWindow_t dstWnd, size_t dstOffset, T value, RemoteAction remoteAction = ncclGin_None{}, Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, cuda::thread_scope givenRelease = cuda::thread_scope_thread, cuda::thread_scope requiredRelease = cuda::thread_scope_device, uint32_t optFlags = ncclGinOptFlagsDefault) const
+   .. cpp:function:: template<typename T> void putValue(ncclTeam team, int peer, ncclSymPtr<T> dst, T value, RemoteAction remoteAction = ncclGin_None{}, Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, cuda::thread_scope givenRelease = cuda::thread_scope_thread, cuda::thread_scope requiredRelease = cuda::thread_scope_device, uint32_t optFlags = ncclGinOptFlagsDefault) const
+
+      Transfers the single *value* to rank *peer* of *team*. ``sizeof(T)`` must be at most eight bytes.
+      *dstOffset* is measured in bytes. The optional remote signal and ordering arguments have the same
+      meaning as in :cpp:func:`put`. These overloads have no local-counter action argument.
+
    .. cpp:function:: void get(ncclTeam team, int peer, ncclWindow_t remoteWnd, size_t remoteOffset, ncclWindow_t localWnd, \
       size_t localOffset, size_t bytes, Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, \
-      uint32_t optFlags = ncclGinOptFlagsDefault, SegmentType bufType = ncclGin_SegmentDevice{})
+      uint32_t optFlags = ncclGinOptFlagsDefault, SegmentType bufType = ncclGin_SegmentDevice{}) const
 
       Schedules a device-initiated, one-sided data transfer operation from a remote buffer to a local buffer
       (available since NCCL 2.30.3).
@@ -80,14 +135,14 @@ ncclGin
       *optFlags* is a bitwise OR of optional flags to the backend (see :ref:`gin_opt_flags`); it defaults to
       ``ncclGinOptFlagsDefault``.
 
-   .. cpp:function:: void flush(Coop coop, cuda::memory_order ord = cuda::memory_order_acquire)
+   .. cpp:function:: void flush(Coop coop, cuda::memory_order ord = cuda::memory_order_acquire, DescriptorSmem descriptor = ncclGin_None{}) const
 
       Ensures that all the pending transfer operations scheduled by any threads of *coop* are locally consumed. For put
       operations, this means that the source buffers are safe to reuse; this makes no claims regarding the completion
       status on the remote peer(s). For get operations, this means that the data is visible to the local rank.
 
    .. cpp:function:: void flushAsync(ncclTeam team, uint32_t peer, ncclGinRequest_t* request, Coop coop = ncclCoopThread{}, \
-        uint32_t optFlags = ncclGinOptFlagsDefault, DescriptorSmem descriptor = ncclGin_None{})
+        uint32_t optFlags = ncclGinOptFlagsDefault, DescriptorSmem descriptor = ncclGin_None{}) const
 
       Initiates a non-blocking flush operation for one peer (see :cpp:func:`ncclGin::flush`). *peer* is a rank within *team*
       (see :ref:`devapi_teams`). *request* is supplied by the caller and initialized by ``flushAsync``.
@@ -95,9 +150,20 @@ ncclGin
       Available since NCCL 2.30.3.
 
    .. cpp:function:: void wait(ncclGinRequest_t& request, Coop coop = ncclCoopThread{}, DescriptorSmem descriptor = ncclGin_None{}, \
-        cuda::memory_order ord = cuda::memory_order_acquire)
+        cuda::memory_order ord = cuda::memory_order_acquire) const
 
       Blocks until *request* is complete. Available since NCCL 2.30.3.
+
+   .. cpp:function:: ncclResult_t wait(ncclGinRequest_t& request, Coop coop, DescriptorSmem descriptor, cuda::memory_order ord, uint64_t timeoutCycles) const
+
+      Waits for *request*, returning :c:enumerator:`ncclTimeout <ncclResult_t.ncclTimeout>` if the wait exceeds
+      *timeoutCycles* device clock cycles. Check the returned status before reusing the associated buffers.
+
+   .. cpp:function:: ncclResult_t flush(Coop coop, cuda::memory_order ord, DescriptorSmem descriptor, uint64_t timeoutCycles) const
+
+      Waits for local completion with the same memory-ordering semantics as the void-returning overload.
+      Returns :c:enumerator:`ncclTimeout <ncclResult_t.ncclTimeout>` if the wait exceeds *timeoutCycles*
+      device clock cycles. A timeout does not establish completion or make outstanding buffers safe to reuse.
 
 .. _devapi_signals:
 
@@ -203,18 +269,18 @@ and writes to the address must be issued via GIN (i.e., a ``RemoteAction`` or GI
    .. cpp:member:: uint64_t value
 
 Since NCCL 2.30.5, these signal types are deprecated in favor of explicitly strong and weak signal objects.
-The strength of these signals is determined by the value of :c:member:`ginStrongSignalsRequired`
+The strength of these signals is determined by the value of :c:member:`ginStrongSignalsRequired <ncclDevCommRequirements.ginStrongSignalsRequired>`
 when creating the device communicator.
 
-**Signal methods of ncclGin:**
+**Signal methods of** :cpp:class:`ncclGin`:
 
-.. cpp:function:: void ncclGin::signal(ncclTeam team, int peer, RemoteAction remoteAction, Coop coop, \
-        DescriptorSmem descriptor, cuda::thread_scope alreadyReleased, \
-        cuda::thread_scope expected_scope)
+.. cpp:function:: void ncclGin::signal(ncclTeam team, int peer, RemoteAction remoteAction, Coop coop = ncclCoopThread{}, \
+        DescriptorSmem descriptor = ncclGin_None{}, cuda::thread_scope givenRelease = cuda::thread_scope_thread, \
+        cuda::thread_scope requiredRelease = cuda::thread_scope_device, uint32_t optFlags = ncclGinOptFlagsDefault) const
 
-.. cpp:function:: uint64_t ncclGin::readSignal(ncclGinSignal_t signal, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire)
-.. cpp:function:: void ncclGin::waitSignal(Coop coop, ncclGinSignal_t signal, uint64_t least, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire)
-.. cpp:function:: void ncclGin::resetSignal(ncclGinSignal_t signal)
+.. cpp:function:: uint64_t ncclGin::readSignal(ncclGinSignal_t signal, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire) const
+.. cpp:function:: void ncclGin::waitSignal(Coop coop, ncclGinSignal_t signal, uint64_t least, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire) const
+.. cpp:function:: void ncclGin::resetSignal(ncclGinSignal_t signal) const
 
 These are signal-specific methods of :cpp:class:`ncclGin`.  :cpp:func:`ncclGin::signal` implements an explicit signal notification without
 an accompanying data transfer operation; it takes a subset of arguments of :cpp:func:`ncclGin::put`.  :cpp:func:`ncclGin::readSignal` returns the
@@ -222,11 +288,49 @@ bottom *bits* of the value of the *signal*.  :cpp:func:`ncclGin::waitSignal` wai
 or exceed *least*.  Finally, :cpp:func:`ncclGin::resetSignal` resets the *signal* value to ``0`` (this method may not race with
 concurrent modifications to the signal).
 
-.. cpp:function:: uint64_t ncclGin::readSignal(ncclWindow_t signalWindow, size_t signalOffset, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire)
-.. cpp:function:: void ncclGin::waitSignal(Coop coop, ncclWindow_t signalWindow, size_t signalOffset, uint64_t least, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire)
-.. cpp:function:: void ncclGin::resetSignal(ncclWindow_t signalWindow, size_t signalOffset)
+.. cpp:function:: uint64_t ncclGin::readSignal(ncclWindow_t signalWindow, size_t signalOffset, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire) const
+.. cpp:function:: void ncclGin::waitSignal(Coop coop, ncclWindow_t signalWindow, size_t signalOffset, uint64_t least, int bits=64, cuda::memory_order ord = cuda::memory_order_acquire) const
+.. cpp:function:: void ncclGin::resetSignal(ncclWindow_t signalWindow, size_t signalOffset) const
 
 These are VA signal-specific methods of :cpp:class:`ncclGin`.
+
+.. cpp:function:: ncclResult_t ncclGin::waitSignal(Coop coop, ncclGinSignal_t signal, uint64_t least, int bits, cuda::memory_order ord, uint64_t timeoutCycles) const
+.. cpp:function:: ncclResult_t ncclGin::waitSignal(Coop coop, ncclWindow_t signalWindow, size_t signalOffset, uint64_t least, int bits, cuda::memory_order ord, uint64_t timeoutCycles) const
+
+   Waits for an indexed or VA signal using the same rolling comparison and memory ordering as the
+   void-returning overload. Returns :c:enumerator:`ncclTimeout <ncclResult_t.ncclTimeout>` if the wait exceeds
+   *timeoutCycles* device clock cycles. Check the status before consuming the data protected by the signal.
+
+Signal shadows
+^^^^^^^^^^^^^^
+
+Each indexed signal has a caller-accessible shadow value that can track the next expected signal value.
+The shadow is local bookkeeping; changing it does not send a signal to a peer.
+
+.. cpp:function:: uint64_t* ncclGin::getSignalShadowPtr(ncclGinSignal_t signal) const
+
+   Returns a pointer to the shadow of *signal*.
+
+.. cpp:function:: void ncclGin::increaseSignalShadow(ncclGinSignal_t signal, uint64_t delta) const
+
+   Adds *delta* to the shadow of *signal*.
+
+.. cpp:function:: void ncclGin::waitSignalMeetShadow(Coop coop, ncclGinSignal_t signal, int bits = 64, cuda::memory_order ord = cuda::memory_order_acquire) const
+
+   Waits until *signal* meets or exceeds its shadow value, using the same rolling comparison as
+   :cpp:func:`ncclGin::waitSignal`. The shadow value is unchanged.
+
+.. cpp:function:: template<typename Uint> void ncclGin::waitSignalFollowShadow(Coop coop, ncclGinSignal_t signal, Uint leastDelta, Uint* before, Uint* delta, int bits = 64, cuda::memory_order ord = cuda::memory_order_acquire) const
+
+   Waits for *signal* to advance by at least *leastDelta* beyond its shadow, then updates the shadow to the
+   observed value. Writes the previous shadow to *before* and the observed increment to *delta*, masked to
+   *bits*. Both output pointers must be valid for every participating thread. Coordinate shadow access
+   between callers to avoid concurrent updates of the same shadow.
+
+The indexed-signal overload of :cpp:func:`ncclGin::resetSignal` resets both the signal and its shadow to zero.
+
+Counters
+^^^^^^^^
 
 .. cpp:type:: ncclGinCounter_t
 
@@ -234,21 +338,71 @@ These are VA signal-specific methods of :cpp:class:`ncclGin`.
    remote actions.  Like signals, they use "rolling" comparison logic, but they are limited to storing values of at most 56
    bits.
 
-.. cpp:struct:: ncclGin_CounterInc
+.. cpp:struct:: ncclGin_WeakCounterInc
 
    .. cpp:member:: ncclGinCounter_t counter
 
-This object can be passed as the *localAction* argument of methods such as :cpp:func:`ncclGin::put`.  It is the only action
-defined for counters.
+This object can be passed as the *localAction* argument of methods such as :cpp:func:`ncclGin::put`.
+The counter increment guarantees that the bundled put is locally complete; it does not guarantee completion
+of preceding puts.
 
-**Counter methods of ncclGin:**
+.. cpp:struct:: ncclGin_CounterInc
 
-.. cpp:function:: uint64_t ncclGin::readCounter(ncclGinCounter_t counter, int bits=56, cuda::memory_order ord = cuda::memory_order_acquire)
-.. cpp:function:: void ncclGin::waitCounter(Coop coop, ncclGinCounter_t counter, uint64_t least, int bits=56, cuda::memory_order ord = cuda::memory_order_acquire)
-.. cpp:function:: void ncclGin::resetCounter(ncclGinCounter_t counter)
+   .. deprecated:: 2.30.5
+
+      Use :cpp:struct:`ncclGin_WeakCounterInc` instead.
+
+   .. cpp:member:: ncclGinCounter_t counter
+
+**Counter methods of** :cpp:class:`ncclGin`:
+
+.. cpp:function:: uint64_t ncclGin::readCounter(ncclGinCounter_t counter, int bits=56, cuda::memory_order ord = cuda::memory_order_acquire) const
+.. cpp:function:: void ncclGin::waitCounter(Coop coop, ncclGinCounter_t counter, uint64_t least, int bits=56, cuda::memory_order ord = cuda::memory_order_acquire) const
+.. cpp:function:: void ncclGin::resetCounter(ncclGinCounter_t counter) const
 
 These are counter-specific methods of :cpp:class:`ncclGin` and they are functionally equivalent to their signal
 counterparts discussed above.
+
+.. cpp:function:: ncclResult_t ncclGin::waitCounter(Coop coop, ncclGinCounter_t counter, uint64_t least, int bits, cuda::memory_order ord, uint64_t timeoutCycles) const
+
+   Waits for the counter using the same comparison and memory-ordering rules as the void-returning overload.
+   Returns :c:enumerator:`ncclTimeout <ncclResult_t.ncclTimeout>` if the wait exceeds *timeoutCycles*
+   device clock cycles. A timeout does not establish local completion of the outstanding transfers.
+
+ncclGinBarrier
+--------------
+
+.. cpp:struct:: ncclGinAllContexts
+
+   .. cpp:function:: ncclGinAllContexts(ncclDevComm const& comm_)
+
+      Selects every GIN context of *comm_* for the barrier fence.
+
+   A :c:type:`ncclDevComm` can also be passed directly to :cpp:func:`ncclGinBarrier` or a
+   :cpp:class:`ncclGinBarrierSession` constructor in place of ``ncclGinAllContexts``. It is implicitly
+   converted to ``ncclGinAllContexts`` and selects every GIN context of that device communicator.
+   The device communicator must remain valid for the lifetime of the barrier session.
+
+.. cpp:function:: template<typename Coop> void ncclGinBarrier(Coop coop, ncclGin gin, ncclTeamTagWorld tag, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
+
+.. cpp:function:: template<typename Coop> void ncclGinBarrier(Coop coop, ncclGinAllContexts gin, ncclTeamTagWorld tag, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
+
+   Constructs, synchronizes, and destroys a world-team barrier session. The ``ncclGin`` variant fences
+   one context; the ``ncclGinAllContexts`` variant fences every context of the communicator.
+   The *index* selects a barrier slot reserved through :c:member:`ncclDevCommRequirements.worldGinBarrierCount`.
+   The *fence* has the same meaning as in :cpp:func:`ncclGinBarrierSession::sync`.
+   Overloads also accept ``ncclTeamTagRail``, or an explicit ``ncclTeam`` and ``ncclGinBarrierHandle``.
+
+.. cpp:function:: template<typename Coop> void ncclGinBarrier(Coop coop, ncclGin gin, ncclTeamTagRail tag, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
+.. cpp:function:: template<typename Coop> void ncclGinBarrier(Coop coop, ncclGinAllContexts gin, ncclTeamTagRail tag, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
+
+   Rail-team variants. Reserve the barrier slots through ``railGinBarrierCount``.
+
+.. cpp:function:: template<typename Coop> void ncclGinBarrier(Coop coop, ncclGin gin, ncclTeam team, ncclGinBarrierHandle handle, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
+.. cpp:function:: template<typename Coop> void ncclGinBarrier(Coop coop, ncclGinAllContexts gin, ncclTeam team, ncclGinBarrierHandle handle, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
+
+   Explicit-team variants. *handle* must identify barriers allocated for *team*; *index* must be within
+   the allocated barrier count.
 
 ncclGinBarrierSession
 ---------------------
@@ -260,16 +414,29 @@ ncclGinBarrierSession
    .. cpp:function:: ncclGinBarrierSession(Coop coop, ncclGin gin, ncclTeamTagRail tag, uint32_t index)
 
       Initializes a new network barrier session.  *coop* represents a cooperative group (see :ref:`devapi_coops`).  *gin* is
-      a previously initialized :cpp:class:`ncclGin` object.  *ncclTeamTagRail* indicates that the barrier will apply to all
+      a previously initialized :cpp:class:`ncclGin` object.  ``ncclTeamTagRail`` indicates that the barrier will apply to all
       peers on the same rail as the local rank (see :ref:`devapi_teams`).  *index* identifies the underlying barrier to use
       (it should be different for each *coop*; typically set to ``blockIdx.x`` to ensure uniqueness between CTAs).
+
+   .. cpp:function:: ncclGinBarrierSession(Coop coop, ncclGin gin, ncclTeamTagWorld tag, uint32_t index)
+
+      Initializes a world-team session. Reserve *index* through ``worldGinBarrierCount`` when creating
+      the device communicator.
+
+   .. cpp:function:: ncclGinBarrierSession(Coop coop, ncclGinAllContexts gin, ncclTeamTagWorld tag, uint32_t index)
+   .. cpp:function:: ncclGinBarrierSession(Coop coop, ncclGinAllContexts gin, ncclTeamTagRail tag, uint32_t index)
+   .. cpp:function:: ncclGinBarrierSession(Coop coop, ncclGinAllContexts gin, ncclTeam team, ncclGinBarrierHandle handle, uint32_t index)
+
+      Initializes a session whose fence covers every GIN context of the communicator.
+      The team, barrier handle, and index requirements match the corresponding single-context constructor.
 
    .. cpp:function:: ncclGinBarrierSession(Coop coop, ncclGin gin, ncclTeam team, ncclGinBarrierHandle handle, uint32_t index)
 
       Initializes a new network barrier session.  This is the general-purpose variant to be used, e.g., when communicating
       with ranks from the world team (see :ref:`devapi_teams`), whereas the previous variant was specific to the rail team.
       This variant expects *team* to be passed as an argument, and also takes an extra *handle* argument indicating the
-      location of the underlying barriers (typically set to the ``railGinBarrier`` field of the device communicator).
+      location of the underlying barriers. Use ``worldGinBarrier`` for the world team or ``railGinBarrier``
+      for the rail team; the handle must match *team*.
 
    .. cpp:function:: void sync(Coop coop, cuda::memory_order order, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
 
@@ -285,8 +452,15 @@ ncclGinBarrierSession
         landed in the calling rank's local memory.
 
       The fence values are bit flags and compose via bitwise OR. To request both ``Put`` and ``Get`` semantics, pass
-      ``ncclGinFenceLevel::Put | ncclGinFenceLevel::Get``. ``ncclGinFenceLevel::Relaxed`` is preserved as a deprecated alias
-      for ``None`` for source-level backward compatibility; new code should use ``None``.
+      ``ncclGinFenceLevel::Put | ncclGinFenceLevel::Get``. ``ncclGinFenceLevel::Relaxed`` has been deprecated since
+      NCCL 2.30.5 and is preserved as an alias for ``None`` for source-level backward compatibility;
+      new code should use ``None``.
+
+   .. cpp:function:: ncclResult_t sync(Coop coop, cuda::memory_order order, ncclGinFenceLevel fence, uint64_t timeoutCycles)
+
+      Synchronizes with the selected fence semantics and a timeout measured in device clock cycles.
+      A :c:enumerator:`ncclTimeout <ncclResult_t.ncclTimeout>` result does not establish barrier completion.
+      All participating threads must call the overload together and check the result before using protected data.
 
 .. c:type:: ncclGinBarrierHandle_t
 
@@ -336,10 +510,26 @@ ncclBarrierSession
       default as in :cpp:func:`ncclGinBarrierSession::sync`.
 
       The selected barrier implementation is decided at run-time from the session's team, the GIN connectivity of the device communicator
-      (see :c:member:`ginConnectionType`), and *fence*.
+      (see :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>`), and *fence*.
 
    .. cpp:function:: ncclLsaBarrierSession<Coop>& lsaBarrier()
    .. cpp:function:: ncclGinBarrierSession<Coop>& ginBarrier()
 
       Returns the reference to the memory barrier or the rail network barrier underlying this hybrid session, so that it can be
       driven individually.
+
+   .. cpp:function:: ncclResult_t sync(Coop coop, cuda::memory_order order, ncclGinFenceLevel fence, uint64_t timeoutCycles)
+
+      Timeout-returning hybrid synchronization. *timeoutCycles* bounds the wait in device clock cycles.
+      Check the returned status; :c:enumerator:`ncclTimeout <ncclResult_t.ncclTimeout>` does not establish
+      synchronization or completion of the operations covered by *fence*.
+
+ncclBarrier
+------------
+
+.. cpp:function:: template<typename Coop> void ncclBarrier(Coop coop, ncclTeamTagWorld tag, ncclGin gin, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get, bool multimem = false)
+.. cpp:function:: template<typename Coop> void ncclBarrier(Coop coop, ncclTeamTagRail tag, ncclGin gin, uint32_t index, cuda::memory_order order = cuda::memory_order_acq_rel, ncclGinFenceLevel fence = ncclGinFenceLevel::Put | ncclGinFenceLevel::Get)
+
+   Performs a single hybrid barrier using :cpp:class:`ncclBarrierSession`. The arguments and resource requirements
+   match the corresponding session constructor and :cpp:func:`ncclBarrierSession::sync`. All threads in *coop*
+   and all ranks of the selected team must participate.

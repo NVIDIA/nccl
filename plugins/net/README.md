@@ -29,7 +29,7 @@ setting `NCCL_NET_PLUGIN` will allow users to select the right plugin.
 
 ## Struct versioning
 
-Once a library is found, NCCL will look for a symbol named `ncclNet_vX`, with `X` increasing
+Once a library is found, NCCL will look for a symbol named `ncclNetPlugin_vX`, with `X` increasing
 over time. The versioning ensures that the plugin and the NCCL core are compatible.
 
 Plugins are encouraged to provide multiple of those symbols, implementing multiple versions
@@ -127,7 +127,7 @@ typedef struct {
 
 ## Error codes
 
-All plugins functions use NCCL error codes as return value. `ncclSuccess` should be returned upon
+All plugin functions use NCCL error codes as their return value. `ncclSuccess` should be returned upon
 success.
 
 Otherwise, plugins can return one of the following:
@@ -165,7 +165,7 @@ Once the connection is established, communication will be done using the functio
 `irecv` and `test`. Prior to calling `isend` or `irecv`, NCCL will call the `regMr` function on
 all buffers to allow RDMA NICs to prepare buffers. `deregMr` will be used to unregister buffers.
 
-In certain conditions, `iflush` will be called after a receive calls completes to allow the network
+In certain conditions, `iflush` will be called after a receive call completes to allow the network
 plugin to flush data and ensure the GPU will observe the newly written data.
 
 To close the connections NCCL will call `closeListen` to close the object returned by `listen`,
@@ -197,7 +197,7 @@ such as `listen` and `connect`. Every context is uniquely associated to a commun
 using the commId. The network can also be initialized with a per communicator configuration using
 the `config` argument.
 
-To allow the plugin logs to integrate into the NCCL logs seemlessly, NCCL provides a logging
+To allow the plugin logs to integrate into the NCCL logs seamlessly, NCCL provides a logging
 function to `init`. This function is typically used to allow for `INFO` and `WARN` macros within
 the plugin code adding the following definitions:
 
@@ -230,7 +230,7 @@ be `NULL`.
 
 The `guid` field is used to determine when network adapters are connected to multiple PCI
 endpoints. For normal cases, it can be set to the device number. If multiple network devices have
-the same guid, then NCCL will consider the are sharing the same network port to the fabric, hence
+the same guid, then NCCL will consider that they are sharing the same network port to the fabric, hence
 it will not use the port multiple times.
 
 The `ptrSupport` field indicates whether or not CUDA pointers are supported. If so, it should be
@@ -249,7 +249,7 @@ The call to ncclCommDeregister should call the final deregMr() and effectively r
 on the network adapter.
 
 The `forceFlush` field can request the NCCL core to call flush for all transfers. By default,
-flushes are only called when the GPU architecture or PCI topology would not not guarantee correct
+flushes are only called when the GPU architecture or PCI topology would not guarantee correct
 PCI ordering. Plugins can set it to one if the NIC operates in a mode where e.g. the data and the
 completion paths use different PCI links and therefore need a call to flush() to guarantee
 ordering.
@@ -272,7 +272,7 @@ receive).
 The `netDeviceType` indicates which type of device networking this plugin supports. The current supported
 options are `NCCL_NET_DEVICE_HOST` and `NCCL_NET_DEVICE_UNPACK`.
 
-The `netDeviceVersion` indicates the version of device networking this plugin supports. Currently, this must match the associated netDeviceVersion of this netDeviceType compiled into NCCL core. Net device functionality is built as apart of NCCL core's device code.
+The `netDeviceVersion` indicates the version of device networking this plugin supports. Currently, this must match the associated netDeviceVersion of this netDeviceType compiled into NCCL core. Net device functionality is built as a part of NCCL core's device code.
 
 The `maxP2pBytes` and `maxCollBytes` fields indicate the maximum size the plugin can handle for
 point-to-point and collective calls. This will tell the NCCL core to cut large operations into
@@ -282,7 +282,7 @@ multiple smaller chunks if needed.
 
 ### Connection establishment
 
-Connections are used in an unidirectional manner. There is therefore a sender side and a receiver
+Connections are used in a unidirectional manner. There is therefore a sender side and a receiver
 side.
 
 `listen`
@@ -301,7 +301,7 @@ be `NULL` if the call succeeds.
 NCCL will use its bootstrap infrastructure to provide the `handle` to the sender side, then call
 `connect` on the sender side on a given device index `dev`, providing the `handle`. `connect`
 should not block either, and instead set `sendComm` to `NULL` and return `ncclSuccess`. In that
-case, NCCL will call `accept` again until it succeeds.
+case, NCCL will call `connect` again until it succeeds.
 
 `accept`
 

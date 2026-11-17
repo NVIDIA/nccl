@@ -2750,6 +2750,12 @@ static ncclResult_t p2pTaskAppend(struct ncclComm* comm, struct ncclInfo* info, 
   NCCLCHECK(ncclProfilerRecordGroupApiEventState(ncclProfilerGroupStartApiStop));
 
   NCCLCHECK(ncclProfilerStartP2pApiEvent(info, isGraphCaptured));
+  if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
+    INFO(NCCL_P2P | NCCL_ENV,
+         "Comm config graphUsageMode is set to %d but the user is capturing graphs on the stream. Violating "
+         "graphUsageMode semantics can lead to hangs!",
+         info->comm->config.graphUsageMode);
+  }
 
   struct ncclTaskP2p* p2p = ncclMemoryPoolAlloc<struct ncclTaskP2p>(&comm->memPool_ncclTaskP2p, &comm->memPermanent);
   p2p->func = coll;
@@ -2841,6 +2847,12 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
   NCCLCHECK(ncclProfilerStartGroupApiEvent(info, isGraphCaptured));
   NCCLCHECK(ncclProfilerRecordGroupApiEventState(ncclProfilerGroupStartApiStop));
   NCCLCHECK(ncclProfilerStartCollApiEvent(info, isGraphCaptured));
+  if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
+    INFO(NCCL_COLL | NCCL_ENV,
+         "Comm config graphUsageMode is set to %d but the user is capturing graphs on the stream. Violating "
+         "graphUsageMode semantics can lead to hangs!",
+         info->comm->config.graphUsageMode);
+  }
 
   // Plain broadcasts (no user config) use the batched-broadcast (AllGatherV) optimization. A config
   // that sets only the observational profiler tag is schedule-neutral, so admit it too and carry the
@@ -2988,6 +3000,12 @@ static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* inf
   NCCLCHECK(ncclProfilerStartGroupApiEvent(info, isGraphCaptured));
   NCCLCHECK(ncclProfilerRecordGroupApiEventState(ncclProfilerGroupStartApiStop));
   NCCLCHECK(ncclProfilerStartCollApiEvent(info, isGraphCaptured));
+  if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
+    INFO(NCCL_COLL | NCCL_ENV,
+         "Comm config graphUsageMode is set to %d but the user is capturing graphs on the stream. Violating "
+         "graphUsageMode semantics can lead to hangs!",
+         info->comm->config.graphUsageMode);
+  }
 
   t = ncclMemoryPoolAlloc<struct ncclTaskColl>(&comm->memPool_ncclTaskColl, &comm->memPermanent);
 

@@ -1348,73 +1348,78 @@ ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan) {
 }
 
 ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) {
+    // Captured callbacks may not run on every rank.
+    if (!plan->persistent) {
+      for (struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue); ct != nullptr; ct = ct->next) {
+        // RAS also uses these counters when no profiler plugin is loaded.
+        COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
+      }
+    }
+    return ncclSuccess;
+  }
   TIME_START_EVENT(taskStart);
   struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
   while (ct) {
-    if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-      int enable = ct->eActivationMask & profilerEventGate(ncclProfileColl);
-      if (enable) {
-        ncclProfilerEventDescr_t eDescr = {0};
-        eDescr.type = ncclProfileColl;
-        eDescr.rank = plan->comm->rank;
-        eDescr.coll.seqNumber = plan->comm->seqNumber[ct->func];
-        eDescr.coll.func = ncclFuncToString(ct->func);
-        eDescr.coll.sendBuff = ct->sendbuff;
-        eDescr.coll.recvBuff = ct->recvbuff;
-        eDescr.coll.count = ct->count;
-        eDescr.coll.root = ct->root;
-        eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
-        eDescr.coll.nChannels = ct->nChannels;
-        eDescr.coll.nWarps = ct->nWarps;
-        eDescr.coll.isSymColl = plan->isSymColl;
-        if (plan->isSymColl) {
-          const char* variant = ncclSymkKernelIdToString(static_cast<int>(ct->devFuncId));
-          eDescr.coll.kernelVariant = variant;
-          const char* underscore = strchr(variant, '_');
-          eDescr.coll.algo = underscore ? underscore + 1 : variant;
-          eDescr.coll.proto = "";
-        } else {
-          eDescr.coll.algo = ncclAlgoToString(ct->algorithm);
-          eDescr.coll.proto = ncclProtoToString(ct->protocol);
-          eDescr.coll.kernelVariant = nullptr;
-        }
-        eDescr.coll.userTag = ct->profilerTag;
-        profilerStart(plan->comm->profilerContext, &ct->eventHandle, &eDescr, &ct->collApiEventHandle,
-                      &plan->groupEventHandle);
+    int enable = ct->eActivationMask & profilerEventGate(ncclProfileColl);
+    if (enable) {
+      ncclProfilerEventDescr_t eDescr = {0};
+      eDescr.type = ncclProfileColl;
+      eDescr.rank = plan->comm->rank;
+      eDescr.coll.seqNumber = plan->comm->seqNumber[ct->func];
+      eDescr.coll.func = ncclFuncToString(ct->func);
+      eDescr.coll.sendBuff = ct->sendbuff;
+      eDescr.coll.recvBuff = ct->recvbuff;
+      eDescr.coll.count = ct->count;
+      eDescr.coll.root = ct->root;
+      eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
+      eDescr.coll.nChannels = ct->nChannels;
+      eDescr.coll.nWarps = ct->nWarps;
+      eDescr.coll.isSymColl = plan->isSymColl;
+      if (plan->isSymColl) {
+        const char* variant = ncclSymkKernelIdToString(static_cast<int>(ct->devFuncId));
+        eDescr.coll.kernelVariant = variant;
+        const char* underscore = strchr(variant, '_');
+        eDescr.coll.algo = underscore ? underscore + 1 : variant;
+        eDescr.coll.proto = "";
+      } else {
+        eDescr.coll.algo = ncclAlgoToString(ct->algorithm);
+        eDescr.coll.proto = ncclProtoToString(ct->protocol);
+        eDescr.coll.kernelVariant = nullptr;
       }
+      eDescr.coll.userTag = ct->profilerTag;
+      profilerStart(plan->comm->profilerContext, &ct->eventHandle, &eDescr, &ct->collApiEventHandle,
+                    &plan->groupEventHandle);
     }
-    // seqNumber is updated even if the plugin is not active; RAS uses it too.
-    // Skip persistent (graph-captured) collectives: this function may not run
-    // on every rank, which would mismatch counters and false-positive in RAS.
-    // KernelCh is the exception because it forces proxy events on all ranks.
-    if (!plan->persistent || (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-                              (profilerLive(&plan->groupEventHandle) || profilerLive(&ct->collApiEventHandle)) &&
-                              (ct->eActivationMask & ncclProfileKernelCh)))
+    // Start callbacks must see the sequence number before this increment.
+    // Captured callbacks may not run on every rank; KernelCh is the
+    // exception because it forces proxy events on all ranks.
+    if (!plan->persistent || ((profilerLive(&plan->groupEventHandle) || profilerLive(&ct->collApiEventHandle)) &&
+                              (ct->eActivationMask & ncclProfileKernelCh))) {
       COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
+    }
     ct = ct->next;
   }
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
-    while (pt) {
-      int enable = pt->eActivationMask & profilerEventGate(ncclProfileP2p);
-      uint8_t profNChannels = pt->nChannels;
-      if (pt->eActivationMask & ncclProfileKernelCh) profNChannels = (uint8_t)countOneBits(pt->channelMask);
-      if (enable) {
-        ncclProfilerEventDescr_t eDescr = {0};
-        eDescr.type = ncclProfileP2p;
-        eDescr.rank = plan->comm->rank;
-        eDescr.p2p.func = ncclFuncToString(pt->func);
-        eDescr.p2p.buff = pt->buff;
-        eDescr.p2p.count = pt->count;
-        eDescr.p2p.datatype = ncclDatatypeToString(pt->datatype);
-        eDescr.p2p.peer = pt->root;
-        eDescr.p2p.nChannels = profNChannels;
-        eDescr.p2p.userTag = pt->profilerTag;
-        profilerStart(plan->comm->profilerContext, &pt->eventHandle, &eDescr, &pt->p2pApiEventHandle,
-                      &plan->groupEventHandle);
-      }
-      pt = pt->next;
+  struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
+  while (pt) {
+    int enable = pt->eActivationMask & profilerEventGate(ncclProfileP2p);
+    uint8_t profNChannels = pt->nChannels;
+    if (pt->eActivationMask & ncclProfileKernelCh) profNChannels = (uint8_t)countOneBits(pt->channelMask);
+    if (enable) {
+      ncclProfilerEventDescr_t eDescr = {0};
+      eDescr.type = ncclProfileP2p;
+      eDescr.rank = plan->comm->rank;
+      eDescr.p2p.func = ncclFuncToString(pt->func);
+      eDescr.p2p.buff = pt->buff;
+      eDescr.p2p.count = pt->count;
+      eDescr.p2p.datatype = ncclDatatypeToString(pt->datatype);
+      eDescr.p2p.peer = pt->root;
+      eDescr.p2p.nChannels = profNChannels;
+      eDescr.p2p.userTag = pt->profilerTag;
+      profilerStart(plan->comm->profilerContext, &pt->eventHandle, &eDescr, &pt->p2pApiEventHandle,
+                    &plan->groupEventHandle);
     }
+    pt = pt->next;
   }
   TIME_STOP_EVENT(taskStart);
   return ncclSuccess;

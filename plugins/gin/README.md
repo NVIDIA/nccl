@@ -318,6 +318,9 @@ this flag is specified (and rings it once for all requests when the flag is no l
 If a user posts N requests, this flag can be used for (N - 1) requests.
 However, the Nth request must not use this flag to ensure that the doorbell is rung.
 
+* `ncclGinOptFlagWarp`. All 32 warp lanes post a `put` or `get` together (same peer,
+message sizes may differ), so a backend may post them with one cooperative reservation.
+
 ## Types summary
 
 Many GIN objects need host and device descriptors. Here is a summary:

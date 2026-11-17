@@ -107,3 +107,9 @@ Backends may ignore flags they do not support. Flags may be combined with a bitw
    Implementations can reduce overhead by delaying some logic until after the batch is complete.
    For example, if a user posts N requests, this flag can be used for (N - 1) requests.
    However, the Nth request must not use this flag to ensure correctness.
+
+.. cpp:enumerator:: ncclGinOptFlagWarp
+
+   Lets the 32 lanes of a warp post their ``put`` or ``get`` requests together.
+   All 32 lanes must make the call together, pass this flag and target the same peer; each lane may transfer a
+   different number of bytes.

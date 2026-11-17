@@ -1456,10 +1456,10 @@ fail:
   if (!ipcExpInfo->legacyIpcCap) {
     size_t offset = 0;
     for (int segment = 0; segment < numSegments; segment++) {
-      if (mapped[segment]) {
+      if (mapped && mapped[segment]) {
         CUCHECKIGNORE(cuMemUnmap((CUdeviceptr)regAddr + offset, ipcExpInfo[segment].size));
       }
-      if (imported[segment]) {
+      if (imported && imported[segment]) {
         CUCHECKIGNORE(cuMemRelease(segmentHandles[segment]));
       }
     }

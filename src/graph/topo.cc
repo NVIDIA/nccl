@@ -1778,7 +1778,7 @@ static ncclResult_t ncclTopoPopulateNics(ncclXml* xml, int startIndex, int endIn
     }
 
     NCCLCHECK(xmlSetAttrInt(netNode, "dev", n));
-    NCCLCHECK(xmlInitAttrInt(netNode, "latency", props.latency));
+    NCCLCHECK(xmlInitAttrFloat(netNode, "latency", props.latency));
     NCCLCHECK(xmlInitAttrInt(netNode, "speed", props.speed));
     NCCLCHECK(xmlInitAttrInt(netNode, "port", props.port));
     // Overwrite stale GUID from topo injection if it exists

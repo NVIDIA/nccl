@@ -379,7 +379,7 @@ static ncclResult_t symSchedBuildKernelPlan(struct ncclComm* comm, struct ncclSy
     workBufPtr = ncclSymkGetWorks(argsBuf, totalChannels);
   }
 
-  remainCell = cellPerChannel = DIVUP(DIVUP(totalCount, totalChannels), cellCount);
+  remainCell = cellPerChannel = ncclSymkCellsPerChannel(totalCount, totalChannels, cellCount);
 
   while (workIndex < nWorks) {
     struct ncclSymkDevWork devWork = {};
@@ -429,7 +429,7 @@ static ncclResult_t symSchedBuildKernelPlan(struct ncclComm* comm, struct ncclSy
         break;
       } else {
         cellLeft -= remainCell;
-        workRangePtr[curChannel].fracHi = uint16_t(DIVUP(0x10000L * (taskCell - cellLeft), taskCell) - 1);
+        workRangePtr[curChannel].fracHi = uint16_t(ncclSymkCellFraction(taskCell - cellLeft, taskCell) - 1);
         remainCell = cellPerChannel;
         curChannel++;
         curChannelWork = 0;

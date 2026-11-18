@@ -38,13 +38,13 @@ struct ncclSymkWorkArgsHandler {
       fracLo = 0;
     }
     struct ncclSymkDevWork const& dwLo = devWork[workLo];
-    indexLo = ((fracLo * divUp(dwLo.nElts, EltPerCell)) >> 16) * EltPerCell;
+    indexLo = ncclSymkFractionCell(fracLo, divUp(dwLo.nElts, EltPerCell)) * EltPerCell;
 
     // Where the work ends
     workHi = channelWorkRange[block].workHi;
     fracHi = channelWorkRange[block].fracHi + 1;
     struct ncclSymkDevWork const& dwHi = devWork[workHi];
-    indexHi = min(((fracHi * divUp(dwHi.nElts, EltPerCell)) >> 16) * EltPerCell, dwHi.nElts);
+    indexHi = min(ncclSymkFractionCell(fracHi, divUp(dwHi.nElts, EltPerCell)) * EltPerCell, dwHi.nElts);
   }
 
   template <typename T>
@@ -62,9 +62,9 @@ struct ncclSymkWorkArgsHandler {
     fracLo = (dw.sChannelId > 0 && channelWorkRange[dw.sChannelId - 1].workHi == w) ?
                ((channelWorkRange[dw.sChannelId - 1].fracHi + 1) & 0xFFFF) :
                0;
-    indexLo = ((fracLo * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell;
+    indexLo = ncclSymkFractionCell(fracLo, divUp(dw.nElts, EltPerCell)) * EltPerCell;
     fracHi = (channelWorkRange[lastBlock].workHi == w) ? channelWorkRange[lastBlock].fracHi + 1 : 0x10000;
-    indexHi = min(((fracHi * divUp(dw.nElts, EltPerCell)) >> 16) * EltPerCell, dw.nElts);
+    indexHi = min(ncclSymkFractionCell(fracHi, divUp(dw.nElts, EltPerCell)) * EltPerCell, dw.nElts);
   }
 
   template <typename T, typename Fn>

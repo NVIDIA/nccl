@@ -368,7 +368,7 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
   setMinChunkPayloadBytes(argsBuf, headTask->minChunkPayloadBytes);
 
   if (!isAlltoAllLLKernel) {
-    remainCell = cellPerChannel = DIVUP(DIVUP(totalCount, nMaxChannels), cellCount);
+    remainCell = cellPerChannel = ncclSymkCellsPerChannel(totalCount, nMaxChannels, cellCount);
   }
   workRangePtr = ncclSymkGetWorkRange(argsBuf);
   workBufPtr = ncclSymkGetWorks(argsBuf, nMaxChannels);
@@ -449,7 +449,7 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
         } else {
           // cellLeft > remainCell; the task is partially scheduled onto the channel
           cellLeft -= remainCell;
-          workRangePtr[curChannel].fracHi = uint16_t(DIVUP(0x10000L * (taskCell - cellLeft), taskCell) - 1);
+          workRangePtr[curChannel].fracHi = uint16_t(ncclSymkCellFraction(taskCell - cellLeft, taskCell) - 1);
           remainCell = cellPerChannel;
           curChannel++;
           curChannelWork = 0;

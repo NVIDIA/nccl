@@ -21,7 +21,7 @@
 // ncclSymk[Foo]: Specialized symmetric kernels and shared dispatch machinery
 // ncclGenk[Foo]: General Ring/Tree kernels built on the device API
 
-#define NCCL_SYM_KERNEL_CELL_SIZE 1024 // no less than 16 bytes minimal cell size
+#include "sym_partition.h"
 
 constexpr int ncclSymkMaxBlocks = 64;
 constexpr int ncclSymkMaxThreads = 512;

@@ -3400,6 +3400,52 @@ static bool ncclInfoHasLaunchCompletionEvent(const struct ncclInfo* info) {
   return info->count != 0 && ncclCollConfigGetLaunchCompletionEvent(&info->collConfig) != nullptr;
 }
 
+// Legacy enqueue chooses CE before task sorting; later SM scheduling can still batch the remaining tasks.
+static ncclResult_t legacyAllGatherCeMethod(struct ncclComm* comm, struct ncclInfo* info, struct ncclDevRedOpFull opDev,
+                                            struct ncclDevrWindow* sendWin, struct ncclDevrWindow* recvWin,
+                                            ncclSymRegType_t winRegType, bool captured, int* method) {
+  *method = ncclCeMethodId_Count;
+  struct ncclTuningInput_t input = {};
+  struct ncclTuningResult_t result = NCCL_TUNING_RESULT_INIT;
+  struct ncclTaskColl task = {};
+  task.func = info->coll;
+  task.opHost = info->op;
+  task.opDev = opDev;
+  task.datatype = info->datatype;
+  task.count = info->count;
+  task.sendbuff = info->sendbuff;
+  task.recvbuff = info->recvbuff;
+  input.comm = comm;
+  input.tuningMask = ncclCommDefaultAlgoMask(comm);
+  NCCLCHECK(ncclCollConfigGetAlgMask(&info->collConfig, info->coll, &input.algSelection));
+  input.forceAlgSelection = info->collConfig.forceAlgSelection;
+  input.func = info->coll;
+  input.redOp = info->op;
+  input.devRedOp = opDev.op;
+  input.datatype = ncclInt8;
+  input.count = input.countMax = input.nBytes = info->count * ncclTypeSize(info->datatype);
+  input.numPipeOps = input.nWorks = 1;
+  input.chunkSteps = info->chunkSteps;
+  input.sliceSteps = info->sliceSteps;
+  input.captured = captured;
+  input.winRegType = winRegType;
+  input.inPlace = ncclAllGatherIsInPlace(info->sendbuff, info->recvbuff, comm->rank, input.nBytes);
+  size_t inputOff = sendWin ? (uintptr_t)info->sendbuff - (uintptr_t)sendWin->userPtr : (uintptr_t)info->sendbuff;
+  size_t outputOff = (uintptr_t)info->recvbuff - (uintptr_t)recvWin->userPtr;
+  input.symAligned16B = uint32_t(inputOff - outputOff) % 16 == 0;
+  input.CTAPolicy = info->collConfig.CTAPolicy;
+  NCCL_CONFIG_SET(&input, minCTAs, ncclParamMinCTAs(), info->collConfig.minCTAs, comm->config.minCTAs, 1, MAXCHANNELS);
+  NCCL_CONFIG_SET(&input, maxCTAs, ncclParamMaxCTAs(), std::min(info->collConfig.maxCTAs, comm->config.maxCTAs),
+                  comm->config.maxCTAs, 1, MAXCHANNELS);
+  if (input.minCTAs > input.maxCTAs) input.minCTAs = 1;
+  input.nvlsSupport = ncclNvlsTransportEnabled(comm);
+  NCCLCHECK(ncclGetCollNetSupport(comm, &task, &input.collNetSupport));
+  NCCLCHECK(ncclGetRegBuff(comm, &task, &input.regBuff));
+  NCCLCHECK(ncclTuningCompute(&input, &result));
+  *method = result.ceMethodId;
+  return ncclSuccess;
+}
+
 static void ncclRecordCollConfigLaunchCompletionEvent(struct ncclComm* comm) {
   // Multi-rank operations join through their task append function. Single-rank collectives
   // execute immediately, so join them here to retain the count until group validation.
@@ -3474,7 +3520,19 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
       int perCall = info->collConfig.CTAPolicy;
       bool envOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
       info->collConfig.CTAPolicy = ncclCollConfigResolveCTAPolicy(perCall, comm->config.CTAPolicy, envOverridden);
-      if ((info->collConfig.CTAPolicy & NCCL_CTA_POLICY_ZERO) && (ceAvailable || hierCeAvailable)) {
+      // Use the same selector for default and ZERO AllGather so both honor per-call algorithm masks.
+      int ceMethod = ncclCeMethodId_Count;
+      if (ceAvailable && info->coll == ncclFuncAllGather &&
+          !comm->tuningContext.forced[ncclTuningFuncIndex(info->coll)]) {
+        struct ncclCudaGraph graph;
+        NCCLCHECK(ncclCudaGetCapturingGraph(&graph, info->stream, comm->config.graphUsageMode));
+        NCCLCHECK(legacyAllGatherCeMethod(comm, info, opDev, sendWin, recvWin, winRegType, ncclCudaGraphValid(graph),
+                                          &ceMethod));
+      }
+      if (ceMethod != ncclCeMethodId_Count) {
+        NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev, ceMethod));
+      } else if ((info->collConfig.CTAPolicy & NCCL_CTA_POLICY_ZERO) &&
+                 ((ceAvailable && info->coll != ncclFuncAllGather) || (!ceAvailable && hierCeAvailable))) {
         NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev, ncclCeMethodId_Auto));
       }
       // Append kernel-based collective
@@ -3548,12 +3606,6 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
           }
           NCCLCHECK(p2pTaskAppend(comm, info, ncclFuncRecv, collAPI, (void*)info->recvbuff, info->count, info->datatype,
                                   info->root, allowUB));
-        } else if (!ncclCollConfigHasAlgSelection(&info->collConfig) && ceAvailable && comm->symmetricSupport &&
-                   info->coll == ncclFuncAllGather && info->count > ncclSymCeAllGatherThreshold(comm) &&
-                   comm->minCompCap >= 100 && !RUBIN_AND_LATER(comm->minCompCap) && comm->isAllDirectNvlink) {
-          // Use CE for AllGather on Blackwell when size exceeds sym CE threshold. Skip this automatic
-          // route on Rubin and when the user passed an algorithm selection so the selection is honored.
-          NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev, ncclCeMethodId_Auto));
         } else {
           NCCLCHECK(collTaskAppend(comm, info, opDev));
         }

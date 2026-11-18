@@ -24,6 +24,7 @@
 //   general    -> bit (algo*NCCL_NUM_PROTOCOLS + proto), the [0,21) space
 //   Symk       -> bit (NCCL_TUNING_SYM_KERNEL_ID_OFFSET + symKernelId), [21,39)
 //   Genk       -> bit (NCCL_TUNING_SYM_KERNEL_ID_OFFSET + symKernelId), [39,57)
+//   CE         -> bit (NCCL_TUNING_CE_METHOD_ID_OFFSET + ceMethodId), AllGather UC/MC
 // Commented rows are algo/proto combinations that do not exist today; they mark where a
 // future kernel would slot into the tuning-id space.
 // IMPORTANT: this table must be consistent with the modelMap in src/tuning/cost_model.cc
@@ -91,6 +92,9 @@ static constexpr struct ncclAlgRegEntry algRegistry[] = {
   {"GENK_RING_LL128",        ALGBIT(54), F_RS, -1, -1, ncclSymkKernelId_ReduceScatter_Ring_LL128},
   {"GENK_RING_LL128",        ALGBIT(55), F_BC, -1, -1, ncclSymkKernelId_Broadcast_Ring_LL128},
   {"GENK_RING_LL128",        ALGBIT(56), F_RD, -1, -1, ncclSymkKernelId_Reduce_Ring_LL128},
+  // Copy-engine AllGather methods; eligibility is still checked before tuning.
+  {"CE_UC", ALGBIT(NCCL_TUNING_CE_METHOD_ID_OFFSET + ncclCeMethodId_AllGather_UC), F_AG, -1, -1, -1},
+  {"CE_MC", ALGBIT(NCCL_TUNING_CE_METHOD_ID_OFFSET + ncclCeMethodId_AllGather_MC), F_AG, -1, -1, -1},
 };
 // clang-format on
 static constexpr int algRegistryCount = (int)(sizeof(algRegistry) / sizeof(algRegistry[0]));

@@ -15,21 +15,9 @@
 #include "cudawrap.h"
 #include "alloc.h"
 #include <cfloat>
-#include <cstring>
+#include <cmath>
 
 NCCL_PARAM(SymNoWinEnable, "SYM_NOWIN_ENABLE", 0);
-NCCL_PARAM(SymCeThreshold, "SYM_CE_THRESHOLD", 8 * 1024 * 1024);
-
-// Higher CE threshold for AllGather since TMA kernels continue to perform better till higher message sizes.
-int64_t ncclSymCeAllGatherThreshold(struct ncclComm* comm) {
-  int64_t threshold = ncclParamSymCeThreshold();
-  const char* env = ncclGetEnv("NCCL_SYM_CE_THRESHOLD");
-  if (env == nullptr || strlen(env) == 0) {
-    bool useMcSync = comm->symkState.hasLsaMultimem;
-    if (!useMcSync && comm->minCompCap >= 100 && ncclSymkTmaAvailable(comm)) threshold *= 4;
-  }
-  return threshold;
-}
 
 void ncclTuningResultListFree(struct ncclTuningResultList_t* list) {
   struct ncclTuningResultListNode* node = list->head;
@@ -169,40 +157,45 @@ fail:
 
 /*
   Select the best tuning from the given list of tunings.
-  Preserve each family's selection policy, then compare their predicted times.
+  Preserve each SM family's selection policy, then compare their predicted times with CE.
 */
 static ncclResult_t ncclTuningSelectBestTuning(
-  struct ncclTuningResultList_t* tunings, struct ncclTuningResult_t* const bestTuning, uint64_t kernelExcludeMask = 0) {
+  struct ncclTuningResultList_t* tunings, struct ncclTuningResult_t* const bestTuning, uint64_t kernelExcludeMask) {
+  // Family order breaks raw-latency ties: General, then Sym, then CE.
   enum ncclTuningFamily {
     ncclTuningFamily_General,
     ncclTuningFamily_Sym,
+    ncclTuningFamily_Ce,
     ncclTuningFamily_Count
   };
-  bestTuning->timeUs = FLT_MAX;
   const struct ncclTuningResult_t* bestFamily[ncclTuningFamily_Count] = {};
-  float bestSelectionTimeUs[ncclTuningFamily_Count] = {FLT_MAX, FLT_MAX};
-  struct ncclTuningResultListNode* node = tunings->head;
-  while (node != nullptr) {
+  float bestScoreUs[ncclTuningFamily_Count] = {FLT_MAX, FLT_MAX, FLT_MAX};
+  for (struct ncclTuningResultListNode* node = tunings->head; node != nullptr; node = node->next) {
     const struct ncclTuningResult_t& tuning = node->result;
-    if (((1ull << tuning.symKernelId) & kernelExcludeMask) == 0) {
-      float selectionTimeUs = tuning.selectionTimeUs > 0.0f ? tuning.selectionTimeUs : tuning.timeUs;
-      TRACE(NCCL_TUNING, "A/P/S %s/%s/%s, time: %f, selection time: %f", ncclAlgoToString(tuning.algo),
-            ncclProtoToString(tuning.proto), ncclSymkKernelIdToString(tuning.symKernelId), tuning.timeUs,
-            selectionTimeUs);
-      ncclTuningFamily family =
-        tuning.symKernelId == ncclSymkKernelId_Count ? ncclTuningFamily_General : ncclTuningFamily_Sym;
-      if (selectionTimeUs < bestSelectionTimeUs[family]) {
-        bestFamily[family] = &tuning;
-        bestSelectionTimeUs[family] = selectionTimeUs;
-      }
+    if (!tuning.valid || !std::isfinite(tuning.timeUs) || tuning.timeUs < 0.0f) continue;
+    ncclTuningFamily family = ncclTuningFamily_General;
+    float scoreUs = tuning.selectionTimeUs > 0.0f ? tuning.selectionTimeUs : tuning.timeUs;
+    if (tuning.ceMethodId != ncclCeMethodId_Count) {
+      family = ncclTuningFamily_Ce;
+      scoreUs = tuning.timeUs;
+    } else if (tuning.symKernelId != ncclSymkKernelId_Count) {
+      if ((1ull << tuning.symKernelId) & kernelExcludeMask) continue;
+      family = ncclTuningFamily_Sym;
     }
-    node = node->next;
+    TRACE(NCCL_TUNING, "A/P/S %s/%s/%s, time: %f, selection time: %f", ncclAlgoToString(tuning.algo),
+          ncclProtoToString(tuning.proto), ncclSymkKernelIdToString(tuning.symKernelId), tuning.timeUs, scoreUs);
+    if (scoreUs < bestScoreUs[family]) {
+      bestFamily[family] = &tuning;
+      bestScoreUs[family] = scoreUs;
+    }
   }
-  const struct ncclTuningResult_t* best = bestFamily[ncclTuningFamily_General];
-  if (bestFamily[ncclTuningFamily_Sym] != nullptr &&
-      (best == nullptr || bestFamily[ncclTuningFamily_Sym]->timeUs < best->timeUs))
-    best = bestFamily[ncclTuningFamily_Sym];
+  // Compare family winners by latency; each SM family's own scoring policy is preserved.
+  const struct ncclTuningResult_t* best = nullptr;
+  for (const struct ncclTuningResult_t* candidate : bestFamily) {
+    if (candidate != nullptr && (best == nullptr || candidate->timeUs < best->timeUs)) best = candidate;
+  }
   if (best != nullptr) *bestTuning = *best;
+  else bestTuning->timeUs = FLT_MAX;
   return ncclSuccess;
 }
 
@@ -226,14 +219,6 @@ static int ncclTuningCollapseId(const struct ncclTuningResult_t* tuning) {
 // CTAPolicy ZERO routes every copy-engine-capable collective to the copy engine.
 static bool tuningCeZeroRoute(const struct ncclTuningInput_t* input) {
   return (input->CTAPolicy & NCCL_CTA_POLICY_ZERO) && (input->tuningMask & NCCL_TUNING_MASK_CE);
-}
-
-// A large AllGather on Blackwell direct NVLink takes the copy engine.
-static bool tuningCeAllGatherRoute(const struct ncclTuningInput_t* input) {
-  struct ncclComm* comm = input->comm;
-  return (input->tuningMask & NCCL_TUNING_MASK_CE) && input->func == ncclFuncAllGather && comm->symmetricSupport &&
-         comm->isAllDirectNvlink && comm->minCompCap >= 100 && !RUBIN_AND_LATER(comm->minCompCap) &&
-         (int64_t)input->count > ncclSymCeAllGatherThreshold(comm);
 }
 
 /*
@@ -260,11 +245,11 @@ static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
     return ncclSuccess;
   }
 
-  // Hard-coded copy-engine routes until the cost model can price the copy engine against the
-  // kernels. A route leaves only the copy-engine entries in the mask.
+  // AllGather models compare CE with SM kernels; ZERO remains CE-only.
   if (input->tuningMask & ~NCCL_TUNING_MASK_CE) {
-    if (tuningCeZeroRoute(input) || tuningCeAllGatherRoute(input)) input->tuningMask &= NCCL_TUNING_MASK_CE;
-    else input->tuningMask &= ~NCCL_TUNING_MASK_CE;
+    if (tuningCeZeroRoute(input)) input->tuningMask &= NCCL_TUNING_MASK_CE;
+    else if (input->func != ncclFuncAllGather || !ncclCeAllGatherModelAvailable(input->comm))
+      input->tuningMask &= ~NCCL_TUNING_MASK_CE;
   }
 
   // Set tuning to Ring/Simple for single rank case
@@ -323,7 +308,7 @@ static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
         tuning.timeUs = generalTable[tuning.algo][tuning.proto];
       }
     }
-    NCCLCHECKGOTO(ncclTuningSelectBestTuning(&tunings, &bestTuning), ret, exit);
+    NCCLCHECKGOTO(ncclTuningSelectBestTuning(&tunings, &bestTuning, 0), ret, exit);
   }
 
   if (bestTuning.algo != NCCL_ALGO_UNDEF && bestTuning.proto != NCCL_PROTO_UNDEF) {

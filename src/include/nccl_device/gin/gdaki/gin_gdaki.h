@@ -62,6 +62,10 @@ NCCL_DEVICE_INLINE static void putImplMode(
     doca_gpu_dev_verbs_qp* companion_qp;
     ncclGinGdakiMemHandle* dstMh = (ncclGinGdakiMemHandle*)dstWin;
     ncclGinGdakiMemHandle* srcMh = (ncclGinGdakiMemHandle*)srcWin;
+    // A counter is posted as a WAIT + atomic pair on the companion QP, so deferring the doorbell
+    // of such a put loses the counter ticks of the deferred requests (the WAIT never observes the
+    // main QP completion). AggregateRequests is only a hint: drop it when a counter is attached.
+    if (hasCounter) optFlags &= ~uint32_t(ncclGinOptFlagsAggregateRequests);
     uint32_t codeOpt = nccl::gin::gdaki::docaOptFlagsFromGinOptFlags(optFlags);
 
     doca_gpu_dev_verbs_addr raddr, laddr;

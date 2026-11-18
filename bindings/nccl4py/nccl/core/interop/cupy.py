@@ -167,7 +167,8 @@ def resolve_array(array: cupy.ndarray) -> tuple[int, int, NcclDataType, int]:
     if not isinstance(array, cupy.ndarray):
         raise NcclInvalid(f"array must be a CuPy array, got {type(array).__name__}")
 
-    if not (array.flags.c_contiguous or array.flags.f_contiguous):
+    flags = array.flags
+    if not (flags.c_contiguous or flags.f_contiguous):
         _check_dense_layout(array.shape, array.strides, array.itemsize)
 
     return (array.data.ptr, array.size, _to_nccl_dtype(array.dtype), array.device.id)

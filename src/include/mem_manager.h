@@ -71,6 +71,13 @@ typedef struct ncclDynMemImportDesc {
   int ownerRank;     // Rank that owns the original buffer
   int ownerDev;      // CUDA device of the owner
   void* ownerPtr;      // Owner's virtual address
+  // Import of a buffer its owner never releases (persistent): resume imports the same
+  // owner handle again instead of waiting for a new one from the handle exchange.
+  bool ownerHandleValid;
+  union {
+    uint64_t handleData;            // owner's cuMem handle, converted to an fd by the owner's proxy
+    CUmemFabricHandle fabricHandle;
+  } ownerHandle;
 } ncclDynMemImportDesc;
 
 // Individual tracked memory entry (only track scratch and offload allocations)
@@ -149,6 +156,14 @@ ncclResult_t ncclMemTrack(struct ncclMemManager* manager, void* ptr, size_t size
 ncclResult_t ncclMemTrackImportFromPeer(struct ncclMemManager* manager, void* ptr, size_t size,
                                         CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
                                         ncclMemType_t memType, int ownerRank, int ownerDev, void* ownerPtr);
+
+// Track an import of a peer buffer that its owner never releases. The mapping is released
+// on suspend like other imports and imported again from `ownerHandle` (a ncclCuDesc) on
+// resume, so a suspended process holds no peer import.
+ncclResult_t ncclMemTrackPersistentImport(struct ncclMemManager* manager, void* ptr, size_t size,
+                                          CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
+                                          int ownerRank, int ownerDev, const void* ownerHandle,
+                                          size_t ownerHandleSize);
 
 // Result of untracking a dynamic allocation.
 struct ncclMemUntrackInfo {

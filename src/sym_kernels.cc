@@ -239,6 +239,7 @@ NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymkLLScratchSize, "SYMK_LL_SCRATCH_SIZE", 256 << 10)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymGinBuffMaxSize, "SYM_GINBUFF_MAX_SIZE", 0)
+NCCL_PARAM(SymAgGinChunkSize, "SYM_AG_GIN_CHUNK_SIZE", -1)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 1)
 #ifdef SYM_GENK
 NCCL_PARAM(SymGenkEnable, "SYM_GENK_ENABLE", 0)
@@ -318,19 +319,30 @@ static size_t ncclSymkAlltoAllLLProvisionBytes(struct ncclComm* comm) {
   return std::min(ncclSymkAlltoAllLLMaxPayloadBytes, scratchLimit);
 }
 
-static constexpr size_t ncclSymkRsGinDefaultChunkBytes = 128 << 10;
-static constexpr size_t ncclSymkRsGinMinChunkBytes = 128;
-static constexpr size_t ncclSymkRsGinMaxChunkBytes = size_t(1) << 30;
-
-size_t ncclSymkRsGinChunkBytes() {
-  int64_t param = ncclParamSymRsGinChunkSize();
-  size_t chunkBytes = param > 0 ? (size_t)param : ncclSymkRsGinDefaultChunkBytes;
-  chunkBytes = std::max(ncclSymkRsGinMinChunkBytes, std::min(chunkBytes, ncclSymkRsGinMaxChunkBytes));
+size_t ncclSymkGinChunkBytes(ncclFunc_t func, bool* forced) {
+  if (forced != nullptr) *forced = false;
+  int64_t param;
+  size_t defaultChunkBytes;
+  switch (func) {
+  case ncclFuncAllGather:
+    param = ncclParamSymAgGinChunkSize();
+    defaultChunkBytes = ncclSymkAllGather_RailRing_ChunkSize;
+    break;
+  case ncclFuncReduceScatter:
+    param = ncclParamSymRsGinChunkSize();
+    defaultChunkBytes = 128 << 10;
+    break;
+  default:
+    return 0;
+  }
+  if (forced != nullptr) *forced = param > 0;
+  size_t chunkBytes = param > 0 ? (size_t)param : defaultChunkBytes;
+  chunkBytes = std::max(size_t(128), std::min(chunkBytes, size_t(1) << 30));
   return pow2Down(chunkBytes);
 }
 
 static uint32_t ncclSymkRsGinAccumBytesPerBlock() {
-  return (uint32_t)alignUp(2 * ncclSymkRsGinChunkBytes(), 128);
+  return (uint32_t)alignUp(2 * ncclSymkGinChunkBytes(ncclFuncReduceScatter, nullptr), 128);
 }
 
 static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t* out_bufSize) {
@@ -613,7 +625,7 @@ ncclSymkKernelMask ncclSymkMask(struct ncclComm* comm, ncclFunc_t coll, int /*nc
   if (ncclParamSymGenkEnable() == 0 || comm->minCompCap < 90) kmask &= ~kernelMask_Genk;
 
   bool const hasGin = ncclSymGinKernelsEnabled(comm);
-  bool const hasMultipleLsaTeams = ncclTeamLsa(comm).nRanks < comm->nRanks;
+  bool const hasMultipleLsaTeams = comm->devrState.lsaTeamSize < comm->nRanks;
   if (hasMultipleLsaTeams) {
     kmask &= kernelMask_GinCapable | kernelMask_A2A;
     if (!hasGin) kmask &= ~(kernelMask_GinOnly | kernelMask_A2A);
@@ -662,6 +674,7 @@ ncclResult_t ncclSymkMakeDevWork(struct ncclComm* comm, struct ncclTaskColl* tas
   outDevWork->rootRank = task->root;
   outDevWork->redOpArg = task->opDev.scalarArg;
   outDevWork->nElts = task->count;
+  outDevWork->chunkSizeBytes = task->chunkSizeBytes;
   outDevWork->inputWin = task->sendWin ? task->sendWin->vidmem : nullptr;
   outDevWork->inputOff =
     task->sendWin ? (uint8_t*)task->sendbuff - (uint8_t*)task->sendWin->userPtr : (size_t)task->sendbuff;

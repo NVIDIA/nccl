@@ -136,6 +136,10 @@ ncclResult_t ncclTuningComputeAllTunings(struct ncclTuningInput_t* const input,
                                          struct ncclTuningResultList_t* const tunings) {
   ncclResult_t ret = ncclSuccess;
 
+  // Prepare shared team state once before the candidate loop.
+  if (input->comm->symmetricSupport && (input->tuningMask & NCCL_TUNING_MASK_SYM_KERNELS))
+    NCCLCHECK(ncclDevrInitOnce(input->comm));
+
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningResult_t tuning = NCCL_TUNING_RESULT_INIT;
     tuning.id = i;
@@ -389,10 +393,10 @@ static ncclResult_t tuningComputeForMask(struct ncclTuningInput_t* const input,
   TRACE(
     NCCL_TUNING,
     "Best tuning { .id = %d, .valid = %d, timeUs = %f,  .algo = %s, .proto = %s, .symKernelId = %s, .ceMethodId = %d, "
-    "nChannels = %d, maxChannels = %d, nWarps = %d, forced = %d }",
+    "nChannels = %d, maxChannels = %d, nWarps = %d, chunkSizeBytes = %d, forced = %d }",
     bestTuning.id, bestTuning.valid, bestTuning.timeUs, ncclAlgoToString(bestTuning.algo),
     ncclProtoToString(bestTuning.proto), ncclSymkKernelIdToString(bestTuning.symKernelId), bestTuning.ceMethodId,
-    bestTuning.nChannels, bestTuning.maxChannels, bestTuning.nWarps, bestTuning.forced);
+    bestTuning.nChannels, bestTuning.maxChannels, bestTuning.nWarps, bestTuning.chunkSizeBytes, bestTuning.forced);
 
   if ((bestTuning.algo == NCCL_ALGO_UNDEF || bestTuning.proto == NCCL_PROTO_UNDEF) &&
       bestTuning.symKernelId == ncclSymkKernelId_Count && bestTuning.ceMethodId == ncclCeMethodId_Count) {

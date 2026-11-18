@@ -279,6 +279,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         task->nMaxChannels = nChannels;
         task->nWarps = nWarps;
         task->minChunkPayloadBytes = bestTuning.minChunkPayloadBytes;
+        task->chunkSizeBytes = bestTuning.chunkSizeBytes;
         convertSymTaskDevOp(comm, task);
         ncclIntruQueueEnqueue(&planner->collSymTaskQueue, task);
         task = next;

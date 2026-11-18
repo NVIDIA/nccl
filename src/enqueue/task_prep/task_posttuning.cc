@@ -378,6 +378,7 @@ static ncclResult_t preSchedLegacySymTask(struct ncclComm* comm, struct ncclTask
   task->nMaxChannels = tInfo->tuningOut.nChannels;
   task->nWarps = tInfo->tuningOut.nWarps;
   task->minChunkPayloadBytes = tInfo->tuningOut.minChunkPayloadBytes;
+  task->chunkSizeBytes = tInfo->tuningOut.chunkSizeBytes;
   task->isSymLast = 1;
   convertSymTaskDevOp(comm, task);
   ncclIntruQueueEnqueue(&planner->collSymTaskQueue, task);

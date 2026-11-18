@@ -59,8 +59,8 @@ static __device__ void rsAlgoHier(ncclSymkDevWorkArgs const* args, BoolTag<multi
                         size_t(blockIdx.x) * handler.rsGinAccumBytesPerBlock);
   int maxChunkEltsCap = handler.rsGinAccumBytesPerBlock / sizeof(AccT);
 
-  handler.template forEachWorkNoFusion<T>([&] __device__(size_t nElts, size_t nAllElts, ncclSymPtr<T> input,
-                                                         ncclSymPtr<T> output) {
+  handler.template forEachWorkNoFusion<T>([&] __device__(ncclSymkDevWork const&, size_t nElts, size_t nAllElts,
+                                                         ncclSymPtr<T> input, ncclSymPtr<T> output) {
     int maxChunkElts = maxChunkEltsCap;
     int chunkBytes_log2 = log2Up(nElts) + log2Up(sizeof(T));
 

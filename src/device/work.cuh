@@ -155,7 +155,7 @@ struct ncclSymkWorkArgsHandler {
       currentIndexLo = (w > workLo) ? 0 : indexLo;
       currentIndexHi = (w < workHi) ? nAllElts : indexHi;
 
-      fn(currentIndexHi - currentIndexLo, nAllElts, ncclSymPtr<T>(dw.inputWin, dw.inputOff) + currentIndexLo,
+      fn(dw, currentIndexHi - currentIndexLo, nAllElts, ncclSymPtr<T>(dw.inputWin, dw.inputOff) + currentIndexLo,
          ncclSymPtr<T>(dw.outputWin, dw.outputOff) + currentIndexLo);
     }
   }

@@ -6,6 +6,7 @@
  *************************************************************************/
 
 #include "model.h"
+#include "gin_ag.h"
 
 #include "comm.h"
 #include "core.h"
@@ -14,6 +15,8 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+
+static_assert(ncclSymkGinAgMaxCtas == ncclSymkMaxBlocks, "GIN model spans must cover every symmetric CTA");
 
 #define NCCL_NVLINK_BW_IDX_HOPPER 0
 #define NCCL_NVLINK_BW_IDX_BLACKWELL 1
@@ -44,8 +47,8 @@ double ncclTuningGetGinBw(struct ncclComm* comm) {
 void ncclTuningGetBusMulReduceScatterRailA2A(struct ncclComm* comm, bool ldmc,
                                              // Bus multipliers per bottleneck
                                              double* out_smMul, double* out_lsaMul, double* out_ginMul) {
-  int lsaRanks = ncclTeamLsa(comm).nRanks;
-  int railRanks = ncclTeamRail(comm).nRanks;
+  int lsaRanks = comm->devrState.lsaTeamSize;
+  int railRanks = comm->nRanks / lsaRanks;
   // LSA
   *out_lsaMul = std::max(
     /*inbound*/ (ldmc ? lsaRanks : lsaRanks - 1) * railRanks,
@@ -106,7 +109,7 @@ static bool ncclSymkAlltoAllLLModel(struct ncclTuningInput_t* input, size_t payl
   struct ncclComm* comm = input->comm;
   if (activeBlocks < 1 || warpsPerBlock < 1 || payloadBytes == 0) return false;
 
-  int lsaRanks = ncclTeamLsa(comm).nRanks;
+  int lsaRanks = comm->devrState.lsaTeamSize;
   int lsaPeerCount = std::max(0, lsaRanks - 1);
   int ginPeerCount = comm->nRanks - lsaRanks;
   int ginLinesPerWarp = ncclSymkAlltoAllLLGinLinesPerWarp(payloadBytes);
@@ -156,20 +159,38 @@ int ncclTuningCalcSatBlocksReduceScatterRailA2A(struct ncclComm* comm, bool ldmc
   return std::ceil(std::min(double(1 << 30), minLsaGinEffBw / (smBw / smMul)));
 }
 
-ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                              float* timeUs, int* nBlocks, int* maxBlocks) {
+static int roundDownGinBlocks(int blocks, bool forced) {
+  return forced || blocks <= 1 ? blocks : blocks & ~1;
+}
+
+ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, struct ncclTuningResult_t* tuning) {
+  ncclSymkKernelId kernelId = (ncclSymkKernelId)tuning->symKernelId;
+  size_t nBytes = input->nBytes;
+  float* timeUs = &tuning->timeUs;
+  int* nBlocks = &tuning->nChannels;
+  tuning->chunkSizeBytes = 0;
   struct ncclComm* comm = input->comm;
   struct ncclSymkState* symk = &comm->symkState;
-  // ncclTeam world = ncclTeamWorld(comm);
-  // ncclTeam lsa = ncclTeamLsa(comm);
-  ncclTeam rail = ncclTeamRail(comm);
+  int lsaRanks = comm->devrState.lsaTeamSize;
+  int railRanks = comm->nRanks / lsaRanks;
   double lsaBw = ncclTuningGetLsaBw(comm);
   double ginLat = ncclTuningGetGinLat(comm);
   double ginBw = ncclTuningGetGinBw(comm);
   // minCTAs/maxCTAs are resolved (env > per-call > comm) at task-append time.
   int nMaxBlocks = std::min<int>(input->maxCTAs, ncclSymkMaxBlocks);
+  int defaultMaxBlocks = nMaxBlocks;
+  enum ncclSymkGinAgArch agArch = ncclSymkGinAgArch_Count;
+  int agContexts = 0;
+  bool useAgPipeline = false;
   if (kernelId == ncclSymkKernelId_AllGather_RailRing_LsaSTMC) {
-    nMaxBlocks = std::min<int>(nMaxBlocks, divUp((comm->cudaArch < 1000 ? 16 : 32), comm->nvlsResources->nHeads));
+    const ncclDevCommRequirements requirements = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+    agContexts = symk->initialized ? symk->kcomm.devComm.ginContextCount : requirements.ginContextCount;
+    agArch = ncclSymkGinAgArchForCapability(comm->minCompCap);
+    useAgPipeline = agArch != ncclSymkGinAgArch_Count && input->nWorks == 1;
+    defaultMaxBlocks =
+      std::min<int>(nMaxBlocks, divUp((comm->minCompCap >= 100 ? 32 : 16), comm->nvlsResources->nHeads));
+    // Grouped work keeps the legacy estimate and its CTA cap.
+    if (!useAgPipeline) nMaxBlocks = defaultMaxBlocks;
   }
   int nMinBlocks = input->minCTAs;
   nMinBlocks = std::min(nMinBlocks, nMaxBlocks);
@@ -186,14 +207,21 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   }
 
   // nLimitBlocks is a loose limit for functional correctness: the largest CTA count the kernel's
-  // resources allow, reported as maxBlocks so grouped launches stay within them. nMaxBlocks may be
+  // resources allow, reported as maxChannels so grouped launches stay within them. nMaxBlocks may be
   // tightened further for performance (e.g. bandwidth saturation), which only shapes the tuned count.
   int nLimitBlocks = nMaxBlocks;
 
   bool applySmPenalty = true;
   *timeUs = FLT_MAX;
+  tuning->selectionTimeUs = FLT_MAX;
   *nBlocks = 0;
-  if (maxBlocks) *maxBlocks = 0;
+  tuning->maxChannels = 0;
+  // Automatic AG choices use one CTA or an even count; explicit overrides stay exact.
+  if (kernelId == ncclSymkKernelId_AllGather_RailRing_LsaSTMC && useAgPipeline) {
+    nMaxBlocks = roundDownGinBlocks(nMaxBlocks, nUserCTAs > 0);
+    if (nUserCTAs <= 0 && nMinBlocks > 1 && (nMinBlocks & 1)) nMinBlocks++;
+    if (nMinBlocks > nMaxBlocks) return ncclSuccess;
+  }
   switch (kernelId) {
   case ncclSymkKernelId_AlltoAll_LL:
     {
@@ -202,7 +230,6 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
       // nBytes is the payload sent to each peer, as the kernel's chunk and
       // scratch formulas consume it.
       size_t payloadBytes = nBytes;
-      int lsaRanks = ncclTeamLsa(comm).nRanks;
       int lsaPeerCount = std::max(0, lsaRanks - 1);
       int ginPeerCount = comm->nRanks - lsaRanks;
       int warpsPerBlock = ncclSymkKernelMaxWarps(kernelId, input->devRedOp, input->datatype);
@@ -219,15 +246,37 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
     break;
   case ncclSymkKernelId_AllGather_RailRing_LsaSTMC:
     {
-      constexpr int railChunkSize = ncclSymkAllGather_RailRing_ChunkSize;
-      int requiredBlocks = DIVUP(nBytes, railChunkSize);
+      bool forcedChunk = false;
+      size_t railChunkSize = ncclSymkGinChunkBytes(ncclFuncAllGather, &forcedChunk);
+      size_t requiredBlocks = DIVUP(nBytes, railChunkSize);
+      int defaultBlocks = std::max(
+        nMinBlocks, roundDownGinBlocks((int)std::min((size_t)std::min(nMaxBlocks, defaultMaxBlocks), requiredBlocks),
+                                       nUserCTAs > 0 || !useAgPipeline));
+      // The model consumes the input bytes per rank, not the total gathered extent.
+      // The selector owns numeric input validation; retain the legacy estimate
+      // outside a supported single-work schedule or when no pair can be modeled.
+      if (useAgPipeline) {
+        size_t rankBytes = input->count * ncclTypeSize(input->datatype);
+        const struct ncclSymkGinAgChoice best =
+          ncclSymkGinAgSelect(agArch, rankBytes, lsaRanks, railRanks, agContexts, nMinBlocks, nMaxBlocks,
+                              forcedChunk ? railChunkSize : 0, defaultBlocks, railChunkSize);
+        if (best.ctas != 0) {
+          *nBlocks = best.ctas;
+          tuning->maxChannels = std::max(nLimitBlocks, best.ctas);
+          *timeUs = (float)best.timeUs;
+          tuning->selectionTimeUs = (float)best.selectionUs;
+          tuning->chunkSizeBytes = (int)best.chunkBytes;
+          return ncclSuccess;
+        }
+      }
+      tuning->chunkSizeBytes = (int)railChunkSize;
       float intraBw = lsaBw;
       float interBw = ginBw;
       float intraTime = (float)(nBytes * comm->nRanks) / intraBw;
-      float interTime = (float)(nBytes * (rail.nRanks - 1)) / interBw;
-      uint32_t steps = DIVUP(nBytes, railChunkSize) * (rail.nRanks - 1);
+      float interTime = (float)(nBytes * (railRanks - 1)) / interBw;
+      size_t steps = DIVUP(nBytes, railChunkSize) * (railRanks - 1);
       *timeUs = steps * ginLat + std::max(intraTime, interTime);
-      *nBlocks = std::max(nMinBlocks, std::min(nMaxBlocks, requiredBlocks));
+      *nBlocks = defaultBlocks;
     }
     break;
   case ncclSymkKernelId_ReduceScatter_RailA2A_LsaLD:
@@ -238,7 +287,7 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
       nMaxBlocks = std::min(nMaxBlocks, symk->maxGinInboxBlocks);
       nLimitBlocks = nMaxBlocks;
       nMaxBlocks = std::min(nMaxBlocks, ncclTuningCalcSatBlocksReduceScatterRailA2A(comm, ldmc));
-      size_t chunkSize = ncclSymkRsGinChunkBytes();
+      size_t chunkSize = ncclSymkGinChunkBytes(ncclFuncReduceScatter, nullptr);
       double smBw = getSmBw_ReduceScatter_RailA2A(comm, ldmc);
       double smMul, lsaMul, ginMul;
       ncclTuningGetBusMulReduceScatterRailA2A(comm, ldmc, &smMul, &lsaMul, &ginMul);
@@ -263,6 +312,7 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   if (applySmPenalty && *nBlocks > 0 && std::isfinite(*timeUs)) {
     *timeUs *= 1.0f + ncclTuningGetSmPenalty(comm, kernelId) * (*nBlocks);
   }
-  if (maxBlocks && *nBlocks > 0) *maxBlocks = std::max(nLimitBlocks, *nBlocks);
+  tuning->selectionTimeUs = *timeUs;
+  if (*nBlocks > 0) tuning->maxChannels = std::max(nLimitBlocks, *nBlocks);
   return ncclSuccess;
 }

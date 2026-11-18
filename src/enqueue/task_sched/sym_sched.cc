@@ -153,6 +153,7 @@ static ncclResult_t symSchedMakeDevWorkFromTuningInfo(struct ncclComm* comm, str
   outDevWork->rootRank = raw->root;
   outDevWork->redOpArg = opDev.scalarArg;
   outDevWork->nElts = raw->count;
+  outDevWork->chunkSizeBytes = tInfo->tuningOut.chunkSizeBytes;
   outDevWork->inputWin = sendWin ? sendWin->vidmem : nullptr;
   outDevWork->inputOff = sendWin ? (uint8_t*)raw->sendbuff - (uint8_t*)sendWin->userPtr : (size_t)raw->sendbuff;
   outDevWork->outputWin = recvWin ? recvWin->vidmem : nullptr;

@@ -63,6 +63,7 @@ static_assert(NCCL_TUNING_COUNT < 64, "Tuning masks cannot represent every tunin
    /*.maxChannels =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
    /*.nWarps =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
    /*.minChunkPayloadBytes =*/NCCL_TUNING_ENTRY_INIT_VALUE, \
+   /*.chunkSizeBytes =*/0, \
    /*.forced =*/0}
 
 struct ncclTuningResult_t {
@@ -78,10 +79,12 @@ struct ncclTuningResult_t {
   int maxChannels;
   int nWarps;
   int minChunkPayloadBytes;
+  int chunkSizeBytes; // Per-operation symmetric GIN payload chunk; 0 when unused.
   int forced;
 };
 
 struct ncclTuningInput_t {
+  // The tuning entry prepares devrState team geometry before evaluating symmetric models.
   struct ncclComm* comm;
   uint64_t tuningMask;
   // Per-call algorithm selection, 0 when the call made none. The tuner narrows tuningMask to it

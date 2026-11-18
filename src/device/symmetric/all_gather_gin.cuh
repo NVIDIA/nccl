@@ -16,7 +16,6 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct nc
   ncclSymkArgsHandler handler(args);
   ncclTeam rail = ncclTeamRail(handler.comm);
   ncclGin gin(handler.comm, (int)(blockIdx.x % handler.comm.ginContextCount));
-  constexpr int chunkSize = ncclSymkAllGather_RailRing_ChunkSize;
   uint32_t lsaRank = ncclTeamLsa(handler.comm).rank;
   ncclGinSignal_t railSignals = handler.ginSyncHandle.railSignals + blockIdx.x * rail.nRanks;
   ncclBarrierSession<ncclCoopCta> bar(cta, ncclTeamTagWorld(), gin, blockIdx.x, /*multimem=*/true);
@@ -29,12 +28,14 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct nc
   bar.sync(cta, cuda::memory_order_acquire, ncclGinFenceLevel::None);
   if NCCL_IF_CONSTEXPR (EnableProfiler) ncclSymkProfilerPhase(args, NCCL_KERNEL_PHASE_AFTER_OPEN);
 
-  handler.template forEachWorkNoFusion<uint8_t>([&] __device__(size_t nElts, size_t nAllElts, ncclSymPtr<uint8_t> input,
+  handler.template forEachWorkNoFusion<uint8_t>([&] __device__(ncclSymkDevWork const& work, size_t nElts,
+                                                               size_t nAllElts, ncclSymPtr<uint8_t> input,
                                                                ncclSymPtr<uint8_t> output) {
+    size_t chunkSize = work.chunkSizeBytes;
     // Rotate by LSA rank with pattern 0 1 3 2 4 5 7 6 to diversify addresses.
     uint32_t startOffsetMultiplier = lsaRank ^ ((lsaRank >> 1) & 1);
     size_t startOffset =
-      nElts > 0 ? ((size_t)startOffsetMultiplier * ncclSymkMcPerRankOffsetBytes % nElts) / chunkSize * chunkSize : 0;
+      nElts > 0 ? ((size_t)startOffsetMultiplier * ncclSymkMcPerRankOffsetBytes % nElts) & ~(chunkSize - 1) : 0;
     auto advanceOffset = [&](size_t chunkElts, size_t& offset, size_t& remainingElts) {
       offset += chunkElts;
       if (offset == nElts) offset = 0;

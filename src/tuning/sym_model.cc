@@ -27,21 +27,11 @@ int ncclSymkModelCtasEnvOverride() {
   return static_cast<int>(nUserCTAs);
 }
 
-static ncclResult_t queryModel(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
-                               float* timeUs, float* selectionTimeUs, int* nBlocks, int* maxBlocks) {
-  if (ncclSymkGinKernelMask() >> kernelId & 1) {
-    NCCLCHECK(ncclSymkGinModel(input, kernelId, nBytes, timeUs, nBlocks, maxBlocks));
-    *selectionTimeUs = *timeUs;
-  } else {
-    NCCLCHECK(ncclSymkLsaModel(input, kernelId, nBytes, timeUs, selectionTimeUs, nBlocks, maxBlocks));
-  }
-  return ncclSuccess;
-}
-
 ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
                                     struct ncclTuningModelState* /*internal*/) {
   ncclResult_t ret = ncclSuccess;
   tuning->selectionTimeUs = NCCL_TUNING_IGNORE;
+  tuning->chunkSizeBytes = 0;
 
   if (tuning->symKernelId == ncclSymkKernelId_Count) {
     tuning->valid = 0;
@@ -108,23 +98,27 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
 
   if ((tuning_kmask & ncclGenkKernelMask()) != 0) return ncclTuningGenkModelSim(inputs, tuning);
 
-  float kTime = FLT_MAX;
-  float kSelectionTime = FLT_MAX;
-  int kBlocks = 0;
-  int kMaxBlocks = 0;
-  NCCLCHECK(queryModel(inputs, (enum ncclSymkKernelId)tuning->symKernelId, inputs->nBytes, &kTime, &kSelectionTime,
-                       &kBlocks, &kMaxBlocks));
-  if (kBlocks <= 0 || !std::isfinite(kTime) || kTime >= disableTime) {
+  tuning->timeUs = FLT_MAX;
+  tuning->selectionTimeUs = FLT_MAX;
+  tuning->nChannels = 0;
+  tuning->maxChannels = 0;
+  if (ncclSymkGinKernelMask() >> tuning->symKernelId & 1) {
+    NCCLCHECK(ncclSymkGinModel(inputs, tuning));
+    tuning->selectionTimeUs = tuning->timeUs;
+  } else {
+    NCCLCHECK(ncclSymkLsaModel(inputs, (enum ncclSymkKernelId)tuning->symKernelId, inputs->nBytes, &tuning->timeUs,
+                               &tuning->selectionTimeUs, &tuning->nChannels, &tuning->maxChannels));
+  }
+  // Mark unmodeled schedules unavailable before the tuner compares candidates.
+  if (tuning->nChannels <= 0 || !std::isfinite(tuning->timeUs) || tuning->timeUs >= disableTime) {
     tuning->valid = 0;
     tuning->timeUs = -1.0f;
+    tuning->selectionTimeUs = NCCL_TUNING_IGNORE;
     tuning->nChannels = 0;
+    tuning->chunkSizeBytes = 0;
     return ncclSuccess;
   }
 
-  tuning->timeUs = kTime;
-  tuning->selectionTimeUs = kSelectionTime;
-  tuning->nChannels = kBlocks;
-  tuning->maxChannels = kMaxBlocks;
   tuning->nWarps = tuning->symKernelId == ncclSymkKernelId_AlltoAll_LL ?
                      ncclSymkKernelMaxWarps(ncclSymkKernelId_AlltoAll_LL, inputs->devRedOp, inputs->datatype) :
                      ncclSymkMaxThreads / WARP_SIZE;

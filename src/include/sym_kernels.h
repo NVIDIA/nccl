@@ -415,7 +415,7 @@ struct alignas(16) ncclSymkDevWork {
   struct ncclWindow_vidmem *inputWin, *outputWin;
   size_t inputOff, outputOff; // these = origUserOffset + cbdPartOffset
   int rootRank;
-  uint64_t sChannelId:16, nChannels:16, padding:32;
+  uint64_t sChannelId:16, nChannels:16, chunkSizeBytes:32;
 };
 
 // Device-side profiling requested for a launch; KernelPhase implies KernelCh. Only the
@@ -536,7 +536,7 @@ ncclSymkKernelMask ncclSymkAGKernelMask();
 ncclSymkKernelMask ncclSymkARKernelMask();
 ncclSymkKernelMask ncclSymkRSKernelMask();
 ncclSymkKernelMask ncclSymkNonGenkKernelMask();
-size_t ncclSymkRsGinChunkBytes();
+size_t ncclSymkGinChunkBytes(ncclFunc_t func, bool* forced);
 
 constexpr int ncclSymkAllGather_RailRing_ChunkSize = 1 << 20;
 

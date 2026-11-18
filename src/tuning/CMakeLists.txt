@@ -9,6 +9,7 @@ set(TUNING_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ring.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/sym_model.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/gin.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/gin_ag.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/lsa.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/lsa_a2a.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/sym_model/lsa_base.cc

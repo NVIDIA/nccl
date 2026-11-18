@@ -237,6 +237,7 @@ struct ncclTaskColl {
 
   struct ncclDevrWindow* sendWin;
   struct ncclDevrWindow* recvWin;
+  int ceMethodId; // Selected CE method; Auto defers legacy UC/MC selection.
   ncclSymRegType_t winRegType;
   void* sendMhandle;
   void* recvMhandle;

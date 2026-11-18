@@ -569,6 +569,11 @@ constexpr int ncclSymkMultimemDeepBytePerChunk = ncclSymkGetBytesPerChunk(1, ncc
 constexpr int ncclSymkMcPerRankOffsetBytes = 32 * 1024 * 1024;
 static_assert(ncclSymkMcPerRankOffsetBytes % ncclSymkMultimemDeepBytePerChunk == 0);
 
+constexpr __host__ __device__ size_t ncclSymkMcStartOffset(unsigned rank, size_t bytes) {
+  unsigned phase = rank ^ ((rank >> 1) & 1);
+  return bytes == 0 ? 0 : size_t(phase) * ncclSymkMcPerRankOffsetBytes % bytes;
+}
+
 // Large-tile TMA deep loop (AllGather: 16 B relatively aligned, store side 256 B)
 constexpr int ncclSymkAlign256BDeepUnrollPacks = 16;
 constexpr int ncclSymkAlign256BDeepBytePerChunk =

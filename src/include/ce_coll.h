@@ -18,10 +18,11 @@
 #define NCCL_CE_SYNC_OPS_PER_RANK_UC 3
 
 enum ncclCeMethodId {
+  ncclCeMethodId_Auto = -1, // Legacy CE tasks defer UC/MC selection until execution.
   ncclCeMethodId_AllGather_UC,
   ncclCeMethodId_AllGather_MC,
   ncclCeMethodId_Coll_P2P_UC,
-  ncclCeMethodId_Count
+  ncclCeMethodId_Count // Number of concrete methods; also means no CE method in tuning results.
 };
 
 struct ncclCeColl {
@@ -32,9 +33,6 @@ struct ncclCeColl {
   size_t baseUCSymComplOffset;
   uint32_t ceSeqNum;
   bool useCompletePtr;
-  uint32_t intraBatchSyncFreq;
-  uint64_t intraBatchSyncMsgThreshold;
-  int64_t agMulticastThreshold;  // user override (>=0); -1 -> use cost model
   struct ncclDevrWindow* ceSyncWin;
   uint32_t* ceSeqNumDev; // Index 0 for the current value, 1 for GRAPH_SYNC_VALUE
 };
@@ -46,6 +44,7 @@ struct ncclCeInitTask {
 
 struct alignas(16) ncclCeCollArgs {
   ncclFunc_t func;
+  int method; // Selected CE method; Auto defers legacy UC/MC selection.
   int rootRank;
   ncclDataType_t datatype;
   size_t nElts;
@@ -67,6 +66,9 @@ struct ncclCeBatchOpsParams {
   // Split operations into stream-ordered round-robin waves.
   bool chunking;
   bool intraBatchSync;
+  // Prefer batching even under graph capture; false retains the existing API policy.
+  // Unsupported CUDA versions and legacy streams always use individual copies.
+  bool preferBatch;
 #if CUDART_VERSION >= 12080
   cudaMemcpyAttributes* attrs;
   size_t* attrIdxs;
@@ -91,7 +93,13 @@ ncclResult_t ncclMemOpSync(struct ncclComm* comm, cudaStream_t stream, struct nc
 ncclResult_t ncclCeInitBatchOpsParams(struct ncclCeBatchOpsParams* params, int capacity);
 void ncclCeFreeBatchOpsParams(struct ncclCeBatchOpsParams* params);
 
-// Launch a batch of cudaMemcpyAsync ops
+// Capability checks are shared by prediction and execution. A batching preference
+// never overrides CUDA support or legacy-stream restrictions.
+inline bool ncclCeMemcpyBatchSupported(int driverVersion, bool captured, bool legacyStream) {
+  return CUDART_VERSION >= 12080 && driverVersion >= (captured ? 13050 : 12080) && !legacyStream;
+}
+
+// Submit a copy list using the supported CUDA API.
 ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsParams* params, cudaStream_t stream,
                                   struct ncclCeCollArgs* profilerArgs = nullptr);
 
@@ -101,7 +109,8 @@ ncclResult_t scheduleCeCollTaskToPlan(struct ncclComm* comm, struct ncclKernelPl
 
 ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream);
 
-int ncclCeAllGatherUseMulticast(struct ncclComm* comm, size_t perRankBytes, int captured, int inPlace);
+ncclResult_t ncclCeAllGatherUseMulticast(struct ncclComm* comm, size_t perRankBytes, int captured, int inPlace,
+                                         bool* multicast);
 
 ncclResult_t ncclCeScatter(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream);
 

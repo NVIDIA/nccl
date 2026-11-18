@@ -260,8 +260,7 @@ static __device__ void bcastMultimem(ncclSymkArgsHandler& handler, int tn, int t
 
     // Ranks use offset multipliers 0 1 3 2 4 5 7 6 etc. This ensures proper address distribution even if
     // each rank has only 64MiB to process.
-    uint32_t startOffsetMultiplier = rank ^ ((rank >> 1) & 1);
-    size_t startBytes = nMainBytes > 0 ? (size_t)startOffsetMultiplier * ncclSymkMcPerRankOffsetBytes % nMainBytes : 0;
+    size_t startBytes = ncclSymkMcStartOffset(rank, nMainBytes);
     uintptr_t wrapAt = cursorAfter + (t % WARP_SIZE) * BytePerPack;
     uintptr_t cursor = nPreBytes + uintptr_t(startBytes / BytePerChunk) * BytePerChunk;
     cursor += (t / WARP_SIZE) * UnrollPacks * WARP_SIZE * BytePerPack;

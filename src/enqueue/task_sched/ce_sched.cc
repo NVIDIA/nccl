@@ -112,6 +112,7 @@ static ncclResult_t ceSchedCollArgsFromTuningInfo(struct ncclComm* comm, struct 
   NCCLCHECK(ncclDevrFindWindow(comm, raw->recvbuff, &args->recvWin));
 
   args->func = raw->func;
+  args->method = tInfo->tuningOut.ceMethodId;
   args->rootRank = raw->root;
   args->datatype = raw->datatype;
   args->nElts = raw->count;
@@ -656,8 +657,10 @@ static ncclResult_t ceSchedHierCeAllGatherDirect(struct ncclComm* comm, struct n
   // Phase 3: initial intra-node barrier
   NCCLCHECKGOTO(ncclMemOpSync(comm, stream, args), ret, fail);
 
-  agUseMulticast = ncclCeAllGatherUseMulticast(comm, perRankBytes, captured,
-                                               ncclAllGatherIsInPlace(sendbuff, recvbuff, myRank, perRankBytes));
+  NCCLCHECKGOTO(ncclCeAllGatherUseMulticast(comm, perRankBytes, captured,
+                                            ncclAllGatherIsInPlace(sendbuff, recvbuff, myRank, perRankBytes),
+                                            &agUseMulticast),
+                ret, fail);
 
   // Phase 4: self-broadcast of own slice
   NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&ceBcastOps, lsaSize), ret, fail);
@@ -957,8 +960,10 @@ static ncclResult_t ceSchedHierCeAllGatherRing(struct ncclComm* comm, struct ncc
   size_t perRankBytes = args->nElts * args->eltSize;
   size_t cwBytes = perRankBytes <= 1 ? perRankBytes : perRankBytes / 2;
   size_t ccwBytes = perRankBytes - cwBytes;
-  bool agUseMulticast = ncclCeAllGatherUseMulticast(
-    comm, perRankBytes, captured, (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes);
+  bool agUseMulticast = false;
+  NCCLCHECK(ncclCeAllGatherUseMulticast(comm, perRankBytes, captured,
+                                        (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes,
+                                        &agUseMulticast));
   int numCtx = ceSchedHierRingNumCtx(rmaProxyState, perRankBytes, captured);
 
   struct ncclRmaProxyCtx* railProxyCtx = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[railCtx];

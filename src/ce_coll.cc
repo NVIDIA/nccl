@@ -10,15 +10,12 @@
 #include <cuda.h>
 #include "cudawrap.h"
 #include "ce_coll.h"
+#include "ce_allgather_schedule.h"
 #include "alloc.h"
 #include "enqueue.h"
 #include "tuning.h"
 
-// User override: when set (>= 0) the cost model is bypassed and this byte
-// threshold decides multicast (sendSize <= threshold). -1 (unset) -> cost model.
-NCCL_PARAM(CeCollAgMulticastThreshold, "CE_COLL_AG_MULTICAST_THRESHOLD", -1);
-
-// Captured batch copies are opt-in until their performance benefits are fully understood.
+// Graph batching remains opt-in for copy lists without an explicit preference.
 NCCL_PARAM(CeBatchCaptureEnable, "CE_BATCH_CAPTURE_ENABLE", 0);
 
 // Chunk size used when a cudaMemcpyBatchAsync CE data batch requests
@@ -26,20 +23,12 @@ NCCL_PARAM(CeBatchCaptureEnable, "CE_BATCH_CAPTURE_ENABLE", 0);
 NCCL_PARAM(CeChunkSize, "CE_CHUNK_SIZE", 8 * 1024 * 1024);
 
 // On CUDA 13.1+, cudaMemcpyFlagPreferOverlapWithCompute is honored on non-Tegra platforms for cudaMemcpyBatchAsync.
-// When set, intra-device copies offload to the CE. NCCL sets this flag on NCCL_CTA_POLICY=ZERO when NCCL_CE_INTRA_GPU_MEMCPY_ENABLE=1 (default).
-// Set to 0 to omit the flag and leave intra-device self-copies on SMs.
+// NCCL requests CE offload for intra-device copies whenever NCCL_CE_INTRA_GPU_MEMCPY_ENABLE=1 (default), regardless of CTA policy.
+// Set to 0 to omit the CE offload preference.
 NCCL_PARAM(CeMemcpyOverlapEnable, "CE_INTRA_GPU_MEMCPY_ENABLE", 1);
 
 // Static constant for graph synchronization
 static const uint32_t GRAPH_SYNC_VALUE = 1;
-
-// Static constants for intra-batch synchronization to improve CE collective performance with large scale
-// Frequency of intra-batch synchronization
-static const uint32_t CE_COLL_INTRA_BATCH_SYNC_FREQ = 8;
-// Message threshold for intra-batch synchronization
-static const uint64_t CE_COLL_INTRA_BATCH_SYNC_MSG_THRESHOLD = 512 * 1024 * 1024;
-// cudaMemcpyBatchAsync supports CUDA graph capture starting with CUDA 13.5.
-static const int CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION = 13050;
 
 // Maximum size of a single sub-chunk for hierarchical collective
 static constexpr size_t HIER_COLL_MAX_CHUNK_SIZE = 64 * 1024 * 1024;
@@ -79,17 +68,15 @@ NCCL_PARAM(HierCeCollNumCtx, "HIER_CE_COLL_NUM_CTX", -1);
 
 // Decide multicast vs unicast for CE AllGather: a CE-only tuning mask lets
 // ncclTuningCompute pick the fastest CE method (UC vs MC).
-int ncclCeAllGatherUseMulticast(struct ncclComm* comm, size_t perRankBytes, int captured, int inPlace) {
-  if (!comm->symkState.hasLsaMultimem) return 0;
-
-  int64_t thresholdOverride = comm->ceColl.agMulticastThreshold;
-  if (thresholdOverride >= 0) {
-    return ((int64_t)perRankBytes <= thresholdOverride) ? 1 : 0;
-  }
+ncclResult_t ncclCeAllGatherUseMulticast(struct ncclComm* comm, size_t perRankBytes, int captured, int inPlace,
+                                         bool* multicast) {
+  *multicast = false;
+  if (!comm->symkState.hasLsaMultimem) return ncclSuccess;
 
   struct ncclTuningInput_t input = {};
   input.comm = comm;
-  input.tuningMask = NCCL_TUNING_MASK_CE;
+  input.tuningMask = (1ull << (NCCL_TUNING_CE_METHOD_ID_OFFSET + ncclCeMethodId_AllGather_UC)) |
+                     (1ull << (NCCL_TUNING_CE_METHOD_ID_OFFSET + ncclCeMethodId_AllGather_MC));
   input.func = ncclFuncAllGather;
   input.datatype = ncclInt8;
   input.nBytes = perRankBytes;
@@ -98,8 +85,9 @@ int ncclCeAllGatherUseMulticast(struct ncclComm* comm, size_t perRankBytes, int 
   input.inPlace = inPlace;
 
   struct ncclTuningResult_t result = NCCL_TUNING_RESULT_INIT;
-  if (ncclTuningCompute(&input, &result) != ncclSuccess) return 0;
-  return (result.ceMethodId == ncclCeMethodId_AllGather_MC) ? 1 : 0;
+  NCCLCHECK(ncclTuningCompute(&input, &result));
+  *multicast = result.ceMethodId == ncclCeMethodId_AllGather_MC;
+  return ncclSuccess;
 }
 
 ncclResult_t ncclCeInit(struct ncclComm* comm) {
@@ -128,9 +116,6 @@ ncclResult_t ncclCeInit(struct ncclComm* comm) {
   comm->ceColl.baseUCSymComplPtr = (uint8_t*)comm->ceColl.ceSyncWin->userPtr + comm->ceColl.baseUCSymComplOffset;
   comm->ceColl.ceSeqNum = 0;
   comm->ceColl.useCompletePtr = false;
-  comm->ceColl.intraBatchSyncFreq = CE_COLL_INTRA_BATCH_SYNC_FREQ;
-  comm->ceColl.intraBatchSyncMsgThreshold = CE_COLL_INTRA_BATCH_SYNC_MSG_THRESHOLD;
-  comm->ceColl.agMulticastThreshold = (int64_t)ncclParamCeCollAgMulticastThreshold();
   comm->ceColl.initialized = true;
   NCCLCHECKGOTO(ncclCudaMemcpy(comm->ceColl.ceSeqNumDev + 1, (uint32_t*)&GRAPH_SYNC_VALUE, 1), ret, fail);
   INFO(NCCL_INIT, "Init CE, rank %d baseUCSymReadyPtr %p, baseUCSymComplPtr %p, seq num %d", comm->rank,
@@ -396,6 +381,7 @@ exit:
   params->numOps = 0;
   params->chunking = false;
   params->intraBatchSync = false;
+  params->preferBatch = false;
 #if CUDART_VERSION >= 12080
   params->attrs = attrs;
   params->attrIdxs = attrIdxs;
@@ -428,6 +414,7 @@ void ncclCeFreeBatchOpsParams(struct ncclCeBatchOpsParams* params) {
   params->numOps = 0;
   params->chunking = false;
   params->intraBatchSync = false;
+  params->preferBatch = false;
 #if CUDART_VERSION >= 12080
   if (params->attrs) free(params->attrs);
   params->attrs = nullptr;
@@ -498,6 +485,7 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
   struct ncclProfilerEventRef ceBatchHandle = {};
   bool capturing = ncclCudaGraphValid(comm->planner.capturingGraph);
   bool isLegacyStream = false;
+  bool useMemcpyBatch = false;
 
   // Start CE batch profiling (no-op if profilerArgs is nullptr)
   NCCLCHECKGOTO(ncclProfilerStartCeBatchEvent(comm, profilerArgs, params, stream, &ceBatchHandle), ret, fail);
@@ -513,127 +501,109 @@ ncclResult_t ncclCeLaunchBatchOps(struct ncclComm* comm, struct ncclCeBatchOpsPa
     NCCLCHECKGOTO(ncclCudaStreamIsLegacyNull(stream, &isLegacyStream), ret, fail);
   }
 
-  if (comm->rank == 0 && capturing && ncclParamCeBatchCaptureEnable() && !isLegacyStream && CUDART_VERSION >= 12080 &&
-      driverVersion >= CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION) {
+  useMemcpyBatch = ncclCeMemcpyBatchSupported(driverVersion, capturing, isLegacyStream) &&
+                   (!capturing || params->preferBatch || ncclParamCeBatchCaptureEnable());
+  if (comm->rank == 0 && capturing && useMemcpyBatch) {
     static int reported = 0;
     if (COMPILER_ATOMIC_EXCHANGE(&reported, 1, std::memory_order_relaxed) == 0)
       INFO(NCCL_INIT, "cudaMemcpyBatchAsync enabled under graph capture");
   }
 
-  // Fall back during capture unless batch copies are enabled and supported, or with a legacy stream.
-  if ((capturing && (!ncclParamCeBatchCaptureEnable() || CUDART_VERSION < 12080 ||
-                     driverVersion < CE_COLL_MEMCPY_BATCH_CAPTURE_DRIVER_VERSION)) ||
-      isLegacyStream) {
+  if (!useMemcpyBatch) {
     for (int i = 0; i < params->numOps; i++) {
       CUDACHECKGOTO(cudaMemcpyAsync((void*)params->dsts[i], (void*)params->srcs[i], params->sizes[i],
                                     cudaMemcpyDeviceToDevice, stream),
                     ret, fail);
 
-      if (params->intraBatchSync && ((i + 1) % comm->ceColl.intraBatchSyncFreq == 0) && ((i + 1) < params->numOps)) {
+      if (params->intraBatchSync && ((i + 1) % ncclCeBatchCopyPlan::syncFreq == 0) && ((i + 1) < params->numOps)) {
         NCCLCHECKGOTO(ncclMemOpSync(comm, stream, profilerArgs), ret, fail);
       }
     }
     // WORKAROUND: This is a workaround to ensure that there is always an even number of intra-batch
     // synchronization operations.
     if (params->intraBatchSync &&
-        ((params->numOps + comm->ceColl.intraBatchSyncFreq - 1) / comm->ceColl.intraBatchSyncFreq) % 2 == 0) {
+        ((params->numOps + ncclCeBatchCopyPlan::syncFreq - 1) / ncclCeBatchCopyPlan::syncFreq) % 2 == 0) {
       NCCLCHECKGOTO(ncclMemOpSync(comm, stream, profilerArgs), ret, fail);
     }
   } else {
-    if (CUDART_VERSION >= 12080 && driverVersion >= 12080) {
 #if CUDART_VERSION >= 12080
-      // Use batch copy when supported for this stream and capture state.
-      params->attrs[0] = {};
-      params->attrs[0].srcAccessOrder = cudaMemcpySrcAccessOrderStream;
-      if (ncclParamCeMemcpyOverlapEnable()) {
-        params->attrs[0].flags = cudaMemcpyFlagPreferOverlapWithCompute;
+    // Use batch copy when supported for this stream and capture state.
+    params->attrs[0] = {};
+    params->attrs[0].srcAccessOrder = cudaMemcpySrcAccessOrderStream;
+    if (ncclParamCeMemcpyOverlapEnable()) {
+      params->attrs[0].flags = cudaMemcpyFlagPreferOverlapWithCompute;
+    }
+    params->attrIdxs[0] = 0;
+    params->numAttrs = 1;
+
+    if (params->chunking && ceChunkSize > 0) {
+      NCCLCHECKGOTO(ncclCeLaunchChunkedMemcpyBatchAsync(params, ceChunkSize, stream), ret, fail);
+    } else if (params->intraBatchSync) {
+      // Find the maximum transfer size to determine number of rounds
+      size_t maxSize = 0;
+      for (int i = 0; i < params->numOps; i++) {
+        if (params->sizes[i] > maxSize) {
+          maxSize = params->sizes[i];
+        }
       }
-      params->attrIdxs[0] = 0;
-      params->numAttrs = 1;
 
-      if (params->chunking && ceChunkSize > 0) {
-        NCCLCHECKGOTO(ncclCeLaunchChunkedMemcpyBatchAsync(params, ceChunkSize, stream), ret, fail);
-      } else if (params->intraBatchSync) {
-        // Find the maximum transfer size to determine number of rounds
-        size_t maxSize = 0;
-        size_t totalSize = 0;
+      ncclCeBatchCopyPlan copyPlan(params->numOps, maxSize);
+
+      size_t numTmpOps = params->numOps * copyPlan.rounds;
+
+      // Allocate temporary arrays for all chunked operations
+      // Use ncclUniqueArrayPtr for automatic cleanup on any exit path
+      ncclUniqueArrayPtr<void*> tmpDsts{nullptr};
+      ncclUniqueArrayPtr<void*> tmpSrcs{nullptr};
+      ncclUniqueArrayPtr<size_t> tmpSizes{nullptr};
+
+      NCCLCHECKGOTO(ncclCalloc(tmpDsts, numTmpOps), ret, fail);
+      NCCLCHECKGOTO(ncclCalloc(tmpSrcs, numTmpOps), ret, fail);
+      NCCLCHECKGOTO(ncclCalloc(tmpSizes, numTmpOps), ret, fail);
+
+      int opIdx = 0;
+      for (size_t round = 0; round < copyPlan.rounds; round++) {
+        size_t offset = round * copyPlan.chunkBytes;
+        // Prepare chunk transfers for this round
         for (int i = 0; i < params->numOps; i++) {
-          if (params->sizes[i] > maxSize) {
-            maxSize = params->sizes[i];
-          }
-          totalSize += params->sizes[i];
-        }
+          int index = (i + round) % params->numOps;
+          if (offset < params->sizes[index]) {
+            size_t remainingSize = params->sizes[index] - offset;
+            size_t currentChunkSize = std::min(remainingSize, copyPlan.chunkBytes);
 
-        size_t chunkSize = comm->ceColl.intraBatchSyncMsgThreshold / params->numOps;
-        int numRounds = (maxSize + chunkSize - 1) / chunkSize;
-
-        size_t numTmpOps = params->numOps * numRounds;
-
-        // Allocate temporary arrays for all chunked operations
-        // Use ncclUniqueArrayPtr for automatic cleanup on any exit path
-        ncclUniqueArrayPtr<void*> tmpDsts{nullptr};
-        ncclUniqueArrayPtr<void*> tmpSrcs{nullptr};
-        ncclUniqueArrayPtr<size_t> tmpSizes{nullptr};
-
-        NCCLCHECKGOTO(ncclCalloc(tmpDsts, numTmpOps), ret, fail);
-        NCCLCHECKGOTO(ncclCalloc(tmpSrcs, numTmpOps), ret, fail);
-        NCCLCHECKGOTO(ncclCalloc(tmpSizes, numTmpOps), ret, fail);
-
-        int opIdx = 0;
-        for (int round = 0; round < numRounds; round++) {
-          size_t offset = round * chunkSize;
-          // Prepare chunk transfers for this round
-          for (int i = 0; i < params->numOps; i++) {
-            int index = (i + round) % params->numOps;
-            if (offset < params->sizes[index]) {
-              size_t remainingSize = params->sizes[index] - offset;
-              size_t currentChunkSize = (remainingSize > chunkSize) ? chunkSize : remainingSize;
-
-              tmpDsts[opIdx] = (void*)((uint8_t*)params->dsts[index] + offset);
-              tmpSrcs[opIdx] = (void*)((uint8_t*)params->srcs[index] + offset);
-              tmpSizes[opIdx] = currentChunkSize;
-              opIdx++;
-            }
+            tmpDsts[opIdx] = (void*)((uint8_t*)params->dsts[index] + offset);
+            tmpSrcs[opIdx] = (void*)((uint8_t*)params->srcs[index] + offset);
+            tmpSizes[opIdx] = currentChunkSize;
+            opIdx++;
           }
         }
+      }
 
-        // Launch a single batch for all chunks
-        if (opIdx > 0) {
+      // Launch a single batch for all chunks
+      if (opIdx > 0) {
 #if CUDART_VERSION >= 13000
-          CUDACHECKGOTO(cudaMemcpyBatchAsync(tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), opIdx, params->attrs,
-                                             params->attrIdxs, params->numAttrs, stream),
-                        ret, fail);
-#else
-          CUDACHECKGOTO(cudaMemcpyBatchAsync(tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), opIdx, params->attrs,
-                                             params->attrIdxs, params->numAttrs, nullptr, stream),
-                        ret, fail);
-#endif
-        }
-      } else {
-        // Use single batch for all operations
-#if CUDART_VERSION >= 13000
-        CUDACHECKGOTO(cudaMemcpyBatchAsync(params->dsts, params->srcs, params->sizes, params->numOps, params->attrs,
+        CUDACHECKGOTO(cudaMemcpyBatchAsync(tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), opIdx, params->attrs,
                                            params->attrIdxs, params->numAttrs, stream),
                       ret, fail);
 #else
-        CUDACHECKGOTO(cudaMemcpyBatchAsync(params->dsts, params->srcs, params->sizes, params->numOps, params->attrs,
+        CUDACHECKGOTO(cudaMemcpyBatchAsync(tmpDsts.get(), tmpSrcs.get(), tmpSizes.get(), opIdx, params->attrs,
                                            params->attrIdxs, params->numAttrs, nullptr, stream),
                       ret, fail);
 #endif
       }
-#endif
     } else {
-      // For older CUDA versions, fall back to individual transfers.
-      for (int i = 0; i < params->numOps; i++) {
-        CUDACHECKGOTO(cudaMemcpyAsync((void*)params->dsts[i], (void*)params->srcs[i], params->sizes[i],
-                                      cudaMemcpyDeviceToDevice, stream),
-                      ret, fail);
-
-        if (params->intraBatchSync && ((i + 1) % comm->ceColl.intraBatchSyncFreq == 0) && ((i + 1) < params->numOps)) {
-          NCCLCHECKGOTO(ncclMemOpSync(comm, stream, profilerArgs), ret, fail);
-        }
-      }
+      // Use single batch for all operations
+#if CUDART_VERSION >= 13000
+      CUDACHECKGOTO(cudaMemcpyBatchAsync(params->dsts, params->srcs, params->sizes, params->numOps, params->attrs,
+                                         params->attrIdxs, params->numAttrs, stream),
+                    ret, fail);
+#else
+      CUDACHECKGOTO(cudaMemcpyBatchAsync(params->dsts, params->srcs, params->sizes, params->numOps, params->attrs,
+                                         params->attrIdxs, params->numAttrs, nullptr, stream),
+                    ret, fail);
+#endif
     }
+#endif
   }
 
 exit:
@@ -645,7 +615,30 @@ fail:
 }
 
 // AllGather across the LSA team (intra-node only).
+// Single-copy algorithms retain payload profiling without consulting the batch API policy.
+static ncclResult_t ncclCeCopyAsync(struct ncclComm* comm, void* dst, void* src, size_t bytes, cudaStream_t stream,
+                                    struct ncclCeCollArgs* args) {
+  ncclResult_t ret = ncclSuccess;
+  struct ncclProfilerEventRef handle = {};
+  struct ncclCeBatchOpsParams copy = {};
+  copy.srcs = &src;
+  copy.dsts = &dst;
+  copy.sizes = &bytes;
+  copy.numOps = 1;
+  NCCLCHECKGOTO(ncclProfilerStartCeBatchEvent(comm, args, &copy, stream, &handle), ret, fail);
+  CUDACHECKGOTO(cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, stream), ret, fail);
+exit:
+  NCCLCHECKIGNORE(ncclProfilerStopCeBatchEvent(comm, &handle, stream), ret);
+  return ret;
+fail:
+  goto exit;
+}
+
 ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
+  if (args->method != ncclCeMethodId_Auto && args->method != ncclCeMethodId_AllGather_UC &&
+      args->method != ncclCeMethodId_AllGather_MC)
+    return ncclInvalidArgument;
+
   ncclResult_t ret = ncclSuccess;
   int myLsaRank = comm->devrState.lsaTeamSelf;
   int lsaSize = comm->devrState.lsaTeamSize;
@@ -656,16 +649,18 @@ ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args,
   size_t offset;
   struct ncclCeBatchOpsParams batchOpsParams = {};
 
-  NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&batchOpsParams, lsaSize), ret, fail);
+  bool agUseMulticast = args->method == ncclCeMethodId_AllGather_MC;
+  if (args->method == ncclCeMethodId_Auto) {
+    NCCLCHECKGOTO(ncclCeAllGatherUseMulticast(
+                    comm, chunkBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
+                    ncclAllGatherIsInPlace(args->sendBuff, args->recvBuff, myLsaRank, chunkBytes), &agUseMulticast),
+                  ret, fail);
+  }
+
+  if (!agUseMulticast) NCCLCHECKGOTO(ncclCeInitBatchOpsParams(&batchOpsParams, lsaSize), ret, fail);
 
   // Ensure all ranks are ready before starting transfers
   NCCLCHECKGOTO(ncclMemOpSync(comm, stream, args), ret, fail);
-
-  // declare-then-assign: NCCLCHECKGOTO's goto can't cross a scalar initialization.
-  bool agUseMulticast;
-  agUseMulticast =
-    ncclCeAllGatherUseMulticast(comm, chunkBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
-                                ncclAllGatherIsInPlace(args->sendBuff, args->recvBuff, myLsaRank, chunkBytes));
 
   if (agUseMulticast) {
     // Multicast path: a single write to the multicast pointer covers
@@ -674,13 +669,15 @@ ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args,
     void* mcDstPtr;
     offset = myRecvBuff - (uint8_t*)args->recvWin->userPtr;
     NCCLCHECKGOTO(ncclDevrGetLsaTeamPtrMC(comm, args->recvWin, offset, ncclTeamLsa(comm), &mcDstPtr), ret, fail);
-    batchOpsParams.srcs[batchOpsParams.numOps] = (void*)mySendBuff;
-    batchOpsParams.dsts[batchOpsParams.numOps] = (void*)mcDstPtr;
-    batchOpsParams.sizes[batchOpsParams.numOps] = chunkBytes;
-    batchOpsParams.numOps++;
-    batchOpsParams.intraBatchSync = false;
+    ncclCeMcCopyPlan copyPlan = ncclCeAllGatherMcCopyPlan(comm, chunkBytes);
+    for (size_t step = 0; step < copyPlan.numCopies; ++step) {
+      size_t off = copyPlan.offset(step);
+      NCCLCHECKGOTO(ncclCeCopyAsync(comm, (uint8_t*)mcDstPtr + off, mySendBuff + off, copyPlan.size(step), stream,
+                                    args),
+                    ret, fail);
+    }
   } else {
-    // Unicast path (original behaviour).
+    batchOpsParams.preferBatch = true;
     // Copy own data to receive buffer if operation is out-of-place.
     if (myRecvBuff != mySendBuff) {
       batchOpsParams.srcs[batchOpsParams.numOps] = (void*)mySendBuff;
@@ -698,12 +695,9 @@ ncclResult_t ncclCeAllGather(struct ncclComm* comm, struct ncclCeCollArgs* args,
       batchOpsParams.sizes[batchOpsParams.numOps] = chunkBytes;
       batchOpsParams.numOps++;
     }
-    batchOpsParams.intraBatchSync = (batchOpsParams.numOps > comm->ceColl.intraBatchSyncFreq &&
-                                     chunkBytes * batchOpsParams.numOps >= comm->ceColl.intraBatchSyncMsgThreshold);
+    batchOpsParams.intraBatchSync = ncclCeBatchCopyPlan(batchOpsParams.numOps, chunkBytes).intraBatchSync;
+    NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &batchOpsParams, stream, args), ret, fail);
   }
-
-  // Launch the batch operations
-  NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &batchOpsParams, stream, args), ret, fail);
 
   // Ensure all transfers are complete across all ranks
   NCCLCHECKGOTO(ncclMemOpSync(comm, stream, args), ret, fail);
@@ -756,8 +750,7 @@ ncclResult_t ncclCeAlltoAll(struct ncclComm* comm, struct ncclCeCollArgs* args, 
   }
 
   // Check if we need to perform intra-batch synchronization
-  batchOpsParams.intraBatchSync = (batchOpsParams.numOps > comm->ceColl.intraBatchSyncFreq &&
-                                   chunkBytes * batchOpsParams.numOps >= comm->ceColl.intraBatchSyncMsgThreshold);
+  batchOpsParams.intraBatchSync = ncclCeBatchCopyPlan(batchOpsParams.numOps, chunkBytes).intraBatchSync;
 
   // Launch the batch operations
   NCCLCHECKGOTO(ncclCeLaunchBatchOps(comm, &batchOpsParams, stream, args), ret, fail);
@@ -1468,8 +1461,10 @@ static ncclResult_t ncclHierCeAllGatherDirect(struct ncclComm* comm, struct nccl
   // unicast loop (which is better at hiding tail latency).
   // declare-then-assign: NCCLCHECKGOTO's goto can't cross a scalar initialization.
   bool agUseMulticast;
-  agUseMulticast = ncclCeAllGatherUseMulticast(comm, perRankBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
-                                               ncclAllGatherIsInPlace(sendbuff, recvbuff, myRank, perRankBytes));
+  NCCLCHECKGOTO(ncclCeAllGatherUseMulticast(comm, perRankBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
+                                            ncclAllGatherIsInPlace(sendbuff, recvbuff, myRank, perRankBytes),
+                                            &agUseMulticast),
+                ret, fail);
 
   // ====================================================================
   // Phase 4: Self-broadcast (intra-node CE Broadcast of own chunk)
@@ -1792,9 +1787,10 @@ static ncclResult_t ncclHierCeAllGatherRing(struct ncclComm* comm, struct ncclKe
   size_t perRankBytes = args->nElts * args->eltSize;
   size_t cwBytes = perRankBytes <= 1 ? perRankBytes : perRankBytes / 2;
   size_t ccwBytes = perRankBytes - cwBytes;
-  bool agUseMulticast =
-    ncclCeAllGatherUseMulticast(comm, perRankBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
-                                (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes);
+  bool agUseMulticast = false;
+  NCCLCHECK(ncclCeAllGatherUseMulticast(comm, perRankBytes, ncclCudaGraphValid(comm->planner.capturingGraph),
+                                        (const uint8_t*)sendbuff == (const uint8_t*)recvbuff + myRank * perRankBytes,
+                                        &agUseMulticast));
   int numCtx = ncclHierCollRingNumCtx(rmaProxyState, perRankBytes, persistent);
 
   struct ncclRmaProxyCtx* railProxyCtx = (struct ncclRmaProxyCtx*)rmaProxyState->rmaProxyCtxs[railCtx];
@@ -2597,6 +2593,7 @@ ncclResult_t scheduleCeCollTaskToPlan(struct ncclComm* comm, struct ncclKernelPl
   plan->isCeColl = true;
   plan->ceCollArgs = ncclMemoryStackAlloc<struct ncclCeCollArgs>(&comm->memScoped);
   plan->ceCollArgs->rootRank = task->root;
+  plan->ceCollArgs->method = task->ceMethodId;
   plan->ceCollArgs->datatype = task->datatype;
   plan->ceCollArgs->nElts = task->count;
   plan->ceCollArgs->eltSize = ncclTypeSize(task->datatype);

@@ -2843,7 +2843,7 @@ static ncclResult_t collTaskAppend(struct ncclComm* comm, struct ncclInfo* info,
 }
 
 static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* info, struct ncclDevrWindow* sendWin,
-                                     struct ncclDevrWindow* recvWin, struct ncclDevRedOpFull opDev) {
+                                     struct ncclDevrWindow* recvWin, struct ncclDevRedOpFull opDev, int method) {
   ncclResult_t ret = ncclSuccess;
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclCeInitTask* ceTask = nullptr;
@@ -2897,6 +2897,7 @@ static ncclResult_t ceCollTaskAppend(struct ncclComm* comm, struct ncclInfo* inf
   t->apiEventHandle = ncclProfilerApiState.collApiEventHandle;
   t->sendWin = sendWin;
   t->recvWin = recvWin;
+  t->ceMethodId = method;
 
   ncclIntruQueueEnqueue(&planner->collCeTaskQueue, t);
   ncclProfilerStopCollApiEvent();
@@ -3474,7 +3475,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
       bool envOverridden = ncclGetEnvCtaPolicy() != NCCL_CONFIG_UNDEF_INT;
       info->collConfig.CTAPolicy = ncclCollConfigResolveCTAPolicy(perCall, comm->config.CTAPolicy, envOverridden);
       if ((info->collConfig.CTAPolicy & NCCL_CTA_POLICY_ZERO) && (ceAvailable || hierCeAvailable)) {
-        NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev));
+        NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev, ncclCeMethodId_Auto));
       }
       // Append kernel-based collective
       else {
@@ -3552,7 +3553,7 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
                    comm->minCompCap >= 100 && !RUBIN_AND_LATER(comm->minCompCap) && comm->isAllDirectNvlink) {
           // Use CE for AllGather on Blackwell when size exceeds sym CE threshold. Skip this automatic
           // route on Rubin and when the user passed an algorithm selection so the selection is honored.
-          NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev));
+          NCCLCHECK(ceCollTaskAppend(comm, info, sendWin, recvWin, opDev, ncclCeMethodId_Auto));
         } else {
           NCCLCHECK(collTaskAppend(comm, info, opDev));
         }

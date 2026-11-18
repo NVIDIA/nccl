@@ -154,4 +154,4 @@ cd 06_allgather_cft_multimem_counted/c && make
 - [NCCL API
   Reference](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api.html)
 - [CUDA Programming
-  Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
+  Guide](https://docs.nvidia.com/cuda/cuda-programming-guide/)

@@ -98,6 +98,16 @@ NCCL_DEVICE_INLINE static uint64_t hwCounterLoad(uint64_t* ptr) {
   return scopedAtomicLoad<cuda::thread_scope_system, Order>(ptr);
 }
 
+/* ── host abort request ───────────────────────────────────────────── */
+
+/* Poll the host-written abort flag (pinned memory). Loaded atomically with
+ * relaxed ordering, like nccl::utility::testAbort: a plain load here is
+ * loop-invariant (the wait loops below have no memory clobbers) and could be
+ * hoisted out of the spin, silently disabling the abort escape. */
+NCCL_DEVICE_INLINE static bool abortRequested(uint32_t* abortFlag) {
+  return abortFlag != nullptr && cuda::atomic_ref<uint32_t>{*abortFlag}.load(cuda::memory_order_relaxed) != 0;
+}
+
 /* ── ringDoorbell: shared doorbell-ring used by the post-path ring sites ─
 
  * Rings the SQ doorbell to `target`, then advances the bookkeeping cursors:
@@ -164,9 +174,12 @@ struct PutValuePayloadEncoder {
  * Put is specialized; Get and PutValue take the GPU path. Do not mix THREAD and
  * CTA/GPU posting on one QP without a flush in between. */
 
-NCCL_DEVICE_INLINE static void postPutThread(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah, uint16_t qpn,
-                                             uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
-                                             const RdmaSgeEncoder& sge, uint32_t optFlags) {
+template <bool HasTimeout>
+NCCL_DEVICE_INLINE static ncclResult_t postPutThread(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah,
+                                                     uint16_t qpn, uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
+                                                     const RdmaSgeEncoder& sge, uint32_t optFlags, uint32_t* abortFlag,
+                                                     uint64_t timeoutCycles) {
+  if NCCL_IF_CONSTEXPR (!HasTimeout) (void)timeoutCycles;
   efa_cuda_qp* qp = (efa_cuda_qp*)ep->qp;
   const uint32_t slot = qp->sq.wq.pc;
   const uint32_t next = slot + 1u;
@@ -175,8 +188,24 @@ NCCL_DEVICE_INLINE static void postPutThread(nccl_ofi_gin_gdaki_dev_endpoint_han
    * (cuda::atomic_ref on a generic pointer adds an LDL + NANOSLEEP fallback). */
   const uint64_t cntr = (uint64_t)__cvta_generic_to_global(ep->local_cntr_value);
   uint64_t done;
+  uint64_t startCycle = 0;
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  else (void)startCycle;
   do {
     asm volatile("ld.relaxed.sys.global.u64 %0, [%1];" : "=l"(done) : "l"(cntr));
+    /* The NIC stops consuming WQEs if one fails on the device (CQ error is
+     * invisible on this CQ-less path) or the QP enters an error state, so
+     * the FI_WRITE counter stalls and this credit wait would spin forever.
+     * Same guard as flushImplMode::wait_for_endpoint below. */
+    if NCCL_IF_CONSTEXPR (HasTimeout) {
+      if (clock64() - startCycle >= timeoutCycles) {
+        printf("NCCL EFA GDA put timeout: ep SQ credit, qpn %d, slot %u, completed %u, sq_size %u, block %d, thread "
+               "%d\n",
+               qpn, next, (uint32_t)done, ep->sq_size, (int)blockIdx.x, (int)threadIdx.x);
+        return ncclTimeout;
+      }
+    }
+    if (abortRequested(abortFlag)) return ncclInProgress;
   } while (((next - (uint32_t)done) & EFA_CNTR_MASK) > ep->sq_size);
   qp->sq.wq.pc = next;
 
@@ -204,6 +233,7 @@ NCCL_DEVICE_INLINE static void postPutThread(nccl_ofi_gin_gdaki_dev_endpoint_han
     ep->submitted_count += (uint64_t)(next - qp->sq.wq.wqes_posted);
     qp->sq.wq.wqes_posted = next;
   }
+  return ncclSuccess;
 }
 
 /* ── postRdmaOp: shared post path for Put, PutValue and Get ──────── */
@@ -222,19 +252,23 @@ struct PostRdmaOpModeTag {};
 /* C++14 does not discard the body of a normal `if`, so put the THREAD-only
  * encoder behind an overload boundary. This keeps Get and PutValue well-formed
  * when NCCL_IF_CONSTEXPR falls back to `if` with CUDA 12. */
-template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op>
-NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<true>, nccl_ofi_gin_gdaki_dev_endpoint_handle* ep,
-                                              uint16_t ah, uint16_t qpn, uint32_t qkey, uint64_t dstAddr,
-                                              uint32_t dstRkey, const RdmaSgeEncoder& sge, uint32_t optFlags) {
+template <bool HasTimeout, ncclGinResourceSharingMode mode, efaGdaRdmaOp op>
+NCCL_DEVICE_INLINE static ncclResult_t postRdmaOpImpl(PostRdmaOpModeTag<true>, nccl_ofi_gin_gdaki_dev_endpoint_handle* ep,
+                                                      uint16_t ah, uint16_t qpn, uint32_t qkey, uint64_t dstAddr,
+                                                      uint32_t dstRkey, const RdmaSgeEncoder& sge, uint32_t optFlags,
+                                                      uint32_t* abortFlag, uint64_t timeoutCycles) {
   static_assert(mode == NCCL_GIN_RESOURCE_SHARING_THREAD, "EFA GDA THREAD tag requires THREAD sharing");
   static_assert(op == EFA_GDA_RDMA_WRITE, "EFA GDA THREAD mode specializes Put only");
-  postPutThread(ep, ah, qpn, qkey, dstAddr, dstRkey, sge, optFlags);
+  return postPutThread<HasTimeout>(ep, ah, qpn, qkey, dstAddr, dstRkey, sge, optFlags, abortFlag, timeoutCycles);
 }
 
-template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op, typename PayloadEncoder>
-NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<false>, nccl_ofi_gin_gdaki_dev_endpoint_handle* ep,
-                                              uint16_t ah, uint16_t qpn, uint32_t qkey, uint64_t dstAddr,
-                                              uint32_t dstRkey, PayloadEncoder payloadEncoder, uint32_t optFlags) {
+template <bool HasTimeout, ncclGinResourceSharingMode mode, efaGdaRdmaOp op, typename PayloadEncoder>
+NCCL_DEVICE_INLINE static ncclResult_t postRdmaOpImpl(PostRdmaOpModeTag<false>,
+                                                      nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah,
+                                                      uint16_t qpn, uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
+                                                      PayloadEncoder payloadEncoder, uint32_t optFlags,
+                                                      uint32_t* abortFlag, uint64_t timeoutCycles) {
+  if NCCL_IF_CONSTEXPR (!HasTimeout) (void)timeoutCycles;
   efa_cuda_qp* qp = (efa_cuda_qp*)ep->qp;
   uint64_t* submitted_count_ptr = &ep->submitted_count;
   uint64_t* local_cntr_ptr = ep->local_cntr_value;
@@ -326,13 +360,21 @@ NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<false>, nccl_ofi
   }
   base = group.shfl(base, 0);
 
+  /* Timeout/abort guard shared by every wait in the chunk loop below,
+   * mirroring flushImplMode's wait_for_endpoint. Only the leader's waits
+   * consume these; every thread reads startCycle only when HasTimeout. */
+  uint64_t startCycle = 0;
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  else (void)startCycle;
+  ncclResult_t result = ncclSuccess;
+
   /* Chunk the group into windows of <= max_batch. */
   for (int chunk_start = 0; chunk_start < group_size; chunk_start += (int)max_batch) {
     int chunk_size = min((int)max_batch, group_size - chunk_start);
     uint32_t chunk_base = base + (uint32_t)chunk_start;
     uint32_t chunk_next = chunk_base + (uint32_t)chunk_size;
 
-    if (is_leader) {
+    if (is_leader && result == ncclSuccess) {
       /* Backpressure: keep the number of written-but-un-rung WQEs within
        * max_batch (the hard EFA staging limit). The un-rung depth this chunk
        * would reach is chunk_next - db_rung.
@@ -352,6 +394,21 @@ NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<false>, nccl_ofi
        * turn, a lower group does and will either ring (advancing db_rung) or
        * hand off (advancing base_ref); keep checking until our chunk fits. */
       while (chunk_next - dbrung_ref.load(cuda::memory_order_relaxed) > max_batch) {
+        if NCCL_IF_CONSTEXPR (HasTimeout) {
+          if (clock64() - startCycle >= timeoutCycles) {
+            printf("NCCL EFA GDA put timeout: staging backpressure, qpn %d, chunk_base %u, db_rung %u, nic %u, "
+                   "sq_size %u, block %d, thread %d\n",
+                   qpn, chunk_base, dbrung_ref.load(cuda::memory_order_relaxed),
+                   (uint32_t)hwCounterLoad<cuda::memory_order_relaxed>(local_cntr_ptr), sq_size_val, (int)blockIdx.x,
+                   (int)threadIdx.x);
+            result = ncclTimeout;
+            break;
+          }
+        }
+        if (abortRequested(abortFlag)) {
+          result = ncclInProgress;
+          break;
+        }
         if (base_ref.load(cuda::memory_order_acquire) == chunk_base) {
           uint32_t db_rung = dbrung_ref.load(cuda::memory_order_relaxed);
           if (chunk_base != db_rung) {   /* deferred, already-written batch */
@@ -367,10 +424,32 @@ NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<false>, nccl_ofi
        * counter wraps at 2^31 and chunk_next is uint32, so a plain
        * widened subtraction would underflow once either side wraps.
        * The true in-flight depth is bounded by sq_size (4096) « 2^31,
-       * so the masked difference is exact. */
-      while (((chunk_next - (uint32_t)hwCounterLoad<cuda::memory_order_relaxed>(local_cntr_ptr)) & EFA_CNTR_MASK) >
-             sq_size_val) {
-        /* spin */
+       * so the masked difference is exact.
+       *
+       * Skipped when the staging wait above already gave up, so a failing
+       * put does not burn a second timeout budget here. */
+      if (result == ncclSuccess) {
+        while (((chunk_next - (uint32_t)hwCounterLoad<cuda::memory_order_relaxed>(local_cntr_ptr)) & EFA_CNTR_MASK) >
+               sq_size_val) {
+          /* A stalled NIC FI_WRITE counter (rejected WQE on this CQ-less path,
+           * QP error, link/device failure) makes this wait unbounded: the NIC
+           * never consumes more SQ slots. Same guard as wait_for_endpoint. */
+          if NCCL_IF_CONSTEXPR (HasTimeout) {
+            if (clock64() - startCycle >= timeoutCycles) {
+              uint32_t completed = (uint32_t)hwCounterLoad<cuda::memory_order_relaxed>(local_cntr_ptr);
+              printf("NCCL EFA GDA put timeout: ep SQ backpressure, qpn %d, chunk_next %u, completed %u, outstanding "
+                     "%u, block %d, thread %d\n",
+                     qpn, chunk_next, completed, (chunk_next - completed) & EFA_CNTR_MASK, (int)blockIdx.x,
+                     (int)threadIdx.x);
+              result = ncclTimeout;
+              break;
+            }
+          }
+          if (abortRequested(abortFlag)) {
+            result = ncclInProgress;
+            break;
+          }
+        }
       }
     }
     group.sync();   /* members wait for leader's backpressure before writing */
@@ -403,18 +482,43 @@ NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<false>, nccl_ofi
     }
     group.sync();   /* all members' WQE writes for this chunk are done */
 
-    if (is_leader) {
+    if (is_leader && result == ncclSuccess) {
       /* Doorbell-order rendezvous: take the turn in strict slot order. */
       while (base_ref.load(cuda::memory_order_relaxed) != chunk_base) {
-        /* spin */
+        /* If a lower group's WQEs were never consumed by the NIC, that group
+         * never handed off (base_ref does not advance) and this rendezvous
+         * never completes. Same guard as the waits above. */
+        if NCCL_IF_CONSTEXPR (HasTimeout) {
+          if (clock64() - startCycle >= timeoutCycles) {
+            printf("NCCL EFA GDA put timeout: doorbell rendezvous, qpn %d, chunk_base %u, released %u, block %d, "
+                   "thread %d\n",
+                   qpn, chunk_base, base_ref.load(cuda::memory_order_relaxed), (int)blockIdx.x, (int)threadIdx.x);
+            result = ncclTimeout;
+            break;
+          }
+        }
+        if (abortRequested(abortFlag)) {
+          result = ncclInProgress;
+          break;
+        }
       }
+    }
 
-      /* Ring unless aggregating. Force a ring if deferring would leave
-       * more than max_batch un-rung WQEs (db_rung is the last rung slot),
-       * so the EFA staging limit is never exceeded. When we do ring, ring
-       * to chunk_next: it is >= every deferred slot below us (we hold the
-       * turn in slot order), so one doorbell drains the whole contiguous
-       * batch. submitted_count advances by everything since db_rung. */
+    /* Ring unless aggregating. Force a ring if deferring would leave
+     * more than max_batch un-rung WQEs (db_rung is the last rung slot),
+     * so the EFA staging limit is never exceeded. When we do ring, ring
+     * to chunk_next: it is >= every deferred slot below us (we hold the
+     * turn in slot order), so one doorbell drains the whole contiguous
+     * batch. submitted_count advances by everything since db_rung.
+     *
+     * Skipped on error: the waiting phase above did not complete, so this
+     * group must not ring or hand off (leaving base_ref unchanged keeps
+     * later groups from proceeding into a broken pipeline). The context is
+     * now failed: only later TIMED calls escape through their own guards;
+     * untimed callers on the same context would wait forever, which is why
+     * the public contract (gin.h) requires tearing the context down after
+     * ncclTimeout. */
+    if (is_leader && result == ncclSuccess) {
       uint32_t db_rung = dbrung_ref.load(cuda::memory_order_relaxed);
       bool must_ring = (!aggregate) || (chunk_next - db_rung >= max_batch);
       if (must_ring) {
@@ -433,26 +537,55 @@ NCCL_DEVICE_INLINE static void postRdmaOpImpl(PostRdmaOpModeTag<false>, nccl_ofi
     }
     group.sync();   /* chunk fully posted before the next chunk */
   }
+  /* Only the leader runs the waits above, so publish its verdict to every
+   * lane of this QP's group: the members would otherwise return success and
+   * keep posting into a pipeline whose waits have already given up. */
+  if NCCL_IF_CONSTEXPR (HasTimeout) result = (ncclResult_t)group.shfl((int)result, 0);
+  /* ncclInProgress is mapped to success here, exactly as in flushImplMode:
+   * an abort is surfaced to the rest of the job through the caller's own
+   * abort polling, and turning a winning abort race into an error would
+   * double-report the same abort. ncclTimeout propagates as a failure. */
+  return (result == ncclInProgress) ? ncclSuccess : result;
 }
 
-template <ncclGinResourceSharingMode mode, efaGdaRdmaOp op = EFA_GDA_RDMA_WRITE, typename PayloadEncoder>
-NCCL_DEVICE_INLINE static void postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah, uint16_t qpn,
-                                          uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
-                                          PayloadEncoder payloadEncoder, uint32_t optFlags = ncclGinOptFlagsDefault) {
-  postRdmaOpImpl<mode, op>(PostRdmaOpModeTag<mode == NCCL_GIN_RESOURCE_SHARING_THREAD>{}, ep, ah, qpn, qkey, dstAddr,
-                           dstRkey, payloadEncoder, optFlags);
+template <bool HasTimeout, ncclGinResourceSharingMode mode, efaGdaRdmaOp op = EFA_GDA_RDMA_WRITE,
+          typename PayloadEncoder>
+NCCL_DEVICE_INLINE static ncclResult_t postRdmaOp(nccl_ofi_gin_gdaki_dev_endpoint_handle* ep, uint16_t ah,
+                                                  uint16_t qpn, uint32_t qkey, uint64_t dstAddr, uint32_t dstRkey,
+                                                  PayloadEncoder payloadEncoder, uint32_t optFlags = ncclGinOptFlagsDefault,
+                                                  uint32_t* abortFlag = nullptr, uint64_t timeoutCycles = 0) {
+  return postRdmaOpImpl<HasTimeout, mode, op>(PostRdmaOpModeTag<mode == NCCL_GIN_RESOURCE_SHARING_THREAD>{}, ep, ah, qpn,
+                                              qkey, dstAddr, dstRkey, payloadEncoder, optFlags, abortFlag, timeoutCycles);
 }
 
 /* ── putImplMode: mode-templated Put implementation ─────────────── */
 
-template <ncclGinResourceSharingMode mode, typename Coop>
-NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, bool hasWins, ncclGinWindow_t dstWin,
-                                           size_t dstOff, ncclGinWindow_t srcWin, size_t srcOff, size_t bytes,
-                                           ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
-                                           uint64_t signalOpArg, bool hasCounter, ncclGinCounter_t counterId,
-                                           bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
-                                           cuda::thread_scope required, cuda::thread_scope given, uint32_t optFlags) {
+template <bool HasTimeout, ncclGinResourceSharingMode mode, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t putImplMode(ncclGinCtx ctx, Coop coop, int peer, bool hasWins,
+                                                   ncclGinWindow_t dstWin, size_t dstOff, ncclGinWindow_t srcWin,
+                                                   size_t srcOff, size_t bytes, ncclGinSignalDescriptor signal,
+                                                   ncclGinSignalOp_t signalOp, uint64_t signalOpArg, bool hasCounter,
+                                                   ncclGinCounter_t counterId, bool hasDescriptor,
+                                                   ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
+                                                   cuda::thread_scope given, uint32_t optFlags, uint32_t* abortFlag,
+                                                   uint64_t timeoutCycles) {
+  if NCCL_IF_CONSTEXPR (!HasTimeout) (void)timeoutCycles;
   coop.sync();
+  ncclResult_t result = ncclSuccess;
+  /* One deadline for the whole call: every wait site below (post path and
+   * leading-chunk drain) is handed the budget remaining since the call
+   * started, so the call as a whole gives up after timeoutCycles no matter
+   * how many posts it contains. */
+  uint64_t startCycle = 0;
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  else (void)startCycle;
+  auto budgetLeft = [&]() -> uint64_t {
+    if NCCL_IF_CONSTEXPR (HasTimeout) {
+      uint64_t elapsed = clock64() - startCycle;
+      return elapsed >= timeoutCycles ? 0 : timeoutCycles - elapsed;
+    }
+    return 0;
+  };
   if (coop.thread_rank() == 0) {
     nccl_ofi_gin_gdaki_dev_handle* dev = getDevHandle(ctx);
 
@@ -619,8 +752,10 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
         const uint16_t dQpn = dev->data.target_remote_qpns[dataIdx];
         const uint32_t dQkey = dev->data.target_qkey[dataIdx];
         for (size_t i = 0; i < nLeading; i++) {
-          postRdmaOp<mode>(&dev->data, dAh, dQpn, dQkey, absDstAddr + i * cap, dstRkey,
-                           RdmaSgeEncoder{absSrcAddr + i * cap, srcLkey, (uint32_t)cap}, ncclGinOptFlagsDefault);
+          result = postRdmaOp<HasTimeout, mode>(&dev->data, dAh, dQpn, dQkey, absDstAddr + i * cap, dstRkey,
+                                                RdmaSgeEncoder{absSrcAddr + i * cap, srcLkey, (uint32_t)cap},
+                                                ncclGinOptFlagsDefault, abortFlag, budgetLeft());
+          if (result != ncclSuccess) goto done;
         }
         /* EFA SRD is unordered: the tail landing does not imply the leading
          * chunks landed. So when the tail announces completion (signal or
@@ -643,7 +778,26 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
           while (((((uint32_t)submitted_ref.load(cuda::memory_order_relaxed)) -
                    (uint32_t)hwCounterLoad(dev->data.local_cntr_value)) &
                   EFA_CNTR_MASK) != 0) {
-            /* spin: leading chunks in flight */
+            /* Same stalled-NIC scenario as the post path: if the NIC stopped
+             * consuming, these leading chunks never complete and the wait
+             * would spin forever. Same guard as flushImplMode, sharing the
+             * call's overall deadline (startCycle). */
+            if NCCL_IF_CONSTEXPR (HasTimeout) {
+              if (clock64() - startCycle >= timeoutCycles) {
+                uint32_t submitted = (uint32_t)submitted_ref.load(cuda::memory_order_relaxed);
+                uint32_t completed = (uint32_t)hwCounterLoad(dev->data.local_cntr_value);
+                printf("NCCL EFA GDA put timeout: leading-chunk drain, ep data, submitted %u, completed %u, "
+                       "outstanding %u, block %d, thread %d\n",
+                       submitted, completed, (submitted - completed) & EFA_CNTR_MASK, (int)blockIdx.x,
+                       (int)threadIdx.x);
+                result = ncclTimeout;
+                goto done;
+              }
+            }
+            if (abortRequested(abortFlag)) {
+              result = ncclInProgress;
+              goto done;
+            }
           }
         }
         absSrcAddr += nLeading * cap;
@@ -657,8 +811,10 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
        * addressed to the resolved target so the receiver's FI_REMOTE_WRITE
        * fires once. absSrcAddr/absDstAddr/writeBytes already point at the
        * payload or the scratch region per the hasPayload branch above. */
-      postRdmaOp<mode>(main_ep, main_ah, main_qpn, main_qkey, absDstAddr, dstRkey,
-                       RdmaSgeEncoder{absSrcAddr, srcLkey, writeBytes}, optFlags);
+      result = postRdmaOp<HasTimeout, mode>(main_ep, main_ah, main_qpn, main_qkey, absDstAddr, dstRkey,
+                                            RdmaSgeEncoder{absSrcAddr, srcLkey, writeBytes}, optFlags, abortFlag,
+                                            budgetLeft());
+      if (result != ncclSuccess) goto done;
 
       /* Remaining (signalCount - 1) signal increments: 0-byte writes to
        * the peer scratch region on the DATA endpoint, so the caller's
@@ -666,45 +822,53 @@ NCCL_DEVICE_INLINE static void putImplMode(ncclGinCtx ctx, Coop coop, int peer, 
        * signalCount > 1, which implies an INDEXED Add (and thus a
        * signal endpoint target). */
       for (uint32_t k = 1u; k < signalCount; k++) {
-        postRdmaOp<mode>(&dev->data, dataSigAh, dataSigQpn, dataSigQkey, dev->scratch_remote_addrs[peer],
-                         dev->scratch_remote_rkeys[peer],
-                         RdmaSgeEncoder{dev->scratch_local_addr, dev->scratch_lkey, 0u}, optFlags);
+        result = postRdmaOp<HasTimeout, mode>(&dev->data, dataSigAh, dataSigQpn, dataSigQkey,
+                                              dev->scratch_remote_addrs[peer], dev->scratch_remote_rkeys[peer],
+                                              RdmaSgeEncoder{dev->scratch_local_addr, dev->scratch_lkey, 0u}, optFlags,
+                                              abortFlag, budgetLeft());
+        if (result != ncclSuccess) goto done;
       }
     }
   }
+done:
   (void)hasDescriptor;
   (void)descriptor;
   (void)required;
   (void)given;
   (void)optFlags;
   coop.sync();
+  /* Same ncclInProgress -> ncclSuccess mapping as flushImplMode: during an
+   * abort the surrounding kernel tears down through its own abort polling. */
+  return (result == ncclInProgress) ? ncclSuccess : result;
 }
 
 /* ── putImpl: runtime mode dispatcher ─────────────────────────────── */
 
-template <typename Coop>
-NCCL_DEVICE_INLINE static void putImpl(ncclGinCtx ctx, Coop coop, int peer, bool hasWins, ncclGinWindow_t dstWin,
-                                       size_t dstOff, ncclGinWindow_t srcWin, size_t srcOff, size_t bytes,
-                                       ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
-                                       bool hasCounter, ncclGinCounter_t counterId, bool hasDescriptor,
-                                       ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
-                                       cuda::thread_scope given, uint32_t optFlags) {
+template <bool HasTimeout = false, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t putImpl(ncclGinCtx ctx, Coop coop, int peer, bool hasWins, ncclGinWindow_t dstWin,
+                                               size_t dstOff, ncclGinWindow_t srcWin, size_t srcOff, size_t bytes,
+                                               ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
+                                               uint64_t signalOpArg, bool hasCounter, ncclGinCounter_t counterId,
+                                               bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                                               cuda::thread_scope required, cuda::thread_scope given, uint32_t optFlags,
+                                               uint32_t* abortFlag, uint64_t timeoutCycles) {
   switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
   case NCCL_GIN_RESOURCE_SHARING_THREAD:
-    putImplMode<NCCL_GIN_RESOURCE_SHARING_THREAD>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff, bytes,
-                                                  signal, signalOp, signalOpArg, hasCounter, counterId, hasDescriptor,
-                                                  descriptor, required, given, optFlags);
-    break;
+    return putImplMode<HasTimeout, NCCL_GIN_RESOURCE_SHARING_THREAD>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin,
+                                                                     srcOff, bytes, signal, signalOp, signalOpArg,
+                                                                     hasCounter, counterId, hasDescriptor, descriptor,
+                                                                     required, given, optFlags, abortFlag,
+                                                                     timeoutCycles);
   case NCCL_GIN_RESOURCE_SHARING_CTA:
-    putImplMode<NCCL_GIN_RESOURCE_SHARING_CTA>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff, bytes, signal,
-                                               signalOp, signalOpArg, hasCounter, counterId, hasDescriptor, descriptor,
-                                               required, given, optFlags);
-    break;
+    return putImplMode<HasTimeout, NCCL_GIN_RESOURCE_SHARING_CTA>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin,
+                                                                  srcOff, bytes, signal, signalOp, signalOpArg,
+                                                                  hasCounter, counterId, hasDescriptor, descriptor,
+                                                                  required, given, optFlags, abortFlag, timeoutCycles);
   default:
-    putImplMode<NCCL_GIN_RESOURCE_SHARING_GPU>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff, bytes, signal,
-                                               signalOp, signalOpArg, hasCounter, counterId, hasDescriptor, descriptor,
-                                               required, given, optFlags);
-    break;
+    return putImplMode<HasTimeout, NCCL_GIN_RESOURCE_SHARING_GPU>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin,
+                                                                  srcOff, bytes, signal, signalOp, signalOpArg,
+                                                                  hasCounter, counterId, hasDescriptor, descriptor,
+                                                                  required, given, optFlags, abortFlag, timeoutCycles);
   }
 }
 
@@ -718,11 +882,26 @@ NCCL_DEVICE_INLINE static void putImpl(ncclGinCtx ctx, Coop coop, int peer, bool
  * window (the destination it fills), with postRdmaOp's op selecting the
  * direction. The fetched bytes become observable to the caller once the read
  * completes, which the caller establishes with flush or flushAsync/wait. */
-template <ncclGinResourceSharingMode mode, typename Coop>
-NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin,
-                                           size_t remoteOff, ncclGinWindow_t localWin, size_t localOff, size_t bytes,
-                                           uint32_t optFlags) {
+template <bool HasTimeout, ncclGinResourceSharingMode mode, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t getImplMode(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin,
+                                                   size_t remoteOff, ncclGinWindow_t localWin, size_t localOff,
+                                                   size_t bytes, uint32_t optFlags, uint32_t* abortFlag,
+                                                   uint64_t timeoutCycles) {
+  if NCCL_IF_CONSTEXPR (!HasTimeout) (void)timeoutCycles;
   coop.sync();
+  ncclResult_t result = ncclSuccess;
+  /* One deadline for the whole call: each chunk below is handed the budget
+   * remaining since the call started (see putImplMode). */
+  uint64_t startCycle = 0;
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  else (void)startCycle;
+  auto budgetLeft = [&]() -> uint64_t {
+    if NCCL_IF_CONSTEXPR (HasTimeout) {
+      uint64_t elapsed = clock64() - startCycle;
+      return elapsed >= timeoutCycles ? 0 : timeoutCycles - elapsed;
+    }
+    return 0;
+  };
   if (coop.thread_rank() == 0) {
     nccl_ofi_gin_gdaki_dev_handle* dev = getDevHandle(ctx);
 
@@ -753,43 +932,61 @@ NCCL_DEVICE_INLINE static void getImplMode(ncclGinCtx ctx, Coop coop, int peer, 
     uint64_t localAddr = absLocalAddr;
     do {
       const size_t chunk = (remaining > cap) ? cap : remaining;
-      postRdmaOp<mode, EFA_GDA_RDMA_READ>(&dev->data, ah, qpn, qkey, remoteAddr, remoteRkey,
-                                          RdmaSgeEncoder{localAddr, localLkey, (uint32_t)chunk}, optFlags);
+      result = postRdmaOp<HasTimeout, mode, EFA_GDA_RDMA_READ>(&dev->data, ah, qpn, qkey, remoteAddr, remoteRkey,
+                                                               RdmaSgeEncoder{localAddr, localLkey, (uint32_t)chunk},
+                                                               optFlags, abortFlag, budgetLeft());
+      if (result != ncclSuccess) goto done;
       remoteAddr += chunk;
       localAddr += chunk;
       remaining -= chunk;
     } while (remaining > 0);
   }
+done:
   coop.sync();
+  /* ncclInProgress -> ncclSuccess, as in flushImplMode (see putImplMode). */
+  return (result == ncclInProgress) ? ncclSuccess : result;
 }
 
 /* ── getImpl: dispatch on the context's resource-sharing mode ────── */
 
-template <typename Coop>
-NCCL_DEVICE_INLINE static void getImpl(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin, size_t remoteOff,
-                                       ncclGinWindow_t localWin, size_t localOff, size_t bytes, uint32_t optFlags) {
+template <bool HasTimeout = false, typename Coop>
+NCCL_DEVICE_INLINE static ncclResult_t getImpl(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin,
+                                               size_t remoteOff, ncclGinWindow_t localWin, size_t localOff, size_t bytes,
+                                               uint32_t optFlags, uint32_t* abortFlag, uint64_t timeoutCycles) {
   switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
   case NCCL_GIN_RESOURCE_SHARING_CTA:
-    getImplMode<NCCL_GIN_RESOURCE_SHARING_CTA>(ctx, coop, peer, remoteWin, remoteOff, localWin, localOff, bytes,
-                                               optFlags);
-    break;
+    return getImplMode<HasTimeout, NCCL_GIN_RESOURCE_SHARING_CTA>(ctx, coop, peer, remoteWin, remoteOff, localWin,
+                                                                  localOff, bytes, optFlags, abortFlag, timeoutCycles);
   default:
-    getImplMode<NCCL_GIN_RESOURCE_SHARING_GPU>(ctx, coop, peer, remoteWin, remoteOff, localWin, localOff, bytes,
-                                               optFlags);
-    break;
+    return getImplMode<HasTimeout, NCCL_GIN_RESOURCE_SHARING_GPU>(ctx, coop, peer, remoteWin, remoteOff, localWin,
+                                                                  localOff, bytes, optFlags, abortFlag, timeoutCycles);
   }
 }
 
 /* ── putValueImplMode: mode-templated PutValue implementation ─────── */
 
-template <ncclGinResourceSharingMode mode, typename Coop, typename T>
-NCCL_DEVICE_INLINE static void putValueImplMode(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t dstWin,
-                                                size_t dstOff, T srcVal, ncclGinSignalDescriptor signal,
-                                                ncclGinSignalOp_t signalOp, uint64_t signalOpArg, bool hasDescriptor,
-                                                ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
-                                                cuda::thread_scope given, uint32_t optFlags) {
+template <bool HasTimeout, ncclGinResourceSharingMode mode, typename Coop, typename T>
+NCCL_DEVICE_INLINE static ncclResult_t putValueImplMode(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t dstWin,
+                                                        size_t dstOff, T srcVal, ncclGinSignalDescriptor signal,
+                                                        ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
+                                                        bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                                                        cuda::thread_scope required, cuda::thread_scope given,
+                                                        uint32_t optFlags, uint32_t* abortFlag, uint64_t timeoutCycles) {
   static_assert(sizeof(T) <= 8, "PutValue: T must fit in 8 bytes");
+  if NCCL_IF_CONSTEXPR (!HasTimeout) (void)timeoutCycles;
   coop.sync();
+  ncclResult_t result = ncclSuccess;
+  /* One deadline for the whole call (see putImplMode). */
+  uint64_t startCycle = 0;
+  if NCCL_IF_CONSTEXPR (HasTimeout) startCycle = clock64();
+  else (void)startCycle;
+  auto budgetLeft = [&]() -> uint64_t {
+    if NCCL_IF_CONSTEXPR (HasTimeout) {
+      uint64_t elapsed = clock64() - startCycle;
+      return elapsed >= timeoutCycles ? 0 : timeoutCycles - elapsed;
+    }
+    return 0;
+  };
   if (coop.thread_rank() == 0) {
     nccl_ofi_gin_gdaki_dev_handle* dev = getDevHandle(ctx);
 
@@ -830,41 +1027,52 @@ NCCL_DEVICE_INLINE static void putValueImplMode(ncclGinCtx ctx, Coop coop, int p
     uint32_t dstRkey = dstMh->peers[peer].rkey;
 
     PutValuePayloadEncoder<T> payloadEncoder(srcVal);
-    postRdmaOp<mode>(ep, ah, qpn, qkey, absDstAddr, dstRkey, payloadEncoder, ncclGinOptFlagsDefault);
+    result = postRdmaOp<HasTimeout, mode>(ep, ah, qpn, qkey, absDstAddr, dstRkey, payloadEncoder,
+                                          ncclGinOptFlagsDefault, abortFlag, budgetLeft());
+    if (result != ncclSuccess) goto done;
 
     /* Remaining (signalCount - 1) signal increments: 0-byte writes to
      * the peer scratch region on the DATA endpoint. The loop body is empty
      * unless signalCount > 1, which implies an INDEXED Add (and thus a
      * signal endpoint target). */
     for (uint32_t k = 1u; k < signalCount; k++) {
-      postRdmaOp<mode>(ep, ah, qpn, qkey, dev->scratch_remote_addrs[peer], dev->scratch_remote_rkeys[peer],
-                       RdmaSgeEncoder{dev->scratch_local_addr, dev->scratch_lkey, 0u});
+      result = postRdmaOp<HasTimeout, mode>(ep, ah, qpn, qkey, dev->scratch_remote_addrs[peer],
+                                            dev->scratch_remote_rkeys[peer],
+                                            RdmaSgeEncoder{dev->scratch_local_addr, dev->scratch_lkey, 0u},
+                                            ncclGinOptFlagsDefault, abortFlag, budgetLeft());
+      if (result != ncclSuccess) goto done;
     }
   }
+done:
   (void)hasDescriptor;
   (void)descriptor;
   (void)required;
   (void)given;
   (void)optFlags;
   coop.sync();
+  return (result == ncclInProgress) ? ncclSuccess : result;
 }
 
 /* ── putValueImpl: runtime mode dispatcher ────────────────────────── */
 
-template <typename Coop, typename T>
-NCCL_DEVICE_INLINE static void putValueImpl(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t dstWin, size_t dstOff,
-                                            T srcVal, ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
-                                            uint64_t signalOpArg, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
-                                            cuda::thread_scope required, cuda::thread_scope given, uint32_t optFlags) {
+template <bool HasTimeout = false, typename Coop, typename T>
+NCCL_DEVICE_INLINE static ncclResult_t putValueImpl(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t dstWin,
+                                                    size_t dstOff, T srcVal, ncclGinSignalDescriptor signal,
+                                                    ncclGinSignalOp_t signalOp, uint64_t signalOpArg,
+                                                    bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                                                    cuda::thread_scope required, cuda::thread_scope given,
+                                                    uint32_t optFlags, uint32_t* abortFlag, uint64_t timeoutCycles) {
   switch ((ncclGinResourceSharingMode)ctx.resourceSharingMode) {
   case NCCL_GIN_RESOURCE_SHARING_CTA:
-    putValueImplMode<NCCL_GIN_RESOURCE_SHARING_CTA>(ctx, coop, peer, dstWin, dstOff, srcVal, signal, signalOp,
-                                                    signalOpArg, hasDescriptor, descriptor, required, given, optFlags);
-    break;
+    return putValueImplMode<HasTimeout, NCCL_GIN_RESOURCE_SHARING_CTA>(ctx, coop, peer, dstWin, dstOff, srcVal, signal,
+                                                                      signalOp, signalOpArg, hasDescriptor, descriptor,
+                                                                      required, given, optFlags, abortFlag,
+                                                                      timeoutCycles);
   default:
-    putValueImplMode<NCCL_GIN_RESOURCE_SHARING_GPU>(ctx, coop, peer, dstWin, dstOff, srcVal, signal, signalOp,
-                                                    signalOpArg, hasDescriptor, descriptor, required, given, optFlags);
-    break;
+    return putValueImplMode<HasTimeout, NCCL_GIN_RESOURCE_SHARING_GPU>(ctx, coop, peer, dstWin, dstOff, srcVal, signal,
+                                                                      signalOp, signalOpArg, hasDescriptor, descriptor,
+                                                                      required, given, optFlags, abortFlag,
+                                                                      timeoutCycles);
   }
 }
 
@@ -973,9 +1181,31 @@ struct ncclGinApi_Put<NCCL_NET_DEVICE_GIN_EFA_GDA> {
                                       bool hasCounter, ncclGinCounter_t counterId, bool hasDescriptor,
                                       ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
                                       cuda::thread_scope given, uint32_t optFlags = ncclGinOptFlagsDefault) {
-    nccl::gin::efa_gda::putImpl(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff, bytes, signal, signalOp,
-                                signalOpArg, hasCounter, counterId, hasDescriptor, descriptor, required, given,
-                                optFlags);
+    (void)nccl::gin::efa_gda::putImpl</*HasTimeout=*/false>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff,
+                                                            bytes, signal, signalOp, signalOpArg, hasCounter, counterId,
+                                                            hasDescriptor, descriptor, required, given, optFlags,
+                                                            /*abortFlag=*/nullptr, /*timeoutCycles=*/0);
+  }
+
+  /* Timed variant, mirroring ncclGinApi_Flush's two overloads. The post path's
+   * waits (SQ credit, staging/SQ backpressure, doorbell rendezvous, leading-
+   * chunk drain) check abortFlag every iteration and timeoutCycles when they
+   * exist, so a NIC-level stall surfaces as ncclTimeout instead of a silent
+   * permanent hang. On abort the waits unwind and ncclInProgress is mapped to
+   * ncclSuccess as in flushImplMode. Callers must pass a non-zero
+   * timeoutCycles: zero expires the deadline immediately. */
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, int peer, bool hasWins, ncclGinWindow_t dstWin,
+                                              size_t dstOff, ncclGinWindow_t srcWin, size_t srcOff, size_t bytes,
+                                              ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
+                                              uint64_t signalOpArg, bool hasCounter, ncclGinCounter_t counterId,
+                                              bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                                              cuda::thread_scope required, cuda::thread_scope given, uint32_t optFlags,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    return nccl::gin::efa_gda::putImpl</*HasTimeout=*/true>(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff,
+                                                            bytes, signal, signalOp, signalOpArg, hasCounter, counterId,
+                                                            hasDescriptor, descriptor, required, given, optFlags,
+                                                            abortFlag, timeoutCycles);
   }
 };
 
@@ -989,8 +1219,23 @@ struct ncclGinApi_PutValue<NCCL_NET_DEVICE_GIN_EFA_GDA> {
                                       uint64_t signalOpArg, bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
                                       cuda::thread_scope required, cuda::thread_scope given,
                                       uint32_t optFlags = ncclGinOptFlagsDefault) {
-    nccl::gin::efa_gda::putValueImpl(ctx, coop, peer, dstWin, dstOff, srcVal, signal, signalOp, signalOpArg,
-                                     hasDescriptor, descriptor, required, given, optFlags);
+    (void)nccl::gin::efa_gda::putValueImpl</*HasTimeout=*/false>(ctx, coop, peer, dstWin, dstOff, srcVal, signal,
+                                                                 signalOp, signalOpArg, hasDescriptor, descriptor,
+                                                                 required, given, optFlags, /*abortFlag=*/nullptr,
+                                                                 /*timeoutCycles=*/0);
+  }
+
+  /* Timed variant; see ncclGinApi_Put's timed overload. */
+  template <typename Coop, typename T>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t dstWin, size_t dstOff,
+                                              T srcVal, ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
+                                              uint64_t signalOpArg, bool hasDescriptor,
+                                              ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
+                                              cuda::thread_scope given, uint32_t optFlags, uint32_t* abortFlag,
+                                              uint64_t timeoutCycles) {
+    return nccl::gin::efa_gda::putValueImpl</*HasTimeout=*/true>(ctx, coop, peer, dstWin, dstOff, srcVal, signal,
+                                                                 signalOp, signalOpArg, hasDescriptor, descriptor,
+                                                                 required, given, optFlags, abortFlag, timeoutCycles);
   }
 };
 
@@ -1004,7 +1249,20 @@ struct ncclGinApi_Get<NCCL_NET_DEVICE_GIN_EFA_GDA> {
                                       ncclGinDescriptorSmem* descriptor, uint32_t optFlags = ncclGinOptFlagsDefault) {
     (void)hasDescriptor;
     (void)descriptor;
-    nccl::gin::efa_gda::getImpl(ctx, coop, peer, remoteWin, remoteOff, localWin, localOff, bytes, optFlags);
+    (void)nccl::gin::efa_gda::getImpl</*HasTimeout=*/false>(ctx, coop, peer, remoteWin, remoteOff, localWin, localOff,
+                                                            bytes, optFlags, /*abortFlag=*/nullptr, /*timeoutCycles=*/0);
+  }
+
+  /* Timed variant; see ncclGinApi_Put's timed overload. */
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin,
+                                              size_t remoteOff, ncclGinWindow_t localWin, size_t localOff, size_t bytes,
+                                              bool hasDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    (void)hasDescriptor;
+    (void)descriptor;
+    return nccl::gin::efa_gda::getImpl</*HasTimeout=*/true>(ctx, coop, peer, remoteWin, remoteOff, localWin, localOff,
+                                                            bytes, optFlags, abortFlag, timeoutCycles);
   }
 };
 

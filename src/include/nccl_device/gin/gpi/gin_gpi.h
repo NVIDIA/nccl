@@ -594,6 +594,25 @@ struct ncclGinApi_Put<NCCL_NET_DEVICE_GIN_GPI> {
       break;
     }
   }
+
+  /* Timed variant (API parity with EFA GDA, whose post path has device-side
+   * waits that check abortFlag/timeoutCycles). This backend's Put has no
+   * device-side completion wait, so there is nothing here that can time out;
+   * the flags are accepted for a uniform interface and ignored. */
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, int peer, bool hasWins, ncclGinWindow_t dstWin,
+                                              size_t dstOff, ncclGinWindow_t srcWin, size_t srcOff, size_t bytes,
+                                              ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
+                                              uint64_t signalOpArg, bool hasCounter, ncclGinCounter_t counterId,
+                                              bool hasDescriptor, ncclGinDescriptorSmem* descriptor,
+                                              cuda::thread_scope required, cuda::thread_scope given, uint32_t optFlags,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    (void)abortFlag;
+    (void)timeoutCycles;
+    ncclGinApi_Put::call(ctx, coop, peer, hasWins, dstWin, dstOff, srcWin, srcOff, bytes, signal, signalOp, signalOpArg,
+                         hasCounter, counterId, hasDescriptor, descriptor, required, given, optFlags);
+    return ncclSuccess;
+  }
 };
 
 template <>
@@ -622,6 +641,21 @@ struct ncclGinApi_PutValue<NCCL_NET_DEVICE_GIN_GPI> {
                                                                       required, given, optFlags);
       break;
     }
+  }
+
+  /* Timed variant; see ncclGinApi_Put's timed overload. */
+  template <typename Coop, typename T>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t dstWin, size_t dstOff,
+                                              T srcVal, ncclGinSignalDescriptor signal, ncclGinSignalOp_t signalOp,
+                                              uint64_t signalOpArg, bool hasDescriptor,
+                                              ncclGinDescriptorSmem* descriptor, cuda::thread_scope required,
+                                              cuda::thread_scope given, uint32_t optFlags, uint32_t* abortFlag,
+                                              uint64_t timeoutCycles) {
+    (void)abortFlag;
+    (void)timeoutCycles;
+    ncclGinApi_PutValue::call(ctx, coop, peer, dstWin, dstOff, srcVal, signal, signalOp, signalOpArg, hasDescriptor,
+                              descriptor, required, given, optFlags);
+    return ncclSuccess;
   }
 };
 
@@ -794,6 +828,19 @@ struct ncclGinApi_Get<NCCL_NET_DEVICE_GIN_GPI> {
       }
     }
     coop.sync();
+  }
+
+  /* Timed variant; see ncclGinApi_Put's timed overload. */
+  template <typename Coop>
+  NCCL_DEVICE_INLINE static ncclResult_t call(ncclGinCtx ctx, Coop coop, int peer, ncclGinWindow_t remoteWin,
+                                              size_t remoteOff, ncclGinWindow_t localWin, size_t localOff, size_t bytes,
+                                              bool hasDescriptor, ncclGinDescriptorSmem* descriptor, uint32_t optFlags,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) {
+    (void)abortFlag;
+    (void)timeoutCycles;
+    ncclGinApi_Get::call(ctx, coop, peer, remoteWin, remoteOff, localWin, localOff, bytes, hasDescriptor, descriptor,
+                         optFlags);
+    return ncclSuccess;
   }
 };
 

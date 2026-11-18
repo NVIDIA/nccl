@@ -34,6 +34,7 @@ NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
 NCCL_PARAM(AllgathervEnable, "ALLGATHERV_ENABLE", 1);
 NCCL_PARAM(EnqueueRearchEnable, "ENQUEUE_REARCH_ENABLE", 1);
 NCCL_PARAM(P2pPerChannelRegNetBw, "P2P_PER_CHANNEL_REG_NET_BW", /*GB/s*/ -1); // -1 = full network bw
+NCCL_PARAM(P2pMinRegChannelsPerNetDev, "P2P_MIN_REG_CHANNELS_PER_NET_DEV", -1); // -1 = platform default
 
 // NCCL params accessed in per-call config values resolving.
 int64_t ncclParamMinCTAs();
@@ -1096,8 +1097,9 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     }
     // Tune channel count for registered NET buffers
     if (netRegistered[dir]) {
-      // Keep at least one channel per local NET device, then use the bw per channel value if defined
-      int regChannels = std::max(1, comm->minNetCount);
+      int minRegChannelsPerNetDev = ncclParamP2pMinRegChannelsPerNetDev();
+      if (minRegChannelsPerNetDev == -1) minRegChannelsPerNetDev = RUBIN_AND_LATER(comm->minCompCap) ? 2 : 1;
+      int regChannels = std::max(1, minRegChannelsPerNetDev) * std::max(1, comm->minNetCount);
       if (ncclParamP2pPerChannelRegNetBw() > 0)
         regChannels = std::max(regChannels, divUp((int)comm->minLocalNetBw, (int)ncclParamP2pPerChannelRegNetBw()));
 

@@ -541,7 +541,10 @@ ncclCollConfig_t
   and ``NVLSTREE_SIMPLE``. The supported operators are ``+`` (AND), ``,``
   (OR), and ``^`` (NOT); parentheses are not supported. For example,
   ``tree,ring`` permits either family, ``ring + ^RING_LL128`` permits Ring except
-  LL128, and ``^symk`` excludes symmetric kernels.
+  LL128, and ``^symk`` excludes symmetric kernels. For AllGather, ``CE``
+  permits UC or MC Copy Engine selection, ``CE_UC`` and ``CE_MC`` restrict it
+  to one method, and ``^CE`` excludes Copy Engine methods. These filters retain
+  the existing hardware, registration, and CUDA API eligibility requirements.
 
   The selectable built-in names and the collectives for which they are valid are:
 
@@ -553,7 +556,7 @@ ncclCollConfig_t
   * AllGather: ``RING_LL``, ``RING_LL128``, ``RING_SIMPLE``,
     ``COLLNET_DIRECT_SIMPLE``, ``NVLS_SIMPLE``, ``PAT_SIMPLE``, ``SYMK_LL``,
     ``SYMK_LLMC``, ``SYMK_TmaST``, ``SYMK_ST``, ``SYMK_TmaSTMC``,
-    ``SYMK_STMC``, and ``SYMK_RailRing_LsaSTMC``.
+    ``SYMK_STMC``, ``SYMK_RailRing_LsaSTMC``, ``CE_UC``, and ``CE_MC``.
   * ReduceScatter: ``RING_LL``, ``RING_LL128``, ``RING_SIMPLE``,
     ``COLLNET_DIRECT_SIMPLE``, ``NVLS_SIMPLE``, ``PAT_SIMPLE``, ``SYMK_LL``,
     ``SYMK_TmaLD``, ``SYMK_LD``, ``SYMK_LDMC``, ``SYMK_RailA2A_LsaLD``, and
@@ -573,8 +576,8 @@ ncclCollConfig_t
 
   Algorithm names are implementation details and may evolve. AllToAll,
   Gather, and Scatter lower to point-to-point sends and receives and expose
-  no selectable names; Copy Engine paths are likewise not selectable here.
-  Request a Copy Engine path with ``CTAPolicy`` instead.
+  no selectable names. Copy Engine selection names currently apply to
+  AllGather only.
 
  .. c:member:: int forceAlgSelection
 
@@ -591,8 +594,9 @@ ncclCollConfig_t
   Per-collective override of the communicator's CTA policy. A set value replaces
   the communicator value; see :ref:`cta_policy_flags`. If both
   ``NCCL_CTA_POLICY_ZERO`` and ``NCCL_CTA_POLICY_EFFICIENCY`` are set, Zero-CTA
-  takes precedence. Copy Engine paths are selected through this policy, not
-  ``algSelection``.
+  takes precedence. Zero-CTA restricts tuning to eligible Copy Engine methods
+  within the ``algSelection`` set; an explicit selection that excludes Copy
+  Engine methods takes precedence over Zero-CTA.
 
  .. c:member:: uint64_t userProfilerTag
 

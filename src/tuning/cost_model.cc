@@ -309,6 +309,8 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce, AlltoAll
   {nullptr, ncclTuningCeModelSim, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
   {nullptr, nullptr, nullptr, {0}, {}},             // CE Coll P2P Unicast
 };
+static_assert(sizeof(modelMap) / sizeof(modelMap[0]) == NCCL_TUNING_COUNT,
+              "The model table must cover every tuning entry");
 
 /*
   Get a model entry from the model map.

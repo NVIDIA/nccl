@@ -83,6 +83,7 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
 ncclResult_t ncclTuningGenkModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning);
 
 // CE (Copy Engine) collective model
+bool ncclCeAllGatherModelAvailable(const struct ncclComm* comm);
 ncclResult_t ncclTuningCeModelSim(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* const tuning,
                                   struct ncclTuningModelState* internal);
 

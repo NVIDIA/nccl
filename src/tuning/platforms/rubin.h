@@ -81,6 +81,8 @@ Enable order: Broadcast, Reduce, AllGather, ReduceScatter, AllReduce
   {nullptr, nullptr, nullptr, {0, 0, 1, 0, 0}, {}}, // CE AllGather Multicast
   {nullptr, nullptr, nullptr, {0}, {}}, // CE Coll P2P Unicast
 };
+static_assert(sizeof(ncclTuningRubinModelMap) / sizeof(ncclTuningRubinModelMap[0]) == NCCL_TUNING_COUNT,
+              "Rubin model overrides must cover every tuning entry");
 
 static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
   constants->hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_TREE][NCCL_PROTO_LL] = 3.49;

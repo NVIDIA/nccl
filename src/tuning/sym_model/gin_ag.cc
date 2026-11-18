@@ -14,6 +14,7 @@
 
 namespace {
 constexpr uint64_t ginAgCellBytes = NCCL_SYM_KERNEL_CELL_SIZE;
+constexpr double ginAgCtaPenalty = .01; // Selection cost per requested CTA on every platform.
 
 struct ginAgPartition {
   uint64_t cells;
@@ -51,6 +52,11 @@ constexpr struct ncclSymkGinAgParameters ginAgTuningParameters[ncclSymkGinAgArch
   {48.7899, 719.4619, 53.9302, 33.1417, 8.9505, 4.0338, 40.3560, 5.2754, 1.3961, .3621, 9.1813}, // GB200.
   {52.0514, 708.2904, 106.7490, 37.9138, 7.2639, 6.0339, 65.3548, 8.1772, 1.8258, .3621, 9.1813}, // GB300.
 };
+
+// Per-CTA payload chunks, with the legacy 1 MiB first for ties.
+constexpr uint64_t KiB = 1024;
+constexpr uint64_t ginAgChunks[] = {1024 * KiB, 32 * KiB,   64 * KiB,   128 * KiB,   256 * KiB,  512 * KiB,
+                                    2048 * KiB, 4096 * KiB, 8192 * KiB, 16384 * KiB, 32768 * KiB};
 
 } // namespace
 
@@ -147,4 +153,55 @@ double ncclSymkGinAgPredict(const struct ncclSymkGinAgPipeline& pipeline, size_t
     }
   }
   return pipeline.baseUs + finishUs;
+}
+
+struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ncclSymkGinAgParameters& parameters,
+                                                       uint64_t rankBytes, int localRanks, int remoteRanks,
+                                                       int contexts, int minimum, int maximum, uint64_t forcedChunk,
+                                                       int preferredCtas, uint64_t preferredChunk) {
+  const int menuSize = sizeof(ginAgChunks) / sizeof(ginAgChunks[0]);
+  const int chunkCount = forcedChunk ? 1 : menuSize; // An explicit override is the only candidate.
+  struct ncclSymkGinAgChoice best;
+  int bestChunk = 0;
+  bool bestDefaultPair = false;
+  for (int ctas = minimum; ctas <= maximum; ctas += ctas == 1 ? 1 : 2) {
+    const double multiplier = 1 + ginAgCtaPenalty * ctas;
+    const struct ncclSymkGinAgPipeline pipeline =
+      ncclSymkGinAgPrepare(parameters, rankBytes, ctas, localRanks, remoteRanks, contexts);
+    const uint64_t maxSpan = pipeline.distinctSpanBytes[pipeline.distinctSpanCount - 1];
+    for (int chunk = 0; chunk < chunkCount; chunk++) {
+      const uint64_t q = forcedChunk ? forcedChunk : ginAgChunks[chunk];
+      const double value = ncclSymkGinAgPredict(pipeline, q);
+      const double cost = value * multiplier;
+      const bool defaultPair = ctas == preferredCtas && q == preferredChunk;
+      const double roundoffUs = 1.e-12 * cost;
+      const bool preferredTie =
+        defaultPair || (!bestDefaultPair && (chunk < bestChunk || (chunk == bestChunk && ctas < best.ctas)));
+      if (cost < best.selectionUs - roundoffUs || (std::abs(cost - best.selectionUs) <= roundoffUs && preferredTie)) {
+        best = {ctas, q, value, cost};
+        bestChunk = chunk;
+        bestDefaultPair = defaultPair;
+      }
+    }
+    if (ctas >= preferredCtas && maxSpan <= ginAgCellBytes) break;
+  }
+  return best;
+}
+
+struct ncclSymkGinAgChoice ncclSymkGinAgSelect(enum ncclSymkGinAgArch arch, uint64_t rankBytes, int localRanks,
+                                               int remoteRanks, int contexts, int minimum, int maximum,
+                                               uint64_t forcedChunk, int preferredCtas, uint64_t preferredChunk) {
+  // Fraction conversion multiplies a cell count by up to ncclSymkFractionScale.
+  constexpr uint64_t maxRankBytes = (UINT64_MAX / ncclSymkFractionScale) * ginAgCellBytes;
+  if (static_cast<unsigned>(arch) >= ncclSymkGinAgArch_Count || !rankBytes || rankBytes > maxRankBytes ||
+      localRanks < 1 || localRanks > ncclSymkGinAgMaxLocalRanks || remoteRanks < 1 || contexts < 1 || minimum < 1 ||
+      maximum > ncclSymkGinAgMaxCtas || minimum > maximum)
+    return {};
+  const struct ncclSymkGinAgParameters& parameters = ginAgTuningParameters[arch];
+  // One scheduler cell always launches one active CTA.
+  if (rankBytes <= ginAgCellBytes) maximum = minimum;
+  const ncclSymkGinAgChoice choice =
+    ncclSymkGinAgSelectUncached(parameters, rankBytes, localRanks, remoteRanks, contexts, minimum, maximum, forcedChunk,
+                                preferredCtas, preferredChunk);
+  return choice;
 }

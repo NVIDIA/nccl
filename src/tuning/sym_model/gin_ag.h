@@ -8,6 +8,7 @@
 #ifndef NCCL_INT_SYM_MODEL_GIN_AG_H_
 #define NCCL_INT_SYM_MODEL_GIN_AG_H_
 
+#include <cfloat>
 #include <cstddef>
 #include <cstdint>
 
@@ -34,6 +35,12 @@ enum ncclSymkGinAgArch {
 };
 
 enum ncclSymkGinAgArch ncclSymkGinAgArchForCapability(int capability);
+
+struct ncclSymkGinAgChoice {
+  int ctas = 0;
+  uint64_t chunkBytes = 0;
+  double timeUs = 0, selectionUs = DBL_MAX;
+};
 
 constexpr int ncclSymkGinAgMaxCtas = 64; // Symmetric kernels support at most 64 CTAs.
 constexpr int ncclSymkGinAgMaxLocalRanks = 72; // Support 72-rank LSA teams with the existing coefficients.
@@ -62,5 +69,14 @@ struct ncclSymkGinAgPipeline ncclSymkGinAgPrepare(const struct ncclSymkGinAgPara
                                                   int requestedCtas, int localRanks, int remoteRanks, int contexts);
 
 double ncclSymkGinAgPredict(const struct ncclSymkGinAgPipeline& pipeline, size_t chunkBytes);
+
+struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ncclSymkGinAgParameters& parameters,
+                                                       uint64_t rankBytes, int localRanks, int remoteRanks,
+                                                       int contexts, int minimum, int maximum, uint64_t forcedChunk,
+                                                       int preferredCtas, uint64_t preferredChunk);
+
+struct ncclSymkGinAgChoice ncclSymkGinAgSelect(enum ncclSymkGinAgArch arch, uint64_t rankBytes, int localRanks,
+                                               int remoteRanks, int contexts, int minimum, int maximum,
+                                               uint64_t forcedChunk, int preferredCtas, uint64_t preferredChunk);
 
 #endif // NCCL_INT_SYM_MODEL_GIN_AG_H_

@@ -99,14 +99,12 @@ static void ncclTuningRubinTuningConstants(ncclTunerConstants_t* constants) {
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 36.32;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL] = 26;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_LL128] = 45;
-  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 219.5;
+  constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 40;
   constants->hwLatencies[NCCL_HW_NET][NCCL_ALGO_NVLS_TREE][NCCL_PROTO_SIMPLE] = 34.37;
 }
 
 static void ncclTuningRubinPreInit(struct ncclComm* comm) {
   ncclTuningRubinTuningConstants(&comm->tuningContext.tuningConstants);
-  if (comm->nNodes == 1 && comm->nRanks >= 64)
-    comm->tuningContext.tuningConstants.hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] += 13;
   if (comm->nNodes > 1)
     comm->tuningContext.tuningConstants.hwLatencies[NCCL_HW_NVLINK][NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] = 17.3;
 }
@@ -129,9 +127,42 @@ static ncclResult_t ncclTuningRubinChannelTuning(struct ncclTuningInput_t* const
   return ncclSuccess;
 }
 
-static ncclResult_t ncclTuningRubinMinFifoTime(struct ncclComm* comm, int algo, int proto, float* minFifoTime) {
+static ncclResult_t ncclTuningRubinMinFifoTime(const struct ncclComm* comm, int algo, int proto,
+                                               struct ncclTuningMinFifoTimeData* minFifoTime) {
+  if (algo == NCCL_ALGO_TREE) {
+    if (proto == NCCL_PROTO_LL128) {
+      if (comm->nNodes > 1) *minFifoTime = ncclTuningMinFifoTimeData({18, 35.5, 47});
+      else *minFifoTime = ncclTuningMinFifoTimeData({10.5, 10.5, 128 /* disable saturation */});
+    } else if (proto == NCCL_PROTO_LL) {
+      if (comm->nNodes > 1) *minFifoTime = ncclTuningMinFifoTimeData({31, 31, 128 /* disable saturation */});
+      else *minFifoTime = ncclTuningMinFifoTimeData({7.2, 7.2, 128 /* disable saturation */});
+    }
+  } else if (algo == NCCL_ALGO_RING) {
+    if (proto == NCCL_PROTO_LL128) {
+      if (comm->nNodes > 1) *minFifoTime = ncclTuningMinFifoTimeData({3.4, 3.6, 8});
+      else *minFifoTime = ncclTuningMinFifoTimeData({2.6, 2.6, 128 /*disable saturation*/});
+    } else if (proto == NCCL_PROTO_LL) {
+      if (comm->nNodes > 1) *minFifoTime = ncclTuningMinFifoTimeData({2.8, 7.0, 8});
+      else *minFifoTime = ncclTuningMinFifoTimeData({1.75, 1.75, 128 /*disable saturation*/});
+    } else if (proto == NCCL_PROTO_SIMPLE) {
+      if (comm->nNodes > 1)
+        if (comm->minLocalRanks <= 4) *minFifoTime = ncclTuningMinFifoTimeData({9.3, 14.43, 8});
+        else *minFifoTime = ncclTuningMinFifoTimeData({9.3, 9.6, 8});
+      else *minFifoTime = ncclTuningMinFifoTimeData({5.9, 10.6, 64});
+    }
+  }
   return ncclSuccess;
 }
 
+static ncclResult_t ncclTuningRubinGetIntraLatFactor(const struct ncclComm* comm, int algo, int proto,
+                                                     struct ncclTuningLatFactor* lf) {
+  if (algo == NCCL_ALGO_RING && proto == NCCL_PROTO_SIMPLE) {
+    if (comm->minLocalRanks >= 1) {
+      lf->saturation_scaling = 2.0; // at 32CTA, double the latency
+      lf->channel_saturation_point = 32;
+    }
+  }
+  return ncclSuccess;
+}
 
 #endif // NCCL_TUNING_PLATFORM_RUBIN_H_

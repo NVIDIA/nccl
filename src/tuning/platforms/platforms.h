@@ -41,6 +41,9 @@ static ncclResult_t ncclTuningPlatformChannelTuning(struct ncclTuningInput_t* co
 static ncclResult_t ncclTuningPlatformMinFifoTime(const struct ncclComm* comm, int algo, int proto,
                                                   struct ncclTuningMinFifoTimeData* minFifoTime) {
   *minFifoTime = ncclTuningMinFifoTimeData({0, 0, 1});
+  if (RUBIN_AND_LATER(comm->minCompCap)) {
+    NCCLCHECK(ncclTuningRubinMinFifoTime(comm, algo, proto, minFifoTime));
+  }
   return ncclSuccess;
 }
 

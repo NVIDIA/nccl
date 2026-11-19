@@ -2030,6 +2030,10 @@ doca_error_t doca_verbs_comp_channel_create(const doca_dev_t *net_dev,
 /**
  * @brief Destroy a DOCA Verbs Completion Channel instance.
  *
+ * Destroy the CQs bound to the channel first. In DOCA SDK mode, the channel can't be destroyed
+ * while CQs are bound to it: the call fails and the channel and its handle remain valid, so it can
+ * be repeated once the CQs are destroyed.
+ *
  * @param [in] verbs_comp_channel
  * Pointer to verbs_comp_channel instance.
  *
@@ -2037,6 +2041,9 @@ doca_error_t doca_verbs_comp_channel_create(const doca_dev_t *net_dev,
  * DOCA_SUCCESS - in case of success.
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - received invalid input.
+ * - DOCA_ERROR_AGAIN - DOCA SDK mode: CQs are still bound to the channel. Nothing is destroyed.
+ * - DOCA_ERROR_UNEXPECTED - DOCA SDK mode: the DOCA SDK failed to destroy the channel. Nothing is
+ * destroyed.
  */
 doca_error_t doca_verbs_comp_channel_destroy(doca_verbs_comp_channel_t *verbs_comp_channel);
 

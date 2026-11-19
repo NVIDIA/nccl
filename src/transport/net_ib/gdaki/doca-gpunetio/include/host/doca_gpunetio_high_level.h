@@ -146,7 +146,7 @@ struct doca_gpu_verbs_qp_list_hl {
     struct doca_gpu_verbs_umem_hl *cq_dbr_umem;
     struct doca_gpu_verbs_umem_hl *sq_umem;
     struct doca_gpu_verbs_umem_hl *sq_dbr_umem;
-    struct doca_gpu_verbs_umem_hl *rq_cq_umem;     
+    struct doca_gpu_verbs_umem_hl *rq_cq_umem;
     struct doca_gpu_verbs_umem_hl *rq_cq_dbr_umem;
 };
 
@@ -157,8 +157,8 @@ struct doca_gpu_verbs_qp_group_list_hl {
     struct doca_gpu_verbs_umem_hl *cq_dbr_umem;
     struct doca_gpu_verbs_umem_hl *sq_umem;
     struct doca_gpu_verbs_umem_hl *sq_dbr_umem;
-    struct doca_gpu_verbs_umem_hl *rq_cq_umem;     
-    struct doca_gpu_verbs_umem_hl *rq_cq_dbr_umem; 
+    struct doca_gpu_verbs_umem_hl *rq_cq_umem;
+    struct doca_gpu_verbs_umem_hl *rq_cq_dbr_umem;
 };
 
 /**
@@ -199,8 +199,7 @@ doca_error_t doca_gpu_verbs_destroy_qp_hl(struct doca_gpu_verbs_qp_hl *qp);
  * The two QPs share the same UAR.
  *
  * If qp_init_attr->rq_nwqe > 0, the main QP gets a receive queue for RDMA Write with Immediate,
- * with the requirements: an Open GPUNetIO instance, GDRCopy, and enable_umem_cpu set to false. 
- * The companion QP never gets one.
+ * with the requirements: GDRCopy and enable_umem_cpu set to false. The companion QP never gets one.
  *
  * @param [in] qp_init_attr
  * High-level QP init attributes.
@@ -255,6 +254,46 @@ doca_error_t doca_gpu_verbs_qp_flat_list_create_hl(struct doca_gpu_verbs_qp_hl *
                                                    struct doca_gpu_dev_verbs_qp **qp_gpu);
 
 /**
+ * As doca_gpu_verbs_qp_flat_list_create_hl, with an explicit device-code version.
+ * See doca_gpu_verbs_get_qp_dev_ver.
+ *
+ * @param [in] qp_list
+ * GPUNetIO high-level QP array
+ * @param [in] num_elems
+ * Number of QP in the qp_list
+ * @param [in] device_code_version
+ * DOCA_GPUNETIO_DEVICE_CODE_VERSION the consumer's device code was compiled against.
+ * @param [out] qp_gpu
+ * Array of GPU QP structures, laid out as struct doca_gpu_dev_verbs_qp of that version.
+ * @param [out] qp_gpu_size
+ * Size in bytes of each GPU QP structure, which is the array stride. Can be NULL.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_NOT_SUPPORTED - if device_code_version is outside the range this library
+ *   supports, or the QP is configured for a feature absent from that device code.
+ */
+doca_error_t doca_gpu_verbs_qp_flat_list_create_hl_ver(struct doca_gpu_verbs_qp_hl **qp_list,
+                                                       uint32_t num_elems,
+                                                       uint32_t device_code_version, void **qp_gpu,
+                                                       size_t *qp_gpu_size);
+
+static inline doca_error_t doca_priv_gpu_verbs_qp_flat_list_create_hl(
+    struct doca_gpu_verbs_qp_hl **qp_list, uint32_t num_elems,
+    struct doca_gpu_dev_verbs_qp **qp_gpu) {
+    void *out = NULL;
+    doca_error_t status = doca_gpu_verbs_qp_flat_list_create_hl_ver(
+        qp_list, num_elems, DOCA_GPUNETIO_DEVICE_CODE_VERSION, qp_gpu != NULL ? &out : NULL, NULL);
+    if (status == DOCA_SUCCESS) *qp_gpu = (struct doca_gpu_dev_verbs_qp *)out;
+    return status;
+}
+
+#define doca_gpu_verbs_qp_flat_list_create_hl(qp_list, num_elems, qp_gpu) \
+    doca_priv_gpu_verbs_qp_flat_list_create_hl(qp_list, num_elems, qp_gpu)
+
+/**
  * Destry a flat list of GPU QP.
  *
  * @param [in] qp_gpu
@@ -265,7 +304,7 @@ doca_error_t doca_gpu_verbs_qp_flat_list_create_hl(struct doca_gpu_verbs_qp_hl *
  * doca_error code - in case of failure:
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  */
-doca_error_t doca_gpu_verbs_qp_flat_list_destroy_hl(struct doca_gpu_dev_verbs_qp *qp_gpu);
+doca_error_t doca_gpu_verbs_qp_flat_list_destroy_hl(void *qp_gpu);
 
 /**
  * Create a list of high-level GPUNetIO QPs backed by shared control-buffer slabs.
@@ -274,8 +313,8 @@ doca_error_t doca_gpu_verbs_qp_flat_list_destroy_hl(struct doca_gpu_dev_verbs_qp
  *
  * If qp_init_attr->rq_nwqe > 0, every QP also gets a receive queue of that size (rounded up to a
  * power of two) for RDMA Write with Immediate, with a receive CQ in host memory. The receive CQs
- * share two more host-memory slabs (rq_cq_umem, rq_cq_dbr_umem). The RQ requirements are: 
- * an Open GPUNetIO instance, GDRCopy, and enable_umem_cpu set to false.
+ * share two more host-memory slabs (rq_cq_umem, rq_cq_dbr_umem). The RQ requirements are:
+ * GDRCopy and enable_umem_cpu set to false.
  *
  * @param [in] qp_init_attr
  * High-level QP init attributes (gpu_dev, net_dev, ibpd, sq_nwqe, mreg_type must be set).

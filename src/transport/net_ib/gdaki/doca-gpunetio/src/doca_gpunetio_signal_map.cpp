@@ -1,5 +1,6 @@
 #include <pthread.h>
 #include <stdlib.h>
+#include <string.h>
 #include <cuda_runtime.h>
 
 #include "doca_gpunetio_gdrcopy.h"
@@ -8,7 +9,8 @@
 #include "host/doca_gpunetio.h"
 #include "host/doca_gpunetio_signal.h"
 
-/* Delivery never takes this lock: an attached map is immutable until it is detached. */
+/* Delivery never takes this lock: the caller must not mutate a map while signals are delivered
+ * into it. */
 static pthread_mutex_t signal_map_lifecycle_lock = PTHREAD_MUTEX_INITIALIZER;
 
 class signal_map_lifecycle_guard {
@@ -27,26 +29,21 @@ static void priv_signal_lookup_destroy(struct doca_gpu_verbs_signal_map *map) {
     }
 }
 
-static doca_error_t priv_signal_lookup_build(struct doca_gpu_verbs_signal_map *map) {
-    priv_signal_lookup_destroy(map);
+/* Blocks are only freed by priv_signal_lookup_destroy(), so delivery never reads a freed block. */
+static doca_error_t priv_signal_lookup_slot(struct doca_gpu_verbs_signal_map *map, uint32_t sig_id,
+                                            struct doca_gpu_verbs_signal_entry ***out_slot) {
+    const uint32_t block_index = sig_id >> DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SHIFT;
+    const uint32_t entry_index = sig_id & (DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SIZE - 1);
 
-    for (auto &registered_signal : *map->entries) {
-        const uint32_t sig_id = registered_signal.first;
-        const uint32_t block_index = sig_id >> DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SHIFT;
-        const uint32_t entry_index = sig_id & (DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SIZE - 1);
-
+    if (map->lookup_blocks[block_index] == nullptr) {
+        map->lookup_blocks[block_index] = (struct doca_gpu_verbs_signal_lookup_block *)calloc(
+            1, sizeof(struct doca_gpu_verbs_signal_lookup_block));
         if (map->lookup_blocks[block_index] == nullptr) {
-            map->lookup_blocks[block_index] = (struct doca_gpu_verbs_signal_lookup_block *)calloc(
-                1, sizeof(struct doca_gpu_verbs_signal_lookup_block));
-            if (map->lookup_blocks[block_index] == nullptr) {
-                DOCA_LOG(LOG_ERR, "Failed to allocate signal lookup block %u", block_index);
-                priv_signal_lookup_destroy(map);
-                return DOCA_ERROR_NO_MEMORY;
-            }
+            DOCA_LOG(LOG_ERR, "Failed to allocate signal lookup block %u", block_index);
+            return DOCA_ERROR_NO_MEMORY;
         }
-        map->lookup_blocks[block_index]->entries[entry_index] = &registered_signal.second;
     }
-
+    *out_slot = &map->lookup_blocks[block_index]->entries[entry_index];
     return DOCA_SUCCESS;
 }
 
@@ -142,6 +139,163 @@ static doca_error_t priv_signal_slot_unregister(struct doca_gpu_verbs_signal_map
     return DOCA_SUCCESS;
 }
 
+static doca_error_t priv_signal_device_needs_mcst(bool *needs_mcst) {
+    int device = 0;
+    cudaError_t cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaGetDevice(&device));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to get the current CUDA device for the signal map");
+        return DOCA_ERROR_DRIVER;
+    }
+
+    int order = 0;
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaDeviceGetAttribute(&order, cudaDevAttrGPUDirectRDMAWritesOrdering, device));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to check device attribute for order");
+        return DOCA_ERROR_DRIVER;
+    }
+    *needs_mcst = order == 0;
+    return DOCA_SUCCESS;
+}
+
+static void priv_signal_reset_queue_destroy(struct doca_gpu_verbs_signal_map *map) {
+    if (map->reset_gdr_mh != nullptr)
+        doca_gpu_gdrcopy_destroy_mapping(map->reset_gdr_mh, map->reset_cpu_base,
+                                         DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_SIZE);
+    if (map->reset_gpu_alloc != nullptr) cudaFree(map->reset_gpu_alloc);
+    if (map->reset_requests != nullptr) cudaFreeHost(map->reset_requests);
+    map->reset_gdr_mh = nullptr;
+    map->reset_gpu_alloc = nullptr;
+    map->reset_requests = nullptr;
+}
+
+static doca_error_t priv_signal_reset_queue_create(struct doca_gpu_verbs_signal_map *map) {
+    const size_t requests_size = DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SIZE * sizeof(uint64_t);
+    void *requests = nullptr;
+    void *gpu_requests = nullptr;
+    void *gpu_alloc = nullptr;
+    uintptr_t page_base = 0;
+    int ret = 0;
+
+    cudaError_t cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaHostAlloc(&requests, requests_size, cudaHostAllocMapped | cudaHostAllocPortable));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to allocate the signal reset queue in pinned host memory");
+        return DOCA_ERROR_NO_MEMORY;
+    }
+    memset(requests, 0, requests_size);
+    map->reset_requests = (uint64_t *)requests;
+
+    cuda_status =
+        DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaHostGetDevicePointer(&gpu_requests, requests, 0));
+    if (cuda_status != cudaSuccess) goto driver_error;
+
+    /* GDRCopy maps whole 64 KiB GPU pages, so over-allocate and align. */
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMalloc(&gpu_alloc, DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_SIZE * 2));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to allocate GPU memory for the signal reset queue");
+        priv_signal_reset_queue_destroy(map);
+        return DOCA_ERROR_NO_MEMORY;
+    }
+    map->reset_gpu_alloc = gpu_alloc;
+    page_base = ((uintptr_t)gpu_alloc + DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_SIZE - 1) &
+                ~(uintptr_t)DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_OFFSET;
+
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMemset((void *)page_base, 0, DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_SIZE));
+    if (cuda_status != cudaSuccess) goto driver_error;
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaStreamSynchronize(0));
+    if (cuda_status != cudaSuccess) goto driver_error;
+
+    ret = doca_gpu_gdrcopy_create_mapping((void *)page_base, DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_SIZE,
+                                          false, &map->reset_gdr_mh, &map->reset_cpu_base);
+    if (ret != 0) {
+        DOCA_LOG(LOG_ERR, "Failed to map the signal reset queue page at %lx, error %d", page_base,
+                 ret);
+        map->reset_gdr_mh = nullptr;
+        goto driver_error;
+    }
+
+    map->reset_acks_cpu = (volatile uint32_t *)((uint8_t *)map->reset_cpu_base +
+                                                DOCA_GPUNETIO_VERBS_SIGNAL_RESET_ACKS_OFFSET);
+    map->reset_queue.requests = (uint64_t *)gpu_requests;
+    map->reset_queue.tail = (uint32_t *)page_base;
+    map->reset_queue.acks = (uint32_t *)(page_base + DOCA_GPUNETIO_VERBS_SIGNAL_RESET_ACKS_OFFSET);
+    map->reset_head = 0;
+    return DOCA_SUCCESS;
+
+driver_error:
+    priv_signal_reset_queue_destroy(map);
+    return DOCA_ERROR_DRIVER;
+}
+
+static struct doca_gpu_verbs_signal_entry *priv_signal_lookup(
+    const struct doca_gpu_verbs_signal_map *map, uint32_t sig_id) {
+    if (sig_id >= DOCA_GPUNETIO_VERBS_SIGNAL_MAX_SIGNALS) return nullptr;
+    const struct doca_gpu_verbs_signal_lookup_block *lookup_block =
+        map->lookup_blocks[sig_id >> DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SHIFT];
+    if (lookup_block == nullptr) return nullptr;
+    return lookup_block->entries[sig_id & (DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SIZE - 1)];
+}
+
+/* The caller holds the lifecycle lock and has already checked that sig_id and the slot are free. */
+static doca_error_t priv_signal_entry_add(struct doca_gpu_verbs_signal_map *map, uint32_t sig_id,
+                                          doca_gpu_verbs_signal_value_t *gpu_addr) {
+    const uintptr_t slot_addr = (uintptr_t)gpu_addr;
+    const uintptr_t page_base = slot_addr & ~(uintptr_t)DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_OFFSET;
+    const size_t page_offset = slot_addr & DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_OFFSET;
+    struct doca_gpu_verbs_signal_entry **lookup_slot = nullptr;
+    doca_error_t status = priv_signal_lookup_slot(map, sig_id, &lookup_slot);
+    if (status != DOCA_SUCCESS) return status;
+
+    struct doca_gpu_verbs_signal_page *page = nullptr;
+    status = priv_signal_page_acquire(map, page_base, &page);
+    if (status != DOCA_SUCCESS) return status;
+
+    struct doca_gpu_verbs_signal_entry entry = {};
+    entry.cpu_alias_legacy =
+        (volatile doca_gpu_verbs_signal_value_t *)((uint8_t *)page->cpu_base_legacy + page_offset);
+    if (page->cpu_base_data_direct != nullptr)
+        entry.cpu_alias_data_direct =
+            (volatile doca_gpu_verbs_signal_value_t *)((uint8_t *)page->cpu_base_data_direct +
+                                                       page_offset);
+    entry.gpu_addr = gpu_addr;
+    entry.page = page;
+
+    try {
+        map->registered_slots->insert(slot_addr);
+    } catch (...) {
+        priv_signal_page_release(map, page);
+        return DOCA_ERROR_NO_MEMORY;
+    }
+    try {
+        /* unordered_map keeps element addresses stable across rehash, so the lookup stays valid. */
+        *lookup_slot = &map->entries->insert({sig_id, entry}).first->second;
+    } catch (...) {
+        priv_signal_slot_unregister(map, slot_addr);
+        priv_signal_page_release(map, page);
+        return DOCA_ERROR_NO_MEMORY;
+    }
+    return DOCA_SUCCESS;
+}
+
+static doca_error_t priv_signal_entry_remove(struct doca_gpu_verbs_signal_map *map,
+                                             uint32_t sig_id) {
+    auto it = map->entries->find(sig_id);
+    if (it == map->entries->end()) return DOCA_ERROR_NOT_FOUND;
+
+    doca_gpu_verbs_signal_value_t *gpu_addr = it->second.gpu_addr;
+    struct doca_gpu_verbs_signal_page *page = it->second.page;
+    doca_error_t slot_status = priv_signal_slot_unregister(map, (uintptr_t)gpu_addr);
+    map->lookup_blocks[sig_id >> DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SHIFT]
+        ->entries[sig_id & (DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SIZE - 1)] = nullptr;
+    map->entries->erase(it);
+    doca_error_t page_status = priv_signal_page_release(map, page);
+    if (slot_status != DOCA_SUCCESS) return slot_status;
+    return page_status;
+}
+
 static bool priv_signal_map_probe_data_direct() {
     void *allocation = nullptr;
     void *gdr_mh = nullptr;
@@ -185,9 +339,14 @@ doca_error_t doca_gpu_verbs_signal_map_create(struct doca_gpu_verbs_signal_map *
         return DOCA_ERROR_NOT_SUPPORTED;
     }
 
+    bool needs_mcst = false;
+    doca_error_t status = priv_signal_device_needs_mcst(&needs_mcst);
+    if (status != DOCA_SUCCESS) return status;
+
     auto *map =
         (struct doca_gpu_verbs_signal_map *)calloc(1, sizeof(struct doca_gpu_verbs_signal_map));
     if (map == nullptr) return DOCA_ERROR_NO_MEMORY;
+    map->needs_mcst = needs_mcst;
     map->data_direct_mode = priv_signal_map_probe_data_direct();
     try {
         map->entries = new std::unordered_map<uint32_t, struct doca_gpu_verbs_signal_entry>();
@@ -201,6 +360,15 @@ doca_error_t doca_gpu_verbs_signal_map_create(struct doca_gpu_verbs_signal_map *
         return DOCA_ERROR_NO_MEMORY;
     }
 
+    status = priv_signal_reset_queue_create(map);
+    if (status != DOCA_SUCCESS) {
+        delete map->entries;
+        delete map->pages;
+        delete map->registered_slots;
+        free(map);
+        return status;
+    }
+
     *out_map = map;
     return DOCA_SUCCESS;
 }
@@ -212,84 +380,86 @@ doca_error_t doca_gpu_verbs_signal_register(struct doca_gpu_verbs_signal_map *ma
     if (((uintptr_t)gpu_addr & (DOCA_GPUNETIO_VERBS_SIGNAL_SLOT_SIZE - 1)) != 0)
         return DOCA_ERROR_INVALID_VALUE;
 
-    cudaPointerAttributes attributes = {};
-    cudaError_t cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
-        cudaPointerGetAttributes(&attributes, static_cast<const void *>(gpu_addr)));
-    if (cuda_status != cudaSuccess || attributes.type != cudaMemoryTypeDevice) {
-        DOCA_LOG(LOG_ERR, "Signal slot must be CUDA device memory");
-        return DOCA_ERROR_INVALID_VALUE;
-    }
-
-    int order = 0;
-    cuda_status =  DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
-        cudaDeviceGetAttribute(&order, cudaDevAttrGPUDirectRDMAWritesOrdering, attributes.device));
-    if (cuda_status != cudaSuccess) {
-        DOCA_LOG(LOG_ERR, "Failed to check device attribute for order");
-        return DOCA_ERROR_DRIVER;
-    }
-
-    const uintptr_t slot_addr = (uintptr_t)gpu_addr;
     signal_map_lifecycle_guard lifecycle_guard;
-    if (map->attached_to_service || map->entries->count(sig_id) != 0 ||
-        map->registered_slots->count(slot_addr) != 0)
+    if (map->entries->count(sig_id) != 0 || map->registered_slots->count((uintptr_t)gpu_addr) != 0)
         return DOCA_ERROR_IN_USE;
 
-    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+    cudaError_t cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
         cudaMemset(gpu_addr, 0, DOCA_GPUNETIO_VERBS_SIGNAL_SLOT_SIZE));
     if (cuda_status != cudaSuccess) return DOCA_ERROR_DRIVER;
     cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaStreamSynchronize(0));
     if (cuda_status != cudaSuccess) return DOCA_ERROR_DRIVER;
 
-    const uintptr_t page_base =
-        (uintptr_t)gpu_addr & ~(uintptr_t)DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_OFFSET;
-    const size_t page_offset = (uintptr_t)gpu_addr & DOCA_GPUNETIO_VERBS_SIGNAL_PAGE_OFFSET;
-    struct doca_gpu_verbs_signal_page *page = nullptr;
-    doca_error_t status = priv_signal_page_acquire(map, page_base, &page);
-    if (status != DOCA_SUCCESS) return status;
+    return priv_signal_entry_add(map, sig_id, gpu_addr);
+}
 
-    struct doca_gpu_verbs_signal_entry entry = {};
-    entry.cpu_alias_legacy =
-        (volatile doca_gpu_verbs_signal_value_t *)((uint8_t *)page->cpu_base_legacy + page_offset);
-    if (page->cpu_base_data_direct != nullptr)
-        entry.cpu_alias_data_direct =
-            (volatile doca_gpu_verbs_signal_value_t *)((uint8_t *)page->cpu_base_data_direct +
-                                                       page_offset);
-    entry.gpu_addr = gpu_addr;
-    entry.page = page;
-    entry.needs_mcst = order == 0;
+doca_error_t doca_gpu_verbs_signal_register_range(struct doca_gpu_verbs_signal_map *map,
+                                                  uint32_t min_sig_id, uint32_t max_sig_id,
+                                                  doca_gpu_verbs_signal_value_t *gpu_addr) {
+    if (map == nullptr || gpu_addr == nullptr) return DOCA_ERROR_INVALID_VALUE;
+    if (min_sig_id > max_sig_id || max_sig_id >= DOCA_GPUNETIO_VERBS_SIGNAL_MAX_SIGNALS)
+        return DOCA_ERROR_INVALID_VALUE;
+    if (((uintptr_t)gpu_addr & (DOCA_GPUNETIO_VERBS_SIGNAL_SLOT_SIZE - 1)) != 0)
+        return DOCA_ERROR_INVALID_VALUE;
+
+    const uint32_t num_signals = max_sig_id - min_sig_id + 1;
+    doca_error_t status = DOCA_SUCCESS;
+
+    signal_map_lifecycle_guard lifecycle_guard;
+    for (uint32_t i = 0; i < num_signals; ++i) {
+        if (map->entries->count(min_sig_id + i) != 0 ||
+            map->registered_slots->count((uintptr_t)(gpu_addr + i)) != 0)
+            return DOCA_ERROR_IN_USE;
+    }
 
     try {
-        map->registered_slots->insert(slot_addr);
+        map->entries->reserve(map->entries->size() + num_signals);
+        map->registered_slots->reserve(map->registered_slots->size() + num_signals);
     } catch (...) {
-        priv_signal_page_release(map, page);
         return DOCA_ERROR_NO_MEMORY;
     }
-    try {
-        map->entries->insert({sig_id, entry});
-    } catch (...) {
-        priv_signal_slot_unregister(map, slot_addr);
-        priv_signal_page_release(map, page);
-        return DOCA_ERROR_NO_MEMORY;
+
+    cudaError_t cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMemset(gpu_addr, 0, (size_t)num_signals * DOCA_GPUNETIO_VERBS_SIGNAL_SLOT_SIZE));
+    if (cuda_status != cudaSuccess) return DOCA_ERROR_DRIVER;
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaStreamSynchronize(0));
+    if (cuda_status != cudaSuccess) return DOCA_ERROR_DRIVER;
+
+    for (uint32_t i = 0; i < num_signals; ++i) {
+        status = priv_signal_entry_add(map, min_sig_id + i, gpu_addr + i);
+        if (status != DOCA_SUCCESS) {
+            for (uint32_t j = 0; j < i; ++j) (void)priv_signal_entry_remove(map, min_sig_id + j);
+            break;
+        }
     }
-    return DOCA_SUCCESS;
+    return status;
 }
 
 doca_error_t doca_gpu_verbs_signal_unregister(struct doca_gpu_verbs_signal_map *map,
                                               uint32_t sig_id) {
     if (map == nullptr) return DOCA_ERROR_INVALID_VALUE;
     signal_map_lifecycle_guard lifecycle_guard;
-    if (map->attached_to_service) return DOCA_ERROR_IN_USE;
+    return priv_signal_entry_remove(map, sig_id);
+}
 
-    auto it = map->entries->find(sig_id);
-    if (it == map->entries->end()) return DOCA_ERROR_NOT_FOUND;
+doca_error_t doca_gpu_verbs_signal_unregister_range(struct doca_gpu_verbs_signal_map *map,
+                                                    uint32_t min_sig_id, uint32_t max_sig_id) {
+    if (map == nullptr) return DOCA_ERROR_INVALID_VALUE;
+    if (min_sig_id > max_sig_id || max_sig_id >= DOCA_GPUNETIO_VERBS_SIGNAL_MAX_SIGNALS)
+        return DOCA_ERROR_INVALID_VALUE;
 
-    doca_gpu_verbs_signal_value_t *gpu_addr = it->second.gpu_addr;
-    struct doca_gpu_verbs_signal_page *page = it->second.page;
-    doca_error_t slot_status = priv_signal_slot_unregister(map, (uintptr_t)gpu_addr);
-    map->entries->erase(it);
-    doca_error_t page_status = priv_signal_page_release(map, page);
-    if (slot_status != DOCA_SUCCESS) return slot_status;
-    return page_status;
+    const uint32_t num_signals = max_sig_id - min_sig_id + 1;
+    signal_map_lifecycle_guard lifecycle_guard;
+    for (uint32_t i = 0; i < num_signals; ++i) {
+        if (map->entries->count(min_sig_id + i) == 0) return DOCA_ERROR_NOT_FOUND;
+    }
+
+    doca_error_t first_error = DOCA_SUCCESS;
+    for (uint32_t i = 0; i < num_signals; ++i) {
+        doca_error_t status = priv_signal_entry_remove(map, min_sig_id + i);
+        if (status != DOCA_SUCCESS && first_error == DOCA_SUCCESS) first_error = status;
+    }
+    return first_error;
 }
 
 doca_error_t doca_gpu_verbs_signal_reset(struct doca_gpu_verbs_signal_map *map, uint32_t sig_id) {
@@ -312,11 +482,54 @@ doca_error_t doca_gpu_verbs_signal_reset(struct doca_gpu_verbs_signal_map *map, 
     return DOCA_SUCCESS;
 }
 
+doca_error_t doca_gpu_verbs_signal_map_get_gpu_reset_queue(
+    struct doca_gpu_verbs_signal_map *map,
+    struct doca_gpu_dev_verbs_signal_reset_queue *out_queue) {
+    if (map == nullptr || out_queue == nullptr) return DOCA_ERROR_INVALID_VALUE;
+    *out_queue = map->reset_queue;
+    return DOCA_SUCCESS;
+}
+
+bool priv_signal_reset_progress(struct doca_gpu_verbs_signal_map *map) {
+    uint32_t handled = 0;
+    while (handled < DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SIZE) {
+        const uint32_t ticket = map->reset_head + handled;
+        const uint32_t index = ticket & (DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SIZE - 1);
+        const uint64_t request = __atomic_load_n(&map->reset_requests[index], __ATOMIC_ACQUIRE);
+        const uint32_t lap_check = ((ticket >> DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SHIFT) + 1)
+                                   << DOCA_GPUNETIO_VERBS_SIGNAL_RESET_CHECK_SHIFT;
+        const uint32_t low = (uint32_t)request;
+        if ((uint32_t)(request >> 32) != ticket + 1 ||
+            (low & ~DOCA_GPUNETIO_VERBS_SIGNAL_IMM_ID_MASK) != lap_check)
+            break;
+
+        /* Acknowledge unregistered ids too, so the GPU never waits on them. */
+        struct doca_gpu_verbs_signal_entry *entry =
+            priv_signal_lookup(map, low & DOCA_GPUNETIO_VERBS_SIGNAL_IMM_ID_MASK);
+        if (entry != nullptr) entry->shadow = 0;
+        map->reset_acks_cpu[index] = ticket + 1;
+        ++handled;
+    }
+    if (handled == 0) return false;
+
+    map->reset_head += handled;
+    doca_internal_wc_store_fence();
+    return true;
+}
+
+static bool priv_signal_reset_queue_empty(struct doca_gpu_verbs_signal_map *map) {
+    (void)priv_signal_reset_progress(map);
+    const uint32_t outstanding = *(const volatile uint32_t *)map->reset_cpu_base - map->reset_head;
+    if (outstanding == 0) return true;
+    DOCA_LOG(LOG_ERR, "Signal map has %u device resets in progress", outstanding);
+    return false;
+}
+
 doca_error_t doca_gpu_verbs_signal_map_destroy(struct doca_gpu_verbs_signal_map *map) {
     if (map == nullptr) return DOCA_ERROR_INVALID_VALUE;
     signal_map_lifecycle_guard lifecycle_guard;
-    if (map->attached_to_service) return DOCA_ERROR_IN_USE;
     if (!map->entries->empty()) return DOCA_ERROR_BAD_STATE;
+    if (!priv_signal_reset_queue_empty(map)) return DOCA_ERROR_BAD_STATE;
 
     if (map->dropped_signals != 0)
         DOCA_LOG(LOG_WARNING, "Signal map dropped %lu signals over its lifetime",
@@ -337,6 +550,7 @@ doca_error_t doca_gpu_verbs_signal_map_destroy(struct doca_gpu_verbs_signal_map 
     }
 
     priv_signal_lookup_destroy(map);
+    priv_signal_reset_queue_destroy(map);
     delete map->entries;
     delete map->pages;
     delete map->registered_slots;
@@ -344,29 +558,11 @@ doca_error_t doca_gpu_verbs_signal_map_destroy(struct doca_gpu_verbs_signal_map 
     return DOCA_SUCCESS;
 }
 
-doca_error_t priv_signal_map_replace_attachment(struct doca_gpu_verbs_signal_map *old_map,
-                                                struct doca_gpu_verbs_signal_map *new_map) {
-    signal_map_lifecycle_guard lifecycle_guard;
-    if (old_map == new_map) return DOCA_SUCCESS;
-    if (new_map != nullptr && new_map->attached_to_service) return DOCA_ERROR_IN_USE;
-
-    if (new_map != nullptr) {
-        doca_error_t status = priv_signal_lookup_build(new_map);
-        if (status != DOCA_SUCCESS) return status;
-        new_map->attached_to_service = true;
-    }
-    if (old_map != nullptr) {
-        old_map->attached_to_service = false;
-        priv_signal_lookup_destroy(old_map);
-    }
-    return DOCA_SUCCESS;
-}
-
 doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32_t imm,
                                    bool use_data_direct) {
-    if (map == nullptr || map->attached_to_service == false) {
+    if (map == nullptr) {
         DOCA_LOG(LOG_ERR,
-                 "Signals are arriving with no signal map attached - see "
+                 "Signals are arriving with no signal map - see doca_gpu_verbs_rq_progress() or "
                  "doca_gpu_verbs_service_set_signal_map()");
         return DOCA_ERROR_INVALID_VALUE;
     }
@@ -378,7 +574,8 @@ doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32
     const uint16_t sig_val =
         (imm >> DOCA_GPUNETIO_VERBS_SIGNAL_IMM_VAL_SHIFT) & DOCA_GPUNETIO_VERBS_SIGNAL_IMM_VAL_MASK;
 
-    if (sig_op != DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD) {
+    if (sig_op != DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD &&
+        sig_op != DOCA_GPUNETIO_VERBS_SIGNAL_OP_SET) {
         map->dropped_signals++;
         if (!map->dropped_op_logged) {
             map->dropped_op_logged = true;
@@ -388,12 +585,7 @@ doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32
         return DOCA_SUCCESS;
     }
 
-    struct doca_gpu_verbs_signal_lookup_block *lookup_block =
-        map->lookup_blocks[sig_id >> DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SHIFT];
-    struct doca_gpu_verbs_signal_entry *entry =
-        lookup_block == nullptr
-            ? nullptr
-            : lookup_block->entries[sig_id & (DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_SIZE - 1)];
+    struct doca_gpu_verbs_signal_entry *entry = priv_signal_lookup(map, sig_id);
     if (entry == nullptr) {
         map->dropped_signals++;
         if (!map->dropped_unregistered_logged) {
@@ -415,16 +607,19 @@ doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32
         return DOCA_SUCCESS;
     }
 
-    if (entry->needs_mcst) (void)READ_ONCE(*(volatile uint8_t *)cpu_alias);
+    if (map->needs_mcst) (void)READ_ONCE(*(volatile uint8_t *)cpu_alias);
 
-    const doca_gpu_verbs_signal_value_t sum =
-        entry->shadow + (doca_gpu_verbs_signal_value_t)sig_val;
-    if (sum < entry->shadow && !map->wrapped_logged) {
+    const doca_gpu_verbs_signal_value_t shadow = entry->shadow;
+    const doca_gpu_verbs_signal_value_t new_value =
+        sig_op == DOCA_GPUNETIO_VERBS_SIGNAL_OP_SET
+            ? (doca_gpu_verbs_signal_value_t)sig_val
+            : shadow + (doca_gpu_verbs_signal_value_t)sig_val;
+    if (sig_op == DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD && new_value < shadow && !map->wrapped_logged) {
         map->wrapped_logged = true;
         DOCA_LOG(LOG_WARNING, "Signal id %u wrapped its %u-bit slot", sig_id,
                  (unsigned int)(DOCA_GPUNETIO_VERBS_SIGNAL_SLOT_SIZE * 8));
     }
-    entry->shadow = sum;
-    *cpu_alias = entry->shadow;
+    entry->shadow = new_value;
+    *cpu_alias = new_value;
     return DOCA_SUCCESS;
 }

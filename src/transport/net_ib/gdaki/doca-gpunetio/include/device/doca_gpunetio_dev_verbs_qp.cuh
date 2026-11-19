@@ -485,7 +485,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_ring_proxy(
         proxy_ptr_aref.store(prod_idx, cuda::memory_order_relaxed);
         WRITE_ONCE(*proxy_ptr, prod_idx);
     } else {
-        proxy_ptr_aref.fetch_max(prod_idx, cuda::memory_order_relaxed);
+        asm volatile("red.relaxed.sys.global.max.u64 [%0], %1;" ::"l"(proxy_ptr), "l"(prod_idx)
+                     : "memory");
     }
 }
 
@@ -718,7 +719,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_wqe_prepare_write(
 
     cseg.opmod_idx_opcode = doca_gpu_dev_verbs_bswap32(
         ((uint32_t)wqe_idx << DOCA_GPUNETIO_VERBS_WQE_IDX_SHIFT) | opcode);
-    cseg.qpn_ds = doca_gpu_dev_verbs_load_const(&qp->sq_num_shift8_be_3ds);
+    cseg.qpn_ds = bytes0 == 0 ? doca_gpu_dev_verbs_load_const(&qp->sq_num_shift8_be_2ds)
+                              : doca_gpu_dev_verbs_load_const(&qp->sq_num_shift8_be_3ds);
     cseg.fm_ce_se = ctrl_flags;
     cseg.imm = immediate;
 
@@ -799,11 +801,14 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_wqe_prepare_write(
  * @param send_wr - Send Work Request to be prepared
  * @param wqe_idx - Index of the WQE to be prepared
  * @param out_wqes - Pointer to the WQE buffer to write the prepared WQE to
+ * @param opcode - RDMA_WRITE or RDMA_WRITE_IMM
+ * @param immediate - Immediate value, used only with RDMA_WRITE_IMM
  */
 __device__ static __forceinline__ void doca_gpu_dev_verbs_prepare_inl_rdma_write_wqe_header(
     struct doca_gpu_dev_verbs_qp *qp, struct doca_gpu_dev_verbs_wqe *wqe_ptr,
     const uint16_t wqe_idx, enum doca_gpu_dev_verbs_wqe_ctrl_flags ctrl_flags, const uint64_t raddr,
-    const uint32_t rkey, const uint32_t bytes) {
+    const uint32_t rkey, const uint32_t bytes,
+    const uint32_t opcode = DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE, const uint32_t immediate = 0) {
     int ds;
     struct doca_gpunetio_ib_mlx5_wqe_ctrl_seg cseg;
     struct doca_gpunetio_ib_mlx5_wqe_raddr_seg rseg;
@@ -816,13 +821,12 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_prepare_inl_rdma_write
 
     assert(bytes <= DOCA_GPUNETIO_VERBS_MAX_INLINE_SIZE);
 
-    cseg.opmod_idx_opcode =
-        doca_gpu_dev_verbs_bswap32(((uint32_t)wqe_idx << DOCA_GPUNETIO_VERBS_WQE_IDX_SHIFT) |
-                                   DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_WRITE);
+    cseg.opmod_idx_opcode = doca_gpu_dev_verbs_bswap32(
+        ((uint32_t)wqe_idx << DOCA_GPUNETIO_VERBS_WQE_IDX_SHIFT) | opcode);
     cseg.qpn_ds =
         doca_gpu_dev_verbs_bswap32(doca_gpu_dev_verbs_load_const(&qp->sq_num_shift8) | ds);
     cseg.fm_ce_se = ctrl_flags;
-    // cseg.imm = 0;
+    cseg.imm = immediate;
 
     rseg.raddr = doca_gpu_dev_verbs_bswap64(raddr);
 #if DOCA_GPUNETIO_VERBS_MKEY_SWAPPED == 1
@@ -903,7 +907,8 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_wqe_prepare_read(
     cseg.opmod_idx_opcode =
         doca_gpu_dev_verbs_bswap32(((uint32_t)wqe_idx << DOCA_GPUNETIO_VERBS_WQE_IDX_SHIFT) |
                                    DOCA_GPUNETIO_IB_MLX5_OPCODE_RDMA_READ);
-    cseg.qpn_ds = doca_gpu_dev_verbs_load_const(&qp->sq_num_shift8_be_3ds);
+    cseg.qpn_ds = bytes0 == 0 ? doca_gpu_dev_verbs_load_const(&qp->sq_num_shift8_be_2ds)
+                              : doca_gpu_dev_verbs_load_const(&qp->sq_num_shift8_be_3ds);
     cseg.fm_ce_se = ctrl_flags;
 
     rseg.raddr = doca_gpu_dev_verbs_bswap64(raddr);

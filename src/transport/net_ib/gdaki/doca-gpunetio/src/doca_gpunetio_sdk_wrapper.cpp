@@ -187,9 +187,8 @@ static void doca_gpunetio_sdk_wrapper_init(int *ret) {
         (doca_gpu_mem_free_t)doca_sdk_find_symbol(gpunetio_handle, "doca_gpu_mem_free", 1);
     p_doca_gpu_dmabuf_fd =
         (doca_gpu_dmabuf_fd_t)doca_sdk_find_symbol(gpunetio_handle, "doca_gpu_dmabuf_fd", 1);
-    p_doca_gpu_verbs_req_notify_cq =
-        (doca_gpu_verbs_req_notify_cq_t)doca_sdk_find_symbol(
-            gpunetio_handle, "doca_gpu_verbs_req_notify_cq", 0);
+    p_doca_gpu_verbs_req_notify_cq = (doca_gpu_verbs_req_notify_cq_t)doca_sdk_find_symbol(
+        gpunetio_handle, "doca_gpu_verbs_req_notify_cq", 0);
 
     /* Optional symbols */
     p_doca_gpu_cap_is_gpu_mem_umem_supported =

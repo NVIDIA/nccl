@@ -47,7 +47,7 @@ extern "C" {
 #endif
 
 #define DOCA_GPUNETIO_VERSION_MAJOR 5
-#define DOCA_GPUNETIO_VERSION_MINOR 0
+#define DOCA_GPUNETIO_VERSION_MINOR 1
 #define DOCA_GPUNETIO_VERSION_PATCH 0
 
 #define DOCA_GPUNETIO_VERSION_MAJOR_SHIFT 16
@@ -183,6 +183,35 @@ extern "C" {
      UINT32_C(1))
 #define DOCA_GPUNETIO_VERBS_SIGNAL_IMM_VAL_MASK \
     (UINT32_MAX >> DOCA_GPUNETIO_VERBS_SIGNAL_IMM_VAL_SHIFT)
+
+/**
+ * Number of entries in a signal map's device reset queue.
+ */
+#define DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SHIFT 10
+#define DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SIZE \
+    (1U << DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SHIFT)
+
+/**
+ * A reset request is one 64-bit word:
+ * bits 0-(CHECK_SHIFT - 1):                  signal id
+ * bits CHECK_SHIFT-31:                       lap check, (ticket / QUEUE_SIZE) + 1
+ * bits 32-63:                                ticket + 1
+ *
+ * The CPU accepts a request only if both halves match the ticket it expects, so it never acts on
+ * a request whose two halves arrived separately.
+ */
+#define DOCA_GPUNETIO_VERBS_SIGNAL_RESET_CHECK_SHIFT \
+    (DOCA_GPUNETIO_VERBS_SIGNAL_IMM_VAL_SHIFT - DOCA_GPUNETIO_VERBS_SIGNAL_IMM_ID_SHIFT)
+
+/**
+ * GPU view of a signal map's device reset queue, from
+ * doca_gpu_verbs_signal_map_get_gpu_reset_queue(). Pass it by value to the kernel.
+ */
+struct doca_gpu_dev_verbs_signal_reset_queue {
+    uint64_t *requests;  ///< Requests in pinned host memory
+    uint32_t *tail;      ///< Next ticket, in GPU memory
+    uint32_t *acks;      ///< Per-entry acknowledgements in GPU memory: the CPU writes ticket + 1
+};
 
 #define DOCA_GPUNETIO_VERBS_CQE_SIZE 64
 
@@ -409,6 +438,7 @@ enum doca_gpu_dev_verbs_cq_type : uint8_t {
 
 enum doca_gpu_dev_verbs_signal_op {
     DOCA_GPUNETIO_VERBS_SIGNAL_OP_ADD = 0,  ///< Signal operation - Add
+    DOCA_GPUNETIO_VERBS_SIGNAL_OP_SET = 1,  ///< Signal operation - Set
 };
 
 enum doca_gpu_dev_verbs_dump_mode {

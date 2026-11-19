@@ -131,25 +131,22 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         (doca_verbs_sdk_wrapper_dev_open_from_pd_t)doca_sdk_find_symbol(
             verbs_handle, "doca_rdma_bridge_open_dev_from_pd", 1);
     p_doca_verbs_dev_close =
-        (doca_verbs_sdk_wrapper_dev_close_t)doca_sdk_find_symbol(
-            verbs_handle, "doca_dev_close", 1);
+        (doca_verbs_sdk_wrapper_dev_close_t)doca_sdk_find_symbol(verbs_handle, "doca_dev_close", 1);
 
     p_doca_verbs_sdk_wrapper_dev_get_ibv_ctx =
         (doca_verbs_sdk_wrapper_dev_get_ibv_ctx_t)doca_sdk_find_symbol(
             verbs_handle, "doca_verbs_bridge_get_ibv_ctx", 1);
 
-    p_doca_verbs_bridge_verbs_pd_import =
-        (doca_verbs_bridge_verbs_pd_import_t)doca_sdk_find_symbol(
-            verbs_handle, "doca_verbs_bridge_verbs_pd_import", 1);
+    p_doca_verbs_bridge_verbs_pd_import = (doca_verbs_bridge_verbs_pd_import_t)doca_sdk_find_symbol(
+        verbs_handle, "doca_verbs_bridge_verbs_pd_import", 1);
     p_doca_verbs_bridge_verbs_context_import =
         (doca_verbs_bridge_verbs_context_import_t)doca_sdk_find_symbol(
             verbs_handle, "doca_verbs_bridge_verbs_context_import", 1);
 
     p_doca_verbs_pd_destroy =
         (doca_verbs_pd_destroy_t)doca_sdk_find_symbol(verbs_handle, "doca_verbs_pd_destroy", 1);
-    p_doca_verbs_context_destroy =
-        (doca_verbs_context_destroy_t)doca_sdk_find_symbol(
-            verbs_handle, "doca_verbs_context_destroy", 1);
+    p_doca_verbs_context_destroy = (doca_verbs_context_destroy_t)doca_sdk_find_symbol(
+        verbs_handle, "doca_verbs_context_destroy", 1);
 
     /* Check if all symbols were found */
     if (!p_doca_verbs_sdk_wrapper_dev_open_from_pd || !p_doca_verbs_dev_close ||

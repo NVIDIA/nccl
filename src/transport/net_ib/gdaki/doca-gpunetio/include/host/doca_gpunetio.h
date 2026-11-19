@@ -129,6 +129,7 @@ struct doca_gpu_verbs_qp {
     doca_verbs_cq_t *cq_sq;
     unsigned int refcount;
     bool enable_data_direct;
+    uint8_t qp_dev_layout; /* Layout of qp_gpu, 0 until export. Padding before cq_rq. */
 
     /* RQ state used by CPU progress. */
     doca_verbs_cq_t *cq_rq;  // Receive CQ used by the QP.
@@ -136,8 +137,9 @@ struct doca_gpu_verbs_qp {
     uint64_t rq_dbr_pi;      // RQ DBR producer index.
     __be32 *rq_dbrec_cpu;    // RQ DBR host-resident CPU-proxy DBR or through the GDRCopy alias of a
                              // GPU-resident DBR.
-    doca_error_t rq_fatal_status;           // Last error code seen on the RQ.
-    bool monitored_by;  // Whether the QP is monitored by a service.
+    doca_error_t rq_fatal_status;  // Last error code seen on the RQ.
+    bool monitored_by;             // Whether the QP is monitored by a service.
+    uint64_t rq_dbr_pi_shadow;     // rq_dbr_pi last written to rq_dbrec_cpu.
 };
 
 /**
@@ -305,6 +307,45 @@ doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
                                        struct doca_gpu_dev_verbs_qp **qp_gpu);
 
 /**
+ * As doca_gpu_verbs_get_qp_dev, with the version of the headers used to compile the device code.
+ * The block is dereferenced by device code, so the version that matters is the one the consumer's
+ * kernels were built against, not the one that opened the handle.
+ *
+ * @param [in] qp
+ * DOCA GPUNetIO Verbs QP object.
+ * @param [in] device_code_version
+ * DOCA_GPUNETIO_DEVICE_CODE_VERSION the consumer's device code was compiled against.
+ * @param [out] qp_gpu
+ * DOCA GPUNetIO Verbs QP GPU object, laid out as struct doca_gpu_dev_verbs_qp of that version.
+ * @param [out] qp_gpu_size
+ * Size in bytes of the QP GPU object. Can be NULL.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_NOT_SUPPORTED - if device_code_version is outside the range this library
+ *   supports, the QP is configured for a feature absent from that device code, or the QP was
+ *   already exported for device code that reads a different layout.
+ */
+doca_error_t doca_gpu_verbs_get_qp_dev_ver(struct doca_gpu_verbs_qp *qp,
+                                           uint32_t device_code_version, void **qp_gpu,
+                                           size_t *qp_gpu_size);
+
+/* Typed so the compiler still checks qp_gpu, and so it is written as its own pointer type. */
+static inline doca_error_t doca_priv_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
+                                                          struct doca_gpu_dev_verbs_qp **qp_gpu) {
+    void *out = NULL;
+    doca_error_t status = doca_gpu_verbs_get_qp_dev_ver(qp, DOCA_GPUNETIO_DEVICE_CODE_VERSION,
+                                                        qp_gpu != NULL ? &out : NULL, NULL);
+    if (status == DOCA_SUCCESS) *qp_gpu = (struct doca_gpu_dev_verbs_qp *)out;
+    return status;
+}
+
+/* Preserve the addressable symbol while forwarding normal calls with the consumer's version. */
+#define doca_gpu_verbs_get_qp_dev(qp, qp_gpu) doca_priv_gpu_verbs_get_qp_dev(qp, qp_gpu)
+
+/**
  * Return a DMABuf file descriptor from a GPU memory address if the GPU device and CUDA installation
  * supports DMABuf.
  *
@@ -431,8 +472,8 @@ doca_error_t doca_gpu_verbs_service_monitor_qp(doca_gpu_verbs_service_t service,
 /**
  * Destroy a service object.
  *
- * All monitored QPs and the signal map attached to the service are detached before it is
- * destroyed.
+ * Stops delivery into the service's signal map and stops monitoring all of its QPs before the
+ * service is destroyed. The map itself is not destroyed.
  *
  * @param [in] service
  * Service object to destroy
@@ -443,6 +484,36 @@ doca_error_t doca_gpu_verbs_service_monitor_qp(doca_gpu_verbs_service_t service,
  * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
  */
 doca_error_t doca_gpu_verbs_destroy_service(doca_gpu_verbs_service_t service);
+
+/**
+ * Fence that brackets the RQ doorbell record writes of an RQ commit.
+ *
+ * A commit is one call to this function, one doca_gpu_verbs_rq_commit_dbr() per QP, then one more
+ * call to this function.
+ *
+ * @param [in] use_strong_fence
+ * true for a full memory fence, false for a store fence. Must be true if any QP of the commit is
+ * data-direct.
+ *
+ * @return
+ * DOCA_SUCCESS - always.
+ */
+doca_error_t doca_gpu_verbs_rq_commit_fence(bool use_strong_fence);
+
+/**
+ * Write a QP's RQ doorbell record with the receive credits consumed since its last write.
+ *
+ * Does nothing if the QP has no RQ or consumed no credits.
+ *
+ * @param [in] qp
+ * QP whose RQ doorbell record is written.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if qp is NULL.
+ */
+doca_error_t doca_gpu_verbs_rq_commit_dbr(struct doca_gpu_verbs_qp *qp);
 
 /**
  * Query the last error of a GPUNetIO QP
@@ -484,6 +555,50 @@ doca_error_t doca_gpu_verbs_export_multi_qps_dev(doca_gpu_t *gpu_dev,
                                                  struct doca_gpu_dev_verbs_qp **out_qp_gpus);
 
 /**
+ * As doca_gpu_verbs_export_multi_qps_dev, with an explicit device-code version.
+ * See doca_gpu_verbs_get_qp_dev_ver.
+ *
+ * @param [in] gpu_dev
+ * DOCA GPUNetIO handler.
+ * @param [in] qps
+ * QPs to export
+ * @param [in] num_qps
+ * Number of QPs to export
+ * @param [in] device_code_version
+ * DOCA_GPUNETIO_DEVICE_CODE_VERSION the consumer's device code was compiled against.
+ * @param [out] out_qp_gpus
+ * GPU QPs, an array of struct doca_gpu_dev_verbs_qp of that version.
+ * @param [out] qp_gpu_size
+ * Size in bytes of each GPU QP, which is the array stride. Can be NULL.
+ *
+ * @return
+ * DOCA_SUCCESS - in case of success.
+ * doca_error code - in case of failure:
+ * - DOCA_ERROR_INVALID_VALUE - if an invalid input had been received.
+ * - DOCA_ERROR_NOT_SUPPORTED - if device_code_version is outside the range this library
+ *   supports, or the QP is configured for a feature absent from that device code.
+ */
+doca_error_t doca_gpu_verbs_export_multi_qps_dev_ver(doca_gpu_t *gpu_dev,
+                                                     struct doca_gpu_verbs_qp **qps,
+                                                     unsigned int num_qps,
+                                                     uint32_t device_code_version,
+                                                     void **out_qp_gpus, size_t *qp_gpu_size);
+
+static inline doca_error_t doca_priv_gpu_verbs_export_multi_qps_dev(
+    doca_gpu_t *gpu_dev, struct doca_gpu_verbs_qp **qps, unsigned int num_qps,
+    struct doca_gpu_dev_verbs_qp **out_qp_gpus) {
+    void *out = NULL;
+    doca_error_t status = doca_gpu_verbs_export_multi_qps_dev_ver(
+        gpu_dev, qps, num_qps, DOCA_GPUNETIO_DEVICE_CODE_VERSION, out_qp_gpus != NULL ? &out : NULL,
+        NULL);
+    if (status == DOCA_SUCCESS) *out_qp_gpus = (struct doca_gpu_dev_verbs_qp *)out;
+    return status;
+}
+
+#define doca_gpu_verbs_export_multi_qps_dev(gpu_dev, qps, num_qps, out_qp_gpus) \
+    doca_priv_gpu_verbs_export_multi_qps_dev(gpu_dev, qps, num_qps, out_qp_gpus)
+
+/**
  * Unexport multiple QPs from GPU
  *
  * @param [in] gpu_dev
@@ -502,8 +617,7 @@ doca_error_t doca_gpu_verbs_export_multi_qps_dev(doca_gpu_t *gpu_dev,
  */
 doca_error_t doca_gpu_verbs_unexport_multi_qps_dev(doca_gpu_t *gpu_dev,
                                                    struct doca_gpu_verbs_qp **qps,
-                                                   unsigned int num_qps,
-                                                   struct doca_gpu_dev_verbs_qp *qp_gpus);
+                                                   unsigned int num_qps, void *qp_gpus);
 
 /**
  * Reset tracking and memory of a GPUNetIO QP.

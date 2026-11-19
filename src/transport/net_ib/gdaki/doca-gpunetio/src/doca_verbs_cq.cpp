@@ -1096,11 +1096,18 @@ doca_error_t doca_verbs_comp_channel_destroy(doca_verbs_comp_channel_t *compch) 
         if (err == DOCA_SDK_WRAPPER_SUCCESS) {
             compch->sdk = nullptr;
             goto exit;
-        } else if (err == DOCA_SDK_WRAPPER_API_ERROR) {
-            DOCA_LOG(LOG_INFO, "DOCA SDK function returned an error", __func__);
-            status = DOCA_ERROR_UNEXPECTED;
-            goto exit;
         }
+        /*
+         * On failure the SDK channel is still alive, e.g. the SDK refuses with DOCA_ERROR_AGAIN
+         * while CQs are bound to it: keep it and the handle, so the caller can destroy the CQs and
+         * call again. sdk and open share a union, the open cleanup at exit must not run on it.
+         */
+        if (err == DOCA_SDK_WRAPPER_ERROR_AGAIN) {
+            DOCA_LOG(LOG_ERR, "Failed to destroy compch %p: CQs are still bound to it", compch);
+            return DOCA_ERROR_AGAIN;
+        }
+        DOCA_LOG(LOG_ERR, "Failed to destroy compch %p with the DOCA SDK", compch);
+        return DOCA_ERROR_UNEXPECTED;
     }
 
     if (compch->open == nullptr) {

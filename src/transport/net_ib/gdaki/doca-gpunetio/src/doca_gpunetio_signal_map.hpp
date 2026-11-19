@@ -28,13 +28,15 @@ struct doca_gpu_verbs_signal_page {
     uint32_t refcount;
 };
 
+/* Offset of the acks in the reset queue's GPU page. The tail sits alone in the first 128 bytes. */
+#define DOCA_GPUNETIO_VERBS_SIGNAL_RESET_ACKS_OFFSET 128
+
 struct doca_gpu_verbs_signal_entry {
     volatile doca_gpu_verbs_signal_value_t *cpu_alias_legacy;
     volatile doca_gpu_verbs_signal_value_t *cpu_alias_data_direct;
     doca_gpu_verbs_signal_value_t *gpu_addr;
     struct doca_gpu_verbs_signal_page *page;
     doca_gpu_verbs_signal_value_t shadow;
-    bool needs_mcst;
 };
 
 struct doca_gpu_verbs_signal_lookup_block {
@@ -47,7 +49,6 @@ struct doca_gpu_verbs_signal_map {
     std::unordered_set<uintptr_t> *registered_slots;
     struct doca_gpu_verbs_signal_lookup_block
         *lookup_blocks[DOCA_GPUNETIO_VERBS_SIGNAL_LOOKUP_BLOCK_COUNT];
-    bool attached_to_service;
 
     uint64_t dropped_signals;
     bool dropped_op_logged;
@@ -55,7 +56,18 @@ struct doca_gpu_verbs_signal_map {
     bool dropped_mapping_logged;
     bool wrapped_logged;
 
+    bool needs_mcst;
     bool data_direct_mode;
+
+    /* Device reset queue. The GPU posts requests into pinned host memory and waits on the acks,
+     * which the CPU writes through a GDRCopy mapping of the queue's GPU page. */
+    uint64_t *reset_requests;
+    void *reset_gpu_alloc;
+    void *reset_gdr_mh;
+    void *reset_cpu_base;
+    volatile uint32_t *reset_acks_cpu;
+    struct doca_gpu_dev_verbs_signal_reset_queue reset_queue;
+    uint32_t reset_head;
 };
 
 /**
@@ -70,12 +82,20 @@ doca_error_t priv_signal_map_apply(struct doca_gpu_verbs_signal_map *map, uint32
                                    bool use_data_direct);
 
 /**
- * Transfer one delivery owner's attachment from old_map to new_map.
+ * Serve the device resets posted to the map's reset queue: zero each requested signal's shadow,
+ * then acknowledge the request so doca_gpu_dev_verbs_signal_reset() returns.
  *
- * The caller must exclude its delivery thread while this runs. Attachment makes a map immutable
- * through the public register, unregister, and destroy APIs.
+ * Runs on the delivery thread, which is the shadow's only writer. Returns true if any reset was
+ * served.
  */
-doca_error_t priv_signal_map_replace_attachment(struct doca_gpu_verbs_signal_map *old_map,
-                                                struct doca_gpu_verbs_signal_map *new_map);
+bool priv_signal_reset_progress(struct doca_gpu_verbs_signal_map *map);
+
+/* Whether the next device reset may have been posted. Delivery checks this on every progress call,
+ * so it stays inline; priv_signal_reset_progress() makes the full check. */
+static inline bool priv_signal_reset_pending(const struct doca_gpu_verbs_signal_map *map) {
+    const uint32_t index = map->reset_head & (DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SIZE - 1);
+    const uint64_t request = __atomic_load_n(&map->reset_requests[index], __ATOMIC_RELAXED);
+    return (uint32_t)(request >> 32) == map->reset_head + 1;
+}
 
 #endif /* DOCA_GPUNETIO_SIGNAL_MAP_HPP */

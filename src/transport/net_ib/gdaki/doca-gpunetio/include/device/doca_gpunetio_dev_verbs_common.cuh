@@ -74,7 +74,8 @@
 
 /**
  * Enable (1) or disable (0) CUDA C++ atomics (cuda::atomic_ref) in atomic add.
- * If enabled use cuda::atomic_ref, otherwise CUDA atomicAdd(), which has no 8-bit or 16-bit version.
+ * If enabled use cuda::atomic_ref, otherwise CUDA atomicAdd(), which has no 8-bit or 16-bit
+ * version.
  */
 #ifndef DOCA_GPUNETIO_VERBS_USE_CCC_ATOMIC_ADD
 #define DOCA_GPUNETIO_VERBS_USE_CCC_ATOMIC_ADD 0
@@ -325,6 +326,18 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_memcpy_inl_aligned_dat
     }
 }
 
+/* Atomic max whose old value is not needed: a fire-and-forget reduction on global memory. */
+template <enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode>
+__device__ static __forceinline__ void doca_gpu_dev_verbs_red_max(uint64_t *ptr, uint64_t val) {
+    if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE) {
+        if (*ptr < val) *ptr = val;
+    } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA) {
+        asm volatile("red.cta.global.max.u64 [%0], %1;" ::"l"(ptr), "l"(val) : "memory");
+    } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU) {
+        asm volatile("red.gpu.global.max.u64 [%0], %1;" ::"l"(ptr), "l"(val) : "memory");
+    }
+}
+
 template <typename T, enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode,
           bool need_fence_acquire = false>
 __device__ static __forceinline__ T doca_gpu_dev_verbs_atomic_max(T *ptr, T val) {
@@ -352,11 +365,11 @@ __device__ static __forceinline__ T doca_gpu_dev_verbs_atomic_max(T *ptr, T val)
  * @return Previous value at *ptr
  */
 template <typename T, enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode>
-__device__ static __forceinline__ T doca_priv_gpu_dev_verbs_atomic_add(T *ptr, T val, std::true_type)
-{
-	T old_val = *ptr;
-	*ptr = old_val + val;
-	return old_val;
+__device__ static __forceinline__ T doca_priv_gpu_dev_verbs_atomic_add(T *ptr, T val,
+                                                                       std::true_type) {
+    T old_val = *ptr;
+    *ptr = old_val + val;
+    return old_val;
 }
 
 /**
@@ -367,49 +380,53 @@ __device__ static __forceinline__ T doca_priv_gpu_dev_verbs_atomic_add(T *ptr, T
  * @return Previous value at *ptr
  */
 template <typename T, enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode>
-__device__ static __forceinline__ T doca_priv_gpu_dev_verbs_atomic_add(T *ptr, T val, std::false_type)
-{
+__device__ static __forceinline__ T doca_priv_gpu_dev_verbs_atomic_add(T *ptr, T val,
+                                                                       std::false_type) {
 #if DOCA_GPUNETIO_VERBS_USE_CCC_ATOMIC_ADD == 1
-	if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA) {
-		cuda::atomic_ref<T, cuda::thread_scope_block> ptr_aref(*ptr);
-		return ptr_aref.fetch_add(val, cuda::memory_order_relaxed);
-	} else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU) {
-		cuda::atomic_ref<T, cuda::thread_scope_device> ptr_aref(*ptr);
-		return ptr_aref.fetch_add(val, cuda::memory_order_relaxed);
-	}
+    if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA) {
+        cuda::atomic_ref<T, cuda::thread_scope_block> ptr_aref(*ptr);
+        return ptr_aref.fetch_add(val, cuda::memory_order_relaxed);
+    } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU) {
+        cuda::atomic_ref<T, cuda::thread_scope_device> ptr_aref(*ptr);
+        return ptr_aref.fetch_add(val, cuda::memory_order_relaxed);
+    }
 #else
-	static_assert(sizeof(T) >= sizeof(unsigned int),
-		      "atomicAdd() has no 8-bit or 16-bit version: set DOCA_GPUNETIO_VERBS_USE_CCC_ATOMIC_ADD to 1");
+    static_assert(sizeof(T) >= sizeof(unsigned int),
+                  "atomicAdd() has no 8-bit or 16-bit version: set "
+                  "DOCA_GPUNETIO_VERBS_USE_CCC_ATOMIC_ADD to 1");
 
-	/* atomicAdd() has no overload for uint64_t: use the unsigned long long one for 64-bit integers */
-	constexpr bool is_int64 = sizeof(T) == sizeof(unsigned long long) && std::is_integral<T>::value;
-	using native_t = typename std::conditional<is_int64, unsigned long long, T>::type;
+    /* atomicAdd() has no overload for uint64_t: use the unsigned long long one for 64-bit integers
+     */
+    constexpr bool is_int64 = sizeof(T) == sizeof(unsigned long long) && std::is_integral<T>::value;
+    using native_t = typename std::conditional<is_int64, unsigned long long, T>::type;
 
-	if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA)
-		return static_cast<T>(atomicAdd_block(reinterpret_cast<native_t *>(ptr), static_cast<native_t>(val)));
-	else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU)
-		return static_cast<T>(atomicAdd(reinterpret_cast<native_t *>(ptr), static_cast<native_t>(val)));
+    if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA)
+        return static_cast<T>(
+            atomicAdd_block(reinterpret_cast<native_t *>(ptr), static_cast<native_t>(val)));
+    else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU)
+        return static_cast<T>(
+            atomicAdd(reinterpret_cast<native_t *>(ptr), static_cast<native_t>(val)));
 #endif
-	return 0;
+    return 0;
 }
 
 /**
  * @brief Atomic add operation.
- * In CTA and GPU modes, 8-bit and 16-bit types need DOCA_GPUNETIO_VERBS_USE_CCC_ATOMIC_ADD set to 1.
+ * In CTA and GPU modes, 8-bit and 16-bit types need DOCA_GPUNETIO_VERBS_USE_CCC_ATOMIC_ADD set
+ * to 1.
  *
  * @param [in] ptr - Pointer to the value
  * @param [in] val - Value to add
  * @return Previous value at *ptr
  */
 template <typename T, enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode>
-__device__ static __forceinline__ T doca_gpu_dev_verbs_atomic_add(T *ptr, T val)
-{
-	/* EXCLUSIVE has its own overload, so it never instantiates the atomic code, in any C++ standard */
-	return doca_priv_gpu_dev_verbs_atomic_add<T, resource_sharing_mode>(
-		ptr,
-		val,
-		std::integral_constant<bool,
-				       resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>());
+__device__ static __forceinline__ T doca_gpu_dev_verbs_atomic_add(T *ptr, T val) {
+    /* EXCLUSIVE has its own overload, so it never instantiates the atomic code, in any C++ standard
+     */
+    return doca_priv_gpu_dev_verbs_atomic_add<T, resource_sharing_mode>(
+        ptr, val,
+        std::integral_constant<bool, resource_sharing_mode ==
+                                         DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE>());
 }
 
 template <typename T, enum doca_gpu_dev_verbs_resource_sharing_mode resource_sharing_mode>
@@ -432,11 +449,17 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_lock(int *lock) {
         *lock = 1;
     } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA) {
         do {
-            asm volatile("atom.acquire.global.cta.cas.b32 %0, [%1], 0, 1;" : "=r"(old_val) : "l"(lock) : "memory");
+            asm volatile("atom.acquire.global.cta.cas.b32 %0, [%1], 0, 1;"
+                         : "=r"(old_val)
+                         : "l"(lock)
+                         : "memory");
         } while (old_val != 0);
     } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU) {
         do {
-            asm volatile("atom.acquire.global.gpu.cas.b32 %0, [%1], 0, 1;" : "=r"(old_val) : "l"(lock) : "memory");
+            asm volatile("atom.acquire.global.gpu.cas.b32 %0, [%1], 0, 1;"
+                         : "=r"(old_val)
+                         : "l"(lock)
+                         : "memory");
         } while (old_val != 0);
     }
 }
@@ -451,9 +474,9 @@ __device__ static __forceinline__ void doca_gpu_dev_verbs_unlock(int *lock) {
     if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_EXCLUSIVE) {
         *lock = 0;
     } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_CTA) {
-        asm volatile("st.release.global.cta.b32 [%0], 0;" :: "l"(lock) : "memory");
+        asm volatile("st.release.global.cta.b32 [%0], 0;" ::"l"(lock) : "memory");
     } else if (resource_sharing_mode == DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU) {
-        asm volatile("st.release.global.gpu.b32 [%0], 0;" :: "l"(lock) : "memory");
+        asm volatile("st.release.global.gpu.b32 [%0], 0;" ::"l"(lock) : "memory");
     }
 }
 
@@ -528,5 +551,56 @@ __device__ __forceinline__ T doca_gpu_dev_verbs_load_const(const T *ptr) {
 #else
     return *ptr;
 #endif
+}
+
+/**
+ * @brief Reset a signal map signal to zero from the GPU.
+ *
+ * Zeroes the slot, then asks the CPU delivering into the map to zero the signal's running total
+ * and waits until it has. When this returns, the next immediate update to the signal starts from
+ * zero, so the caller may tell its peers to send the next updates.
+ *
+ * Blocks until the map is progressed, by doca_gpu_verbs_rq_progress() or a service that delivers
+ * into the map. There is no timeout or abort: if the map is never progressed, this waits forever.
+ * The map must not be destroyed while this waits.
+ *
+ * No update to the signal may be in flight, and only one thread may reset a given signal at a
+ * time. The thread that waits on the signal afterwards must be ordered after this call by the
+ * application.
+ *
+ * @param slot - The signal's slot in GPU memory, as registered with the map when using its queue
+ * @param sig_id - The signal's id. Ignored with an empty queue.
+ * @param queue - The map's reset queue, from doca_gpu_verbs_signal_map_get_gpu_reset_queue(), or
+ *                an empty queue for a signal that never receives immediate updates
+ */
+__device__ static __forceinline__ void doca_gpu_dev_verbs_signal_reset(
+    uint64_t *slot, uint32_t sig_id, struct doca_gpu_dev_verbs_signal_reset_queue queue) {
+    if (queue.requests == nullptr) {
+        *slot = 0;
+        doca_gpu_dev_verbs_fence_release<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_GPU>();
+        return;
+    }
+
+    const uint32_t ticket = atomicAdd(queue.tail, 1U);
+    const uint32_t index = ticket & (DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SIZE - 1);
+    uint32_t *ack = queue.acks + index;
+
+    /* The entry is free once the ticket that used it one lap earlier has been acknowledged. */
+    const uint32_t previous_ack = ticket - DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SIZE + 1;
+    while ((int32_t)(doca_gpu_dev_verbs_load_relaxed_sys_global(ack) - previous_ack) < 0);
+    doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
+
+    *slot = 0;
+    const uint32_t lap_check = ((ticket >> DOCA_GPUNETIO_VERBS_SIGNAL_RESET_QUEUE_SHIFT) + 1)
+                               << DOCA_GPUNETIO_VERBS_SIGNAL_RESET_CHECK_SHIFT;
+    const uint64_t request = ((uint64_t)(ticket + 1) << 32) | lap_check |
+                             (sig_id & DOCA_GPUNETIO_VERBS_SIGNAL_IMM_ID_MASK);
+    asm volatile("st.release.sys.b64 [%0], %1;"
+                 :
+                 : "l"(queue.requests + index), "l"(request)
+                 : "memory");
+
+    while ((int32_t)(doca_gpu_dev_verbs_load_relaxed_sys_global(ack) - (ticket + 1)) < 0);
+    doca_gpu_dev_verbs_fence_acquire<DOCA_GPUNETIO_VERBS_SYNC_SCOPE_SYS>();
 }
 #endif /* DOCA_GPUNETIO_DEV_VERBS_COMMON_H */

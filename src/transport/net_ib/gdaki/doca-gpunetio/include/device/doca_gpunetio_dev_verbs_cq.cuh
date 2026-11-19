@@ -176,7 +176,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_one_cq_device_at(
         doca_priv_gpu_dev_verbs_poll_one_cq_device_at<resource_sharing_mode>(cq, cons_index);
     if (status == 0) {
         doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
-        doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(&cq->cqe_ci, cons_index + 1);
+        doca_gpu_dev_verbs_red_max<resource_sharing_mode>(&cq->cqe_ci, cons_index + 1);
     }
     return status;
 }
@@ -271,7 +271,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_one_cq_collapsed_a
         cq, cons_index, &new_cqe_ci);
     if (status == 0) {
         doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
-        doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(&cq->cqe_ci, new_cqe_ci);
+        doca_gpu_dev_verbs_red_max<resource_sharing_mode>(&cq->cqe_ci, new_cqe_ci);
     }
     return status;
 }
@@ -384,7 +384,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_device_at(
     int status = doca_priv_gpu_dev_verbs_poll_cq_device_at<resource_sharing_mode>(cq, cons_index);
     if (status == 0) {
         doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
-        doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(&cq->cqe_ci, cons_index + 1);
+        doca_gpu_dev_verbs_red_max<resource_sharing_mode>(&cq->cqe_ci, cons_index + 1);
     }
     return status;
 }
@@ -497,7 +497,7 @@ __device__ static __forceinline__ int doca_gpu_dev_verbs_poll_cq_collapsed_at(
     if (status == 0) {
         struct doca_gpu_dev_verbs_cq *cq = doca_gpu_dev_verbs_qp_get_cq<qp_type>(qp);
         doca_gpu_dev_verbs_fence_acquire_nvidia_nic();
-        doca_gpu_dev_verbs_atomic_max<uint64_t, resource_sharing_mode>(&(cq->cqe_ci), new_cqe_ci);
+        doca_gpu_dev_verbs_red_max<resource_sharing_mode>(&(cq->cqe_ci), new_cqe_ci);
     }
     return status;
 }

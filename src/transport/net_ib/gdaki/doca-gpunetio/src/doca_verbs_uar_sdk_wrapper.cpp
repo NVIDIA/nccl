@@ -96,9 +96,8 @@ static void doca_verbs_sdk_wrapper_init(int *ret) {
         (doca_verbs_uar_destroy_t)doca_sdk_find_symbol(common_handle, "doca_uar_destroy", 1);
     p_doca_verbs_uar_get_id =
         (doca_verbs_uar_get_id_t)doca_sdk_find_symbol(common_handle, "doca_uar_id_get", 1);
-    p_doca_verbs_uar_reg_addr_get =
-        (doca_verbs_uar_reg_addr_get_t)doca_sdk_find_symbol(
-            common_handle, "doca_uar_reg_addr_get", 1);
+    p_doca_verbs_uar_reg_addr_get = (doca_verbs_uar_reg_addr_get_t)doca_sdk_find_symbol(
+        common_handle, "doca_uar_reg_addr_get", 1);
 
     /* Check if all symbols were found */
     if (!p_doca_verbs_uar_create || !p_doca_verbs_uar_destroy || !p_doca_verbs_uar_get_id ||

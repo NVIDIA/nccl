@@ -56,6 +56,7 @@
 #include "doca_gpunetio_cuda_wrapper.h"
 #include "doca_gpunetio_sdk_wrapper.h"
 #include "doca_gpunetio.hpp"
+#include "gpu_dev_compat/doca_gpunetio_dev_compat.hpp"
 #include "doca_verbs_dev.hpp"
 #include "host/doca_gpunetio_signal.h"
 #include "doca_gpunetio_signal_map.hpp"
@@ -99,6 +100,7 @@ struct doca_gpu_verbs_service {
     pthread_t service_thread;
     pthread_rwlock_t service_lock;
     bool running;
+    bool use_strong_fence;
     std::set<struct doca_gpu_verbs_qp *> *qps;
     struct doca_gpu_verbs_signal_map *signal_map;
 };
@@ -854,6 +856,7 @@ static doca_error_t initialize_rq(struct doca_gpu_verbs_qp *qp_gverbs, void *rq_
 
     *(volatile __be32 *)cq_ci_dbr = htobe32(0);
     *(volatile __be32 *)qp_gverbs->rq_dbrec_cpu = htobe32(qp_gverbs->rq_dbr_pi & UINT16_MAX);
+    qp_gverbs->rq_dbr_pi_shadow = qp_gverbs->rq_dbr_pi;
     doca_internal_wc_store_fence();
 
     return DOCA_SUCCESS;
@@ -1160,18 +1163,34 @@ out:
     return status;
 }
 
-doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
-                                       struct doca_gpu_dev_verbs_qp **qp_gpu) {
+doca_error_t doca_gpu_verbs_get_qp_dev_ver(struct doca_gpu_verbs_qp *qp,
+                                           uint32_t device_code_version, void **qp_gpu,
+                                           size_t *qp_gpu_size) {
     doca_error_t status = DOCA_SUCCESS;
     int custatus = 0;
 
     enum doca_gpu_mem_type mtype;
+    uint32_t layout = 0;
+    size_t qp_dev_size = 0;
+    void *staging = nullptr;
 
-    if (qp == nullptr) return DOCA_ERROR_INVALID_VALUE;
+    if (qp == nullptr || qp_gpu == nullptr || qp->qp_cpu == nullptr || qp->gpu_dev == nullptr)
+        return DOCA_ERROR_INVALID_VALUE;
 
-    assert(qp->qp_cpu);
+    status = doca_internal_gpu_verbs_qp_dev_select(device_code_version, &layout, &qp_dev_size);
+    if (status != DOCA_SUCCESS) return status;
+    status = doca_internal_gpu_verbs_qp_dev_check_version(device_code_version, qp->qp_cpu);
+    if (status != DOCA_SUCCESS) return status;
 
     if (qp->qp_gpu == nullptr) {
+        staging = calloc(1, qp_dev_size);
+        if (staging == nullptr) return DOCA_ERROR_NO_MEMORY;
+        status = doca_internal_gpu_verbs_qp_dev_fill(layout, staging, 0, qp->qp_cpu);
+        if (status != DOCA_SUCCESS) {
+            free(staging);
+            return status;
+        }
+
         if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) ||
             (qp->cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST)) {
             mtype = qp->enable_data_direct ? DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT
@@ -1180,16 +1199,17 @@ doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
             mtype = DOCA_GPU_MEM_TYPE_GPU;
         }
 
-        status = doca_gpu_mem_alloc(qp->gpu_dev, sizeof(struct doca_gpu_dev_verbs_qp),
-                                    priv_get_page_size(), mtype, (void **)&qp->qp_gpu,
-                                    (void **)&qp->qp_gpu_h);
+        status = doca_gpu_mem_alloc(qp->gpu_dev, qp_dev_size, priv_get_page_size(), mtype,
+                                    (void **)&qp->qp_gpu, (void **)&qp->qp_gpu_h);
         if (status != DOCA_SUCCESS) {
             DOCA_LOG(LOG_ERR, "Failed to alloc gpu memory for qp_gpu");
+            free(staging);
             return status;
         }
 
-        custatus = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaMemcpy(
-            qp->qp_gpu, qp->qp_cpu, sizeof(struct doca_gpu_dev_verbs_qp), cudaMemcpyHostToDevice));
+        custatus = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+            cudaMemcpy(qp->qp_gpu, staging, qp_dev_size, cudaMemcpyHostToDevice));
+        free(staging);
         if (custatus != cudaSuccess) {
             DOCA_LOG(LOG_ERR, "cuMemcpyHtoD failed");
             doca_gpu_mem_free(qp->gpu_dev, qp->qp_gpu);
@@ -1198,16 +1218,33 @@ doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
             return DOCA_ERROR_DRIVER;
         }
 
+        qp->qp_dev_layout = (uint8_t)layout;
         if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
             ((qp->qp_cpu->nic_handler & DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_CPU_PROXY) == 0)) {
             assert(doca_gpu_gdrcopy_is_supported());
-            qp->cpu_db = &qp->qp_gpu_h->sq_wqe_pi;
+            qp->cpu_db = doca_internal_gpu_verbs_qp_dev_sq_wqe_pi(layout, qp->qp_gpu_h);
         }
+    } else if (qp->qp_dev_layout != layout) {
+        DOCA_LOG(LOG_ERR, "QP already exported in layout %u, requested layout %u",
+                 qp->qp_dev_layout, layout);
+        return DOCA_ERROR_NOT_SUPPORTED;
     }
 
     *qp_gpu = qp->qp_gpu;
+    if (qp_gpu_size != nullptr) *qp_gpu_size = qp_dev_size;
 
     return DOCA_SUCCESS;
+}
+
+#undef doca_gpu_verbs_get_qp_dev
+doca_error_t doca_gpu_verbs_get_qp_dev(struct doca_gpu_verbs_qp *qp,
+                                       struct doca_gpu_dev_verbs_qp **qp_gpu) {
+    void *out = nullptr;
+    doca_error_t status =
+        doca_gpu_verbs_get_qp_dev_ver(qp, sc_gpu_verbs_unversioned_device_code_version,
+                                      qp_gpu != nullptr ? &out : nullptr, nullptr);
+    if (status == DOCA_SUCCESS) *qp_gpu = (struct doca_gpu_dev_verbs_qp *)out;
+    return status;
 }
 
 doca_error_t doca_gpu_verbs_unexport_qp(doca_gpu_t *gpu_dev, struct doca_gpu_verbs_qp *qp_gverbs) {
@@ -1245,20 +1282,23 @@ doca_error_t doca_gpu_verbs_unexport_qp(doca_gpu_t *gpu_dev, struct doca_gpu_ver
     return DOCA_SUCCESS;
 }
 
-doca_error_t doca_gpu_verbs_export_multi_qps_dev(doca_gpu_t *gpu_dev,
-                                                 struct doca_gpu_verbs_qp **qps,
-                                                 unsigned int num_qps,
-                                                 struct doca_gpu_dev_verbs_qp **out_qp_gpus) {
+doca_error_t doca_gpu_verbs_export_multi_qps_dev_ver(doca_gpu_t *gpu_dev,
+                                                     struct doca_gpu_verbs_qp **qps,
+                                                     unsigned int num_qps,
+                                                     uint32_t device_code_version,
+                                                     void **out_qp_gpus, size_t *qp_gpu_size) {
     doca_error_t status = DOCA_SUCCESS;
     int custatus = 0;
 
     enum doca_gpu_mem_type mtype;
-    struct doca_gpu_dev_verbs_qp *qp_gpus_d = nullptr;
-    struct doca_gpu_dev_verbs_qp *qp_cpus = nullptr;
-    struct doca_gpu_dev_verbs_qp *qp_gpus_h = nullptr;
+    uint8_t *qp_gpus_d = nullptr;
+    uint8_t *qp_cpus = nullptr;
+    uint8_t *qp_gpus_h = nullptr;
     struct doca_gpu_verbs_qp *qp;
     bool need_cpu_mapping = false;
     bool need_data_direct = false;
+    uint32_t layout = 0;
+    size_t qp_dev_size = 0;
 
     unsigned int qp_idx;
 
@@ -1267,10 +1307,28 @@ doca_error_t doca_gpu_verbs_export_multi_qps_dev(doca_gpu_t *gpu_dev,
         goto out;
     }
 
+    status = doca_internal_gpu_verbs_qp_dev_select(device_code_version, &layout, &qp_dev_size);
+    if (status != DOCA_SUCCESS) goto out;
+
+    qp_gpus_h = (uint8_t *)calloc(num_qps, qp_dev_size);
+    if (qp_gpus_h == nullptr) {
+        DOCA_LOG(LOG_ERR, "Failed to allocate memory for qp_gpus_h");
+        status = DOCA_ERROR_NO_MEMORY;
+        goto out;
+    }
+
     for (unsigned int qp_idx = 0; qp_idx < num_qps; qp_idx++) {
         qp = qps[qp_idx];
         if (qp == nullptr) continue;
-        assert(qp->qp_cpu != nullptr);
+        if (qp->qp_cpu == nullptr || qp->gpu_dev != gpu_dev || qp->qp_gpu != nullptr ||
+            qp->qp_gpu_h != nullptr) {
+            status = DOCA_ERROR_INVALID_VALUE;
+            goto out;
+        }
+        status = doca_internal_gpu_verbs_qp_dev_check_version(device_code_version, qp->qp_cpu);
+        if (status != DOCA_SUCCESS) goto out;
+        status = doca_internal_gpu_verbs_qp_dev_fill(layout, qp_gpus_h, qp_idx, qp->qp_cpu);
+        if (status != DOCA_SUCCESS) goto out;
         need_cpu_mapping |=
             (qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) ||
             (qp->cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST);
@@ -1284,45 +1342,38 @@ doca_error_t doca_gpu_verbs_export_multi_qps_dev(doca_gpu_t *gpu_dev,
             need_data_direct ? DOCA_GPU_MEM_TYPE_GPU_CPU_DATA_DIRECT : DOCA_GPU_MEM_TYPE_GPU_CPU;
     else
         mtype = DOCA_GPU_MEM_TYPE_GPU;
-    status = doca_gpu_mem_alloc(gpu_dev, sizeof(struct doca_gpu_dev_verbs_qp) * num_qps,
-                                GPU_PAGE_SIZE, mtype, (void **)&qp_gpus_d, (void **)&qp_cpus);
+    status = doca_gpu_mem_alloc(gpu_dev, qp_dev_size * num_qps, GPU_PAGE_SIZE, mtype,
+                                (void **)&qp_gpus_d, (void **)&qp_cpus);
     if (status != DOCA_SUCCESS) {
         DOCA_LOG(LOG_ERR, "Failed to alloc gpu memory for qp_gpus");
         goto out;
     }
 
-    qp_gpus_h =
-        (struct doca_gpu_dev_verbs_qp *)calloc(num_qps, sizeof(struct doca_gpu_dev_verbs_qp));
-    if (qp_gpus_h == nullptr) {
-        DOCA_LOG(LOG_ERR, "Failed to allocate memory for qp_gpus_h");
-        goto out;
-    }
-
-    for (qp_idx = 0; qp_idx < num_qps; qp_idx++) {
-        qp = qps[qp_idx];
-        if (qp == nullptr) continue;
-        assert(qp->qp_cpu != nullptr);
-        qp->qp_gpu = &(qp_gpus_d[qp_idx]);
-        if (qp->cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST)
-            qp->qp_gpu_h = &(qp_cpus[qp_idx]);
-        if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
-            ((qp->qp_cpu->nic_handler & DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_CPU_PROXY) == 0)) {
-            qp->qp_gpu_h = &(qp_cpus[qp_idx]);
-            qp->cpu_db = &qp->qp_gpu_h->sq_wqe_pi;
-        }
-        memcpy(&qp_gpus_h[qp_idx], qp->qp_cpu, sizeof(struct doca_gpu_dev_verbs_qp));
-    }
-
     custatus = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
-        cudaMemcpy(qp_gpus_d, qp_gpus_h, sizeof(struct doca_gpu_dev_verbs_qp) * num_qps,
-                   cudaMemcpyHostToDevice));
+        cudaMemcpy(qp_gpus_d, qp_gpus_h, qp_dev_size * num_qps, cudaMemcpyHostToDevice));
     if (custatus != cudaSuccess) {
         DOCA_LOG(LOG_ERR, "cuMemcpyHtoD failed");
         status = DOCA_ERROR_DRIVER;
         goto out;
     }
 
+    /* Publish pointers only after the copy, so a failure leaves the QPs unchanged. */
+    for (qp_idx = 0; qp_idx < num_qps; qp_idx++) {
+        qp = qps[qp_idx];
+        if (qp == nullptr) continue;
+        qp->qp_gpu = (struct doca_gpu_dev_verbs_qp *)(qp_gpus_d + qp_idx * qp_dev_size);
+        qp->qp_dev_layout = (uint8_t)layout;
+        if (qp->cq_type == DOCA_GPUNETIO_VERBS_CQ_64B_COLLAPSED_HOST)
+            qp->qp_gpu_h = (struct doca_gpu_dev_verbs_qp *)(qp_cpus + qp_idx * qp_dev_size);
+        if ((qp->send_dbr_mode_ext == DOCA_GPUNETIO_VERBS_SEND_DBR_MODE_EXT_NO_DBR_SW_EMULATED) &&
+            ((qp->qp_cpu->nic_handler & DOCA_GPUNETIO_VERBS_NIC_HANDLER_FLAG_CPU_PROXY) == 0)) {
+            qp->qp_gpu_h = (struct doca_gpu_dev_verbs_qp *)(qp_cpus + qp_idx * qp_dev_size);
+            qp->cpu_db = doca_internal_gpu_verbs_qp_dev_sq_wqe_pi(layout, qp->qp_gpu_h);
+        }
+    }
+
     *out_qp_gpus = qp_gpus_d;
+    if (qp_gpu_size != nullptr) *qp_gpu_size = qp_dev_size;
 
 out:
     if (status != DOCA_SUCCESS) {
@@ -1332,22 +1383,40 @@ out:
     return status;
 }
 
+#undef doca_gpu_verbs_export_multi_qps_dev
+doca_error_t doca_gpu_verbs_export_multi_qps_dev(doca_gpu_t *gpu_dev,
+                                                 struct doca_gpu_verbs_qp **qps,
+                                                 unsigned int num_qps,
+                                                 struct doca_gpu_dev_verbs_qp **out_qp_gpus) {
+    void *out = nullptr;
+    doca_error_t status = doca_gpu_verbs_export_multi_qps_dev_ver(
+        gpu_dev, qps, num_qps, sc_gpu_verbs_unversioned_device_code_version,
+        out_qp_gpus != nullptr ? &out : nullptr, nullptr);
+    if (status == DOCA_SUCCESS) *out_qp_gpus = (struct doca_gpu_dev_verbs_qp *)out;
+    return status;
+}
+
 doca_error_t doca_gpu_verbs_unexport_multi_qps_dev(doca_gpu_t *gpu_dev,
                                                    struct doca_gpu_verbs_qp **qps,
-                                                   unsigned int num_qps,
-                                                   struct doca_gpu_dev_verbs_qp *qp_gpus) {
+                                                   unsigned int num_qps, void *qp_gpus) {
     doca_error_t status = DOCA_SUCCESS;
     if (gpu_dev == nullptr || qps == nullptr || num_qps == 0 || qp_gpus == nullptr)
         return DOCA_ERROR_INVALID_VALUE;
 
+    /* Free before clearing: on failure the QPs keep pointers to memory that is still theirs. */
+    status = doca_gpu_mem_free(gpu_dev, qp_gpus);
+    if (status != DOCA_SUCCESS) return status;
+
     for (unsigned int qp_idx = 0; qp_idx < num_qps; qp_idx++) {
         struct doca_gpu_verbs_qp *qp = qps[qp_idx];
         if (qp == nullptr) continue;
+        if (qp->qp_gpu_h != nullptr &&
+            qp->cpu_db == doca_internal_gpu_verbs_qp_dev_sq_wqe_pi(qp->qp_dev_layout, qp->qp_gpu_h))
+            qp->cpu_db = nullptr;
         qp->qp_gpu = nullptr;
         qp->qp_gpu_h = nullptr;
     }
 
-    status = doca_gpu_mem_free(gpu_dev, qp_gpus);
     return status;
 }
 
@@ -1458,7 +1527,8 @@ static inline void priv_cpu_proxy_progress_cq(struct doca_gpu_verbs_qp *qp, bool
                  (((uint16_t)old_cqe_ci > wqe_counter) ? 0x10000ULL : 0x0);
 
     if (new_cqe_ci > old_cqe_ci) {
-        uint64_t *gpu_cqe_ci = &qp->qp_gpu_h->cq_sq.cqe_ci;
+        uint64_t *gpu_cqe_ci =
+            doca_internal_gpu_verbs_qp_dev_cqe_ci(qp->qp_dev_layout, qp->qp_gpu_h);
 
         if (priv_doca_gpu_t_to_doca_gpu_internal(qp->gpu_dev)->need_mcst) {
             (void)READ_ONCE(*gpu_cqe_ci);
@@ -1516,9 +1586,9 @@ static void priv_log_rq_err_cqe(const struct doca_gpunetio_ib_mlx5_cqe64 *cqe) {
              err_cqe->hw_synd_type, be16toh(err_cqe->wqe_counter));
 }
 
-static doca_error_t priv_rq_progress(struct doca_gpu_verbs_qp *qp,
-                                    struct doca_gpu_verbs_signal_map *map,
-                                    bool *out_progressed) {
+doca_error_t doca_gpu_verbs_rq_progress(struct doca_gpu_verbs_qp *qp,
+                                        struct doca_gpu_verbs_signal_map *map,
+                                        bool *out_progressed) {
     void *cq_rq_cqe_haddr = nullptr;
     uint32_t cq_rq_cqe_num = 0;
     uint8_t cq_rq_cqe_size = 0;
@@ -1527,29 +1597,40 @@ static doca_error_t priv_rq_progress(struct doca_gpu_verbs_qp *qp,
     doca_error_t status = DOCA_SUCCESS;
 
     if (out_progressed != nullptr) *out_progressed = false;
-    if (qp == nullptr || qp->cq_rq == nullptr || qp->rq_dbrec_cpu == nullptr)
+    if (qp == nullptr || map == nullptr || qp->cq_rq == nullptr || qp->rq_dbrec_cpu == nullptr)
         return DOCA_ERROR_INVALID_VALUE;
 
-    status = doca_verbs_cq_get_wq(qp->cq_rq, &cq_rq_cqe_haddr, &cq_rq_cqe_num,
-                                  &cq_rq_cqe_size);
+    if (priv_signal_reset_pending(map) && priv_signal_reset_progress(map) &&
+        out_progressed != nullptr)
+        *out_progressed = true;
+
+    const doca_error_t fatal_status = qp->rq_fatal_status;
+    if (fatal_status != DOCA_SUCCESS) return fatal_status;
+
+    if (qp->enable_data_direct && !map->data_direct_mode) {
+        DOCA_LOG(LOG_ERR,
+                 "Cannot progress a data-direct RQ because the signal map has no forced-PCIe "
+                 "mappings");
+        return DOCA_ERROR_NOT_SUPPORTED;
+    }
+
+    status = doca_verbs_cq_get_wq(qp->cq_rq, &cq_rq_cqe_haddr, &cq_rq_cqe_num, &cq_rq_cqe_size);
     if (status != DOCA_SUCCESS) return status;
     if (cq_rq_cqe_haddr == nullptr || cq_rq_cqe_num == 0 ||
         (cq_rq_cqe_num & (cq_rq_cqe_num - 1)) != 0 ||
         cq_rq_cqe_size != sizeof(struct doca_gpunetio_ib_mlx5_cqe64))
         return DOCA_ERROR_INVALID_VALUE;
 
-    const doca_error_t fatal_status = qp->rq_fatal_status;
-    if (fatal_status != DOCA_SUCCESS) return fatal_status;
-
     max_batch = cq_rq_cqe_num < DOCA_GPUNETIO_VERBS_RQ_MAX_CQES_PER_POLL
                     ? cq_rq_cqe_num
                     : DOCA_GPUNETIO_VERBS_RQ_MAX_CQES_PER_POLL;
 
+    const uint64_t dropped_before = map->dropped_signals;
+
     while (consumed < max_batch) {
         const uint64_t cqe_ci = qp->cq_rq_cqe_ci + consumed;
         struct doca_gpunetio_ib_mlx5_cqe64 *cqe =
-            (struct doca_gpunetio_ib_mlx5_cqe64 *)cq_rq_cqe_haddr +
-            (cqe_ci & (cq_rq_cqe_num - 1));
+            (struct doca_gpunetio_ib_mlx5_cqe64 *)cq_rq_cqe_haddr + (cqe_ci & (cq_rq_cqe_num - 1));
 
         /* The NIC DMAs this word last, so acquire makes the rest of the CQE safe to read. */
         const uint32_t cqe_ctrl_be =
@@ -1559,8 +1640,7 @@ static doca_error_t priv_rq_progress(struct doca_gpu_verbs_qp *qp,
         const bool cqe_owner = (op_own & DOCA_GPUNETIO_IB_MLX5_CQE_OWNER_MASK) != 0;
         const bool expected_cqe_owner = (cqe_ci & cq_rq_cqe_num) != 0;
 
-        if (cqe_opcode == DOCA_GPUNETIO_IB_MLX5_CQE_INVALID ||
-            cqe_owner != expected_cqe_owner)
+        if (cqe_opcode == DOCA_GPUNETIO_IB_MLX5_CQE_INVALID || cqe_owner != expected_cqe_owner)
             break;
 
         if (cqe_opcode == DOCA_GPUNETIO_IB_MLX5_CQE_RESP_ERR) {
@@ -1577,8 +1657,7 @@ static doca_error_t priv_rq_progress(struct doca_gpu_verbs_qp *qp,
             break;
         }
 
-        status = priv_signal_map_apply(map, le32toh(cqe->imm_inval_pkey),
-                                       qp->enable_data_direct);
+        status = priv_signal_map_apply(map, le32toh(cqe->imm_inval_pkey), qp->enable_data_direct);
         if (status != DOCA_SUCCESS) break;
 
         ++consumed;
@@ -1593,9 +1672,29 @@ static doca_error_t priv_rq_progress(struct doca_gpu_verbs_qp *qp,
     if (status != DOCA_SUCCESS) {
         qp->rq_fatal_status = status;
         DOCA_LOG(LOG_ERR, "RQ is stopped and will not be polled again");
+        return status;
     }
 
-    return status;
+    if (map->dropped_signals != dropped_before) return DOCA_ERROR_SKIPPED;
+
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_gpu_verbs_rq_commit_fence(bool use_strong_fence) {
+    if (use_strong_fence)
+        doca_internal_memory_fence();
+    else
+        doca_internal_wc_store_fence();
+    return DOCA_SUCCESS;
+}
+
+doca_error_t doca_gpu_verbs_rq_commit_dbr(struct doca_gpu_verbs_qp *qp) {
+    if (qp == nullptr) return DOCA_ERROR_INVALID_VALUE;
+    if (qp->cq_rq == nullptr) return DOCA_SUCCESS;
+    if (qp->rq_dbr_pi == qp->rq_dbr_pi_shadow) return DOCA_SUCCESS;
+    *(volatile __be32 *)qp->rq_dbrec_cpu = htobe32((uint32_t)(qp->rq_dbr_pi & UINT16_MAX));
+    qp->rq_dbr_pi_shadow = qp->rq_dbr_pi;
+    return DOCA_SUCCESS;
 }
 
 static void *priv_service_mainloop(void *args) {
@@ -1627,8 +1726,10 @@ static void *priv_service_mainloop(void *args) {
             for (auto qp : *service->qps) {
                 if (qp->cq_rq == nullptr || !qp->monitored_by) continue;
                 bool qp_progressed = false;
-                doca_error_t status = priv_rq_progress(qp, service->signal_map, &qp_progressed);
-                if (status != DOCA_SUCCESS && qp->rq_fatal_status == DOCA_SUCCESS) {
+                doca_error_t status =
+                    doca_gpu_verbs_rq_progress(qp, service->signal_map, &qp_progressed);
+                if (status != DOCA_SUCCESS && status != DOCA_ERROR_SKIPPED &&
+                    qp->rq_fatal_status == DOCA_SUCCESS) {
                     qp->rq_fatal_status = status;
                     DOCA_LOG(LOG_ERR, "RQ is stopped and will not be polled again");
                 }
@@ -1637,25 +1738,12 @@ static void *priv_service_mainloop(void *args) {
             progressed |= rq_progressed;
             rq_sweep_progressed |= rq_progressed;
             ++rq_rounds;
-        } while (rq_progressed &&
-                 rq_rounds < DOCA_GPUNETIO_VERBS_RQ_MAX_ROUNDS_PER_SWEEP);
+        } while (rq_progressed && rq_rounds < DOCA_GPUNETIO_VERBS_RQ_MAX_ROUNDS_PER_SWEEP);
 
         if (rq_sweep_progressed) {
-            if (service->signal_map->data_direct_mode)
-                doca_internal_memory_fence();
-            else
-                doca_internal_wc_store_fence();
-
-            for (auto qp : *service->qps) {
-                if (qp->cq_rq == nullptr || !qp->monitored_by) continue;
-                *(volatile __be32 *)qp->rq_dbrec_cpu =
-                    htobe32((uint32_t)(qp->rq_dbr_pi & UINT16_MAX));
-            }
-
-            if (service->signal_map->data_direct_mode)
-                doca_internal_memory_fence();
-            else
-                doca_internal_wc_store_fence();
+            doca_gpu_verbs_rq_commit_fence(service->use_strong_fence);
+            for (auto qp : *service->qps) doca_gpu_verbs_rq_commit_dbr(qp);
+            doca_gpu_verbs_rq_commit_fence(service->use_strong_fence);
         }
         pthread_rwlock_unlock(&service->service_lock);
         if (!progressed) sched_yield();
@@ -1746,7 +1834,10 @@ doca_error_t doca_gpu_verbs_service_monitor_qp(doca_gpu_verbs_service_t service,
     }
 
     service_->qps->insert(qp);
-    if (qp->cq_rq != nullptr) qp->monitored_by = true;
+    if (qp->cq_rq != nullptr) {
+        qp->monitored_by = true;
+        if (qp->enable_data_direct) service_->use_strong_fence = true;
+    }
     pthread_rwlock_unlock(&service_->service_lock);
 
     return DOCA_SUCCESS;
@@ -1772,12 +1863,6 @@ doca_error_t doca_gpu_verbs_service_set_signal_map(doca_gpu_verbs_service_t serv
         return DOCA_ERROR_BAD_STATE;
     }
 
-    doca_error_t status = priv_signal_map_replace_attachment(service_->signal_map, map);
-    if (status != DOCA_SUCCESS) {
-        pthread_rwlock_unlock(&service_->service_lock);
-        return status;
-    }
-
     service_->signal_map = map;
     pthread_rwlock_unlock(&service_->service_lock);
     return DOCA_SUCCESS;
@@ -1790,14 +1875,9 @@ doca_error_t doca_gpu_verbs_destroy_service(doca_gpu_verbs_service_t service) {
     __atomic_store_n(&service_->running, false, __ATOMIC_RELAXED);
     pthread_join(service_->service_thread, nullptr);
 
-    doca_error_t status = priv_signal_map_replace_attachment(service_->signal_map, nullptr);
-    if (status != DOCA_SUCCESS)
-        DOCA_LOG(LOG_ERR, "Failed to detach signal map while destroying service");
-
     pthread_rwlock_wrlock(&service_->service_lock);
     for (auto qp : *service_->qps) {
-        if (qp->cq_rq != nullptr && qp->monitored_by)
-            qp->monitored_by = false;
+        if (qp->cq_rq != nullptr && qp->monitored_by) qp->monitored_by = false;
     }
     pthread_rwlock_unlock(&service_->service_lock);
 
@@ -1876,30 +1956,38 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
     doca_error_t status = DOCA_SUCCESS;
     cudaError_t cuda_status = cudaSuccess;
 
-    struct doca_gpu_dev_verbs_qp qp_gpu_h;
     void *sq_wqe_daddr = nullptr;
     void *rq_wqe_daddr = nullptr;
     void *cq_rq_cqe_haddr = nullptr;
     uint32_t sq_wqe_num = 0;
     uint32_t rq_wqe_num = 0;
     uint32_t rcv_wqe_size = 0;
+    size_t qp_dev_size = 0;
+    void *staging = nullptr;
 
-    if (qp_gverbs == nullptr) {
+    if (qp_gverbs == nullptr || qp_gverbs->qp_gpu == nullptr || qp_gverbs->qp_cpu == nullptr) {
         status = DOCA_ERROR_INVALID_VALUE;
         goto out;
     }
 
-    assert(qp_gverbs->qp_gpu);
-    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaMemcpy(&qp_gpu_h, qp_gverbs->qp_gpu,
-                                                              sizeof(struct doca_gpu_dev_verbs_qp),
-                                                              cudaMemcpyDeviceToHost));
-    if (cuda_status != cudaSuccess) {
-        DOCA_LOG(LOG_ERR, "Failed to copy qp_gpu to qp_gpu_h");
-        status = DOCA_ERROR_DRIVER;
+    /* A layout that cannot represent this QP must fail before the queues are cleared. */
+    status = doca_internal_gpu_verbs_qp_dev_check(qp_gverbs->qp_dev_layout, qp_gverbs->qp_cpu);
+    if (status != DOCA_SUCCESS) goto out;
+
+    qp_dev_size = doca_internal_gpu_verbs_qp_dev_size(qp_gverbs->qp_dev_layout);
+    staging = calloc(1, qp_dev_size);
+    if (staging == nullptr) {
+        status = DOCA_ERROR_NO_MEMORY;
         goto out;
     }
 
-    assert(qp_gverbs->qp_cpu);
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMemcpy(staging, qp_gverbs->qp_gpu, qp_dev_size, cudaMemcpyDeviceToHost));
+    if (cuda_status != cudaSuccess) {
+        DOCA_LOG(LOG_ERR, "Failed to copy qp_gpu to host");
+        status = DOCA_ERROR_DRIVER;
+        goto out;
+    }
 
     if (qp_gverbs->cq_rq != nullptr) {
         if (qp_gverbs->monitored_by) {
@@ -1931,7 +2019,6 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
     qp_gverbs->qp_cpu->sq_lock = 0;
 
     qp_gverbs->qp_cpu->cq_sq.cqe_ci = 0;
-    qp_gverbs->qp_cpu->cq_sq.cqe_rsvd = qp_gpu_h.sq_rsvd_index;
 
     qp_gverbs->sq_wqe_pi_last = 0;
 
@@ -1983,12 +2070,16 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
 
         *(volatile __be32 *)qp_gverbs->rq_dbrec_cpu =
             htobe32((uint32_t)(qp_gverbs->rq_dbr_pi & UINT16_MAX));
+        qp_gverbs->rq_dbr_pi_shadow = qp_gverbs->rq_dbr_pi;
         doca_internal_wc_store_fence();
     }
 
-    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(cudaMemcpy(qp_gverbs->qp_gpu, qp_gverbs->qp_cpu,
-                                                              sizeof(struct doca_gpu_dev_verbs_qp),
-                                                              cudaMemcpyHostToDevice));
+    status =
+        doca_internal_gpu_verbs_qp_dev_reset(qp_gverbs->qp_dev_layout, staging, qp_gverbs->qp_cpu);
+    if (status != DOCA_SUCCESS) goto out;
+
+    cuda_status = DOCA_VERBS_CUDA_CALL_CLEAR_ERROR(
+        cudaMemcpy(qp_gverbs->qp_gpu, staging, qp_dev_size, cudaMemcpyHostToDevice));
     if (cuda_status != cudaSuccess) {
         DOCA_LOG(LOG_ERR, "Failed to update qp_gpu");
         status = DOCA_ERROR_DRIVER;
@@ -2003,6 +2094,7 @@ doca_error_t doca_gpu_verbs_reset_tracking_and_memory(struct doca_gpu_verbs_qp *
     }
 
 out:
+    free(staging);
     return status;
 }
 

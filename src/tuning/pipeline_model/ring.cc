@@ -11,6 +11,7 @@
 #include "../model.h"
 #include "../tuning_int.h"
 #include "pipeline_model.h"
+#include "../platforms/platforms.h"
 
 static float ringMaxBusBw(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* tuning) {
   struct ncclComm* comm = inputs->comm;
@@ -20,6 +21,28 @@ static float ringMaxBusBw(struct ncclTuningInput_t* const inputs, struct ncclTun
   intraBw = ncclTuningProtoBW(comm, tuning->algo, tuning->proto, intraBw);
   interBw = ncclTuningProtoBW(comm, tuning->algo, tuning->proto, interBw);
   return (comm->nNodes > 1 ? interBw : intraBw) * graph->nChannels * graph->nCtasPerChannel;
+}
+
+static float getIntraLatScaling(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* tuning) {
+  ncclTuningLatFactor lf;
+
+  ncclTuningPlatformGetIntraLatFactor(inputs->comm, tuning->algo, tuning->proto, &lf);
+
+  int ctas = tuning->nChannels;
+  if (ctas <= lf.channel_saturation_point)
+    return 1 + (lf.saturation_scaling - 1) / (float)lf.channel_saturation_point * ctas;
+  else return ctas / (float)lf.channel_saturation_point * lf.saturation_scaling;
+}
+
+static float getInterLatScaling(struct ncclTuningInput_t* const inputs, struct ncclTuningResult_t* tuning) {
+  ncclTuningLatFactor lf;
+
+  ncclTuningPlatformGetInterLatFactor(inputs->comm, tuning->algo, tuning->proto, &lf);
+
+  int ctas = tuning->nChannels;
+  if (ctas <= lf.channel_saturation_point)
+    return 1 + (lf.saturation_scaling - 1) / (float)lf.channel_saturation_point * ctas;
+  else return ctas / (float)lf.channel_saturation_point * lf.saturation_scaling;
 }
 
 static ncclResult_t ncclTuningPipelineRingGetAlgoStep(struct ncclTuningInput_t* const inputs,
@@ -39,10 +62,19 @@ static ncclResult_t ncclTuningPipelineRingGetAlgoStep(struct ncclTuningInput_t* 
   float intraBw = bwFactor * graph->bwIntra, interBw = bwFactor * graph->bwInter;
   int intraHw, interHw;
   ncclTuningGetHwIndexes(comm, algo, &intraHw, &interHw);
-  float intraRtt = comm->tuningContext.tuningConstants.hwLatencies[intraHw][algo][proto];
-  float interRtt = comm->tuningContext.tuningConstants.hwLatencies[interHw][algo][proto];
+  float intraRtt =
+    comm->tuningContext.tuningConstants.hwLatencies[intraHw][algo][proto] * getIntraLatScaling(inputs, tuning);
+  float interRtt =
+    comm->tuningContext.tuningConstants.hwLatencies[interHw][algo][proto] * getInterLatScaling(inputs, tuning);
   *intra = {nSteps - nInterSteps, intraRtt, intraBw * 1000};
   *inter = {nInterSteps, interRtt, interBw * 1000};
+
+  ncclTuningMinFifoTimeData mftd;
+  ncclTuningPlatformMinFifoTime(inputs->comm, tuning->algo, tuning->proto, &mftd);
+  if (tuning->nChannels < mftd.CTAsaturationPoint)
+    pipeline->minFifoStepTime = mftd.minFifoTime + (mftd.saturatedFifoTime - mftd.minFifoTime) *
+                                                     ((float)tuning->nChannels / mftd.CTAsaturationPoint);
+  else pipeline->minFifoStepTime = mftd.saturatedFifoTime * ((float)tuning->nChannels / mftd.CTAsaturationPoint);
 
   return ncclSuccess;
 }
@@ -73,6 +105,17 @@ static inline ncclResult_t ncclTuningPipelineRingComputePipeline(struct ncclTuni
 
   NCCLCHECK(ncclTuningPipelineComputeSliceSize(inputs, tuning, pipeline));
 
+  pipeline->fifoStepsNeeded = DIVUP(pipeline->channelSize, pipeline->chunkSize);
+  if (inputs->func == ncclFuncAllReduce)
+    pipeline->fifoStepsNeeded *= (float)ncclTuningGetNsteps(inputs->func, comm->nRanks) / comm->nRanks;
+
+  if (pipeline->fifoStepsNeeded < NCCL_STEPS) pipeline->fifoStepsNeeded = 0;
+
+  // LL and LL128 behave like a full pipeline in 1 domains
+  if (inputs->comm->nNodes == 1 && (tuning->proto == NCCL_PROTO_LL || tuning->proto == NCCL_PROTO_LL128)) {
+    pipeline->sliceSize = std::min(pipeline->sliceSize, (size_t)ncclProtoGrainSize(tuning->proto));
+  }
+
   // Counts the number of slices transferred through a link.
   size_t sliceCount = (pipeline->sliceSize == 0) ? 0 : DIVUP(pipeline->channelSize, pipeline->sliceSize);
 
@@ -84,7 +127,7 @@ static inline ncclResult_t ncclTuningPipelineRingComputePipeline(struct ncclTuni
     pipeline->nSlices -= 1; // ghost slice accounting
 
   if (tuning->proto == NCCL_PROTO_SIMPLE) pipeline->maxMode = true;
-  
+
   return ncclSuccess;
 }
 

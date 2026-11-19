@@ -155,6 +155,21 @@ struct ncclGin_BackendMask {
                               DescriptorSmem descriptor = ncclGin_None{}, uint32_t optFlags = ncclGinOptFlagsDefault,
                               SegmentType bufType = ncclGin_SegmentDevice{}) const;
 
+  // Timed Get: same as get(), but the device-side waits of the post path
+  // (staging/SQ backpressure, doorbell rendezvous) give up after
+  // timeoutCycles and return ncclTimeout. abortFlag is polled every iteration
+  // (it is set from the host on teardown) and, when set, unwinds the waits;
+  // the abort case returns ncclSuccess, exactly like flush(..., timeoutCycles).
+  // Same contract as the timed put() below: thread-0-only result, and on
+  // ncclTimeout the context is failed and must be torn down.
+  // All arguments must be supplied (no defaults) so this overload is
+  // unambiguous against the untimed get() above.
+  template <typename Coop, typename DescriptorSmem, typename SegmentType>
+  NCCL_DEVICE_INLINE ncclResult_t get(ncclTeam, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
+                                      ncclWindow_t localWnd, size_t localOffset, size_t bytes, Coop coop,
+                                      DescriptorSmem descriptor, uint32_t optFlags, SegmentType bufType,
+                                      uint64_t timeoutCycles) const;
+
   template <
     // Action to take on peer when put completes.
     // For strong signals: guarantees this put AND all
@@ -177,6 +192,31 @@ struct ncclGin_BackendMask {
     DescriptorSmem descriptor = ncclGin_None{}, cuda::thread_scope givenRelease = cuda::thread_scope_thread,
     cuda::thread_scope requiredRelease = cuda::thread_scope_device, uint32_t optFlags = ncclGinOptFlagsDefault,
     SegmentType bufType = ncclGin_SegmentDevice{}) const;
+
+  // Timed Put: same as put() above, but every device-side wait of the post
+  // path (SQ credit, staging and SQ backpressure, doorbell rendezvous,
+  // leading-chunk drain) shares one deadline and gives up after
+  // timeoutCycles, returning ncclTimeout instead of spinning forever when
+  // the NIC stops consuming WQEs.
+  // abortFlag is polled every iteration; when set, the waits unwind and the
+  // call returns ncclSuccess, exactly like flush(..., timeoutCycles).
+  // All arguments must be supplied (no defaults) so this overload is
+  // unambiguous against the untimed put() above. timeoutCycles must be
+  // non-zero: zero expires the deadline immediately.
+  //
+  // Contract: the result is only meaningful on the coop's thread 0
+  // (coop.thread_rank() == 0); other threads return ncclSuccess, as with
+  // flush(..., timeoutCycles). Once any timed call returns ncclTimeout the
+  // context is in a failed state -- its QP cursors stopped mid-pipeline --
+  // and no thread may issue further operations (put/get/putValue/signal/
+  // flush) on it; treat it as a transport error and tear the connection
+  // down.
+  template <typename RemoteAction, typename LocalAction, typename Coop, typename DescriptorSmem, typename SegmentType>
+  NCCL_DEVICE_INLINE ncclResult_t put(
+    ncclTeam, int peer, ncclWindow_t dstWnd, size_t dstOffset, ncclWindow_t srcWnd, size_t srcOffset, size_t bytes,
+    RemoteAction remoteAction, LocalAction localAction, Coop coop, DescriptorSmem descriptor,
+    cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease, uint32_t optFlags, SegmentType bufType,
+    uint64_t timeoutCycles) const;
 
   template <
     typename T,
@@ -202,6 +242,15 @@ struct ncclGin_BackendMask {
                               uint32_t optFlags = ncclGinOptFlagsDefault,
                               SegmentType bufType = ncclGin_SegmentDevice{}) const;
 
+  // Timed element-wise Put; see the timed window put() above.
+  template <typename T, typename RemoteAction, typename LocalAction, typename Coop, typename DescriptorSmem,
+            typename SegmentType>
+  NCCL_DEVICE_INLINE ncclResult_t put(ncclTeam, int peer, ncclSymPtr<T> dstElts, ncclSymPtr<T> srcElts, size_t nElts,
+                                      RemoteAction remoteAction, LocalAction localAction, Coop coop,
+                                      DescriptorSmem descriptor, cuda::thread_scope givenRelease,
+                                      cuda::thread_scope requiredRelease, uint32_t optFlags, SegmentType bufType,
+                                      uint64_t timeoutCycles) const;
+
   template <typename T, // requires sizeof(T) <= 8
     // See put() for all template arguments.
             typename RemoteAction = ncclGin_None, typename Coop = ncclCoopThread,
@@ -212,6 +261,13 @@ struct ncclGin_BackendMask {
                                    cuda::thread_scope givenRelease = cuda::thread_scope_thread,
                                    cuda::thread_scope requiredRelease = cuda::thread_scope_device,
                                    uint32_t optFlags = ncclGinOptFlagsDefault) const;
+
+  // Timed PutValue; see the timed put() above.
+  template <typename T, typename RemoteAction, typename Coop, typename DescriptorSmem>
+  NCCL_DEVICE_INLINE ncclResult_t putValue(ncclTeam, int peer, ncclWindow_t dstWnd, size_t dstOffset, T value,
+                                           RemoteAction remoteAction, Coop coop, DescriptorSmem descriptor,
+                                           cuda::thread_scope givenRelease, cuda::thread_scope requiredRelease,
+                                           uint32_t optFlags, uint64_t timeoutCycles) const;
 
   template <typename T, // requires sizeof(T) <= 8
     // See put() for all template arguments.
@@ -224,12 +280,26 @@ struct ncclGin_BackendMask {
                                    cuda::thread_scope requiredRelease = cuda::thread_scope_device,
                                    uint32_t optFlags = ncclGinOptFlagsDefault) const;
 
+  // Timed element-wise PutValue; see the timed put() above.
+  template <typename T, typename RemoteAction, typename Coop, typename DescriptorSmem>
+  NCCL_DEVICE_INLINE ncclResult_t putValue(ncclTeam, int peer, ncclSymPtr<T> dst, T value, RemoteAction remoteAction,
+                                           Coop coop, DescriptorSmem descriptor, cuda::thread_scope givenRelease,
+                                           cuda::thread_scope requiredRelease, uint32_t optFlags,
+                                           uint64_t timeoutCycles) const;
+
   template <typename RemoteAction, typename Coop = ncclCoopThread, typename DescriptorSmem = ncclGin_None>
   NCCL_DEVICE_INLINE void signal(ncclTeam, int peer, RemoteAction remoteAction, Coop coop = ncclCoopThread(),
                                  DescriptorSmem descriptor = ncclGin_None{},
                                  cuda::thread_scope givenRelease = cuda::thread_scope_thread,
                                  cuda::thread_scope requiredRelease = cuda::thread_scope_device,
                                  uint32_t optFlags = ncclGinOptFlagsDefault) const;
+
+  // Timed signal; see the timed put() above.
+  template <typename RemoteAction, typename Coop, typename DescriptorSmem>
+  NCCL_DEVICE_INLINE ncclResult_t signal(ncclTeam, int peer, RemoteAction remoteAction, Coop coop,
+                                         DescriptorSmem descriptor, cuda::thread_scope givenRelease,
+                                         cuda::thread_scope requiredRelease, uint32_t optFlags,
+                                         uint64_t timeoutCycles) const;
 
   // All source buffers from put's from any thread in this coop will be safe to reuse.
   // Flush does not guarantee that data has settled in remote memory.
@@ -326,6 +396,25 @@ struct ncclGin_BackendMask {
 
   //////////////////////////////////////////////////////////////////////////////
   // internal:
+
+  // Shared bodies of the untimed and timed put()/get() entry points.
+  // EnableTimeout selects whether the backend's device-side waits on the post
+  // path (EFA GDA: SQ credit, staging/SQ backpressure, doorbell rendezvous,
+  // leading-chunk drain) check timeoutCycles/abortFlag.
+  template <bool EnableTimeout, typename RemoteAction, typename LocalAction, typename Coop, typename DescriptorSmem,
+            typename SegmentType>
+  NCCL_DEVICE_INLINE ncclResult_t putInternal(ncclTeam, int peer, ncclWindow_t dstWnd, size_t dstOffset,
+                                              ncclWindow_t srcWnd, size_t srcOffset, size_t bytes,
+                                              RemoteAction remoteAction, LocalAction localAction, Coop coop,
+                                              DescriptorSmem descriptor, cuda::thread_scope givenRelease,
+                                              cuda::thread_scope requiredRelease, uint32_t optFlags, SegmentType bufType,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) const;
+
+  template <bool EnableTimeout, typename Coop, typename DescriptorSmem, typename SegmentType>
+  NCCL_DEVICE_INLINE ncclResult_t getInternal(ncclTeam, int peer, ncclWindow_t remoteWnd, size_t remoteOffset,
+                                              ncclWindow_t localWnd, size_t localOffset, size_t bytes, Coop coop,
+                                              DescriptorSmem descriptor, uint32_t optFlags, SegmentType bufType,
+                                              uint32_t* abortFlag, uint64_t timeoutCycles) const;
 
   void* _ginHandle;
   uint64_t* _signalShadows;

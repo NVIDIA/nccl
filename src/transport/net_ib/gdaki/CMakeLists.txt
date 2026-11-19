@@ -62,6 +62,8 @@ set(DOCA_SOURCES
     ${DOCA_HOME}/src/doca_verbs_uar_sdk_wrapper.cpp
     ${DOCA_HOME}/src/doca_verbs_cq_sdk_wrapper.cpp
     ${DOCA_HOME}/src/doca_verbs_qp_sdk_wrapper.cpp
+    ${DOCA_HOME}/src/gpu_dev_compat/doca_gpunetio_dev_compat.cpp
+    ${DOCA_HOME}/src/gpu_dev_compat/doca_gpunetio_dev_verbs_v1.cpp
 )
 
 # Add DOCA sources to parent scope

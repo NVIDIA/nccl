@@ -116,3 +116,25 @@ target_include_directories(nccl_device PRIVATE
 )
 
 add_dependencies(nccl_device nccl_header)
+
+# Aggregate the three generation rules so targets outside this directory can
+# depend on the generated sources (custom-command OUTPUTs are per-directory).
+# Windows-only: keep the Linux build graph byte-identical to master.
+if(NCCL_OS_WINDOWS)
+    add_custom_target(nccl_device_gensrc DEPENDS ${files} ${symmetric_files} ${general_files})
+    add_dependencies(nccl_device nccl_device_gensrc)
+endif()
+
+# Expose the Windows device source list so nccl_static can compile the device
+# sources directly (see src/CMakeLists.txt): lib.exe does not link dependencies
+# into an archive and object libraries cannot run the CUDA device link.
+if(NCCL_OS_WINDOWS)
+    set(NCCL_DEVICE_SOURCES
+        ${device_files}
+        ${device_symk_files}
+        ${device_genk_files}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
+        PARENT_SCOPE
+    )
+endif()

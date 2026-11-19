@@ -11,6 +11,7 @@
 #include "../model.h"
 #include "../tuning_int.h"
 #include "pipeline_model.h"
+#include "../platforms/platforms.h"
 
 static ncclResult_t getTreeNsteps(struct ncclComm* comm, ncclFunc_t func, int* nStepsIntra, int* nStepsInter) {
   if (func != ncclFuncAllReduce) return ncclInternalError;
@@ -51,6 +52,14 @@ static ncclResult_t ncclTuningPipelineTreeGetAlgoStep(struct ncclTuningInput_t* 
   if (comm->nNodes == 2) interBw *= 2; // tree opt on 2 nodes
   *intra = {nStepsIntra, intraRtt, intraBw * 1000};
   *inter = {nStepsInter, interRtt, interBw * 1000};
+
+  ncclTuningMinFifoTimeData mftd;
+  ncclTuningPlatformMinFifoTime(inputs->comm, tuning->algo, tuning->proto, &mftd);
+  if (tuning->nChannels < mftd.CTAsaturationPoint)
+    pipeline->minFifoStepTime = mftd.minFifoTime + (mftd.saturatedFifoTime - mftd.minFifoTime) *
+                                                     ((float)tuning->nChannels / mftd.CTAsaturationPoint);
+  else pipeline->minFifoStepTime = mftd.saturatedFifoTime * ((float)tuning->nChannels / mftd.CTAsaturationPoint);
+
   return ncclSuccess;
 }
 
@@ -65,6 +74,14 @@ static inline ncclResult_t ncclTuningPipelineTreeComputePipeline(struct ncclTuni
                                                                  struct ncclTuningResult_t* tuning,
                                                                  struct ncclTuningPipeline* pipeline /*output*/) {
   NCCLCHECK(ncclTuningPreComputePipeline(inputs, tuning, pipeline));
+
+  pipeline->fifoStepsNeeded = DIVUP(pipeline->channelSize, pipeline->chunkSize);
+  if (pipeline->fifoStepsNeeded < NCCL_STEPS) pipeline->fifoStepsNeeded = 0;
+
+  // LL and LL128 behave like a full pipeline in 1 domains
+  if (inputs->comm->nNodes == 1 && (tuning->proto == NCCL_PROTO_LL || tuning->proto == NCCL_PROTO_LL128)) {
+    pipeline->sliceSize = std::min(pipeline->sliceSize, (size_t)ncclProtoGrainSize(tuning->proto));
+  }
 
   // Counts the number of slices transferred through a link.
   size_t sliceCount = (pipeline->sliceSize == 0) ? 0 : DIVUP(pipeline->channelSize, pipeline->sliceSize);

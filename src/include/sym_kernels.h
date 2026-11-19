@@ -567,7 +567,8 @@ constexpr int ncclSymkMultimemDeepBytePerChunk = ncclSymkGetBytesPerChunk(1, ncc
 
 // Spread concurrent MC operations across different addresses to avoid contention.
 constexpr int ncclSymkMcPerRankOffsetBytes = 32 * 1024 * 1024;
-static_assert(ncclSymkMcPerRankOffsetBytes % ncclSymkMultimemDeepBytePerChunk == 0);
+static_assert(ncclSymkMcPerRankOffsetBytes % ncclSymkMultimemDeepBytePerChunk == 0,
+    "MC per-rank offset must be a multiple of the multimem deep chunk size");
 
 // Large-tile TMA deep loop (AllGather: 16 B relatively aligned, store side 256 B)
 constexpr int ncclSymkAlign256BDeepUnrollPacks = 16;

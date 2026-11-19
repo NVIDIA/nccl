@@ -12,11 +12,11 @@
 #include <fcntl.h>
 #include <math.h>
 #include <netdb.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -787,13 +787,13 @@ static bool inspectorOtelConnectWithTimeout(int fd,
     return false;
   }
 
-  fd_set writeFds;
-  FD_ZERO(&writeFds);
-  FD_SET(fd, &writeFds);
-  struct timeval timeout;
-  timeout.tv_sec = timeoutMs / 1000;
-  timeout.tv_usec = (timeoutMs % 1000) * 1000;
-  ret = select(fd + 1, nullptr, &writeFds, nullptr, &timeout);
+  // poll() has no FD_SETSIZE limit on the descriptor value, so sockets held by
+  // processes with many open descriptors keep working.
+  struct pollfd writeFd;
+  writeFd.fd = fd;
+  writeFd.events = POLLOUT;
+  writeFd.revents = 0;
+  ret = poll(&writeFd, 1, timeoutMs);
   if (ret <= 0) {
     fcntl(fd, F_SETFL, flags);
     return false;

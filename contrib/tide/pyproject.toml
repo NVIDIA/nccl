@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Kuaishou Technology. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+[build-system]
+requires = ["setuptools>=77", "torch"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nccl-tide"
+dynamic = ["version"]
+description = "TIDE: layout-aware all-gather and reduce-scatter for fully sharded training, on NCCL public APIs"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{name = "wangzejian", email = "wangzejian@kuaishou.com"}]
+requires-python = ">=3.10"
+dependencies = ["torch>=2.13"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Topic :: System :: Distributed Computing",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "tide.__version__"}

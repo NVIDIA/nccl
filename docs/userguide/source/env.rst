@@ -55,7 +55,7 @@ Note: By default, the loopback interface (``lo``) and docker interfaces (``docke
 NCCL_SOCKET_FAMILY
 ------------------
 
-The ``NCCL_SOCKET_FAMILY`` variable allows users to force NCCL to use only IPv4 or IPv6 interface.
+The ``NCCL_SOCKET_FAMILY`` variable allows users to force NCCL to use only IPv4 or IPv6 interfaces.
 
 Values accepted
 ^^^^^^^^^^^^^^^
@@ -115,7 +115,7 @@ Values accepted
 ^^^^^^^^^^^^^^^
 Non-negative integer. The old behavior corresponds to 0 (the default).
 If 0, it will not poll, but keep trying to progress the socket
-operation without pause. If non-zero, it will poll for up that amount
+operation without pause. If non-zero, it will poll for up to that amount
 of time before trying to progress the operation again.
 
 NCCL_SOCKET_NTHREADS
@@ -534,12 +534,12 @@ Example:
 NCCL_UID_STAGGER_THRESHOLD
 --------------------------
 (since 2.23)
-The ``NCCL_UID_STAGGER_THRESHOLD`` variable is used to trigger staggering of communications between NCCL ranks and the ncclUniqueId in order to avoid overflowing the ncclUniqueId.
+The ``NCCL_UID_STAGGER_THRESHOLD`` variable is used to trigger staggering of communications between NCCL ranks and the ``ncclUniqueId`` in order to avoid overflowing the ``ncclUniqueId``.
 If the number of NCCL ranks communicating exceeds the specified threshold, the communications are staggered using the rank value (see NCCL_UID_STAGGER_RATE below).
-If the number of NCCL ranks per ncclUniqueId is smaller or equal to the threshold, no staggering is performed.
+If the number of NCCL ranks per ``ncclUniqueId`` is smaller or equal to the threshold, no staggering is performed.
 
-For example, if we have 128 NCCL ranks, 1 ncclUniqueId, and a threshold at 64, staggering is performed.
-However, if 2 ncclUniqueIds are used with 128 NCCL ranks and a threshold at 64, no staggering is done.
+For example, if we have 128 NCCL ranks, 1 ``ncclUniqueId``, and a threshold at 64, staggering is performed.
+However, if 2 ``ncclUniqueIds`` are used with 128 NCCL ranks and a threshold at 64, no staggering is done.
 
 Values accepted
 ^^^^^^^^^^^^^^^
@@ -550,7 +550,7 @@ NCCL_UID_STAGGER_RATE
 ---------------------
 (since 2.23)
 
-The ``NCCL_UID_STAGGER_RATE`` variable is used to define the message rate targeted when staggering the communications between NCCL ranks and the ncclUniqueId.
+The ``NCCL_UID_STAGGER_RATE`` variable is used to define the message rate targeted when staggering the communications between NCCL ranks and the ``ncclUniqueId``.
 If staggering is used (see NCCL_UID_STAGGER_THRESHOLD above), the message rate is used to compute the time a given NCCL rank has to wait.
 
 Values accepted
@@ -562,11 +562,11 @@ NCCL_NET
 --------
 (since 2.10)
 
-Forces NCCL to use a specific network, for example to make sure NCCL uses an external plugin and doesn't automatically fall back on the internal IB or Socket implementation. Setting this environment variable will override the ``netName`` configuration in all communicators (see :ref:`ncclConfig`); if not set (undefined), the network module will be determined by the configuration; if not passing configuration, NCCL will automatically choose the best network module.
+Forces NCCL to use a specific network, for example to make sure NCCL uses an external plugin and doesn't automatically fall back on the internal IB or Socket implementation. Setting this environment variable will override the ``netName`` configuration in all communicators (see :ref:`ncclconfig`); if not set (undefined), the network module will be determined by the configuration; if not passing configuration, NCCL will automatically choose the best network module.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-The value of NCCL_NET has to match exactly the name of the NCCL network used (case-insensitive). On Linux, internal network names are "IB" (generic IB verbs) and "Socket" (TCP/IP sockets). On Windows, internal network names are "NetworkDirect" and "Socket"; when NCCL_NET is unset, NCCL tries NetworkDirect before falling back to Socket. External network plugins define their own names. Default value is undefined.
+The value of ``NCCL_NET`` has to match exactly the name of the NCCL network used (case-insensitive). On Linux, internal network names are "IB" (generic IB verbs) and "Socket" (TCP/IP sockets). On Windows, internal network names are "NetworkDirect" and "Socket"; when ``NCCL_NET`` is unset, NCCL tries NetworkDirect before falling back to Socket. External network plugins define their own names. Default value is undefined.
 
 NCCL_NET_PLUGIN
 ---------------
@@ -1115,7 +1115,7 @@ number of CUDA blocks used for communication, hence the impact on GPU computing 
 The old ``NCCL_MAX_NRINGS`` variable (used until 2.4) still works as an alias in newer versions but is ignored if ``NCCL_MAX_NCHANNELS`` is set.
 
 This environment variable has been deprecated in favor of ``NCCL_MAX_CTAS``
-which can also be set programmatically using :ref:`ncclCommInitRankConfig`. If
+which can also be set programmatically using :c:func:`ncclCommInitRankConfig`. If
 both are set then the most restrictive value (i.e., the lower value) is used.
 
 Values accepted
@@ -1138,7 +1138,7 @@ Note that for small message sizes it is possible that NCCL will use fewer
 channels than NCCL_MIN_CTAS.
 
 This environment variable has been deprecated in favor of ``NCCL_MIN_CTAS``
-which can also be set programmatically using :ref:`ncclCommInitRankConfig`. If
+which can also be set programmatically using :c:func:`ncclCommInitRankConfig`. If
 both are set then the most restrictive value (i.e., the higher value) is used.
 
 Values accepted
@@ -1323,22 +1323,22 @@ NCCL_CUMEM_ENABLE
 -----------------
 (since 2.18)
 
-Use CUDA cuMem* functions to allocate memory in NCCL.
+Use CUDA ``cuMem*`` functions to allocate memory in NCCL.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-0 or 1. Default is 0 in 2.18 (disabled); since 2.19 this feature is auto-enabled by default if the system supports it (NCCL_CUMEM_ENABLE can still be used to override the autodetection).
+0 or 1. Default is 0 in 2.18 (disabled); since 2.19 this feature is auto-enabled by default if the system supports it (``NCCL_CUMEM_ENABLE`` can still be used to override the autodetection).
 
 NCCL_CUMEM_HOST_ENABLE
 ----------------------
 (since 2.23)
 
-Use CUDA cuMem* functions to allocate host memory in NCCL. See :ref:`cuMem_host_allocations` for more information.
+Use CUDA ``cuMem*`` functions to allocate host memory in NCCL. See :ref:`cuMem_host_allocations` for more information.
 
 Values accepted
 ^^^^^^^^^^^^^^^
 0 or 1.
-Default is 0 in 2.23; since 2.24, default is 1 if CUDA driver >= 12.6, CUDA runtime >= 12.2, and cuMem host allocations are supported.
+Default is 0 in 2.23; since 2.24, default is 1 if CUDA driver >= 12.6, CUDA runtime >= 12.2, and ``cuMem`` host allocations are supported.
 
 NCCL_NET_GDR_LEVEL (formerly NCCL_IB_GDR_LEVEL)
 -----------------------------------------------
@@ -1661,7 +1661,7 @@ NCCL_RUNTIME_CONNECT
 --------------------
 (since 2.22)
 
-Dynamically connect peers during runtime (e.g., calling `ncclAllReduce()`) instead of init stage.
+Dynamically connect peers during runtime (e.g., calling :c:func:`ncclAllReduce`) instead of init stage.
 
 Value accepted
 ^^^^^^^^^^^^^^
@@ -1694,7 +1694,7 @@ NCCL_LOCAL_REGISTER
 -------------------
 (since 2.19)
 
-Enable user local buffer registration when users explicitly call *ncclCommRegister*.
+Enable user local buffer registration when users explicitly call :c:func:`ncclCommRegister`.
 
 Value accepted
 ^^^^^^^^^^^^^^
@@ -1704,10 +1704,10 @@ NCCL_LEGACY_CUDA_REGISTER
 -------------------------
 (since 2.24)
 
-Cuda buffers allocated through *cudaMalloc* (and related memory allocators) are legacy
+Cuda buffers allocated through ``cudaMalloc`` (and related memory allocators) are legacy
 buffers. Registering legacy buffer can cause implicit synchronization, which is unsafe
 and can possibly cause a hang for NCCL. NCCL disables legacy buffer registration by
-default, and users should move to cuMem-based memory allocators for buffer registration.
+default, and users should move to ``cuMem``-based memory allocators for buffer registration.
 
 Value accepted
 ^^^^^^^^^^^^^^
@@ -1741,13 +1741,13 @@ NCCL_GRAPH_MIXING_SUPPORT
 -------------------------
 (since 2.13)
 
-Enable/disable support for multiple outstanding NCCL calls from parallel CUDA graphs or a CUDA graph and non-captured NCCL calls. NCCL calls are considered outstanding starting from their host-side launch (e.g., a call to `ncclAllReduce()` for non-captured calls or `cudaGraphLaunch()` for captured calls) and ending when the device kernel execution completes. With graph mixing support disabled, the following use cases are NOT supported:
+Enable/disable support for multiple outstanding NCCL calls from parallel CUDA graphs or a CUDA graph and non-captured NCCL calls. NCCL calls are considered outstanding starting from their host-side launch (e.g., a call to :c:func:`ncclAllReduce` for non-captured calls or ``cudaGraphLaunch()`` for captured calls) and ending when the device kernel execution completes. With graph mixing support disabled, the following use cases are NOT supported:
 
 1. Using a NCCL communicator (or split-shared communicators) from parallel graph launches, where parallel means on different streams without dependencies that would serialize their execution.
 
 2. Launching a non-captured NCCL collective during an outstanding graph launch that uses the same communicator (or split-shared communicators), regardless of stream ordering.
 
-The ability to disable support is motivated by observed hangs in the CUDA launches when support is enabled and multiple ranks have work launched via cudaGraphLaunch from the same thread.
+The ability to disable support is motivated by observed hangs in the CUDA launches when support is enabled and multiple ranks have work launched via ``cudaGraphLaunch`` from the same thread.
 
 Value accepted
 ^^^^^^^^^^^^^^
@@ -1773,7 +1773,7 @@ CUDA graph capture.
    ``graphUsageMode`` ``0`` or ``1`` (and note that :ref:`NCCL_GRAPH_MIXING_SUPPORT`
    ``1`` forces ``graphUsageMode=2`` at init, overriding an explicit lower mode).
    Workloads that require mixing must keep the default ``1``. The same rule applies
-   to per-communicator :c:macro:`graphStreamOrdering` ``0``.
+   to per-communicator :c:member:`graphStreamOrdering <ncclConfig_t.graphStreamOrdering>` ``0``.
 
 When set to 1 (default), NCCL guarantees that communication kernels are executed
 in a serialized and deterministic order across graphs and communicators that share
@@ -1785,17 +1785,17 @@ The application is responsible for ensuring correct ordering of communication
 kernels.
 
 The same bypass can be selected per communicator with the
-:c:macro:`graphStreamOrdering` field in :ref:`ncclconfig`. When that
+:c:member:`graphStreamOrdering <ncclConfig_t.graphStreamOrdering>` field in :ref:`ncclconfig`. When that
 field is ``0`` or ``1``, it overrides ``NCCL_GRAPH_STREAM_ORDERING`` for that
 communicator. Communicators on the same GPU may still set this option
 differently; NCCL does not order them with respect to each other in that case,
 so the application's obligations below apply whenever the bypass is in effect
-for a communicator—see :c:macro:`graphStreamOrdering` for details.
+for a communicator—see :c:member:`graphStreamOrdering <ncclConfig_t.graphStreamOrdering>` for details.
 
 .. admonition:: Application responsibilities
 
    With ``NCCL_GRAPH_STREAM_ORDERING=0`` (or
-   :c:macro:`graphStreamOrdering` ``0``), NCCL stops enforcing
+   :c:member:`graphStreamOrdering <ncclConfig_t.graphStreamOrdering>` ``0``), NCCL stops enforcing
    device-side serialization of communication kernels on the graph-capture
    path. The application must then guarantee:
 
@@ -1832,7 +1832,7 @@ Set to 1 to initialize it at communicator-init time instead; this is required if
 the communicator issues :c:func:`ncclSignal` or :c:func:`ncclWaitSignal` without
 first registering a window, which otherwise returns ``ncclInvalidUsage``.
 
-This can also be set per communicator with the :c:macro:`rmaEagerInit` field in
+This can also be set per communicator with the :c:member:`rmaEagerInit <ncclConfig_t.rmaEagerInit>` field in
 :ref:`ncclconfig`; the environment variable takes precedence when set.
 
 Value accepted
@@ -1855,7 +1855,7 @@ NCCL_P2P_NET_CHUNKSIZE
 ----------------------
 (since 2.14)
 
-The ``NCCL_P2P_NET_CHUNKSIZE`` controls the size of messages sent through the network for ncclSend/ncclRecv operations.
+The ``NCCL_P2P_NET_CHUNKSIZE`` controls the size of messages sent through the network for :c:func:`ncclSend`/:c:func:`ncclRecv` operations.
 
 Values accepted
 ^^^^^^^^^^^^^^^
@@ -1893,7 +1893,7 @@ NCCL_COMM_BLOCKING
 ------------------
 (since 2.14)
 
-The ``NCCL_COMM_BLOCKING`` variable controls whether NCCL calls are allowed to block or not. This includes all calls to NCCL, including init/finalize functions, as well as communication functions which may also block due to the lazy initialization of connections for send/receive calls. Setting this environment variable will override the ``blocking`` configuration in all communicators (see :ref:`ncclConfig`); if not set (undefined), communicator behavior will be determined by the configuration; if not passing configuration, communicators are blocking.
+The ``NCCL_COMM_BLOCKING`` variable controls whether NCCL calls are allowed to block or not. This includes all calls to NCCL, including init/finalize functions, as well as communication functions which may also block due to the lazy initialization of connections for send/receive calls. Setting this environment variable will override the ``blocking`` configuration in all communicators (see :ref:`ncclconfig`); if not set (undefined), communicator behavior will be determined by the configuration; if not passing configuration, communicators are blocking.
 
 Values accepted
 ^^^^^^^^^^^^^^^
@@ -2158,7 +2158,7 @@ NCCL_LAUNCH_ORDER_IMPLICIT
 
 Implicitly order NCCL operations from different communicators on the same device using the host program order. This ensures the operations will not deadlock. When the CUDA runtime and driver are 12.3+, overlapped execution is permitted. On older CUDA versions the operations will be serialized.
 
-For per-communicator configuration, see the :c:macro:`launchOrderImplicit`
+For per-communicator configuration, see the :c:member:`launchOrderImplicit <ncclConfig_t.launchOrderImplicit>`
 field in :ref:`ncclconfig`. If this environment variable is set, it overrides
 that communicator config field before initialization.
 

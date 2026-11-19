@@ -1,0 +1,43 @@
+TIDE third-party notices
+========================
+
+TIDE itself is licensed under the Apache License, Version 2.0 (see LICENSE).
+It links against or imports the following third-party software at build or
+run time. None of it is redistributed in this tree except where stated.
+
+NCCL (NVIDIA Collective Communications Library)
+  https://github.com/NVIDIA/nccl
+  License: Apache License 2.0 for most of the project; parts keep their
+  original BSD 3-Clause license and files borrowed from other projects
+  carry their own (see LICENSE.txt at the root of the NCCL tree).
+  Use: public headers nccl.h / nccl_device.h and libnccl.so.2 at run time,
+  built from the NCCL tree this directory sits in (or NCCL_HOME).
+
+CUDA Toolkit (cuda.h, cuda_runtime.h, libcuda, libcudart, nvcc)
+  https://developer.nvidia.com/cuda-toolkit
+  License: NVIDIA Software License Agreement (not redistributed).
+
+PyTorch (torch, torch.utils.cpp_extension, torch.distributed)
+  https://github.com/pytorch/pytorch
+  License: BSD 3-Clause.
+  Use: Python bindings and the FSDP2 adapter import it; the tests and
+  benchmarks run under torchrun. The adapter patches private FSDP2 entry
+  points (torch.distributed.fsdp._fully_shard) at run time; no PyTorch
+  source is copied.
+
+pybind11
+  https://github.com/pybind/pybind11
+  License: BSD 3-Clause.
+  Use: through torch/extension.h.
+
+matplotlib (optional: regenerating docs/figures)
+  https://matplotlib.org
+  License: Matplotlib License (BSD-compatible, based on the PSF license).
+  Use: docs/figures/plot.py and docs/figures/logo.py draw the benchmark
+  charts and the logo; neither building nor running TIDE needs it.
+
+DejaVu Sans Mono Bold (a font matplotlib ships)
+  https://dejavu-fonts.github.io
+  License: Bitstream Vera Fonts license; DejaVu changes are in the public
+  domain.
+  Use: the outlines of the "TIDE" wordmark in docs/figures/logo.svg.

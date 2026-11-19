@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.32.6. Do not modify it directly.
+# This code was automatically generated with version 2.33.0. Do not modify it directly.
 
 
 # <<<< PREAMBLE CONTENT >>>>
@@ -116,7 +116,7 @@ from libcpp.vector cimport vector
 from ._internal.utils cimport (nested_resource, nullable_unique_ptr,
                               get_resource_ptr, get_nested_resource_ptr)
 
-_version_span = "with version 2.32.6"
+_version_span = "with version 2.33.0"
 __version__ = _version_span.split()[-1]
 
 # NCCL_VERSION(X,Y,Z) = X*10000 + Y*100 + Z (NCCL >= 2.9).
@@ -4511,8 +4511,8 @@ cdef class CollConfig:
 cdef _get_dev_comm_requirements_dtype_offsets():
     cdef ncclDevCommRequirements_t pod
     return _numpy.dtype({
-        'names': ['size_', 'magic', 'version', 'resource_requirements_list', 'team_requirements_list', 'lsa_multimem', 'barrier_count', 'lsa_barrier_count', 'rail_gin_barrier_count', 'lsa_ll_a2a_block_count', 'lsa_ll_a2a_slot_count', 'gin_force_enable', 'gin_context_count', 'gin_signal_count', 'gin_counter_count', 'gin_connection_type', 'gin_exclusive_contexts', 'gin_queue_depth', 'gin_traffic_class', 'world_gin_barrier_count', 'gin_strong_signals_required', 'gin_va_signals_required', 'gin_custom_stride', 'gin_type', 'use_runtime_version', 'cft_caps', 'cft_barrier_count', 'gin_custom_array', 'gin_custom_array_count'],
-        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32],
+        'names': ['size_', 'magic', 'version', 'resource_requirements_list', 'team_requirements_list', 'lsa_multimem', 'barrier_count', 'lsa_barrier_count', 'rail_gin_barrier_count', 'lsa_ll_a2a_block_count', 'lsa_ll_a2a_slot_count', 'gin_force_enable', 'gin_context_count', 'gin_signal_count', 'gin_counter_count', 'gin_connection_type', 'gin_exclusive_contexts', 'gin_queue_depth', 'gin_traffic_class', 'world_gin_barrier_count', 'gin_strong_signals_required', 'gin_va_signals_required', 'gin_custom_stride', 'gin_type', 'use_runtime_version', 'cft_caps', 'cft_barrier_count', 'gin_custom_array', 'gin_custom_array_count', 'gin_specializations'],
+        'formats': [_numpy.uint64, _numpy.uint32, _numpy.uint32, _numpy.intp, _numpy.intp, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.bool_, _numpy.int32, _numpy.int32, _numpy.intp, _numpy.int32, _numpy.int32],
         'offsets': [
             (<intptr_t>&(pod.size)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.magic)) - (<intptr_t>&pod),
@@ -4543,6 +4543,7 @@ cdef _get_dev_comm_requirements_dtype_offsets():
             (<intptr_t>&(pod.cftBarrierCount)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.ginCustomArray)) - (<intptr_t>&pod),
             (<intptr_t>&(pod.ginCustomArrayCount)) - (<intptr_t>&pod),
+            (<intptr_t>&(pod.ginSpecializations)) - (<intptr_t>&pod),
         ],
         'itemsize': sizeof(ncclDevCommRequirements_t),
     })
@@ -4960,6 +4961,17 @@ cdef class DevCommRequirements:
             raise ValueError("This DevCommRequirements instance is read-only")
         self._ptr[0].ginCustomArrayCount = val
 
+    @property
+    def gin_specializations(self):
+        """int: """
+        return <int>(self._ptr[0].ginSpecializations)
+
+    @gin_specializations.setter
+    def gin_specializations(self, val):
+        if self._readonly:
+            raise ValueError("This DevCommRequirements instance is read-only")
+        self._ptr[0].ginSpecializations = <ncclGinSpecialization_t><int>val
+
     @staticmethod
     def from_buffer(buffer):
         """Create an DevCommRequirements instance with the memory from the given buffer."""
@@ -5206,6 +5218,13 @@ class GinConnectionType(_cyb_IntEnum):
     RAIL = NCCL_GIN_CONNECTION_RAIL
     CUSTOM_STRIDE = NCCL_GIN_CONNECTION_CUSTOM_STRIDE
     CUSTOM_ARRAY = NCCL_GIN_CONNECTION_CUSTOM_ARRAY
+
+class GinSpecialization(_cyb_IntEnum):
+    """
+    See `ncclGinSpecialization_t`.
+    """
+    NONE = NCCL_GIN_SPECIALIZATION_NONE
+    FAST_SUBMISSION = NCCL_GIN_SPECIALIZATION_FAST_SUBMISSION
 
 class GinType(_cyb_IntEnum):
     """

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.32.6. Do not modify it directly.
+# This code was automatically generated with version 2.33.0. Do not modify it directly.
 
 
 ###############################################################################
@@ -106,6 +106,10 @@ ctypedef enum ncclGinConnectionType_t "ncclGinConnectionType_t":
     NCCL_GIN_CONNECTION_RAIL "NCCL_GIN_CONNECTION_RAIL"
     NCCL_GIN_CONNECTION_CUSTOM_STRIDE "NCCL_GIN_CONNECTION_CUSTOM_STRIDE"
     NCCL_GIN_CONNECTION_CUSTOM_ARRAY "NCCL_GIN_CONNECTION_CUSTOM_ARRAY"
+
+ctypedef enum ncclGinSpecialization_t "ncclGinSpecialization_t":
+    NCCL_GIN_SPECIALIZATION_NONE "NCCL_GIN_SPECIALIZATION_NONE" = 0
+    NCCL_GIN_SPECIALIZATION_FAST_SUBMISSION "NCCL_GIN_SPECIALIZATION_FAST_SUBMISSION" = 1
 
 ctypedef enum ncclGinType_t "ncclGinType_t":
     NCCL_GIN_TYPE_NONE "NCCL_GIN_TYPE_NONE" = 0
@@ -387,6 +391,7 @@ ctypedef struct ncclDevCommRequirements_t 'ncclDevCommRequirements_t':
     int cftBarrierCount
     int* ginCustomArray
     int ginCustomArrayCount
+    ncclGinSpecialization_t ginSpecializations
 
 
 ###############################################################################

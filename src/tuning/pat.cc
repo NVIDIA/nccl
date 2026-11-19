@@ -45,6 +45,7 @@ ncclResult_t ncclTuningPatModelInit(struct ncclComm* comm, int id, int enabled[N
       continue;
     }
     float busBw = std::min(comm->graphs[algo].bwInter, comm->graphs[algo].bwIntra) * comm->graphs[algo].nChannels;
+    if (RUBIN_AND_LATER(comm->minCompCap) && comm->isOneRPN) busBw *= 0.5f;
     if (!comm->isOneRPN) {
       if (!ncclNvlsTransportEnabled(comm)) busBw = 0.0f;
       if (busBw > 0.0f) {

@@ -42,8 +42,8 @@ The host code requests CFT capability when creating the device communicator.
 
    NCCLCHECK(ncclDevCommCreate(comm, &reqs, &devComm));
 
-Request :c:macro:`NCCL_CFT_MULTIMEM` in addition to :c:macro:`NCCL_CFT` when a
-kernel uses multicast CFT operations or multimem CFT barriers:
+Request :c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` in addition to
+:c:enumerator:`NCCL_CFT <ncclCftCap_t.NCCL_CFT>` when a kernel uses multicast CFT operations or multimem CFT barriers:
 
 .. code-block:: C
 
@@ -128,8 +128,7 @@ to request one barrier per CTA and use ``blockIdx.x`` as the barrier index.
    }
 
 For multicast CFT barriers, create the device communicator with
-:c:macro:`NCCL_CFT_MULTIMEM` and pass ``multimem=true`` to the barrier session
-constructor.
+:c:enumerator:`NCCL_CFT_MULTIMEM <ncclCftCap_t.NCCL_CFT_MULTIMEM>` and pass ``multimem=true`` to the barrier session constructor.
 
 CFT Counted Operations
 ======================

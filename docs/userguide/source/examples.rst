@@ -23,7 +23,7 @@ Example 1: Single Process, Single Thread, Multiple Devices
 ----------------------------------------------------------
 
 
-In the specific case of a single process, ncclCommInitAll can be used. Here is an example creating a communicator for 4 devices, therefore, there are 4 communicator objects:
+In the specific case of a single process, :c:func:`ncclCommInitAll` can be used. Here is an example creating a communicator for 4 devices, therefore, there are 4 communicator objects:
 
 .. code:: C
 
@@ -75,13 +75,13 @@ The following code depicts a complete working example with a single process that
    ncclComm_t comms[4];
 
 
-   //managing 4 devices
+   // managing 4 devices
    int nDev = 4;
    int size = 32*1024*1024;
    int devs[4] = { 0, 1, 2, 3 };
 
 
-   //allocating and initializing device buffers
+   // allocating and initializing device buffers
    float** sendbuff = (float**)malloc(nDev * sizeof(float*));
    float** recvbuff = (float**)malloc(nDev * sizeof(float*));
    cudaStream_t* s = (cudaStream_t*)malloc(sizeof(cudaStream_t)*nDev);
@@ -97,12 +97,12 @@ The following code depicts a complete working example with a single process that
    }
 
 
-   //initializing NCCL
+   // initializing NCCL
    NCCLCHECK(ncclCommInitAll(comms, nDev, devs));
 
 
-    //calling NCCL communication API. Group API is required when using
-    //multiple devices per thread
+   // calling NCCL communication API. Group API is required when using
+   // multiple devices per thread
    NCCLCHECK(ncclGroupStart());
    for (int i = 0; i < nDev; ++i)
      NCCLCHECK(ncclAllReduce((const void*)sendbuff[i], (void*)recvbuff[i], size, ncclFloat, ncclSum,
@@ -110,14 +110,14 @@ The following code depicts a complete working example with a single process that
    NCCLCHECK(ncclGroupEnd());
 
 
-   //synchronizing on CUDA streams to wait for completion of NCCL operation
+   // synchronizing on CUDA streams to wait for completion of NCCL operation
    for (int i = 0; i < nDev; ++i) {
      CUDACHECK(cudaSetDevice(i));
      CUDACHECK(cudaStreamSynchronize(s[i]));
    }
 
 
-   //free device buffers
+   // free device buffers
    for (int i = 0; i < nDev; ++i) {
      CUDACHECK(cudaSetDevice(i));
      CUDACHECK(cudaFree(sendbuff[i]));
@@ -125,7 +125,7 @@ The following code depicts a complete working example with a single process that
    }
 
 
-   //finalizing NCCL
+   // finalizing NCCL
    for(int i = 0; i < nDev; ++i)
        ncclCommDestroy(comms[i]);
 
@@ -137,7 +137,7 @@ The following code depicts a complete working example with a single process that
 Example 2: One Device per Process or Thread
 -------------------------------------------
 
-When a process or host thread is responsible for at most one GPU, ncclCommInitRank can be used as a collective call to create a communicator. Each thread or process will get its own object.
+When a process or host thread is responsible for at most one GPU, :c:func:`ncclCommInitRank` can be used as a collective call to create a communicator. Each thread or process will get its own object.
 
 
 The following code is an example of a communicator creation in the context of MPI, using one device per MPI rank.
@@ -281,13 +281,13 @@ The following code depicts a complete working example with multiple MPI processe
    int myRank, nRanks, localRank = 0;
 
 
-   //initializing MPI
+   // initializing MPI
    MPICHECK(MPI_Init(&argc, &argv));
    MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
    MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
 
 
-   //calculating localRank based on hostname which is used in selecting a GPU
+   // calculating localRank based on hostname which is used in selecting a GPU
    uint64_t hostHashs[nRanks];
    char hostname[1024];
    getHostName(hostname, 1024);
@@ -305,41 +305,41 @@ The following code depicts a complete working example with multiple MPI processe
    cudaStream_t s;
 
 
-   //get NCCL unique ID at rank 0 and broadcast it to all others
+   // get NCCL unique ID at rank 0 and broadcast it to all others
    if (myRank == 0) ncclGetUniqueId(&id);
    MPICHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
 
 
-   //picking a GPU based on localRank, allocate device buffers
+   // picking a GPU based on localRank, allocate device buffers
    CUDACHECK(cudaSetDevice(localRank));
    CUDACHECK(cudaMalloc(&sendbuff, size * sizeof(float)));
    CUDACHECK(cudaMalloc(&recvbuff, size * sizeof(float)));
    CUDACHECK(cudaStreamCreate(&s));
 
 
-   //initializing NCCL
+   // initializing NCCL
    NCCLCHECK(ncclCommInitRank(&comm, nRanks, id, myRank));
 
 
-   //communicating using NCCL
+   // communicating using NCCL
    NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclSum,
          comm, s));
 
 
-   //completing NCCL operation by synchronizing on the CUDA stream
+   // completing NCCL operation by synchronizing on the CUDA stream
    CUDACHECK(cudaStreamSynchronize(s));
 
 
-   //free device buffers
+   // free device buffers
    CUDACHECK(cudaFree(sendbuff));
    CUDACHECK(cudaFree(recvbuff));
 
 
-   //finalizing NCCL
+   // finalizing NCCL
    ncclCommDestroy(comm);
 
 
-   //finalizing MPI
+   // finalizing MPI
    MPICHECK(MPI_Finalize());
 
 
@@ -496,13 +496,13 @@ The following code depicts a complete working example with multiple MPI processe
    int myRank, nRanks, localRank = 0;
 
 
-   //initializing MPI
+   // initializing MPI
    MPICHECK(MPI_Init(&argc, &argv));
    MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
    MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
 
 
-   //calculating localRank which is used in selecting a GPU
+   // calculating localRank which is used in selecting a GPU
    uint64_t hostHashs[nRanks];
    char hostname[1024];
    getHostName(hostname, 1024);
@@ -514,7 +514,7 @@ The following code depicts a complete working example with multiple MPI processe
    }
 
 
-   //each process is using two GPUs
+   // each process is using two GPUs
    int nDev = 2;
 
 
@@ -523,7 +523,7 @@ The following code depicts a complete working example with multiple MPI processe
    cudaStream_t* s = (cudaStream_t*)malloc(sizeof(cudaStream_t)*nDev);
 
 
-   //picking GPUs based on localRank
+   // picking GPUs based on localRank
    for (int i = 0; i < nDev; ++i) {
      CUDACHECK(cudaSetDevice(localRank*nDev + i));
      CUDACHECK(cudaMalloc(sendbuff + i, size * sizeof(float)));
@@ -538,13 +538,13 @@ The following code depicts a complete working example with multiple MPI processe
    ncclComm_t comms[nDev];
 
 
-   //generating NCCL unique ID at one process and broadcasting it to all
+   // generating NCCL unique ID at one process and broadcasting it to all
    if (myRank == 0) ncclGetUniqueId(&id);
    MPICHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
 
 
-   //initializing NCCL, group API is required around ncclCommInitRank as it is
-   //called across multiple GPUs in each thread/process
+   // initializing NCCL, group API is required around ncclCommInitRank as it is
+   // called across multiple GPUs in each thread/process
    NCCLCHECK(ncclGroupStart());
    for (int i=0; i<nDev; i++) {
       CUDACHECK(cudaSetDevice(localRank*nDev + i));
@@ -553,8 +553,8 @@ The following code depicts a complete working example with multiple MPI processe
    NCCLCHECK(ncclGroupEnd());
 
 
-   //calling NCCL communication API. Group API is required when using
-   //multiple devices per thread/process
+   // calling NCCL communication API. Group API is required when using
+   // multiple devices per thread/process
    NCCLCHECK(ncclGroupStart());
    for (int i=0; i<nDev; i++)
       NCCLCHECK(ncclAllReduce((const void*)sendbuff[i], (void*)recvbuff[i], size, ncclFloat, ncclSum,
@@ -562,25 +562,25 @@ The following code depicts a complete working example with multiple MPI processe
    NCCLCHECK(ncclGroupEnd());
 
 
-   //synchronizing on CUDA stream to complete NCCL communication
+   // synchronizing on CUDA stream to complete NCCL communication
    for (int i=0; i<nDev; i++)
        CUDACHECK(cudaStreamSynchronize(s[i]));
 
 
-   //freeing device memory
+   // freeing device memory
    for (int i=0; i<nDev; i++) {
       CUDACHECK(cudaFree(sendbuff[i]));
       CUDACHECK(cudaFree(recvbuff[i]));
    }
 
 
-   //finalizing NCCL
+   // finalizing NCCL
    for (int i=0; i<nDev; i++) {
       ncclCommDestroy(comms[i]);
    }
 
 
-   //finalizing MPI
+   // finalizing MPI
    MPICHECK(MPI_Finalize());
 
 
@@ -639,7 +639,7 @@ If you have a thread or process per device, then each thread calls the collectiv
  ncclAllReduce(sendbuff, recvbuff, count, datatype, op, comm, stream);
 
 
-After the call, the operation has been enqueued to the stream.  Therefore, you can call cudaStreamSynchronize if you want to wait for the operation to be complete:
+After the call, the operation has been enqueued to the stream.  Therefore, you can call ``cudaStreamSynchronize`` if you want to wait for the operation to be complete:
 
 .. code:: C
 
@@ -659,7 +659,7 @@ When a single thread manages multiple devices, you need to use group semantics t
    ncclAllReduce(sendbuffs[i], recvbuff[i], count, datatype, op, comms[i], streams[i]);
  ncclGroupEnd();
 
-After ncclGroupEnd, all of the operations have been enqueued to the stream.  Therefore, you can now call cudaStreamSynchronize if you want to wait for the operation to be complete:
+After :c:func:`ncclGroupEnd`, all of the operations have been enqueued to the stream.  Therefore, you can now call ``cudaStreamSynchronize`` if you want to wait for the operation to be complete:
 
 
 .. code:: C

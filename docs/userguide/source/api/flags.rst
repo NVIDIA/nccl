@@ -28,11 +28,21 @@ Window Registration Flags
   Register buffer into NCCL window while ensuring strict ordering for window operations using the IB Verbs transport.
   This flag is mostly intended for buffers used for GIN VA Signals (see :ref:`devapi_signals`).
 
+.. c:macro:: NCCL_WIN_GIN_ONLY
+
+  Register the window for GIN operations only. Without this flag, registration enables all supported capabilities.
+  Use this flag only for windows that will not be used by host collectives, LSA, or CFT operations.
+
 .. c:macro:: NCCL_WIN_CFT_COUNTED
 
-  Register buffer into NCCL window with CFT counted support. Registered buffers must be aligned to 256 bytes and are used
+  Register buffer into NCCL window with CFT counted support for use
   in counted operations (see :ref:`CFT counted operations <cft_counted_operations>`). The user cannot exceed the 256GB limit
   of registered memory for counted windows.
+
+.. c:macro:: NCCL_WIN_REQUIRED_ALIGNMENT
+
+  Required alignment, in bytes, of the window's starting offset within its underlying virtual-memory allocation.
+  The value is ``4096``. This requirement also applies to counted CFT windows.
 
 .. _cta_policy_flags:
 
@@ -71,7 +81,7 @@ These flags modify the behavior of the ``ncclCommShrink`` operation.
 
    First, terminate ongoing parent communicator operations, and then proceed with shrinking the communicator.
    This is used for error recovery scenarios where the parent communicator might be in a hung state.
-   Resources of parent comm are still not freed, users should decide whether to call ncclCommAbort on the parent communicator after shrink.
+   Resources of parent comm are still not freed, users should decide whether to call :c:func:`ncclCommAbort` on the parent communicator after shrink.
    Value: ``0x01``.
 
 .. _gin_opt_flags:
@@ -79,12 +89,17 @@ These flags modify the behavior of the ``ncclCommShrink`` operation.
 GIN Optimization Flags
 ----------------------
 
-These flags modify the behavior of GIN Device API operations (see :ref:`device_api_gin`).
-Flags may be combined with a bitwise OR.
+These flags are backend-dependent optimization hints for GIN Device API operations (see :ref:`device_api_gin`).
+Backends may ignore flags they do not support. Flags may be combined with a bitwise OR.
 
 .. cpp:enumerator:: ncclGinOptFlagsDefault
 
    Default behavior; no optional flags are given to the backend.
+
+.. cpp:enumerator:: ncclGinOptFlagsMaySkipCreditCheck
+
+   Allows the backend to skip queue-credit availability checks.
+   The caller must ensure sufficient queue capacity for all outstanding requests.
 
 .. cpp:enumerator:: ncclGinOptFlagsAggregateRequests
 

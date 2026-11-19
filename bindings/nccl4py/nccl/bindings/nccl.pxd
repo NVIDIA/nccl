@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# This code was automatically generated with version 2.32.6. Do not modify it directly.
+# This code was automatically generated with version 2.33.0. Do not modify it directly.
 
 
 
@@ -43,6 +43,7 @@ ctypedef ncclDataType_t _DataType
 ctypedef ncclScalarResidence_t _ScalarResidence
 ctypedef ncclEncryptionMode_t _EncryptionMode
 ctypedef ncclGinConnectionType_t _GinConnectionType
+ctypedef ncclGinSpecialization_t _GinSpecialization
 ctypedef ncclGinType_t _GinType
 ctypedef ncclCftTeamMode_t _CftTeamMode
 ctypedef ncclCftCap_t _CftCap

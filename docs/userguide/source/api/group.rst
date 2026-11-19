@@ -14,10 +14,10 @@ ncclGroupStart
 
  Start a group call.
 
- All subsequent calls to NCCL until ncclGroupEnd will not block due to inter-CPU
+ All subsequent calls to NCCL until :c:func:`ncclGroupEnd` will not block due to inter-CPU
  synchronization.  Work within the group does not begin processing until the
- final *ncclGroupEnd* call.  While submitting work within the group,
- *ncclSuccess* only indicates the group will include the operation, but it does
+ final :c:func:`ncclGroupEnd` call.  While submitting work within the group,
+ :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` only indicates the group will include the operation, but it does
  not indicate completion or that stream operations have been enqueued. Blocking
  and non-blocking communicators cannot submit operations within the same group.
 
@@ -36,27 +36,28 @@ ncclGroupEnd
 
  End a group.  Work is submitted only if this is the outermost group.
 
- For a group including standard (blocking) communicators, *ncclGroupEnd* returns
- ncclSuccess when all communication operations since ncclGroupStart have been
+ For a group including standard (blocking) communicators, :c:func:`ncclGroupEnd` returns
+ :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` when all communication operations since :c:func:`ncclGroupStart` have been
  submitted to the respective streams (but not necessarily completed), or all
  communicator management functions have been completed.
 
- For a group of non-blocking communicators, *ncclGroupEnd* returns
- *ncclInProgress*, and additional work cannot be submitted to the communicators
+ For a group of non-blocking communicators, :c:func:`ncclGroupEnd` returns
+ :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`, and additional work cannot be submitted to the communicators
  until :c:func:`ncclCommGetAsyncError` indicates the communicator reached
- *ncclSuccess*, indicating all work was submitted or completed as described in
- the blocking case.
+ :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`, indicating all work was submitted or completed as described in
+ the blocking case.  If a query fails or a communicator reports a terminal error,
+ stop polling and follow the error-handling guidance in :c:func:`ncclCommGetAsyncError`.
 
- Groups may be nested.  If this is not the outermost group, ncclGroupEnd returns
- *ncclSuccess* but no work has been submitted.
+ Groups may be nested.  If this is not the outermost group, :c:func:`ncclGroupEnd` returns
+ :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` but no work has been submitted.
 
 ncclGroupSimulateEnd
 --------------------
 
 .. c:function:: ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* simInfo)
 
- Simulate a ncclGroupEnd() call and return NCCL's simulation info in a structure
+ Simulate a :c:func:`ncclGroupEnd` call and return NCCL's simulation info in a structure
  passed as an argument, then discard the group's operations.  Use this to
  estimate the time a group of operations will take to execute.  If this is not
- the outermost group, *ncclSuccess* is returned but *estimatedTime* will show a
+ the outermost group, :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` is returned but *estimatedTime* will show a
  number less than 0 (no estimation is done).

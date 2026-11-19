@@ -1102,7 +1102,6 @@ ncclResult_t ncclGroupEndInternal(ncclSimInfo_t* simInfo) {
   groupJob->groupCommPreconnectHead = ncclGroupCommPreconnectHead;
   groupJob->groupError = ncclSuccess;
   groupJob->abortFlag = false;
-  groupJob->joined = false;
   ncclIntruQueueTransfer(&groupJob->asyncJobs, &ncclAsyncJobs);
 
   if (hasCommHead || !ncclIntruQueueEmpty(&groupJob->asyncJobs) || ncclGroupCommPreconnectHead != nullptr) {
@@ -1179,9 +1178,7 @@ fail:
 ncclResult_t ncclGroupJobComplete(struct ncclGroupJob* groupJob) {
   ncclResult_t ret = ncclSuccess;
   if (groupJob && groupJob->nonBlockingInit) {
-    if (!COMPILER_ATOMIC_EXCHANGE(&groupJob->joined, true, std::memory_order_acq_rel)) {
-      ret = ncclAsyncJobComplete(&groupJob->base);
-    }
+    std::call_once(groupJob->joinOnce, [&] { ret = ncclAsyncJobComplete(&groupJob->base); });
     if (ncclAtomicRefCountDecrement(&groupJob->groupRefCount) == 0) {
       delete groupJob;
     }
@@ -1191,10 +1188,9 @@ ncclResult_t ncclGroupJobComplete(struct ncclGroupJob* groupJob) {
 
 ncclResult_t ncclGroupJobAbort(struct ncclGroupJob* groupJob) {
   if (groupJob && groupJob->nonBlockingInit) {
-    if (!COMPILER_ATOMIC_EXCHANGE(&groupJob->joined, true, std::memory_order_acq_rel)) {
-      COMPILER_ATOMIC_STORE(&groupJob->abortFlag, true, std::memory_order_relaxed);
-      ncclAsyncJobComplete(&groupJob->base);
-    }
+    COMPILER_ATOMIC_STORE(&groupJob->abortFlag, true, std::memory_order_relaxed);
+    // Every caller returns after the join: none may free its communicator while the group thread runs.
+    std::call_once(groupJob->joinOnce, [&] { ncclAsyncJobComplete(&groupJob->base); });
     if (ncclAtomicRefCountDecrement(&groupJob->groupRefCount) == 0) {
       delete groupJob;
     }

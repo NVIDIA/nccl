@@ -2363,6 +2363,15 @@ exit:
   return res;
 fail:
   COMPILER_ATOMIC_STORE(&comm->initState, res, std::memory_order_release);
+  // A failed split/shrink child can be freed before its parent: unlink its abort flag from the parent.
+  if (job->parent && !job->isGrow && job->parent->childAbortFlag == comm->abortFlag) {
+    COMPILER_ATOMIC_STORE(&job->parent->childAbortFlag, static_cast<uint32_t*>(nullptr), std::memory_order_release);
+  }
+  // A failed child joins the group job of its parent, so that its abort also waits for the group thread.
+  if (job->parent && !job->isGrow && job->parent->groupJob) {
+    comm->groupJob = job->parent->groupJob;
+    ncclAtomicRefCountIncrement(&comm->groupJob->groupRefCount);
+  }
   goto exit;
 }
 
@@ -3440,6 +3449,23 @@ static ncclResult_t commReclaim(struct ncclAsyncJob* job_) {
           ATTN("cleanup comm 0x%" PRIx64 " rank %d failed in destroy/abort, error %d", commHash, curRank, ret);
         }
       }
+    }
+  } else if (comm->bootstrap != NULL && comm->peerInfo == NULL &&
+             COMPILER_ATOMIC_LOAD(&comm->initState, std::memory_order_acquire) != ncclInProgress) {
+    // Init ended in the bootstrap, before the all-gather that gives comm to the other ranks: reclaim it alone.
+    uint64_t commHash = comm->commHash;
+    int rank = comm->rank;
+    // The roots that this rank checked in with cannot complete any more: stop them if they run in this process.
+    bootstrapRootAbort(comm->bootstrap);
+    if (comm->finalizeCalled == false) {
+      NOWARN(ret = commDestroySync(job_), NCCL_DESTROY);
+      if (ret != ncclSuccess) {
+        ATTN("comm 0x%" PRIx64 " rank %d commDestroySync error %d", commHash, rank, ret);
+      }
+    }
+    NOWARN(ret = commCleanup(comm), NCCL_DESTROY);
+    if (ret != ncclSuccess) {
+      ATTN("cleanup comm 0x%" PRIx64 " rank %d failed in destroy/abort, error %d", commHash, rank, ret);
     }
   }
 exit:

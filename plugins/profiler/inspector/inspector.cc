@@ -618,12 +618,21 @@ FILE* inspectorDumpThread::getOrCreateFileHandle(const char* deviceUuidStr,
     deviceFlushEntries[flushIndex].fileHandle = file;
 
     if (needsFlush) {
-      TRACE_INSPECTOR("NCCL Inspector: Created/flushed Prometheus file %s", filename);
+      TRACE_INSPECTOR("NCCL Inspector: Opened Prometheus file %s", filename);
       deviceFlushEntries[flushIndex].lastFlushTime = currentTime;
     }
   }
 
   return deviceFlushEntries[flushIndex].fileHandle;
+}
+
+inspectorResult_t inspectorDumpThread::reportWriteError(int error) {
+  if (!warnedWriteError) {
+    logFn(INSPECTOR_WARN_LEVEL, NCCL_ALL, __func__, __LINE__,
+          "NCCL Inspector: Failed to write dump in %s: %s", outputRoot, strerror(error));
+    warnedWriteError = true;
+  }
+  return inspectorFileWriteError;
 }
 
 void inspectorDumpThread::startThread() {
@@ -689,15 +698,17 @@ inspectorResult_t inspectorDumpThread::inspectorStateDumpJSON(const char* output
     chmod(tmp, 0666);
   }
 
-  if (jfo != nullptr) {
-    inspectorCommInfoListDump(jfo, &g_state.liveComms);
-    inspectorCommInfoListDump(jfo, &g_state.deletedComms);
+  inspectorResult_t result = inspectorSuccess;
+  for (auto* list : {&g_state.liveComms, &g_state.deletedComms}) {
+    if (inspectorCommInfoListDump(jfo, list) == inspectorFileWriteError) {
+      result = reportWriteError(errno);
+    }
   }
 
   if (g_state.deletedComms.ncomms > 0) {
     inspectorCommInfoListFinalize(&g_state.deletedComms);
   }
-  return inspectorSuccess;
+  return result;
 }
 
 inspectorResult_t inspectorDumpThread::inspectorStateDumpProm(const char* output_root) {
@@ -706,7 +717,7 @@ inspectorResult_t inspectorDumpThread::inspectorStateDumpProm(const char* output
   inspectorResult_t dumpResult = inspectorPromCommInfoListDump(&g_state.liveComms,
                                                                output_root,
                                                                this);
-  if (dumpResult != inspectorSuccess) {
+  if (dumpResult != inspectorSuccess && dumpResult != inspectorFileWriteError) {
     INFO_INSPECTOR("NCCL Inspector: Direct Prometheus dump failed: %s",
                    inspectorErrorString(dumpResult));
     return dumpResult;
@@ -717,7 +728,7 @@ inspectorResult_t inspectorDumpThread::inspectorStateDumpProm(const char* output
     inspectorCommInfoListFinalize(&g_state.deletedComms);
   }
 
-  return inspectorSuccess;
+  return dumpResult;
 }
 
 inspectorResult_t inspectorDumpThread::inspectorStateDumpOtel(const char* output_root) {
@@ -1274,6 +1285,8 @@ const char* inspectorErrorString(inspectorResult_t result) {
     return "Inspector is not initialized";
   case inspectorMemoryError:
     return "Inspector encountered issue allocating memory";
+  case inspectorFileWriteError:
+    return "Inspector could not write dump";
   case inspectorFileOpenError:
     return "Inspector could not open file";
   case inspectorDisabledError:

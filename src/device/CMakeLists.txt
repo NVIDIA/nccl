@@ -62,13 +62,19 @@ add_custom_command(
 
 # On Windows use STATIC so CUDA device linking runs (OBJECT libs don't support it); on Linux use OBJECT.
 if(NCCL_OS_WINDOWS)
-    add_library(nccl_device STATIC
-                ${device_files}
-                ${device_symk_files}
-                ${device_genk_files}
-                ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
-                ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
+    # Single definition of the Windows device sources. It is also exported to the
+    # parent scope: lib.exe does not link dependencies into an archive and object
+    # libraries cannot run the CUDA device link, so nccl_static (src/CMakeLists.txt)
+    # compiles these sources directly instead of linking nccl_device.
+    set(NCCL_DEVICE_SOURCES
+        ${device_files}
+        ${device_symk_files}
+        ${device_genk_files}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
     )
+    set(NCCL_DEVICE_SOURCES ${NCCL_DEVICE_SOURCES} PARENT_SCOPE)
+    add_library(nccl_device STATIC ${NCCL_DEVICE_SOURCES})
     set_target_properties(nccl_device PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
@@ -123,18 +129,4 @@ add_dependencies(nccl_device nccl_header)
 if(NCCL_OS_WINDOWS)
     add_custom_target(nccl_device_gensrc DEPENDS ${files} ${symmetric_files} ${general_files})
     add_dependencies(nccl_device nccl_device_gensrc)
-endif()
-
-# Expose the Windows device source list so nccl_static can compile the device
-# sources directly (see src/CMakeLists.txt): lib.exe does not link dependencies
-# into an archive and object libraries cannot run the CUDA device link.
-if(NCCL_OS_WINDOWS)
-    set(NCCL_DEVICE_SOURCES
-        ${device_files}
-        ${device_symk_files}
-        ${device_genk_files}
-        ${CMAKE_CURRENT_SOURCE_DIR}/common.cu
-        ${CMAKE_CURRENT_SOURCE_DIR}/onerank.cu
-        PARENT_SCOPE
-    )
 endif()

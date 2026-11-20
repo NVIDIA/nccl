@@ -314,7 +314,7 @@ if(NCCL_OS_WINDOWS)
     # the static library itself so the archive is self-contained by
     # construction; the shared library keeps linking nccl_device.
     target_sources(nccl_static PRIVATE ${NCCL_DEVICE_SOURCES})
-    target_compile_definitions(nccl_static PRIVATE WIN32_LEAN_AND_MEAN NCCL_GIN_GDAKI_ENABLE=0)
+    target_compile_definitions(nccl_static PRIVATE NCCL_GIN_GDAKI_ENABLE=0)
     # Custom-command OUTPUTs do not cross directory scopes; depend on the
     # aggregate generation target defined next to the rules.
     add_dependencies(nccl_static nccl_device_gensrc)
@@ -388,7 +388,7 @@ install(TARGETS nccl nccl_static
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 )
-# On Windows, nccl/nccl_static link to nccl_device (STATIC); export set must include it.
+# On Windows, nccl links nccl_device (STATIC); export set must include it.
 if(NCCL_OS_WINDOWS)
   install(TARGETS nccl_device
     EXPORT NCCLTargets

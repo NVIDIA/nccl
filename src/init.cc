@@ -3136,7 +3136,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   for (int i = 0; i < ndev; i++) {
     // Ignore return codes .. we need to call ncclGroupEnd to clean up anyway
     int dev = devlist ? devlist[i] : i;
-    CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);
+    CUDACHECKGOTO(cudaSetDevice(dev), ret, groupFail);
     ncclCommInitRankDev(comms + i, ndev, 1, &uniqueId, i, dev, &config, __func__);
   }
   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);
@@ -3147,6 +3147,11 @@ exit:
   (void)cudaSetDevice(oldDev);
   free(gpuFlags);
   return ret;
+groupFail:
+  /* The group opened above must be closed on this path too. Record the error so the pending inits are cleaned up;
+   * keep our own return code, since inside a user group the nested group end returns success. */
+  (void)ncclGroupErrCheck(ret);
+  (void)ncclGroupEndInternal();
 fail:
   goto exit;
 }
@@ -3173,10 +3178,12 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t* newcomm, int nranks, ncclUniqueI
   NCCLCHECK(ncclInitEnv());
   NVTX3_RANGE(NcclNvtxParamsCommInitRankConfig);
 
+  if (newcomm) *newcomm = NULL;
+
   NCCLCHECK(ncclGroupStartInternal());
 
   (void)ncclCudaLibraryInit();
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, fail);
 
   if (config == NULL) internalConfigPtr = &internalConfig;
   else internalConfigPtr = config;
@@ -3210,10 +3217,12 @@ ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myran
   ncclResult_t ret = ncclSuccess;
   ncclConfig_t internalConfig = NCCL_CONFIG_INITIALIZER;
   ncclConfig_t* internalConfigPtr = NULL;
+  if (newcomm) *newcomm = NULL;
+
   NCCLCHECK(ncclGroupStartInternal());
 
   (void)ncclCudaLibraryInit();
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, fail);
 
   if (config == NULL) internalConfigPtr = &internalConfig;
   else internalConfigPtr = config;
@@ -3319,6 +3328,13 @@ static ncclResult_t commCleanup(ncclComm_t comm) {
   return ncclSuccess;
 }
 
+/* ncclInvalidArgument applies to the failing call only: the group state stays unchanged and ncclGroupEnd does not
+ * report it (docs/userguide/source/usage/communicators.rst, error codes). Do not record it into an enclosing group, which
+ * would discard that group's queued work; every other error still goes through the group machinery. */
+static inline void commGroupErrCheckCallLocal(ncclResult_t res) {
+  if (res != ncclInvalidArgument) (void)ncclGroupErrCheck(res);
+}
+
 NCCL_API(ncclResult_t, ncclCommFinalize, ncclComm_t comm);
 ncclResult_t ncclCommFinalize(ncclComm_t comm) {
   NVTX3_RANGE(NcclNvtxParamsCommFinalize);
@@ -3356,7 +3372,7 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
   comm->finalizeCalled = true;
 
 exit:
-  ncclGroupErrCheck(ret);
+  commGroupErrCheckCallLocal(ret);
   NCCLCHECK(ncclGroupEndInternal());
   if (comm) {
     if (!comm->config.blocking && ret == ncclSuccess) {
@@ -3465,12 +3481,13 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   // Try and prevent a double free of the comm struct (user error)
   if (comm->rank == -1 || comm->nRanks == -1 || comm->cudaDev == -1 || comm->busId == -1) {
     WARN("comm %p has already been destroyed", comm);
-    return ncclInvalidArgument;
+    res = ncclInvalidArgument;
+    goto fail;
   }
 
   comm->destroyFlag = 1;
   /* init thread must be joined before we destroy the comm. */
-  NCCLCHECK(ncclCommEnsureReady(comm));
+  NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, fail);
   NEW_NOTHROW_GOTO(job, ncclCommFinalizeAsyncJob, res, fail);
   job->comm = comm;
   if (ncclParamEnqueueRearchEnable()) {
@@ -3482,7 +3499,7 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   }
 
 exit:
-  ncclGroupErrCheck(res);
+  commGroupErrCheckCallLocal(res);
   NCCLCHECK(ncclGroupEndInternal());
   return res;
 fail:

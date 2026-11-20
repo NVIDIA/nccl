@@ -3328,6 +3328,13 @@ static ncclResult_t commCleanup(ncclComm_t comm) {
   return ncclSuccess;
 }
 
+/* ncclInvalidArgument applies to the failing call only: the group state stays unchanged and ncclGroupEnd does not
+ * report it (docs/userguide/source/usage/communicators.rst, error codes). Do not record it into an enclosing group, which
+ * would discard that group's queued work; every other error still goes through the group machinery. */
+static inline void commGroupErrCheckCallLocal(ncclResult_t res) {
+  if (res != ncclInvalidArgument) (void)ncclGroupErrCheck(res);
+}
+
 NCCL_API(ncclResult_t, ncclCommFinalize, ncclComm_t comm);
 ncclResult_t ncclCommFinalize(ncclComm_t comm) {
   NVTX3_RANGE(NcclNvtxParamsCommFinalize);
@@ -3365,7 +3372,7 @@ ncclResult_t ncclCommFinalize(ncclComm_t comm) {
   comm->finalizeCalled = true;
 
 exit:
-  ncclGroupErrCheck(ret);
+  commGroupErrCheckCallLocal(ret);
   NCCLCHECK(ncclGroupEndInternal());
   if (comm) {
     if (!comm->config.blocking && ret == ncclSuccess) {
@@ -3492,10 +3499,7 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   }
 
 exit:
-  /* ncclInvalidArgument only affects this call: balance the group depth
-   * without recording the error into (or discarding queued work from) an
-   * outer group; fatal errors still go through the group machinery. */
-  if (res != ncclInvalidArgument) ncclGroupErrCheck(res);
+  commGroupErrCheckCallLocal(res);
   NCCLCHECK(ncclGroupEndInternal());
   return res;
 fail:

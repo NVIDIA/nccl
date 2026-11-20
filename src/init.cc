@@ -3136,7 +3136,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comms, int ndev, const int* devlist) {
   for (int i = 0; i < ndev; i++) {
     // Ignore return codes .. we need to call ncclGroupEnd to clean up anyway
     int dev = devlist ? devlist[i] : i;
-    CUDACHECKGOTO(cudaSetDevice(dev), ret, fail);
+    CUDACHECKGOTO(cudaSetDevice(dev), ret, groupFail);
     ncclCommInitRankDev(comms + i, ndev, 1, &uniqueId, i, dev, &config, __func__);
   }
   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, fail);
@@ -3147,6 +3147,11 @@ exit:
   (void)cudaSetDevice(oldDev);
   free(gpuFlags);
   return ret;
+groupFail:
+  /* The group opened above must be closed on this path too. Record the error so the pending inits are cleaned up;
+   * keep our own return code, since inside a user group the nested group end returns success. */
+  (void)ncclGroupErrCheck(ret);
+  (void)ncclGroupEndInternal();
 fail:
   goto exit;
 }

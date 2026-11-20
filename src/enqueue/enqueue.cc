@@ -3606,7 +3606,8 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
 
   info->comm->opCount++;
 exit:
-  if (devOld != -1) CUDACHECK(cudaSetDevice(devOld));
+  if (devOld != -1) CUDACHECKGOTO(cudaSetDevice(devOld), ret, end);
+end:
   ncclGroupErrCheck(ret);
   NCCLCHECK(ncclGroupEndInternal());
   /* if depth is 1, ncclGroupEndInternal() will trigger group ops. The state can change

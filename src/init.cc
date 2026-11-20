@@ -3173,10 +3173,12 @@ ncclResult_t ncclCommInitRankConfig(ncclComm_t* newcomm, int nranks, ncclUniqueI
   NCCLCHECK(ncclInitEnv());
   NVTX3_RANGE(NcclNvtxParamsCommInitRankConfig);
 
+  if (newcomm) *newcomm = NULL;
+
   NCCLCHECK(ncclGroupStartInternal());
 
   (void)ncclCudaLibraryInit();
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, fail);
 
   if (config == NULL) internalConfigPtr = &internalConfig;
   else internalConfigPtr = config;
@@ -3210,10 +3212,12 @@ ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myran
   ncclResult_t ret = ncclSuccess;
   ncclConfig_t internalConfig = NCCL_CONFIG_INITIALIZER;
   ncclConfig_t* internalConfigPtr = NULL;
+  if (newcomm) *newcomm = NULL;
+
   NCCLCHECK(ncclGroupStartInternal());
 
   (void)ncclCudaLibraryInit();
-  CUDACHECK(cudaGetDevice(&cudaDev));
+  CUDACHECKGOTO(cudaGetDevice(&cudaDev), ret, fail);
 
   if (config == NULL) internalConfigPtr = &internalConfig;
   else internalConfigPtr = config;
@@ -3465,12 +3469,13 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   // Try and prevent a double free of the comm struct (user error)
   if (comm->rank == -1 || comm->nRanks == -1 || comm->cudaDev == -1 || comm->busId == -1) {
     WARN("comm %p has already been destroyed", comm);
-    return ncclInvalidArgument;
+    res = ncclInvalidArgument;
+    goto fail;
   }
 
   comm->destroyFlag = 1;
   /* init thread must be joined before we destroy the comm. */
-  NCCLCHECK(ncclCommEnsureReady(comm));
+  NCCLCHECKGOTO(ncclCommEnsureReady(comm), res, fail);
   NEW_NOTHROW_GOTO(job, ncclCommFinalizeAsyncJob, res, fail);
   job->comm = comm;
   if (ncclParamEnqueueRearchEnable()) {
@@ -3482,7 +3487,10 @@ ncclResult_t ncclCommDestroy(ncclComm_t comm) {
   }
 
 exit:
-  ncclGroupErrCheck(res);
+  /* ncclInvalidArgument only affects this call: balance the group depth
+   * without recording the error into (or discarding queued work from) an
+   * outer group; fatal errors still go through the group machinery. */
+  if (res != ncclInvalidArgument) ncclGroupErrCheck(res);
   NCCLCHECK(ncclGroupEndInternal());
   return res;
 fail:

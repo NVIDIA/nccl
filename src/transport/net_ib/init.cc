@@ -22,7 +22,16 @@ static std::mutex ncclIbMutex;
 // still assumes the plugin is initialized only once across all communicators. The ref
 // counter makes sure the plugin internally initializes only once. When per communicator
 // context support is added to the plugin the ref counter can be removed.
+#include <mutex>
 static int netRefCount;
+/* Result of the initializing call. netInitMutex serializes the one-shot
+ * device initialization: a caller that sees netRefCount > 0 is guaranteed the
+ * initializing call finished and published its outcome. */
+static ncclResult_t netInitResult = ncclSuccess;
+static std::mutex netInitMutex;
+/* Result of the initializing call: later users of the shared IB state must
+ * see the same outcome instead of an unconditional success. */
+static ncclResult_t netInitResult = ncclSuccess;
 
 NCCL_PARAM(IbDisable, "IB_DISABLE", 0);
 NCCL_PARAM(IbMergeVfs, "IB_MERGE_VFS", 1);
@@ -297,6 +306,9 @@ const char* ibProviderName[] = {
 };
 
 ncclResult_t ncclIbFinalizeDevices(void) {
+  /* NET and GIN enter under different upper-level locks; take netInitMutex so
+   * a finalize cannot interleave with an init or another finalize. */
+  std::lock_guard<std::mutex> netInitLock(netInitMutex);
   netRefCount--;
   return ncclSuccess;
 }
@@ -434,11 +446,12 @@ extern int64_t ncclIbArThreshold;
 ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallback_t profFunction) {
   ncclResult_t ret = ncclSuccess;
   struct ibv_device** devices = NULL;
-  if (netRefCount++) return ret;
+  std::lock_guard<std::mutex> netInitLock(netInitMutex);
+  if (netRefCount++) return netInitResult;
   ncclProfilerFunction = profFunction;
-  if (ncclParamIbDisable()) return ncclInternalError;
+  if (ncclParamIbDisable()) { ret = ncclInternalError; goto exit; }
   static int shownIbHcaEnv = 0;
-  if (wrap_ibv_symbols() != ncclSuccess) return ncclInternalError;
+  if (wrap_ibv_symbols() != ncclSuccess) { ret = ncclInternalError; goto exit; }
   if (wrap_mlx5dv_symbols() != ncclSuccess) {
     INFO(NCCL_NET, "NET/IB : Failed to open mlx5dv symbols. Advance features like CX-8 Direct-NIC will be disabled.");
   }
@@ -450,7 +463,9 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       int nIpIfs = 0;
       ncclNIbDevs = 0;
       ncclNMergedIbDevs = 0;
-      NCCLCHECK(ncclFindInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1, &nIpIfs));
+      if ((ret = ncclFindInterfaces(ncclIbIfName, &ncclIbIfAddr, MAX_IF_NAME_SIZE, 1, &nIpIfs)) != ncclSuccess) {
+        goto fail;
+      }
       if (nIpIfs != 1) {
         WARN("NET/IB : No IP interface found.");
         ret = ncclInternalError;
@@ -639,7 +654,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
     if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
     // Start the async-event threads only once ncclIbDevs[] has its final, stable device order.
     for (int d = 0; d < ncclNIbDevs; d++) {
-      ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + d);
+      STDTHREADCREATE_GOTO(ncclIbAsyncThread, ncclIbAsyncThreadMain, ret, fail, ncclIbDevs + d);
       ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", d);
       ncclIbAsyncThread.detach();
     }
@@ -671,13 +686,16 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
       ncclNetVDeviceProps_t vProps = {0};
       vProps.ndevs = 1;
       vProps.devs[0] = d;
-      NCCLCHECK(ncclIbMakeVDeviceInternal(&vDev, &vProps));
+      if ((ret = ncclIbMakeVDeviceInternal(&vDev, &vProps)) != ncclSuccess) {
+        goto fail;
+      }
     }
     char addrline[SOCKET_NAME_MAXLEN + 1];
     INFO(NCCL_INIT | NCCL_NET, "NET/IB : Using%s %s; OOB %s:%s", line, ncclIbRelaxedOrderingEnabled ? "[RO]" : "",
          ncclIbIfName, ncclSocketToString(&ncclIbIfAddr, addrline));
   }
 exit:
+  netInitResult = ret;
   return ret;
 fail:
   if (devices) wrap_ibv_free_device_list(devices);

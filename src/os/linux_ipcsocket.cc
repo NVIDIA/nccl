@@ -97,7 +97,9 @@ ncclResult_t ncclIpcSocketClose(ncclIpcSocket* handle) {
   if (handle == NULL) {
     return ncclInternalError;
   }
-  if (handle->fd <= 0) {
+  /* fd == 0 is a valid descriptor (e.g. when stdin was closed); only the
+   * sentinel marks an unopened socket. */
+  if (handle->fd == NCCL_INVALID_IPC_FD) {
     return ncclSuccess;
   }
   int useAbstractSocket = ncclParamIpcUseAbstractSocket();
@@ -105,6 +107,7 @@ ncclResult_t ncclIpcSocketClose(ncclIpcSocket* handle) {
     (void)unlink(handle->socketName);
   }
   close(handle->fd);
+  handle->fd = NCCL_INVALID_IPC_FD;
 
   return ncclSuccess;
 }

@@ -419,12 +419,13 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
   NCCLCHECKGOTO(ncclCalloc(&args, 1), ret, fail);
   args->listenSock = listenSock;
   args->magic = handle->magic;
-  thread = std::thread(bootstrapRoot, args);
+  STDTHREADCREATE_GOTO(thread, bootstrapRoot, ret, fail, args);
   ncclSetThreadName(thread, "NCCL BootstrapR");
   thread.detach();
 exit:
   return ret;
 fail:
+  if (listenSock) ncclSocketClose(listenSock);
   free(listenSock);
   free(args);
   goto exit;
@@ -731,7 +732,7 @@ static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* st
 
 exit:
   free(ringData);
-  return ncclSuccess;
+  return res;
 }
 
 static ncclResult_t sendToRoot(struct ncclBootstrapHandle* handle, struct ncclComm* comm, struct extInfo* info) {

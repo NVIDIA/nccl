@@ -1035,7 +1035,7 @@ ncclResult_t ncclProxyStart(struct ncclComm* comm) {
 static ncclResult_t ncclProxyProgressCreate(struct ncclProxyState* proxyState) {
   struct ncclProxyProgressState* state = &proxyState->progressState;
   if (!state->thread.joinable()) {
-    state->thread = std::thread(ncclProxyProgress, proxyState);
+    STDTHREADCREATE(state->thread, ncclProxyProgress, proxyState);
     ncclSetThreadName(state->thread, "NCCL Progress%2d", proxyState->tpLocalnRanks);
   }
   return ncclSuccess;
@@ -1055,7 +1055,7 @@ ncclResult_t ncclProxyProgressDestroy(struct ncclProxyState* proxyState) {
       state->opsPool->cond.notify_one();
 #endif
     }
-    state->thread.join();
+    if (state->thread.joinable()) state->thread.join();
   }
 
   // Free off any memory allocated for the proxy arg pools
@@ -1525,9 +1525,11 @@ static ncclResult_t proxyProgressInit(struct ncclProxyState* proxyState) {
 #endif
 
     // All ops structures are created, we can start the progress thread
-    NCCLCHECK(ncclProxyProgressCreate(proxyState));
   }
-  return ncclSuccess;
+  /* Always run the creation attempt: a failed first try leaves opsPool
+   * allocated, and the joinable() check inside lets later connections retry
+   * the thread instead of silently sharing an unconsumed queue. */
+  return ncclProxyProgressCreate(proxyState);
 }
 
 static void proxyOpsFree(struct ncclProxyState* proxyState) {
@@ -2132,6 +2134,7 @@ ncclResult_t ncclProxyInit(struct ncclComm* comm, struct ncclSocket* sock, union
 }
 
 ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
+  ncclResult_t ret = ncclSuccess;
   /* proxyState is shared among parent comm and split comms. comm->proxyState->thread is
    * join()'d by commFree() in init.cc when the refCount reduces down to 0. */
   struct ncclProxyState* proxyState = comm->proxyState;
@@ -2155,17 +2158,31 @@ ncclResult_t ncclProxyCreate(struct ncclComm* comm) {
     proxyState->collNetContext = comm->collNetContext;
     proxyState->profilerContext = comm->profilerContext;
     proxyState->directMode = comm->directMode;
-    memcpy(proxyState->buffSizes, comm->buffSizes, sizeof(comm->buffSizes));
+    memcpy(proxyState->buffSizes, comm->buffSizes, sizeof(proxyState->buffSizes));
 
-    comm->proxyState->thread = std::thread(ncclProxyService, comm->proxyState);
+    STDTHREADCREATE_GOTO(comm->proxyState->thread, ncclProxyService, ret, fail, comm->proxyState);
     ncclSetThreadName(comm->proxyState->thread, "NCCL Service %2d", comm->cudaDev);
 
     // UDS support
     INFO(NCCL_PROXY, "UDS: Creating service thread comm %p rank %d", comm, comm->rank);
-    comm->proxyState->threadUDS = std::thread(ncclProxyServiceUDS, comm->proxyState);
+    STDTHREADCREATE_GOTO(comm->proxyState->threadUDS, ncclProxyServiceUDS, ret, fail, comm->proxyState);
     ncclSetThreadName(comm->proxyState->threadUDS, "NCCL UDS Svc%2d", comm->cudaDev);
   }
   return ncclSuccess;
+
+fail:
+  /* No service/UDS thread will run, so close the endpoints they would have
+   * owned: the UDS thread closes ipcSock on exit (ncclProxyServiceUDS) and
+   * the service thread closes and frees listenSock (ncclProxyService). */
+  if (!comm->proxyState->threadUDS.joinable()) {
+    (void)ncclIpcSocketClose(&comm->proxyState->ipcSock);
+  }
+  if (!comm->proxyState->thread.joinable()) {
+    (void)ncclSocketClose(comm->proxyState->listenSock);
+    free(comm->proxyState->listenSock);
+    comm->proxyState->listenSock = nullptr;
+  }
+  return ret;
 }
 
 ncclResult_t ncclProxyStop(struct ncclComm* comm) {

@@ -3252,9 +3252,22 @@ static ncclResult_t commDestroySync(struct ncclAsyncJob* job_) {
     NCCLCHECKGOTO(ncclCommPollEventCallbacks(comm, true), ret, fail);
     NCCLCHECKGOTO(ncclCommPollCallbacks(comm, false), ret, fail);
     NCCLCHECKGOTO(ncclSchedPollCallbacks(comm), ret, fail);
-    // And keep polling until all graphs referencing us die.
-    while (comm->localPersistentRefs != 0) {
-      NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/true), ret, fail);
+    // And keep polling until all graphs referencing us die. Graph destruction completes asynchronously, so only report
+    // the wait once it has lasted long enough to suggest that a graph is still alive.
+    {
+      uint64_t const waitStart = clockNano();
+      bool waitReported = false;
+      while (comm->localPersistentRefs != 0) {
+        NCCLCHECKGOTO(ncclCommPollCallbacks(comm, /*waitSome=*/waitReported), ret, fail);
+        if (waitReported) continue;
+        std::this_thread::yield();
+        if (clockNano() - waitStart >= 5000000000ull && comm->localPersistentRefs != 0) {
+          WARN("comm 0x%" PRIx64 " rank %d: finalize cannot complete until the CUDA graphs that captured operations on "
+               "this communicator are destroyed (captured operations still referenced: %d)",
+               comm->commHash, comm->rank, comm->localPersistentRefs);
+          waitReported = true;
+        }
+      }
     }
     while (comm->captureRef != 0) {
       NCCLCHECKGOTO(ncclSchedPollCallbacks(comm), ret, fail);

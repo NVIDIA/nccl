@@ -8,13 +8,17 @@
 #include "gin_ag.h"
 #include "cudawrap.h"
 #include "../../include/sym_partition.h"
+#include "selection_cache.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 
 namespace {
 constexpr uint64_t ginAgCellBytes = NCCL_SYM_KERNEL_CELL_SIZE;
 constexpr double ginAgCtaPenalty = .01; // Selection cost per requested CTA on every platform.
+constexpr int ncclSymkGinAgMaxLocalRanks = 72; // Support 72-rank LSA teams with the existing coefficients.
 
 struct ginAgPartition {
   uint64_t cells;
@@ -46,11 +50,23 @@ int ginAgCtaSpans(uint64_t rankBytes, const struct ginAgPartition& partition, ui
 }
 
 // Bandwidths are GB/s and latencies are microseconds.
-constexpr struct ncclSymkGinAgParameters ginAgTuningParameters[ncclSymkGinAgArch_Count] = {
-  // ctaBw, peakBw, gpuNetBw, baseUs, hopUs, shareUs, ctaNetBw, postUs, localChunkUs, firstContextUs, localPower.
-  {68.9771, 1044.3587, 178.2701, 37.2824, 10.8427, 6.7661, 52.1764, 7.7635, 3.1359, .3621, 9.1813}, // Rubin.
-  {48.7899, 719.4619, 53.9302, 33.1417, 8.9505, 4.0338, 40.3560, 5.2754, 1.3961, .3621, 9.1813}, // GB200.
-  {52.0514, 708.2904, 106.7490, 37.9138, 7.2639, 6.0339, 65.3548, 8.1772, 1.8258, .3621, 9.1813}, // GB300.
+struct ginAgParameters {
+  double ctaBw;
+  double peakBw;
+  double gpuNetBw;
+  double baseUs;
+  double hopUs;
+  double ctaNetBw;
+  double postUs;
+  double localChunkUs; // Completion cost per nonempty local chunk.
+  double localPower; // Smooth transition between CTA and shared local bandwidth.
+};
+
+constexpr struct ginAgParameters ginAgTuningParameters[ncclSymkGinAgArch_Count] = {
+  // ctaBw, peakBw, gpuNetBw, baseUs, hopUs, ctaNetBw, postUs, localChunkUs, localPower.
+  {68.9771, 1044.3587, 178.2701, 37.2824, 10.8427, 52.1764, 8.4799, 3.1359, 9.1813}, // Rubin.
+  {48.7899, 719.4619, 53.9302, 33.1417, 8.9505, 40.3560, 5.3742, 1.3961, 9.1813}, // GB200.
+  {52.0514, 708.2904, 106.7490, 37.9138, 7.2639, 65.3548, 8.0482, 1.8258, 9.1813}, // GB300.
 };
 
 // Per-CTA payload chunks, with the legacy 1 MiB first for ties.
@@ -58,20 +74,36 @@ constexpr uint64_t KiB = 1024;
 constexpr uint64_t ginAgChunks[] = {1024 * KiB, 32 * KiB,   64 * KiB,   128 * KiB,   256 * KiB,  512 * KiB,
                                     2048 * KiB, 4096 * KiB, 8192 * KiB, 16384 * KiB, 32768 * KiB};
 
-} // namespace
+// One prepared partition and its rates serve every chunk candidate for a CTA count.
+struct ncclSymkGinAgPipeline {
+  // The sorted distinct lengths omit CTA order and multiplicity.
+  uint64_t distinctSpanBytes[ncclSymkGinAgMaxCtas];
+  int distinctSpanCount;
+  int lsaRanks;
+  int railRanks;
+  double networkUsPerByte;
+  double localUsPerByte;
+  double postingUs;
+  double baseUs;
+  double hopUs;
+  double localChunkUs;
+};
 
-enum ncclSymkGinAgArch ncclSymkGinAgArchForCapability(int capability) {
-  if (capability == 100) return ncclSymkGinAgArch_Gb200;
-  if (capability == 103) return ncclSymkGinAgArch_Gb300;
-  if (RUBIN_AND_LATER(capability)) return ncclSymkGinAgArch_Rubin;
-  return ncclSymkGinAgArch_Count;
+// Before preparing a partition, bound single-chunk schedules by aggregate bandwidth.
+// Increasing CTAs cannot reduce this bound, so it can prune all remaining CTA counts.
+double ncclSymkGinAgSingleChunkLowerBound(const struct ginAgParameters& parameters, size_t rankBytes, int requestedCtas,
+                                          int localRanks, int remoteRanks, int contexts) {
+  const int activeCtas = ginAgPartitionForCtas(rankBytes, requestedCtas).activeCtas;
+  const double localUs = double(rankBytes) * localRanks / (1000 * parameters.peakBw) + parameters.localChunkUs;
+  if (remoteRanks == 1) return parameters.baseUs + localUs;
+  const int extraWaves = (activeCtas - 1) / contexts;
+  const double networkUs =
+    double(rankBytes) / (1000 * parameters.gpuNetBw) + parameters.postUs * (1 + .75 * extraWaves);
+  return parameters.baseUs +
+         std::max(remoteRanks * localUs, (remoteRanks - 1) * (networkUs + parameters.hopUs) + localUs);
 }
 
-struct ncclSymkGinAgParameters ncclSymkGinAgDefaults(enum ncclSymkGinAgArch arch) {
-  return ginAgTuningParameters[arch];
-}
-
-struct ncclSymkGinAgPipeline ncclSymkGinAgPrepare(const struct ncclSymkGinAgParameters& parameters, size_t rankBytes,
+struct ncclSymkGinAgPipeline ncclSymkGinAgPrepare(const struct ginAgParameters& parameters, size_t rankBytes,
                                                   int requestedCtas, int localRanks, int remoteRanks, int contexts) {
   struct ncclSymkGinAgPipeline pipeline = {};
   const struct ginAgPartition partition = ginAgPartitionForCtas(rankBytes, requestedCtas);
@@ -91,10 +123,24 @@ struct ncclSymkGinAgPipeline ncclSymkGinAgPrepare(const struct ncclSymkGinAgPara
   const double localLow = std::min(1 / parameters.ctaBw, ctaLoad * pipeline.lsaRanks / parameters.peakBw);
   pipeline.localUsPerByte =
     localHigh * std::pow(1 + std::pow(localLow / localHigh, parameters.localPower), 1 / parameters.localPower) / 1000;
-  pipeline.postingUs = parameters.shareUs * ((partition.activeCtas - 1) / contexts) + parameters.postUs;
-  pipeline.firstIssueUs = (std::min(partition.activeCtas, contexts) - 1) * parameters.firstContextUs;
+  const int extraWaves = (partition.activeCtas - 1) / contexts;
+  pipeline.postingUs = parameters.postUs * (1 + .75 * extraWaves);
 
   return pipeline;
+}
+
+// After preparing one CTA partition, bound every chunk candidate by the work
+// required with maxChunk. Unlike the single-chunk bound, this handles multiple
+// chunks and per-CTA bandwidth limits, and only prunes this CTA count.
+// Ignore inter-run waits and all but the last arrival/copy to stay optimistic.
+double ncclSymkGinAgChunkLowerBound(const struct ncclSymkGinAgPipeline& pipeline, uint64_t maxChunk) {
+  const uint64_t bytes = pipeline.distinctSpanBytes[pipeline.distinctSpanCount - 1];
+  const uint64_t chunks = ncclSymkDivUp(bytes, maxChunk);
+  const double local = pipeline.railRanks * (bytes * pipeline.localUsPerByte + chunks * pipeline.localChunkUs);
+  if (pipeline.railRanks == 1) return pipeline.baseUs + local;
+  const double network = (pipeline.railRanks - 1) * (bytes * pipeline.networkUsPerByte + chunks * pipeline.postingUs) +
+                         pipeline.hopUs + pipeline.localChunkUs;
+  return pipeline.baseUs + std::max(local, network);
 }
 
 double ncclSymkGinAgPredict(const struct ncclSymkGinAgPipeline& pipeline, size_t chunkBytes) {
@@ -130,7 +176,7 @@ double ncclSymkGinAgPredict(const struct ncclSymkGinAgPipeline& pipeline, size_t
       // The network and local-copy clocks continue across hops.
       double copyUsPerChunk[3];
       double firstArrivalUsByRun[3] = {};
-      double networkAvailableUs = pipeline.firstIssueUs;
+      double networkAvailableUs = 0;
       double localCompleteUs = 0;
       for (int run = 0; run < 3; run++) {
         copyUsPerChunk[run] = lengths[run] * pipeline.localUsPerByte + pipeline.localChunkUs;
@@ -155,23 +201,36 @@ double ncclSymkGinAgPredict(const struct ncclSymkGinAgPipeline& pipeline, size_t
   return pipeline.baseUs + finishUs;
 }
 
-struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ncclSymkGinAgParameters& parameters,
-                                                       uint64_t rankBytes, int localRanks, int remoteRanks,
-                                                       int contexts, int minimum, int maximum, uint64_t forcedChunk,
-                                                       int preferredCtas, uint64_t preferredChunk) {
+struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ginAgParameters& parameters, uint64_t rankBytes,
+                                                       int localRanks, int remoteRanks, int contexts, int minimum,
+                                                       int maximum, uint64_t forcedChunk, int preferredCtas,
+                                                       uint64_t preferredChunk) {
   const int menuSize = sizeof(ginAgChunks) / sizeof(ginAgChunks[0]);
   const int chunkCount = forcedChunk ? 1 : menuSize; // An explicit override is the only candidate.
   struct ncclSymkGinAgChoice best;
   int bestChunk = 0;
   bool bestDefaultPair = false;
+  const bool allSingleChunk =
+    rankBytes <= (forcedChunk ? forcedChunk : *std::min_element(ginAgChunks, ginAgChunks + menuSize));
+  const uint64_t maxChunk = forcedChunk ? forcedChunk : ginAgChunks[menuSize - 1];
   for (int ctas = minimum; ctas <= maximum; ctas += ctas == 1 ? 1 : 2) {
     const double multiplier = 1 + ginAgCtaPenalty * ctas;
+    if (allSingleChunk && best.selectionUs != DBL_MAX &&
+        ncclSymkGinAgSingleChunkLowerBound(parameters, rankBytes, ctas, localRanks, remoteRanks, contexts) >
+          best.selectionUs / multiplier * (1 + 1.e-12))
+      break;
     const struct ncclSymkGinAgPipeline pipeline =
       ncclSymkGinAgPrepare(parameters, rankBytes, ctas, localRanks, remoteRanks, contexts);
     const uint64_t maxSpan = pipeline.distinctSpanBytes[pipeline.distinctSpanCount - 1];
+    // The guard leaves ample room for roundoff and the original tie tolerance.
+    if (best.ctas && ncclSymkGinAgChunkLowerBound(pipeline, maxChunk) * multiplier > best.selectionUs * (1 + 1.e-9))
+      continue;
+    double singleChunkUs = 0;
     for (int chunk = 0; chunk < chunkCount; chunk++) {
       const uint64_t q = forcedChunk ? forcedChunk : ginAgChunks[chunk];
-      const double value = ncclSymkGinAgPredict(pipeline, q);
+      const bool singleChunk = q >= maxSpan;
+      const double value = singleChunk && singleChunkUs > 0 ? singleChunkUs : ncclSymkGinAgPredict(pipeline, q);
+      if (singleChunk) singleChunkUs = value;
       const double cost = value * multiplier;
       const bool defaultPair = ctas == preferredCtas && q == preferredChunk;
       const double roundoffUs = 1.e-12 * cost;
@@ -188,6 +247,16 @@ struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ncclSymkGinA
   return best;
 }
 
+} // namespace
+
+enum ncclSymkGinAgArch ncclSymkGinAgArchForCapability(int capability) {
+  if (capability == 100) return ncclSymkGinAgArch_Gb200;
+  if (capability == 103) return ncclSymkGinAgArch_Gb300;
+  if (RUBIN_AND_LATER(capability)) return ncclSymkGinAgArch_Rubin;
+  return ncclSymkGinAgArch_Count;
+}
+
+// Cache matching inputs across communicator lifetimes. The architecture selects the constant row.
 struct ncclSymkGinAgChoice ncclSymkGinAgSelect(enum ncclSymkGinAgArch arch, uint64_t rankBytes, int localRanks,
                                                int remoteRanks, int contexts, int minimum, int maximum,
                                                uint64_t forcedChunk, int preferredCtas, uint64_t preferredChunk) {
@@ -197,11 +266,17 @@ struct ncclSymkGinAgChoice ncclSymkGinAgSelect(enum ncclSymkGinAgArch arch, uint
       localRanks < 1 || localRanks > ncclSymkGinAgMaxLocalRanks || remoteRanks < 1 || contexts < 1 || minimum < 1 ||
       maximum > ncclSymkGinAgMaxCtas || minimum > maximum)
     return {};
-  const struct ncclSymkGinAgParameters& parameters = ginAgTuningParameters[arch];
+  using Key = std::array<uint64_t, 10>;
+  static thread_local ncclSymkSelectionCache<Key, ncclSymkGinAgChoice> cache;
+  const Key key{{uint64_t(arch), rankBytes, uint64_t(localRanks), uint64_t(remoteRanks), uint64_t(contexts),
+                 uint64_t(minimum), uint64_t(maximum), forcedChunk, uint64_t(preferredCtas), preferredChunk}};
+  const ncclSymkGinAgChoice* cached = ncclSymkSelectionCacheFind(cache, key);
+  if (cached) return *cached;
   // One scheduler cell always launches one active CTA.
   if (rankBytes <= ginAgCellBytes) maximum = minimum;
   const ncclSymkGinAgChoice choice =
-    ncclSymkGinAgSelectUncached(parameters, rankBytes, localRanks, remoteRanks, contexts, minimum, maximum, forcedChunk,
-                                preferredCtas, preferredChunk);
+    ncclSymkGinAgSelectUncached(ginAgTuningParameters[arch], rankBytes, localRanks, remoteRanks, contexts, minimum,
+                                maximum, forcedChunk, preferredCtas, preferredChunk);
+  if (choice.ctas) ncclSymkSelectionCacheInsert(cache, key, choice);
   return choice;
 }

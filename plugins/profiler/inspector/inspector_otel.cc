@@ -21,6 +21,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <map>
@@ -793,7 +794,18 @@ static bool inspectorOtelConnectWithTimeout(int fd,
   writeFd.fd = fd;
   writeFd.events = POLLOUT;
   writeFd.revents = 0;
-  ret = poll(&writeFd, 1, timeoutMs);
+  // A signal can interrupt poll(); retry with the time that is left instead of failing the connect.
+  const std::chrono::steady_clock::time_point deadline =
+    std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  int remainingMs = timeoutMs;
+  while ((ret = poll(&writeFd, 1, remainingMs)) < 0 && errno == EINTR) {
+    remainingMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+    if (remainingMs <= 0) {
+      ret = 0;
+      break;
+    }
+  }
   if (ret <= 0) {
     fcntl(fd, F_SETFL, flags);
     return false;

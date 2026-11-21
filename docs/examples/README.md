@@ -13,7 +13,7 @@ to effectively use NCCL in their applications. The examples progress from basic
 concepts to advanced usage patterns, with each example featuring a detailed
 README file. The APIs and features covered here are far from the complete set of
 what NCCL provides. The [NCCL
-Documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html)
+Documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/index.html)
 includes a detailed description of NCCL features and APIs.
 
 These examples showcase individual features but are not intended to maximize the
@@ -182,7 +182,7 @@ build these examples:
 - `CUDA_VISIBLE_DEVICES`: Comma delimited list of GPUs visible to the
   application.
 - All other NCCL [environment
-  variables](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html)
+  variables](https://docs.nvidia.com/deeplearning/nccl/user-guide/env.html)
   apply.
 
 ## Supported OS
@@ -192,5 +192,5 @@ Linux
 Each example includes a /Common Issues and Solutions/ section for the individual
 tests. For general runtime issues use the debug output enabled by setting
 `NCCL_DEBUG=INFO` for detailed logging. The
-[Troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting.html)
+[Troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/troubleshooting.html)
 section of the NCCL documentation also includes many helpful tips.

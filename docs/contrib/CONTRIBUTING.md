@@ -11,7 +11,7 @@ code, build, tests, and the standard user-facing docs flow.
 
 To help ensure your contribution can be accepted smoothly:
 
-- **Check existing documentation** — including the [user guide](../userguide/README.md) and
+- **Check existing documentation** — including the [user guide](../website/README.md) and
   **`docs/contrib/README.md`** — so your work complements rather than duplicates what is already maintained.
 - **Coordinate with us** raise a [github Issue](https://github.com/NVIDIA/nccl/issues/new?template=ISSUE.yaml)
   proposing the documentation. We don't want you to do a lot of work if we have something

@@ -12,7 +12,7 @@ nccl4py follows the NCCL SLA. The details of the NCCL SLA is available `here <ht
 
 * `Homepage <https://developer.nvidia.com/nccl>`_
 * `Repository <https://github.com/NVIDIA/nccl>`_
-* `Documentation <https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html>`_
+* `Documentation <https://docs.nvidia.com/deeplearning/nccl/user-guide/index.html>`_
 * `Issue tracker <https://github.com/NVIDIA/nccl/issues>`_
 
 ``nccl4py`` is under active development. Feedback and suggestions are welcome!

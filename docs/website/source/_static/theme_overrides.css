@@ -1,0 +1,10 @@
+/* Green check / red cross markers used in the determinism tables. */
+.guaranteed,
+.not-guaranteed {
+    font-weight: bold;
+    font-size: 1.2em;
+    text-align: center;
+    display: block;
+}
+.guaranteed { color: #2e8b57; }
+.not-guaranteed { color: #c62828; }

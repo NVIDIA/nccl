@@ -111,4 +111,4 @@ python -m pip install -e ".[cu12]"
 
 - [NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/)
 - [NCCL repository](https://github.com/NVIDIA/nccl)
-- [nccl4py package documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/nccl4py.html)
+- [nccl4py package documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/nccl4py.html)

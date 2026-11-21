@@ -56,7 +56,7 @@ User buffer registration provides several advantages:
 
 **Important**: Buffers must be allocated with `ncclMemAlloc()` or another compatible allocator (C), or an
 NCCL-compatible allocator in Python such as `nccl.cupy.empty()`, for registration to work. See the
-[Buffer Registration](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/bufferreg.html)
+[Buffer Registration](https://docs.nvidia.com/deeplearning/nccl/user-guide/usage/bufferreg.html)
 section of the user guide.
 
 **Important**: If any rank passes registered buffers, **all** ranks in the same communicator must also

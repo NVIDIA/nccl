@@ -62,7 +62,7 @@ test = [
 
 [project.urls]
 homepage = "https://developer.nvidia.com/nccl"
-documentation = "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html"
+documentation = "https://docs.nvidia.com/deeplearning/nccl/user-guide/index.html"
 repository = "https://github.com/NVIDIA/nccl"
 issues = "https://github.com/NVIDIA/nccl/issues"
 

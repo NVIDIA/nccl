@@ -93,7 +93,7 @@ All RAS examples require MPI (`MPI=1` is set in each leaf Makefile).
 ## Interpreting RAS output
 
 The status/error terms below are summarized for convenience; the
-[NCCL User Guide — RAS troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/ras.html)
+[NCCL User Guide — RAS troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/troubleshooting/ras.html)
 is the authoritative reference if the vocabulary changes across releases.
 
 ### Status vocabulary
@@ -170,6 +170,6 @@ RAS is a **diagnostic** tool.  It surfaces information but does not:
 
 ## References
 
-- [NCCL User Guide — RAS troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/ras.html)
-- [NCCL User Guide — Environment variables](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html)
-- [NCCL API Reference](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api.html)
+- [NCCL User Guide — RAS troubleshooting](https://docs.nvidia.com/deeplearning/nccl/user-guide/troubleshooting/ras.html)
+- [NCCL User Guide — Environment variables](https://docs.nvidia.com/deeplearning/nccl/user-guide/env.html)
+- [NCCL API Reference](https://docs.nvidia.com/deeplearning/nccl/user-guide/api.html)

@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reaching out! To solve your problem, feel free to check out the [user guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html), in particular the troubleshooting section, and also the [release notes](https://docs.nvidia.com/deeplearning/nccl/release-notes/index.html).
+        Thanks for reaching out! To solve your problem, feel free to check out the [user guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/index.html), in particular the troubleshooting section, and also the [release notes](https://docs.nvidia.com/deeplearning/nccl/release-notes/index.html).
         ---
   - type: textarea
     id: question

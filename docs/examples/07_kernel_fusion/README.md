@@ -422,8 +422,8 @@ These parameters can be modified in the source code to match your specific use c
 
 ## Additional Resources
 
-- [NCCL Device API Documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/device.html)
-- [NCCL User Guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html)
+- [NCCL Device API Documentation](https://docs.nvidia.com/deeplearning/nccl/user-guide/api/device.html)
+- [NCCL User Guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/index.html)
 - [Main Examples README](../README.md)
 
 ## Contributing

@@ -8,7 +8,7 @@ body:
     attributes:
       value: |
         Thanks for reaching out! Before reporting a new issue, please feel free to search for the behavior in the existing issues. If you found an issue which is already closed or you are unsure, open a new issue and reference the old one from it.
-        You can also check out the [troubleshooting section](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting.html) in our user guide.
+        You can also check out the [troubleshooting section](https://docs.nvidia.com/deeplearning/nccl/user-guide/troubleshooting.html) in our user guide.
         
         ---
         

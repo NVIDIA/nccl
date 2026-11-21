@@ -772,7 +772,7 @@ static inline void printIbWcStatusHint(int status) {
     INFO(NCCL_NET, "HINT: In many cases this error indicates that NCCL_IB_TIMEOUT is set too short (the default value "
                    "is 20, which is ~30 seconds before timing out).");
     INFO(NCCL_NET, "HINT: To confirm, increase NCCL_IB_TIMEOUT (see "
-                   "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-ib-timeout).");
+                   "https://docs.nvidia.com/deeplearning/nccl/user-guide/env.html#nccl-ib-timeout).");
     return;
   default:
     break;

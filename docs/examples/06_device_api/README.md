@@ -150,8 +150,8 @@ cd 06_allgather_cft_multimem_counted/c && make
 
 ## References
 - [NCCL User Guide:
-  Examples](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/examples.html)
+  Examples](https://docs.nvidia.com/deeplearning/nccl/user-guide/examples.html)
 - [NCCL API
-  Reference](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api.html)
+  Reference](https://docs.nvidia.com/deeplearning/nccl/user-guide/api.html)
 - [CUDA Programming
   Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)

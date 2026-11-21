@@ -16,7 +16,7 @@ from functools import cache
 import numpy as np
 from typing import Literal
 
-from nccl.core.buffer import mem_alloc
+from nccl.core.buffer import _check_dense_layout, mem_alloc
 from nccl.core.typing import NcclInvalid, NcclDataType
 
 __all__ = ["empty", "resolve_tensor"]
@@ -236,13 +236,16 @@ def resolve_tensor(tensor: torch.Tensor) -> tuple[int, int, NcclDataType, int]:
 
     Raises:
         ModuleNotFoundError: If PyTorch is not installed.
-        NcclInvalid: If tensor is not a PyTorch tensor or its dtype has no
-            NCCL equivalent.
+        NcclInvalid: If tensor is not a PyTorch tensor, its dtype has no
+            NCCL equivalent, or its layout has gaps or overlapping elements.
     """
     if not _torch_enabled:
         raise ModuleNotFoundError("PyTorch is not installed")
 
     if not isinstance(tensor, torch.Tensor):
         raise NcclInvalid(f"tensor must be a PyTorch tensor, got {type(tensor).__name__}")
+
+    if not tensor.is_contiguous():
+        _check_dense_layout(tensor.shape, tensor.stride())
 
     return (tensor.data_ptr(), tensor.numel(), _to_nccl_dtype(tensor.dtype), tensor.device.index)

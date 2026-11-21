@@ -71,6 +71,19 @@ def _resolve_buffer(buffer, stream_ptr: int | None) -> StridedMemoryView:
     return buffer.view(stream_ptr)
 
 
+def _check_dense_layout(shape, strides, itemsize=1) -> None:
+    """Require a contiguous storage region, allowing any dimension order."""
+    if strides is None or 0 in shape:
+        return
+    expected = itemsize
+    for stride, size in sorted((s, n) for s, n in zip(strides, shape) if n > 1):
+        if stride != expected:
+            raise NcclInvalid(
+                "NCCL buffers must occupy a contiguous, non-overlapping memory region"
+            )
+        expected *= size
+
+
 class NcclBuffer:
     """Resolves user-provided buffer specifications to raw pointer, count, dtype, and device.
 
@@ -79,7 +92,9 @@ class NcclBuffer:
     Interface or DLPack compatible object, or a ``cuda.core.Buffer`` (any
     PyTorch tensor or CuPy array works via DLPack). Element count is
     automatically derived from buffer size and dtype; use slicing to control
-    element count.
+    element count. Buffers must occupy a contiguous, non-overlapping memory
+    region. Elements are communicated in storage order, including for
+    column-major arrays and dense permutations of dimensions.
 
     When stream is ``None``, the special sentinel value -1 is used internally.
     This sentinel is required by cuda.core's StridedMemoryView.view to
@@ -138,6 +153,7 @@ class NcclBuffer:
             self._device_id = resolved[3]
         else:
             view = _resolve_buffer(buffer, self.stream_ptr)
+            _check_dense_layout(view.shape, view.strides)
             self._ptr = view.ptr
             self._count = math.prod(view.shape)
             self._dtype = NcclDataType(view.dtype)

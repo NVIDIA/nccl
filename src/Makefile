@@ -170,10 +170,19 @@ $(INCDIR)/nccl.h : nccl.h.in ../makefiles/version.mk
 
 # Device objs (from device manifests, incl. common.cu.o) are linked in so libnccl.so contains
 # device code (e.g. ncclGin_BackendMask<...>) that tests resolve when linking with -lnccl.
-$(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVMANIFESTS)
+DEVMANIFESTS_SHARED := $(addsuffix .shared,$(DEVMANIFESTS))
+# manifest.shared is used only for libnccl.so
+$(DEVMANIFEST).shared: ALWAYS_REBUILD $(DEVMANIFEST)
+	$(MAKE) -C ./device shared
+
+$(DIAG_DEVMANIFEST).shared: ALWAYS_REBUILD $(DIAG_DEVMANIFEST)
+	$(MAKE) -C ./diagnostics/device shared
+
+$(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVMANIFESTS) $(DEVMANIFESTS_SHARED)
 	@printf "Linking    %-35s > %s\n" $(LIBTARGET) $@
 	mkdir -p $(LIBDIR)
-	$(CXX) $(CXXFLAGS) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME) -o $@ $(LIBOBJ) $$(cat $(DEVMANIFESTS)) $(LDFLAGS) -Wl,--version-script=libnccl.map
+	for m in $(DEVMANIFESTS_SHARED); do test -s $$m || exit 1; done
+	$(CXX) $(CXXFLAGS) -shared -Wl,--no-as-needed -Wl,-soname,$(LIBSONAME) -o $@ $(LIBOBJ) $$(cat $(DEVMANIFESTS_SHARED)) $(LDFLAGS) -Wl,--version-script=libnccl.map
 	ln -sf $(LIBSONAME) $(LIBDIR)/$(LIBNAME)
 	ln -sf $(LIBTARGET) $(LIBDIR)/$(LIBSONAME)
 

@@ -18,6 +18,7 @@ BUILDDIR ?= $(abspath ../../../build)
 OBJDIR := $(BUILDDIR)/obj/diagnostics/device
 
 MANIFEST := $(OBJDIR)/manifest
+SHARED_MANIFEST := $(OBJDIR)/manifest.shared
 DIAG_DEVGLUE_OBJ := $(OBJDIR)/diagnostics_device_glue.o
 
 INCFLAGS = -I. -I.. -I../.. -I../../device -I$(BUILDDIR)/include -I../../include -I../../include/plugin
@@ -60,6 +61,9 @@ $(DIAG_DEVGLUE_OBJ): $(LIB_OBJS)
 
 $(MANIFEST): $(LIB_OBJS) $(DIAG_DEVGLUE_OBJ)
 	@echo $^ > $@
+
+NVPRUNE_GLUE := $(DIAG_DEVGLUE_OBJ)
+include $(NCCLDIR)/makefiles/nvprune.mk
 
 -include $(wildcard $(OBJDIR)/*.d)
 

@@ -136,10 +136,6 @@ ncclResult_t ncclTuningComputeAllTunings(struct ncclTuningInput_t* const input,
                                          struct ncclTuningResultList_t* const tunings) {
   ncclResult_t ret = ncclSuccess;
 
-  // Prepare shared team state once before the candidate loop.
-  if (input->comm->symmetricSupport && (input->tuningMask & NCCL_TUNING_MASK_SYM_KERNELS))
-    NCCLCHECK(ncclDevrInitOnce(input->comm));
-
   for (int i = 0; i < NCCL_TUNING_COUNT; i++) {
     struct ncclTuningResult_t tuning = NCCL_TUNING_RESULT_INIT;
     tuning.id = i;

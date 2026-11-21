@@ -104,7 +104,6 @@ ncclResult_t ncclTuningSymkModelSim(struct ncclTuningInput_t* const inputs, stru
   tuning->maxChannels = 0;
   if (ncclSymkGinKernelMask() >> tuning->symKernelId & 1) {
     NCCLCHECK(ncclSymkGinModel(inputs, tuning));
-    tuning->selectionTimeUs = tuning->timeUs;
   } else {
     NCCLCHECK(ncclSymkLsaModel(inputs, (enum ncclSymkKernelId)tuning->symKernelId, inputs->nBytes, &tuning->timeUs,
                                &tuning->selectionTimeUs, &tuning->nChannels, &tuning->maxChannels));

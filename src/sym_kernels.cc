@@ -361,7 +361,7 @@ static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t*
     if (ncclParamSymGinBuffMaxSize() > 0) {
       // NCCL_SYM_GINBUFF_MAX_SIZE caps the staging estimate in bytes. It is rounded up to a power of two
       // per block below and kept at or above two chunks so the kernel's pipeline depth holds.
-      size_t maxBufSize = std::max((size_t)ncclParamSymGinBuffMaxSize(), 2 * ncclSymkRsGinChunkBytes());
+      size_t maxBufSize = std::max((size_t)ncclParamSymGinBuffMaxSize(), (size_t)ncclSymkRsGinAccumBytesPerBlock());
       bufSize = std::min(bufSize, maxBufSize);
       if (comm->rank == 0 && pow2Up(bufSize) > (size_t)ncclParamSymGinBuffMaxSize())
         ATTN("NCCL_SYM_GINBUFF_MAX_SIZE=%ld: rounded to the next higher power of 2, %zu bytes per block",

@@ -8,7 +8,6 @@
 #ifndef NCCL_INT_SYM_MODEL_GIN_AG_H_
 #define NCCL_INT_SYM_MODEL_GIN_AG_H_
 
-#include <cfloat>
 #include <cstdint>
 
 enum ncclSymkGinAgArch {
@@ -23,7 +22,7 @@ enum ncclSymkGinAgArch ncclSymkGinAgArchForCapability(int capability);
 struct ncclSymkGinAgChoice {
   int ctas = 0;
   uint64_t chunkBytes = 0;
-  double timeUs = 0, selectionUs = DBL_MAX;
+  double timeUs = 0;
 };
 
 constexpr int ncclSymkGinAgMaxCtas = 64; // Symmetric kernels support at most 64 CTAs.

@@ -159,8 +159,8 @@ int ncclTuningCalcSatBlocksReduceScatterRailA2A(struct ncclComm* comm, bool ldmc
   return std::ceil(std::min(double(1 << 30), minLsaGinEffBw / (smBw / smMul)));
 }
 
-static int roundDownGinBlocks(int blocks, bool forced) {
-  return forced || blocks <= 1 ? blocks : blocks & ~1;
+static int roundDownGinBlocks(int blocks) {
+  return blocks <= 1 ? blocks : blocks & ~1;
 }
 
 ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, struct ncclTuningResult_t* tuning) {
@@ -213,15 +213,8 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, struct ncclTuning
 
   bool applySmPenalty = true;
   *timeUs = FLT_MAX;
-  tuning->selectionTimeUs = FLT_MAX;
   *nBlocks = 0;
   tuning->maxChannels = 0;
-  // Automatic AG choices use one CTA or an even count; explicit overrides stay exact.
-  if (kernelId == ncclSymkKernelId_AllGather_RailRing_LsaSTMC && useAgPipeline) {
-    nMaxBlocks = roundDownGinBlocks(nMaxBlocks, nUserCTAs > 0);
-    if (nUserCTAs <= 0 && nMinBlocks > 1 && (nMinBlocks & 1)) nMinBlocks++;
-    if (nMinBlocks > nMaxBlocks) return ncclSuccess;
-  }
   switch (kernelId) {
   case ncclSymkKernelId_AlltoAll_LL:
     {
@@ -249,9 +242,14 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, struct ncclTuning
       bool forcedChunk = false;
       size_t railChunkSize = ncclSymkGinChunkBytes(ncclFuncAllGather, &forcedChunk);
       size_t requiredBlocks = DIVUP(nBytes, railChunkSize);
-      int defaultBlocks = std::max(
-        nMinBlocks, roundDownGinBlocks((int)std::min((size_t)std::min(nMaxBlocks, defaultMaxBlocks), requiredBlocks),
-                                       nUserCTAs > 0 || !useAgPipeline));
+      int defaultBlocks = (int)std::min((size_t)std::min(nMaxBlocks, defaultMaxBlocks), requiredBlocks);
+      // Search one or even CTA counts by default. NCCL_SYM_CTAS sets both bounds to the requested count.
+      if (useAgPipeline && nMinBlocks != nMaxBlocks) {
+        nMaxBlocks = roundDownGinBlocks(nMaxBlocks);
+        if (nMinBlocks > 1) nMinBlocks = roundUp(nMinBlocks, 2);
+        defaultBlocks = roundDownGinBlocks(defaultBlocks);
+      }
+      defaultBlocks = std::max(nMinBlocks, defaultBlocks);
       // The model consumes the input bytes per rank, not the total gathered extent.
       // The selector owns numeric input validation; retain the legacy estimate
       // outside a supported single-work schedule or when no pair can be modeled.
@@ -264,7 +262,8 @@ ncclResult_t ncclSymkGinModel(struct ncclTuningInput_t* input, struct ncclTuning
           *nBlocks = best.ctas;
           tuning->maxChannels = std::max(nLimitBlocks, best.ctas);
           *timeUs = (float)best.timeUs;
-          tuning->selectionTimeUs = (float)best.selectionUs;
+          // Compare kernels using the predicted latency of the selected CTA and chunk pair.
+          tuning->selectionTimeUs = *timeUs;
           tuning->chunkSizeBytes = (int)best.chunkBytes;
           return ncclSuccess;
         }

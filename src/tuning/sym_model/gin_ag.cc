@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstddef>
 
@@ -208,6 +209,7 @@ struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ginAgParamet
   const int menuSize = sizeof(ginAgChunks) / sizeof(ginAgChunks[0]);
   const int chunkCount = forcedChunk ? 1 : menuSize; // An explicit override is the only candidate.
   struct ncclSymkGinAgChoice best;
+  double bestCost = DBL_MAX;
   int bestChunk = 0;
   bool bestDefaultPair = false;
   const bool allSingleChunk =
@@ -215,16 +217,15 @@ struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ginAgParamet
   const uint64_t maxChunk = forcedChunk ? forcedChunk : ginAgChunks[menuSize - 1];
   for (int ctas = minimum; ctas <= maximum; ctas += ctas == 1 ? 1 : 2) {
     const double multiplier = 1 + ginAgCtaPenalty * ctas;
-    if (allSingleChunk && best.selectionUs != DBL_MAX &&
+    if (allSingleChunk && bestCost != DBL_MAX &&
         ncclSymkGinAgSingleChunkLowerBound(parameters, rankBytes, ctas, localRanks, remoteRanks, contexts) >
-          best.selectionUs / multiplier * (1 + 1.e-12))
+          bestCost / multiplier * (1 + 1.e-12))
       break;
     const struct ncclSymkGinAgPipeline pipeline =
       ncclSymkGinAgPrepare(parameters, rankBytes, ctas, localRanks, remoteRanks, contexts);
     const uint64_t maxSpan = pipeline.distinctSpanBytes[pipeline.distinctSpanCount - 1];
     // The guard leaves ample room for roundoff and the original tie tolerance.
-    if (best.ctas && ncclSymkGinAgChunkLowerBound(pipeline, maxChunk) * multiplier > best.selectionUs * (1 + 1.e-9))
-      continue;
+    if (best.ctas && ncclSymkGinAgChunkLowerBound(pipeline, maxChunk) * multiplier > bestCost * (1 + 1.e-9)) continue;
     double singleChunkUs = 0;
     for (int chunk = 0; chunk < chunkCount; chunk++) {
       const uint64_t q = forcedChunk ? forcedChunk : ginAgChunks[chunk];
@@ -236,8 +237,9 @@ struct ncclSymkGinAgChoice ncclSymkGinAgSelectUncached(const struct ginAgParamet
       const double roundoffUs = 1.e-12 * cost;
       const bool preferredTie =
         defaultPair || (!bestDefaultPair && (chunk < bestChunk || (chunk == bestChunk && ctas < best.ctas)));
-      if (cost < best.selectionUs - roundoffUs || (std::abs(cost - best.selectionUs) <= roundoffUs && preferredTie)) {
-        best = {ctas, q, value, cost};
+      if (cost < bestCost - roundoffUs || (std::abs(cost - bestCost) <= roundoffUs && preferredTie)) {
+        best = {ctas, q, value};
+        bestCost = cost;
         bestChunk = chunk;
         bestDefaultPair = defaultPair;
       }

@@ -1965,6 +1965,8 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   }
 
   NCCLCHECKGOTO(ncclTopoPathAllDirectNVLink(comm->topo, &comm->isAllDirectNvlink), ret, fail);
+  // Tuning needs the LSA team size before the device runtime is initialized.
+  comm->devrState.lsaTeamSize = computeLsaTeamSize(comm);
   comm->globalGinSupport = NCCL_GIN_CONNECTION_NONE;
   if (globalGinTypeBitMask && comm->cuMemGdrSupport && !comm->hasMloPart) {
     NCCLCHECKGOTO(ncclGinSetDefaultBackend(comm, globalGinTypeBitMask), ret, fail);

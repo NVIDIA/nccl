@@ -179,7 +179,7 @@ NCCL_PARAM(LsaTeamSize, "LSA_TEAM_SIZE", 0)
 
 // Compute the LSA team size from the comm topology without any side effects.
 int computeLsaTeamSize(struct ncclComm* comm) {
-  if (comm->devrState.bigSize != 0) return comm->devrState.lsaTeamSize;
+  if (comm->devrState.lsaTeamSize != 0) return comm->devrState.lsaTeamSize;
 
   // LSA needs to be the same size for all ranks, and it needs to represent
   // a consecutive set of ranks.

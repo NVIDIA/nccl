@@ -31,11 +31,11 @@ __device__ __forceinline__ void ncclSymkRun_AllGather_RailRing_LsaSTMC(struct nc
   handler.template forEachWorkNoFusion<uint8_t>([&] __device__(ncclSymkDevWork const& work, size_t nElts,
                                                                size_t nAllElts, ncclSymPtr<uint8_t> input,
                                                                ncclSymPtr<uint8_t> output) {
-    size_t chunkSize = work.chunkSizeBytes;
+    const uint32_t chunkSize = work.chunkSizeBytes;
     // Rotate by LSA rank with pattern 0 1 3 2 4 5 7 6 to diversify addresses.
     uint32_t startOffsetMultiplier = lsaRank ^ ((lsaRank >> 1) & 1);
     size_t startOffset =
-      nElts > 0 ? ((size_t)startOffsetMultiplier * ncclSymkMcPerRankOffsetBytes % nElts) & ~(chunkSize - 1) : 0;
+      nElts > 0 ? ((size_t)startOffsetMultiplier * ncclSymkMcPerRankOffsetBytes % nElts) & ~size_t(chunkSize - 1) : 0;
     auto advanceOffset = [&](size_t chunkElts, size_t& offset, size_t& remainingElts) {
       offset += chunkElts;
       if (offset == nElts) offset = 0;

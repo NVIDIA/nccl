@@ -24,6 +24,10 @@ static bool ncclCommLocalIsMloPart(const struct ncclComm* comm) {
 // Localization support begins with CUDA 13.4.
 ncclResult_t ncclRegBufferIsLocalized(struct ncclComm* comm, const void* ptr, size_t size, bool* isLocalized) {
   *isLocalized = false;
+#if CUDART_VERSION < 13040
+  // Without a locality-domain allocation type, only an MLOPart rank can report localized memory.
+  if (!comm->hasMloPart) return ncclSuccess;
+#endif
   CUmemGenericAllocationHandle handle;
   CUmemAllocationProp prop = {};
   CUmemorytype memType;

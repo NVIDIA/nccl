@@ -516,7 +516,7 @@ static ncclResult_t ncclGinProxyCreateContext(void* collComm, ncclGinConfig_t* c
     return ncclInternalError;
   }
 
-  if (!ncclGdrCopy) INFO(NCCL_NET, "GIN Proxy will not be using GDRCopy");
+  if (!ncclGdrCopy) INFO(NCCL_NET, "GIN Proxy using host memory for CPU-accessible controls");
 
   NCCLCHECKGOTO(ncclCalloc(&proxyCtx, 1), ret, fail);
 

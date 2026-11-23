@@ -1398,17 +1398,21 @@ Before 2.4.2, the default value is 0 for all platforms. Since 2.4.2, the default
 
 NCCL_GDRCOPY_ENABLE
 -------------------
-The ``NCCL_GDRCOPY_ENABLE`` variable enables GDRCopy support for CPU-accessible CUDA memory used by NCCL internal control structures.
+The ``NCCL_GDRCOPY_ENABLE`` variable controls how NCCL enables GDRCopy for CPU access to CUDA memory.
 
 When enabled, NCCL first tries to load ``libgdrapi.so``. If the library is not available or cannot initialize, NCCL can use its internal Linux CUDA DMA-BUF mmap backend when the CUDA driver and GPU support it.
 
 Values accepted
 ^^^^^^^^^^^^^^^
-0 or 1. Default value is 0 (disabled).
+- ``0`` disables GDRCopy for the paths controlled by this variable.
+- ``1`` enables GDRCopy explicitly, subject to the settings below.
+- ``2`` enables selected uses of GDRCopy automatically when available.
+
+Value ``2`` is supported and is the default since NCCL 2.33. The previous default was ``0``.
 
 NCCL_GDRCOPY_FIFO_ENABLE
 ------------------------
-The ``NCCL_GDRCOPY_FIFO_ENABLE`` variable controls whether the communicator work FIFO is allocated in GDRCopy-mapped CUDA memory when GDRCopy support is enabled.
+The ``NCCL_GDRCOPY_FIFO_ENABLE`` variable controls whether the communicator work FIFO is allocated in GDRCopy-mapped CUDA memory with ``NCCL_GDRCOPY_ENABLE=1``.
 
 When disabled, NCCL allocates the work FIFO in CUDA host memory instead.
 
@@ -1418,7 +1422,7 @@ Values accepted
 
 NCCL_GDRCOPY_SYNC_ENABLE
 ------------------------
-The ``NCCL_GDRCOPY_SYNC_ENABLE`` variable controls whether NCCL uses GDRCopy-mapped CUDA memory for network proxy synchronization words such as connection head and tail pointers.
+The ``NCCL_GDRCOPY_SYNC_ENABLE`` variable controls whether NCCL uses GDRCopy-mapped CUDA memory for network proxy synchronization words such as connection head and tail pointers with ``NCCL_GDRCOPY_ENABLE=1``.
 
 On platforms where NIC writes use PCIe and GPU control synchronization uses a C2C path, enabling this option can avoid an additional network flush when NCCL can map the synchronization word through PCIe. When disabled, NCCL uses the regular host-memory control path and will still issue network flushes when topology requires them.
 
@@ -1428,7 +1432,7 @@ Values accepted
 
 NCCL_GDRCOPY_FLUSH_ENABLE
 -------------------------
-The ``NCCL_GDRCOPY_FLUSH_ENABLE`` variable controls whether NCCL uses a GDRCopy-mapped CUDA memory read as the receive-side GDRDMA visibility flush.
+The ``NCCL_GDRCOPY_FLUSH_ENABLE`` variable controls whether NCCL uses a GDRCopy-mapped CUDA memory read as the receive-side GDRDMA visibility flush with ``NCCL_GDRCOPY_ENABLE=1``.
 
 When disabled, NCCL uses the network transport ``iflush`` callback for receive buffers that require a flush. When enabled, NCCL uses a CPU read from GDRCopy-mapped CUDA memory to force PCIe write visibility.
 

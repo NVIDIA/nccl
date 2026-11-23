@@ -27,9 +27,14 @@ ncclResult_t ncclRmaSocketProxyInit(void** ctx, uint64_t commId, ncclDebugLogger
     ncclRmaSocketProxyRefCount++;
     return ncclSuccess;
   }
-  // ncclGdrCopy was initialized during comm init. If it is not available, it means that GDRCopy is not supported/enabled.
-  if (ncclGdrCopy == NULL) {
-    WARN("RMA/Socket : rma_socket requires GDRCopy; and GDR Copy is not available");
+  int64_t enable = ncclParamGdrCopyEnable();
+  gdr_t handle = ncclGdrCopy;
+  if (enable == 2) {
+    NOWARN(handle = ncclGdrHandle(), NCCL_INIT);
+  }
+  if (handle == NULL) {
+    INFO(NCCL_INIT | NCCL_NET, "RMA/Socket : %s; disabling socket RMA backend",
+         enable == 0 ? "GDRCopy disabled by NCCL_GDRCOPY_ENABLE=0" : "GDRCopy unavailable");
     return ncclInternalError;
   }
   NCCLCHECK(ncclNetSocketInitDevices("RMA/Socket"));

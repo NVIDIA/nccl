@@ -118,9 +118,9 @@ ncclResult_t wrap_gdr_copy_from_mapping(gdr_mh_t handle, void *h_ptr, const void
 bool ncclGdrIsInternalDmaBufBackend(void);
 bool ncclGdrInternalDmaBufRequired(void);
 
-// Alias of the shared GDR handle for FIFO/transport paths;
-// null when NCCL_GDRCOPY_ENABLE is disabled.
+// Alias of the shared GDR handle for explicitly enabled control mappings.
 extern gdr_t ncclGdrCopy;
+int64_t ncclParamGdrCopyEnable();
 // Open once per process, independently of the enable flag. The backend stays fixed.
 gdr_t ncclGdrHandle();
 

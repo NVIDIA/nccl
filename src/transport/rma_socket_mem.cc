@@ -30,7 +30,7 @@ ncclResult_t ncclRmaSocketProxyFreeChunkBuffer(void* ptr) {
 ncclResult_t ncclRmaSocketProxyFreeMr(struct ncclRmaSocketProxyMrHandle* handle) {
   ncclResult_t ret = ncclSuccess;
   if (handle == NULL) return ncclSuccess;
-  if (handle->gdr.mapped && ncclGdrCopy) {
+  if (handle->gdr.mapped) {
     NCCLCHECKIGNORE(ncclGdrCudaUnmapPointer(handle->gdr.mh, handle->gdr.map, handle->gdr.mapSize), ret);
   }
   free(handle);

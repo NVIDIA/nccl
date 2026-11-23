@@ -148,8 +148,8 @@ int ncclGetEnvCtaPolicy() {
 
 static ncclResult_t commReclaim(struct ncclAsyncJob* job_);
 
-// GDRCOPY support: Off by default
-NCCL_PARAM(GdrCopyEnable, "GDRCOPY_ENABLE", 0);
+// GDRCOPY support: automatic for socket RMA, opt-in for control mappings.
+NCCL_PARAM(GdrCopyEnable, "GDRCOPY_ENABLE", 2);
 NCCL_PARAM(IgnoreNetMismatch, "IGNORE_NET_MISMATCH", 1);
 NCCL_PARAM(IgnoreCollNetMismatch, "IGNORE_COLLNET_MISMATCH", 0);
 
@@ -157,9 +157,12 @@ NCCL_PARAM(IgnoreCollNetMismatch, "IGNORE_COLLNET_MISMATCH", 0);
 gdr_t ncclGdrCopy = NULL;
 
 ncclResult_t initGdrCopy() {
-  if (ncclParamGdrCopyEnable() == 1) {
-    ncclGdrCopy = ncclGdrHandle();
-    if (ncclGdrCopy == NULL && ncclGdrInternalDmaBufRequired()) {
+  int64_t enable = ncclParamGdrCopyEnable();
+  // AUTO normally probes in Socket RMA. A required DMA-BUF backend is checked at init.
+  if (enable == 1 || (enable == 2 && ncclGdrInternalDmaBufRequired())) {
+    gdr_t handle = ncclGdrHandle();
+    if (enable == 1) ncclGdrCopy = handle;
+    if (handle == NULL && ncclGdrInternalDmaBufRequired()) {
       WARN("NCCL_GDRCOPY_USE_INTERNAL_DMABUF=1 but NCCL internal DMA-BUF mmap backend could not initialize");
       return ncclSystemError;
     }

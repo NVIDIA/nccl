@@ -1134,8 +1134,6 @@ static ncclResult_t rasClientRunConns(struct rasClient* client) {
       }
     }
   }
-  rasCollFree(coll);
-
   rasOutAppend("\nGathering data about the NCCL communicators (timeout %gs)...",
                (double)client->timeout / CLOCK_UNITS_PER_SEC);
   msgLen = rasOutLength();
@@ -1154,6 +1152,7 @@ static ncclResult_t rasClientRunConns(struct rasClient* client) {
       ret = ncclInProgress;
   }
 exit:
+  rasCollFree(coll);
   free(peersBuf);
   return ret;
 fail:
@@ -1868,8 +1867,6 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
       } // if (auxComm->errors & RAS_ACE_MISMATCH)
     } // for (commIdx)
   } // for (vcIdx)
-  rasCollFree(coll);
-
   msgLen = rasOutLength();
   NCCLCHECKGOTO(rasClientAllocMsg(&msg, msgLen), ret, fail);
   rasOutExtract(msg);
@@ -1878,6 +1875,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
 
   TRACE(NCCL_RAS, "RAS: rasClientRunComms: finishing");
 exit:
+  rasCollFree(coll);
   free(peerNvmlDevs);
   free(collOpCounts);
   free(valCounts);

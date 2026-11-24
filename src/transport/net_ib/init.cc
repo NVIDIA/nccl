@@ -639,7 +639,7 @@ ncclResult_t ncclIbInitDevices(ncclDebugLogger_t logFunction, ncclProfilerCallba
     if (ncclParamIbDevicePciOrder()) qsort(ncclIbDevs, ncclNIbDevs, sizeof(struct ncclIbDev), ncclIbCompareDevs);
     // Start the async-event threads only once ncclIbDevs[] has its final, stable device order.
     for (int d = 0; d < ncclNIbDevs; d++) {
-      ncclIbAsyncThread = std::thread(ncclIbAsyncThreadMain, ncclIbDevs + d);
+      STDTHREADCREATE_GOTO(ncclIbAsyncThread, ncclIbAsyncThreadMain, ret, fail, ncclIbDevs + d);
       ncclSetThreadName(ncclIbAsyncThread, "NCCL IbAsync %2d", d);
       ncclIbAsyncThread.detach();
     }

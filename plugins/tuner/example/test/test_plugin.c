@@ -143,7 +143,10 @@ int test_config_parsing_valid() {
 int test_config_parsing_invalid() {
   const char* test_config =
     "allreduce,0,65536,tree,simple,2,1  # Missing nRanks and other fields\n"
-    "invalid_collective,0,1024,ring,simple,1,1,1,-1,-1\n"
+    "invalid_collective,0,1024,ring,simple,1,1,-1,-1,-1\n"
+    "alltoall,0,1024,ring,simple,1,1,-1,-1,-1\n"
+    "allreduce,0,1024,tree,simple,4,1,-1,-1,-1\n"
+    "allreduce,0,1024,ring,simple,8,1,-1,-1,-1\n"
     "broadcast,abc,def,ring,simple,1,1,1,-1,-1\n";  // Invalid numbers
 
   create_test_config("test_invalid.conf", test_config);
@@ -151,8 +154,27 @@ int test_config_parsing_invalid() {
 
   void* context = NULL;
   ncclResult_t result = pluginInit(&context, 0, 8, 1, mock_logger, NULL, NULL);
-  // Should still succeed but with no valid configs loaded
+  // Invalid collective names must not prevent later rules from being loaded.
   TEST_ASSERT(result == ncclSuccess, "Plugin init should succeed even with invalid config");
+
+  // NCCL passes a contiguous cost table cast to float**.
+  float cost_table[NCCL_NUM_ALGORITHMS][NCCL_NUM_PROTOCOLS];
+  for (int i = 0; i < NCCL_NUM_ALGORITHMS; i++) {
+    for (int j = 0; j < NCCL_NUM_PROTOCOLS; j++) {
+      cost_table[i][j] = 1.0;
+    }
+  }
+  int nChannels = 0;
+  result = pluginGetCollInfo(context, ncclFuncAllReduce, 1024, 1,
+                            (float**)cost_table, NCCL_NUM_ALGORITHMS, NCCL_NUM_PROTOCOLS, 0, &nChannels);
+  TEST_ASSERT(result == ncclSuccess, "AllReduce tuning should succeed");
+  TEST_ASSERT(cost_table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] == 0.0,
+              "Unknown collectives must not shadow the first valid AllReduce rule");
+  TEST_ASSERT(cost_table[NCCL_ALGO_RING][NCCL_PROTO_SIMPLE] == 1.0,
+              "Skipped and later rules must leave the ring cost unchanged");
+  TEST_ASSERT(nChannels == 4, "The first valid AllReduce rule should select four channels");
+  // Numeric parsing is unchanged: the broadcast rule is still loaded.
+  TEST_ASSERT(((TunerContext*)context)->numConfigs == 3, "Unknown collective rules should not be loaded");
 
   // Clean up
   pluginFinalize(context);

@@ -62,7 +62,7 @@ static ncclFunc_t parseCollType(const char* str) {
   if (strcmp(str, "allgather") == 0) return ncclFuncAllGather;
   if (strcmp(str, "reducescatter") == 0) return ncclFuncReduceScatter;
   if (strcmp(str, "allreduce") == 0) return ncclFuncAllReduce;
-  return ncclFuncAllReduce; // default
+  return ncclNumFuncs; // Unknown collective
 }
 
 // Convert collective type to string
@@ -230,6 +230,14 @@ static ncclResult_t loadConfig(TunerContext* ctx, const char* filename) {
     if (tokenCount >= CONFIG_FIELDS_REQUIRED && tokenCount <= CONFIG_FIELDS_MAX) {
       TuningConfig* config = &ctx->configs[ctx->numConfigs];
       config->collType = parseCollType(tokens[CONFIG_FIELD_COLLTYPE]);
+      if (config->collType == ncclNumFuncs) {
+        if (ctx->logFunction) {
+          ctx->logFunction(NCCL_LOG_WARN, NCCL_TUNING, __FILE__, __LINE__,
+                           "TUNER/ExamplePlugin: Unknown collective '%s', skipping config",
+                           tokens[CONFIG_FIELD_COLLTYPE]);
+        }
+        continue;
+      }
       config->minBytes = (size_t)strtoull(tokens[CONFIG_FIELD_MINBYTES], NULL, 10);
       config->maxBytes = (size_t)strtoull(tokens[CONFIG_FIELD_MAXBYTES], NULL, 10);
       config->algorithm = parseAlgorithm(tokens[CONFIG_FIELD_ALGORITHM]);

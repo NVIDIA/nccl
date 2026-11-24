@@ -1312,8 +1312,9 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
       auxCommRanks[rankIdx].value = peerSortedIdx[rank->peerIdx];
       TRACE(NCCL_RAS, "RAS: comm rank[%d] commRank %d, peerIdx %d (-> %d), cudaDev %d, nvmlDev %d", rankIdx,
             rank->commRank, rank->peerIdx, peerIdxConv[rank->peerIdx], rank->cudaDev, rank->nvmlDev);
-      TRACE(NCCL_RAS, "RAS: comm rank[%d] collOpCounts (%ld, %ld, %ld, %ld, %ld)", rankIdx, rank->collOpCounts[0],
-            rank->collOpCounts[1], rank->collOpCounts[2], rank->collOpCounts[3], rank->collOpCounts[4]);
+      TRACE(NCCL_RAS, "RAS: comm rank[%d] enqueuedCollOpCounts (%ld, %ld, %ld, %ld, %ld)", rankIdx,
+            rank->enqueuedCollOpCounts[0], rank->enqueuedCollOpCounts[1], rank->enqueuedCollOpCounts[2],
+            rank->enqueuedCollOpCounts[3], rank->enqueuedCollOpCounts[4]);
       TRACE(NCCL_RAS,
             "RAS: comm rank[%d] status initState %d, asyncError %d, finalizeCalled %d, destroyFlag %d, "
             "abortFlag %d",
@@ -1330,7 +1331,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
         auxComm->nPeers = auxComm->nNodes = 1;
         auxComm->ranksPerNodeMin = INT_MAX;
         auxComm->ranksPerNodeMax = 0;
-        memcpy(auxComm->firstCollOpCounts, auxRank->rank->collOpCounts, sizeof(auxComm->firstCollOpCounts));
+        memcpy(auxComm->firstCollOpCounts, auxRank->rank->enqueuedCollOpCounts, sizeof(auxComm->firstCollOpCounts));
         nRanks = 1;
       } else {
         // rankIdx > 0
@@ -1367,7 +1368,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
       }
 
       for (int collIdx = 0; collIdx < NCCL_NUM_FUNCTIONS && !(auxComm->errors & RAS_ACE_MISMATCH); collIdx++) {
-        if (auxRank->rank->collOpCounts[collIdx] != auxComm->firstCollOpCounts[collIdx]) {
+        if (auxRank->rank->enqueuedCollOpCounts[collIdx] != auxComm->firstCollOpCounts[collIdx]) {
           auxComm->errors |= RAS_ACE_MISMATCH;
         }
       }
@@ -1774,7 +1775,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
           bool inconsistent = false;
 
           for (int rankIdx = 0; rankIdx < comm->nRanks; rankIdx++) {
-            if (comm->ranks[rankIdx].collOpCounts[collIdx] != auxComm->firstCollOpCounts[collIdx]) {
+            if (comm->ranks[rankIdx].enqueuedCollOpCounts[collIdx] != auxComm->firstCollOpCounts[collIdx]) {
               inconsistent = true;
               break;
             }
@@ -1788,7 +1789,7 @@ static ncclResult_t rasClientRunComms(struct rasClient* client) {
               struct rasCollComms::comm::rank* rank = comm->ranks + rankIdx;
               struct rasAuxCommRank* auxRank = auxCommRanks + rankIdx;
               auxRank->rank = rank;
-              auxRank->value = rank->collOpCounts[collIdx];
+              auxRank->value = rank->enqueuedCollOpCounts[collIdx];
             }
             qsort(auxCommRanks, comm->nRanks, sizeof(*auxCommRanks), rasAuxCommRanksValueCompare);
             // Calculate the frequency of different collOpCounts[collIdx] values.
@@ -2338,7 +2339,7 @@ static void rasDumpCommsToJSON(struct rasClient* client, struct rasCollComms* co
 
       jsonWriteRankData(rank->commRank, host, pid, rank->cudaDev, rank->nvmlDev, rank->status.initState,
                         rank->status.asyncError, rank->status.finalizeCalled, rank->status.destroyFlag,
-                        rank->status.abortFlag, rank->collOpCounts, (rankIdx == 0));
+                        rank->status.abortFlag, rank->enqueuedCollOpCounts, (rankIdx == 0));
     }
 
     // Start missing ranks section.

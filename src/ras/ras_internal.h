@@ -22,6 +22,7 @@
 #include <mutex>
 
 #include "nccl.h"
+#include "progress_monitor.h"
 #include "ras.h"
 #include "socket.h"
 #include "utils.h"
@@ -319,7 +320,12 @@ struct rasCollComms {
     struct rank {
       int commRank;
       int peerIdx; // Index within rasCollective->peers, *not* rasPeers.
-      uint64_t collOpCounts[NCCL_NUM_FUNCTIONS];
+      uint64_t enqueuedCollOpCounts[NCCL_NUM_FUNCTIONS]; // Host-enqueued counts for the five legacy collective types.
+      uint64_t completedOpCounts[NCCL_NUM_PROGRESS_COUNTERS]; // GPU-completed work counts per slot.
+      uint64_t activeSlotMask; // OR of the per-channel GPU active masks.
+      uint64_t uninstrumentedSlotMask; // Slots with work not covered by the generic-kernel counters.
+      uint64_t hostCountGraphUnsafeMask; // Slots whose host count omits graph-replayed operations.
+      uint32_t devCounterSnapshotAgeMs; // Age since sample read began, or first-sample wait after setup.
       struct {
         ncclResult_t initState:4;
         ncclResult_t asyncError:4;
@@ -327,6 +333,11 @@ struct rasCollComms {
         bool destroyFlag:1;
         bool abortFlag:1;
       } status;
+      uint16_t noProgressSecAgo[NCCL_NUM_PROGRESS_COUNTERS]; // Current monitor-observed pending interval.
+      uint16_t completedAgeSec[NCCL_NUM_FUNCTIONS]; // Age of each legacy slot's current completed count.
+      uint8_t devCounterEnabled; // GPU progress-counter storage exists for this communicator.
+      uint8_t devCounterSnapshotFresh; // The published snapshot is within the configured freshness threshold.
+      uint8_t devCounterMonitorState; // ncclCounterMonitorState, including query-derived freshness.
       char cudaDev;
       char nvmlDev;
     }
@@ -344,6 +355,7 @@ struct rasCollComms {
   comms[0]; // Variable length.  Sorted by commId.
 #endif
 };
+static_assert(sizeof(struct rasCollComms::comm::rank) <= 256, "RAS_COLL_COMMS per-rank entry exceeds 256 bytes");
 
 // Provides info about missing ranks.  An array of these structures can be part of struct rasCollComms above.
 // Because the arrays are of variable length, we can't describe them in C.  To ensure that adding
@@ -625,6 +637,11 @@ const char* ncclSocketToHost(const union ncclSocketAddress* addr, char* buf, siz
 const char* rasPeerInfoToString(const struct rasPeerInfo* peer, char* buf, size_t size);
 void rasClientsNotifyEvent(rasEventGroup group, const struct rasEventNotification* event);
 void rasClientSupportTerminate();
+
+// GPU progress diagnostics (progress_diagnostics.cc).
+// Setup failures are not runtime stalls. Derive timeliness without a CUDA/GDR call.
+uint8_t rasProgressMonitorStateForQuery(ncclCounterMonitorState state, uint64_t refreshed, uint64_t started,
+                                        uint64_t now, uint64_t staleNs);
 
 #endif // !NCCL_RAS_CLIENT
 

@@ -16,6 +16,7 @@
 #include "utils.h"
 #include "ras_internal.h"
 #include "diagnostics.h"
+#include "progress_monitor.h"
 
 // The number of recent collectives to keep track of.  Completely arbitrary.
 #define COLL_HISTORY_SIZE 64
@@ -602,6 +603,18 @@ static ncclResult_t rasCollConnsMerge(struct rasCollective* coll, struct rasMsg*
 // Functions related to the handling of the RAS_COLL_COMMS collective. //
 /////////////////////////////////////////////////////////////////////////
 
+// Snapshot ages travel as 32-bit milliseconds, saturating after about 49 days.
+static uint32_t rasAgeMs(uint64_t ns) {
+  uint64_t ms = ns / 1000000;
+  return ms > UINT32_MAX ? UINT32_MAX : (uint32_t)ms;
+}
+
+// Ages compared with the whole-second threshold travel as 16-bit seconds, saturating after 18 hours.
+static uint16_t rasAgeSec(uint64_t ns) {
+  uint64_t sec = ns / 1000000000;
+  return sec > UINT16_MAX ? UINT16_MAX : (uint16_t)sec;
+}
+
 // Initializes the accumulated data with just the local data for now.
 // For this particular collective, we keep for every communicator information about every rank, to help identify
 // the missing ones and the discrepancies between the ones that did respond.
@@ -621,6 +634,7 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
   struct rasCollRequest* req = nullptr;
   struct rasPeerInfo** peersReSorted = nullptr;
   int firstNewSkipMissingIdx = -1;
+  const uint64_t staleThresholdNs = (uint64_t)ncclProgressCounterMonitorStaleThresholdMs() * 1000000ULL;
 
   *pReqLen = rasCollDataLength(RAS_COLL_COMMS) +
              (*pReq)->comms.nSkipMissingRanksComms * sizeof(*(*pReq)->comms.skipMissingRanksComms);
@@ -720,7 +734,38 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
       // rasNetSendCollReq initializes coll->peers[0] to our rasNetListeningSocket.addr, so peerIdx is initially
       // always 0.  It will increase after we send this response back to the peer we got the request from.
       rank->peerIdx = 0;
-      memcpy(rank->collOpCounts, ncclComm->seqNumber, sizeof(rank->collOpCounts));
+      memcpy(rank->enqueuedCollOpCounts, ncclComm->seqNumber, sizeof(rank->enqueuedCollOpCounts));
+      rank->hostCountGraphUnsafeMask =
+        COMPILER_ATOMIC_LOAD(&ncclComm->rasHostCountGraphUnsafeMask, std::memory_order_relaxed);
+      // Publication and this gather both hold ncclCommsMutex, so the fields come from one complete
+      // sample, which is still not an atomic snapshot of the GPU.
+      const struct ncclProgressCountersBlock* counters = ncclComm->hostCountersBlock;
+      rank->devCounterEnabled = counters != nullptr;
+      auto monitorState = COMPILER_ATOMIC_LOAD(&ncclComm->rasCounterMonitorState, std::memory_order_acquire);
+      rank->uninstrumentedSlotMask =
+        COMPILER_ATOMIC_LOAD(&ncclComm->rasCounterUninstrumentedSlotMask, std::memory_order_acquire);
+      uint64_t cpuNow = clockNano();
+      uint64_t refreshNs = ncclComm->rasCounterLastRefreshNs; // Zero until the first sample is published.
+      uint64_t startedNs = COMPILER_ATOMIC_LOAD(&ncclComm->rasCounterMonitorStartNs, std::memory_order_relaxed);
+      rank->devCounterMonitorState =
+        rasProgressMonitorStateForQuery(monitorState, refreshNs, startedNs, cpuNow, staleThresholdNs);
+      uint64_t baseNs = refreshNs ? refreshNs : startedNs;
+      if (baseNs != 0 && baseNs <= cpuNow) rank->devCounterSnapshotAgeMs = rasAgeMs(cpuNow - baseNs);
+      rank->devCounterSnapshotFresh = counters != nullptr && rank->devCounterMonitorState == ncclCounterRunning;
+      if (counters != nullptr && refreshNs != 0) {
+        memcpy(rank->completedOpCounts, counters->completedWorkCount, sizeof(rank->completedOpCounts));
+        for (int ch = 0; ch < MAXCHANNELS; ch++) rank->activeSlotMask |= counters->collOpActive[ch];
+
+        for (int slot = 0; slot < NCCL_NUM_PROGRESS_COUNTERS; slot++) {
+          uint64_t sinceNs = ncclComm->rasCounterNoProgressSinceNs[slot];
+          // Progress after the last sample began is unobserved, so the age ends there.
+          if (sinceNs != 0 && sinceNs < refreshNs) rank->noProgressSecAgo[slot] = rasAgeSec(refreshNs - sinceNs);
+        }
+        for (int slot = 0; slot < NCCL_NUM_FUNCTIONS; slot++) {
+          uint64_t changedNs = ncclComm->rasCounterCompletedChangedNs[slot];
+          if (changedNs != 0 && changedNs <= cpuNow) rank->completedAgeSec[slot] = rasAgeSec(cpuNow - changedNs);
+        }
+      }
       rank->status.initState = COMPILER_ATOMIC_LOAD(&ncclComm->initState, std::memory_order_acquire);
       rank->status.asyncError = COMPILER_ATOMIC_LOAD(&ncclComm->asyncResult, std::memory_order_acquire);
       if (rank->status.asyncError == ncclSuccess && ncclComm->proxyState) {

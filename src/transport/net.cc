@@ -104,6 +104,8 @@ struct sendNetResources {
   int channelId;
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
+  // LL steps whose connFifo size is at least this were published after their lines; -1: none
+  int llSendSigMin;
   char* buffers[NCCL_NUM_PROTOCOLS];
   ssize_t buffSizes[NCCL_NUM_PROTOCOLS];
   void* mhandles[NCCL_NUM_PROTOCOLS];
@@ -181,7 +183,15 @@ struct setupReq {
   int channelId;
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
+  // send: the kernel's NCCL_LL_SENDSIG_MIN when the connection has NCCL_LL_NET_SENDSIG, else -1
+  int llSendSigMin;
 };
+
+// NCCL_LL_SENDSIG=1: on NET send connections, LL steps that publish at least NCCL_LL_SENDSIG_MIN
+// bytes write their connFifo size after their lines and a fence, and the proxy posts them without
+// reading the lines.
+NCCL_PARAM(LlSendSig, "LL_SENDSIG", 0);
+NCCL_PARAM(LlSendSigMin, "LL_SENDSIG_MIN", 32768);
 
 NCCL_PARAM(NetOptionalRecvCompletion, "NET_OPTIONAL_RECV_COMPLETION", 1);
 
@@ -309,6 +319,11 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
   NCCLCHECK(ncclTopoGetNetDev(comm, myInfo->rank, graph, channelId, peerInfo->rank, &netId, &req.netDev, &proxyRank));
   NCCLCHECK(ncclTopoCheckGdr(comm->topo, myInfo->rank, netId, 1, &req.useGdr));
   send->conn.flags |= req.useGdr ? NCCL_DIRECT_NIC : 0;
+  // The proxy gets the kernel's threshold (read once in commAlloc) from this request, so it skips
+  // the line scan for exactly the steps the kernel publishes late, also when the proxy runs in
+  // another process (PXN).
+  req.llSendSigMin = comm->llSendSigMin;
+  if (req.llSendSigMin >= 0) send->conn.flags |= NCCL_LL_NET_SENDSIG;
   if (!req.useGdr && connIndex == 0) comm->useGdr = 0;
   if (proxyRank != myInfo->rank && connIndex == 0) comm->useNetPXN = true;
 
@@ -768,6 +783,7 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
   resources->channelId = req->channelId;
   resources->connIndex = req->connIndex;
   resources->sameDevice = req->sameDevice;
+  resources->llSendSigMin = req->llSendSigMin;
   ncclNetProperties_t props;
   NCCLCHECK(proxyState->ncclNet->getProperties(req->netDev, &props));
   /* DMA-BUF support */
@@ -1404,7 +1420,11 @@ static ncclResult_t sendProxyProgress(struct ncclProxyState* proxyState, struct 
                 }
               }
             }
-          } else if (p == NCCL_PROTO_LL) {
+          } else if (p == NCCL_PROTO_LL &&
+                     (resources->llSendSigMin < 0 || size < resources->llSendSigMin)) {
+            // With NCCL_LL_NET_SENDSIG, a size of at least llSendSigMin was written after the step's
+            // lines and a fence, so the step is complete; reading its lines here would slow the
+            // next writes into them.
             uint32_t flag = NCCL_LL_FLAG(sub->base + sub->transmitted + 1);
             int nFifoLines = DIVUP(size, sizeof(union ncclLLFifoLine));
             union ncclLLFifoLine* lines = (union ncclLLFifoLine*)buff;

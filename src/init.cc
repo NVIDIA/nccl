@@ -511,6 +511,12 @@ exit:
 }
 
 static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, int ndev, int rank) {
+  // Read once: the kernel (devCommSetup) and every NET send connection (sendSetup) must use the
+  // same threshold. A child that shares its parent's resources also uses its parent's
+  // connections, so it takes the parent's value.
+  comm->llSendSigMin = (parent && parent->shareResources) ? parent->llSendSigMin :
+                       ncclParamLlSendSig()               ? (int)ncclParamLlSendSigMin() :
+                                                            -1;
   if (ndev < 1) {
     WARN("invalid device count (%d) requested", ndev);
     return ncclInvalidArgument;
@@ -791,6 +797,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
   NCCLCHECKGOTO(ncclCudaHostCalloc(&comm->profiler.workCompleted, MAXCHANNELS), ret, fail);
   tmpCommAndChans.comm.workStarted = comm->profiler.workStarted;
   tmpCommAndChans.comm.workCompleted = comm->profiler.workCompleted;
+  tmpCommAndChans.comm.llSendSigMin = comm->llSendSigMin;
   ncclCommPushCudaHostFree(comm, comm->profiler.workStarted);
   ncclCommPushCudaHostFree(comm, comm->profiler.workCompleted);
   // Dedicated sym profiler buffers (ncclProfilerCommState); reach the device via the

@@ -624,6 +624,14 @@ static int getReqQpIndex(struct ncclIbRequest* req, int request, int qpNumber) {
   }
   return 0;
 }
+
+static inline ncclResult_t ncclIbStopQpEvent(void** eHandle) {
+  if (*eHandle != NULL) {
+    NCCLCHECK(ncclProfilerFunction(eHandle, ncclProfilerNetEventStop, NULL, 0, NULL));
+    *eHandle = NULL;
+  }
+  return ncclSuccess;
+}
 #endif
 
 static inline ncclResult_t ncclIbRequestRetrieveFromCompletion(struct ncclIbNetCommBase* base, ibv_wc* wc,
@@ -696,7 +704,7 @@ static inline ncclResult_t ncclIbRequestComplete(struct ncclIbRequest* r, int* d
       sizes[i] = sizesToReport[i];
 #ifdef NCCL_ENABLE_NET_PROFILING
       for (int j = 0; j < r->pInfo[i].nEventHandles; j++) {
-        NCCLCHECK(ncclProfilerFunction(&r->pInfo[i].qpEventHandles[j], ncclProfilerNetEventStop, NULL, 0, NULL));
+        NCCLCHECK(ncclIbStopQpEvent(&r->pInfo[i].qpEventHandles[j]));
       }
 #endif
     }
@@ -707,7 +715,7 @@ static inline ncclResult_t ncclIbRequestComplete(struct ncclIbRequest* r, int* d
       sizes[0] = r->send.size;
 #ifdef NCCL_ENABLE_NET_PROFILING
       for (int j = 0; j < r->pInfo[0].nEventHandles; j++) {
-        NCCLCHECK(ncclProfilerFunction(&r->pInfo[0].qpEventHandles[j], ncclProfilerNetEventStop, NULL, 0, NULL));
+        NCCLCHECK(ncclIbStopQpEvent(&r->pInfo[0].qpEventHandles[j]));
       }
 #endif
     }
@@ -845,8 +853,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
 #ifdef NCCL_ENABLE_NET_PROFILING
       // Stop Qp event for sendReq
       int qpIndex = getReqQpIndex(sendReq, j, wc->qp_num);
-      NCCLCHECK(ncclProfilerFunction(&sendReq->pInfo[j].qpEventHandles[qpIndex], ncclProfilerNetEventStop, NULL, 0,
-                                     NULL));
+      NCCLCHECK(ncclIbStopQpEvent(&sendReq->pInfo[j].qpEventHandles[qpIndex]));
 #endif
     }
   } else {
@@ -916,7 +923,7 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
     // Stop Qp event for workFifo
     for (int j = 0; j < req->nreqs; j++) {
       int qpIndex = getReqQpIndex(req, j, wc->qp_num);
-      NCCLCHECK(ncclProfilerFunction(&req->pInfo[j].qpEventHandles[qpIndex], ncclProfilerNetEventStop, NULL, 0, NULL));
+      NCCLCHECK(ncclIbStopQpEvent(&req->pInfo[j].qpEventHandles[qpIndex]));
     }
 #endif
   }

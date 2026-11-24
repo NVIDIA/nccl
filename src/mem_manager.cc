@@ -130,7 +130,8 @@ ncclResult_t ncclMemManagerDestroy(struct ncclComm* comm) {
 static ncclResult_t ncclMemTrackInternal(struct ncclMemManager* manager, void* ptr, size_t size,
                                          CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
                                          ncclMemType_t memType, bool isImportedFromPeer, int ownerRank, int ownerDev,
-                                         void* ownerPtr) {
+                                         void* ownerPtr, const void* ownerHandle = nullptr,
+                                         size_t ownerHandleSize = 0) {
   if (ncclParamMemManagerDisable()) return ncclSuccess;
   if (manager == nullptr || ptr == nullptr) return ncclInternalError;
   if (!COMPILER_ATOMIC_LOAD(&manager->initialized, std::memory_order_acquire)) {
@@ -174,6 +175,10 @@ static ncclResult_t ncclMemTrackInternal(struct ncclMemManager* manager, void* p
     entry->desc.imported.ownerRank = ownerRank;
     entry->desc.imported.ownerDev = ownerDev;
     entry->desc.imported.ownerPtr = ownerPtr;
+    if (ownerHandle != nullptr) {
+      memcpy(&entry->desc.imported.ownerHandle, ownerHandle, ownerHandleSize);
+      entry->desc.imported.ownerHandleValid = true;
+    }
   } else {
     if (handleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
       entry->desc.local.shareableHandle.fd = -1;  // avoid using 0 which is stdin
@@ -225,6 +230,16 @@ ncclResult_t ncclMemTrackImportFromPeer(struct ncclMemManager* manager, void* pt
                                         CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
                                         ncclMemType_t memType, int ownerRank, int ownerDev, void* ownerPtr) {
   return ncclMemTrackInternal(manager, ptr, size, handle, handleType, memType, true, ownerRank, ownerDev, ownerPtr);
+}
+
+ncclResult_t ncclMemTrackPersistentImport(struct ncclMemManager* manager, void* ptr, size_t size,
+                                          CUmemGenericAllocationHandle handle, CUmemAllocationHandleType handleType,
+                                          int ownerRank, int ownerDev, const void* ownerHandle,
+                                          size_t ownerHandleSize) {
+  if (ownerHandleSize > sizeof(ncclDynMemImportDesc::ownerHandle)) return ncclInternalError;
+  // A scratch import: nothing to save, its contents live in the owner's buffer.
+  return ncclMemTrackInternal(manager, ptr, size, handle, handleType, ncclMemScratch, true, ownerRank, ownerDev,
+                              nullptr, ownerHandle, ownerHandleSize);
 }
 
 // Untrack a dynamic (scratch/offload) allocation
@@ -833,6 +848,17 @@ ncclResult_t ncclCommMemResume(struct ncclComm* comm) {
             break;
           }
         }
+      }
+
+      // The owner of a persistent buffer kept it, and with it the handle this rank imported.
+      ncclDynMemP2pHandleInfo ownerInfo;
+      if (matchedInfo == nullptr && entry->desc.imported.ownerHandleValid) {
+        memset(&ownerInfo, 0, sizeof(ownerInfo));
+        ownerInfo.ownerRank = entry->desc.imported.ownerRank;
+        ownerInfo.size = entry->size;
+        ownerInfo.handleType = entry->handleType;
+        memcpy(&ownerInfo.fabricHandle, &entry->desc.imported.ownerHandle, sizeof(ownerInfo.fabricHandle));
+        matchedInfo = &ownerInfo;
       }
 
       if (matchedInfo == nullptr) {

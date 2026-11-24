@@ -31,7 +31,7 @@ ncclResult_t ncclGpuGdrSupport(struct ncclComm* comm, int* gdrSupport);
 #if defined(NCCL_OS_LINUX)
 #define NCCL_NET_DATA_IMPORT
 #elif defined(NCCL_OS_WINDOWS)
-#if defined(nccl_EXPORTS)
+#if defined(nccl_EXPORTS) || defined(NCCL_STATIC_BUILD)
 #define NCCL_NET_DATA_IMPORT
 #else
 #define NCCL_NET_DATA_IMPORT __declspec(dllimport)

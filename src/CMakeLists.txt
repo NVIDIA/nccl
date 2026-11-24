@@ -307,7 +307,17 @@ endif()
 ###################### Create a static NCCL library ############################
 add_library(nccl_static STATIC ${LIBSRCFILES})
 if(NCCL_OS_WINDOWS)
-    target_link_libraries(nccl_static PRIVATE nccl_device)
+    target_compile_definitions(nccl_static PRIVATE NCCL_STATIC_BUILD)
+    # lib.exe does not link dependencies into an archive and CMake object
+    # libraries cannot run the CUDA device link, so the device objects can
+    # never be embedded that way on Windows. Compile the device sources into
+    # the static library itself so the archive is self-contained by
+    # construction; the shared library keeps linking nccl_device.
+    target_sources(nccl_static PRIVATE ${NCCL_DEVICE_SOURCES})
+    target_compile_definitions(nccl_static PRIVATE NCCL_GIN_GDAKI_ENABLE=0)
+    # Custom-command OUTPUTs do not cross directory scopes; depend on the
+    # aggregate generation target defined next to the rules.
+    add_dependencies(nccl_static nccl_device_gensrc)
 else()
     target_sources(nccl_static PRIVATE $<TARGET_OBJECTS:nccl_device>)
 endif()
@@ -378,7 +388,7 @@ install(TARGETS nccl nccl_static
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 )
-# On Windows, nccl/nccl_static link to nccl_device (STATIC); export set must include it.
+# On Windows, nccl links nccl_device (STATIC); export set must include it.
 if(NCCL_OS_WINDOWS)
   install(TARGETS nccl_device
     EXPORT NCCLTargets

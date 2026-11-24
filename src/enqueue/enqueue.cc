@@ -3633,7 +3633,15 @@ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
 
   info->comm->opCount++;
 exit:
-  if (devOld != -1) CUDACHECK(cudaSetDevice(devOld));
+  if (devOld != -1) {
+    // Do not return from here: the group opened above must be closed on every path. Keep an earlier error if any.
+    cudaError_t err = cudaSetDevice(devOld);
+    if (err != cudaSuccess) {
+      WARN("Cuda failure '%s'", cudaGetErrorString(err));
+      (void)cudaGetLastError();
+      if (ret == ncclSuccess) ret = ncclUnhandledCudaError;
+    }
+  }
   ncclGroupErrCheck(ret);
   NCCLCHECK(ncclGroupEndInternal());
   /* if depth is 1, ncclGroupEndInternal() will trigger group ops. The state can change

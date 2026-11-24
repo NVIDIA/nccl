@@ -570,6 +570,7 @@ ncclResult_t ncclIbIrecv(void* recvComm, int n, void** data, size_t* sizes, int*
 
 ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void** mhandles, void** request) {
   struct ncclIbRecvComm* comm = (struct ncclIbRecvComm*)recvComm;
+  *request = NULL;
   int last = -1;
   for (int i = 0; i < n; i++) {
     if (sizes[i]) last = i;
@@ -584,8 +585,14 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
   req->sock = &comm->base.sock;
   struct ncclIbMrHandle* mhandle = (struct ncclIbMrHandle*)mhandles[last];
 
-  // We don't know which devIndex the recv was on, so we flush on all devices
+  // As with an error completion on a flush QP, failover relies on the
+  // remaining devices to flush. Do not post to a failed QP while recovery may
+  // be resetting it. Recovered devices become usable only after the proxy
+  // consumes the Recovered state and restores activeQps.
+  bool posted = false;
+  auto* resCtx = comm->base.resiliency;
   for (int i = 0; i < comm->base.vProps.ndevs; i++) {
+    if (resCtx && resCtx->devs[i].state.load(std::memory_order_acquire) != ncclIbResiliencyDevStateOk) continue;
     struct ibv_send_wr wr;
     memset(&wr, 0, sizeof(wr));
     wr.wr_id = (req - comm->base.reqs) + NCCL_IB_FLUSH_REQ_WR_ID_OFFSET;
@@ -605,11 +612,19 @@ ncclResult_t ncclIbIflush(void* recvComm, int n, void** data, int* sizes, void**
     TIME_STOP(4);
 
     ncclIbAddEvent(req, i);
+    if (resCtx) resCtx->devs[i].nOutstandingFlushes.fetch_add(1, std::memory_order_relaxed);
+    posted = true;
 
     TRACE(NCCL_NET, "NET/IB: %s: Flush request posted (req=%p, comm=%p, wr_id=%ld)", __func__, req, req->base,
           wr.wr_id);
   }
 
+  if (!posted) {
+    // Never report a successful flush without posting work on any device.
+    NCCLCHECK(ncclIbFreeRequest(req));
+    WARN("NET/IB: No healthy device available for a flush (comm=%p)", comm);
+    return ncclRemoteError;
+  }
   *request = req;
   return ncclSuccess;
 }
@@ -890,6 +905,8 @@ static inline ncclResult_t ncclIbCompletionEventProcess(struct ncclIbNetCommBase
             "NET/IB: %s: Got completion for a flush request (req=%p, comm=%p, id=%ld, devIndex=%d, qp_num=%u)",
             __func__, req, req->base, req->id, devIndex, wc->qp_num);
       req->events[devIndex]--;
+      if (commBase->resiliency)
+        commBase->resiliency->devs[devIndex].nOutstandingFlushes.fetch_sub(1, std::memory_order_release);
     } else if (wc->opcode == IBV_WC_RDMA_WRITE) {
       // This is a CTS completion
       TRACE(NCCL_NET, "NET/IB: %s: Got completion for a CTS (req=%p, comm=%p, id=%ld, devIndex=%d, qp_num=%u)",

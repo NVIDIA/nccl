@@ -28,8 +28,10 @@ ncclResult_t ncclRmaSocketProxyInit(void** ctx, uint64_t commId, ncclDebugLogger
     return ncclSuccess;
   }
   // ncclGdrCopy was initialized during comm init. If it is not available, it means that GDRCopy is not supported/enabled.
+  // This plugin is the last internal fallback and is probed on every communicator init, so a missing GDRCopy is an
+  // expected configuration rather than an error: report it at INFO level (ncclRmaPluginInit then disables the plugin).
   if (ncclGdrCopy == NULL) {
-    WARN("RMA/Socket : rma_socket requires GDRCopy; and GDR Copy is not available");
+    INFO(NCCL_INIT | NCCL_NET, "RMA/Socket : rma_socket requires GDRCopy; and GDR Copy is not available");
     return ncclInternalError;
   }
   NCCLCHECK(ncclNetSocketInitDevices("RMA/Socket"));

@@ -92,6 +92,8 @@ enum ncclIbRailPolicy {
 
 struct alignas(64) ncclIbDev {
   std::mutex mutex;
+  // Set once the provider refused the group-sized inline request; one element is requested from then on.
+  bool ctsInlineReduced;
   int device;
   uint64_t guid;
   uint32_t vendorId;
@@ -333,6 +335,8 @@ struct ncclIbQp {
   // to.
   int remDevIdx;
   struct ncclIbWqeLatMon latMon;
+  // Inline send capacity the provider granted at creation; consulted only when IBV_SEND_INLINE is set.
+  uint32_t maxInlineData;
 };
 
 // We need to support NCCL_NET_MAX_REQUESTS for each concurrent receive

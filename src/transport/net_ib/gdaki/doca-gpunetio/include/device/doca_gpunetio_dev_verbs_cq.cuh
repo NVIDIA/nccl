@@ -238,7 +238,7 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_one_collap
 
     if ((opcode == DOCA_GPUNETIO_IB_MLX5_CQE_INVALID) ||
         ((cqe_ci <= cons_index) &&
-         ((uint16_t)((uint16_t)cons_index - wqe_counter - (uint16_t)2) < cqe_num))) {
+         ((uint16_t)((uint16_t)cons_index - wqe_counter - (uint16_t)1) < cqe_num))) {
         return EBUSY;
     }
 
@@ -454,17 +454,12 @@ __device__ static __forceinline__ int doca_priv_gpu_dev_verbs_poll_cq_collapsed_
         opown = cqe_chunk & 0xff;
         opcode = opown >> DOCA_GPUNETIO_VERBS_MLX5_CQE_OPCODE_SHIFT;
     }
-    // NOTE: This while loop is part of do while above.
-    // wqe_counter is the HW consumer index. However, we always maintain index
-    // + 1 in SW. To be able to compare with idx, we need to use wqe_counter +
-    // 1. Because wqe_counter is uint16_t, it may wraparound. Still we know for
-    // sure that if idx - wqe_counter - 1 < ncqes, wqe_counter + 1 is less than
-    // idx, and thus we need to wait. We don't need to wait when idx ==
-    // wqe_counter + 1. That's why we use - (uint16_t)2 here to make this case
-    // wraparound.
+    // cons_index and wqe_counter are both zero-based WQE indices. Subtracting
+    // one keeps the 16-bit difference within the CQ window when the target
+    // is still pending. When the indices match, it wraps to UINT16_MAX.
     while ((opcode == DOCA_GPUNETIO_IB_MLX5_CQE_INVALID) ||
            ((cqe_ci <= cons_index) &&
-            ((uint16_t)((uint16_t)cons_index - wqe_counter - (uint16_t)2) < cqe_num)));
+            ((uint16_t)((uint16_t)cons_index - wqe_counter - (uint16_t)1) < cqe_num)));
 
     ++wqe_counter;
     *new_cqe_ci = ((cons_index & ~(0xFFFFULL)) | wqe_counter) +

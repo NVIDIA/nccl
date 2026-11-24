@@ -248,6 +248,21 @@ Linux distribution. Note that changes to ``limits.conf`` typically require the
 user to log out and back in, reboot, or, for Slurm clusters, ensure that jobs
 are launched with the updated limits. Verify the new limits with ``ulimit -l``.
 
+For Kubernetes pods, if the container running NCCL has the
+``IPC_LOCK`` capability (configured through
+``securityContext.capabilities.add``), it can bypass the memlock limit
+when registering pinned memory for RDMA. In this case, there is no
+need to increase the limit with ``ulimit -l``.
+
+To check for ``IPC_LOCK`` in the capabilities of the container's main process
+(PID 1), run the following command inside the container:
+
+.. code:: shell
+
+  getpcaps 1 | sed 's/,/ /g' | xargs -n1 | grep -i IPC_LOCK
+
+Look for ``cap_ipc_lock`` in the output.
+
 RDMA over Converged Ethernet (RoCE)
 ===================================
 

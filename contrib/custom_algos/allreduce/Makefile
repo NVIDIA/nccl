@@ -1,4 +1,4 @@
-# custom_algos: MC AllReduce benchmark
+# custom_algos: custom AllReduce benchmark (MC and LSA push kernels)
 #
 # Build with:
 #   make -C contrib/custom_algos/allreduce MPI=1
@@ -46,7 +46,10 @@ all: $(DST_DIR)/allreduce
 $(DST_DIR)/allreduce: main.cu \
     oneshot_mc_allreduce_kernel.cuh \
     twoshot_mc_simple_allreduce_kernel.cuh \
-    twoshot_mc_poison_allreduce_kernel.cuh
+    twoshot_mc_poison_allreduce_kernel.cuh \
+    oneshot_lsa_push_allreduce_kernel.cuh \
+    oneshot_lsa_push_ll_allreduce_kernel.cuh \
+    lsa_push_reduce.cuh
 	@mkdir -p $(DST_DIR)
 	@printf "Compiling+linking allreduce\n"
 	$(NVCC) $(NVCUFLAGS) $(MPI_CFLAGS) $< -o $@ $(LDFLAGS)

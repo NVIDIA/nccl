@@ -27,6 +27,9 @@
 #include "socket.h"
 #include "utils.h"
 
+// Default progress age threshold in seconds, also used in place of non-positive values.
+#define RAS_AGE_THRESHOLD_SEC_DEFAULT 30
+
 // Type of a RAS network or client message.
 typedef enum {
   RAS_MSG_CONNINIT = 1,
@@ -639,9 +642,70 @@ void rasClientsNotifyEvent(rasEventGroup group, const struct rasEventNotificatio
 void rasClientSupportTerminate();
 
 // GPU progress diagnostics (progress_diagnostics.cc).
+struct rasProgressClassification {
+  bool anyCounterEnabled;
+  bool deviceCounterUnavailable;
+  bool counterMirrorStale;
+  int nUsableRanks; // Ranks with fresh snapshots; only these support GPU-derived verdicts.
+  uint64_t uninstrumentedSlotMask;
+  uint64_t hostMismatchMask;
+  uint64_t ungatedHostMismatchMask; // Host mismatch reported without the no-progress age gate.
+  uint64_t qualifiedHostMismatchMask; // Host mismatch which passed the age gate.
+  uint64_t observedCounterMismatchMask;
+  uint64_t qualifiedCounterMismatchMask;
+  uint64_t observedDeviceMismatchMask;
+  uint64_t qualifiedDeviceMismatchMask;
+  uint64_t stuckSlotMask;
+  uint64_t blockedSlotMask;
+};
+
+// Keep thresholds below the 16-bit age saturation so saturated ages can qualify.
+static inline uint64_t rasProgressAgeThresholdSec(int64_t sec) {
+  if (sec <= 0) return RAS_AGE_THRESHOLD_SEC_DEFAULT;
+  return sec < UINT16_MAX ? (uint64_t)sec : UINT16_MAX - 1;
+}
+
 // Setup failures are not runtime stalls. Derive timeliness without a CUDA/GDR call.
 uint8_t rasProgressMonitorStateForQuery(ncclCounterMonitorState state, uint64_t refreshed, uint64_t started,
                                         uint64_t now, uint64_t staleNs);
+
+// The rank has a fresh snapshot. Every other enabled rank is either stale or unavailable.
+static inline bool rasProgressSnapshotUsable(const struct rasCollComms::comm::rank* rank) {
+  return rank->devCounterEnabled && rank->devCounterSnapshotFresh;
+}
+
+static inline bool rasProgressCounterStale(const struct rasCollComms::comm::rank* rank) {
+  if (!rank->devCounterEnabled) return false;
+  uint8_t state = rank->devCounterMonitorState;
+  return state == ncclCounterSnapshotStale || state == ncclCounterFirstSampleStale;
+}
+
+// Counters are enabled, but setup has not succeeded or the first sample is still pending.
+static inline bool rasProgressCounterUnavailable(const struct rasCollComms::comm::rank* rank) {
+  return rank->devCounterEnabled && !rasProgressSnapshotUsable(rank) && !rasProgressCounterStale(rank);
+}
+
+// Raw GPU active bit; callers check the snapshot and coverage first.
+static inline bool rasProgressSlotActive(const struct rasCollComms::comm::rank* rank, int slot) {
+  return (rank->activeSlotMask & (1ULL << slot)) != 0;
+}
+
+// A set active bit is evidence even with incomplete coverage; a clear one is not.
+static inline bool rasProgressSlotActivityUsable(const struct rasCollComms::comm::rank* rank, int slot) {
+  return rasProgressSnapshotUsable(rank) &&
+         (!(rank->uninstrumentedSlotMask & (1ULL << slot)) || rasProgressSlotActive(rank, slot));
+}
+
+// Host and GPU counts cover the same operations: a legacy slot, full coverage, no graph replays.
+static inline bool rasProgressHostDeviceCountsComparable(const struct rasCollComms::comm::rank* rank, int slot) {
+  return slot < NCCL_NUM_FUNCTIONS &&
+         !((rank->hostCountGraphUnsafeMask | rank->uninstrumentedSlotMask) & (1ULL << slot));
+}
+
+// Classify one communicator's progress. Ranks without a fresh snapshot are treated like missing ranks:
+// STUCK needs fresh snapshots from every rank; MISMATCH and BLOCKED may use the fresh subset.
+void rasClassifyProgress(const struct rasCollComms::comm::rank* ranks, int nRanks, bool completeRankSet,
+                         uint64_t thresholdSec, struct rasProgressClassification* out);
 
 #endif // !NCCL_RAS_CLIENT
 

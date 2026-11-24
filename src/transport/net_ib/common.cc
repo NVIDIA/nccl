@@ -70,8 +70,12 @@ ncclResult_t ncclIbBaseCommInit(struct ncclIbNetCommBase* baseComm, bool isSend)
   memset(baseComm->devSpeeds, 0, sizeof(baseComm->devSpeeds));
 
   NCCLCHECK(ncclIbResiliencyInit(baseComm, &baseComm->resiliency));
-  baseComm->recvMatchingScheme =
-    ncclParamIbReceiverSideMatchingScheme() == -2 ? BY_INDEX : ncclParamIbReceiverSideMatchingScheme();
+  int receiverSideMatchingScheme = ncclParamIbReceiverSideMatchingScheme();
+  if (ncclParamIbPrepostReceiveWorkRequests() == 1 && receiverSideMatchingScheme != 1) {
+    WARN("NET/IB : NCCL_IB_PREPOST_RECEIVE_WORK_REQUESTS=1 requires NCCL_IB_RECEIVER_SIDE_MATCHING_SCHEME=1");
+    return ncclInvalidArgument;
+  }
+  baseComm->recvMatchingScheme = receiverSideMatchingScheme == -2 ? BY_INDEX : receiverSideMatchingScheme;
 
   if (ncclParamIbOooRq() || (ncclParamIbResiliencyPortFailover() == 1)) {
     baseComm->recvMatchingScheme = BY_ID;

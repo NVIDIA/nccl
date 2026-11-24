@@ -690,7 +690,8 @@ static ncclResult_t sharedNetBuffersInit(struct ncclProxyState* proxyState, int 
 
   if (cuda && state->cudaBuff == NULL) {
     if (sameProcess == 0 || ncclCuMemEnable()) {
-      NCCLCHECK(ncclP2pAllocateShareableBuffer(state->size, 0, &state->ipcDesc, (void**)&state->cudaBuff));
+      NCCLCHECK(ncclP2pAllocateShareableBuffer(state->size, 0, &state->ipcDesc, (void**)&state->cudaBuff, -1,
+                                               proxyState->memManager));
     } else {
       NCCLCHECK(ncclCudaCalloc(&state->cudaBuff, state->size, proxyState->memManager));
     }
@@ -963,9 +964,9 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
     if (resources->shared == 0) {
       if (!map->sameProcess || ncclCuMemEnable()) {
         ALIGN_SIZE(map->mems[NCCL_NET_MAP_DEVMEM].size, CUDA_IPC_MIN);
-        NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, 0,
-                                                 &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
-                                                 (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
+        NCCLCHECK(ncclP2pAllocateShareableBuffer(
+          map->mems[NCCL_NET_MAP_DEVMEM].size, 0, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
+          (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, -1, proxyState->memManager));
       } else {
         NCCLCHECK(ncclCudaCalloc(&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, map->mems[NCCL_NET_MAP_DEVMEM].size,
                                  proxyState->memManager));
@@ -1144,9 +1145,9 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   if (map->mems[NCCL_NET_MAP_DEVMEM].size) {
     if (resources->shared == 0) {
       if (ncclCuMemEnable()) {
-        NCCLCHECK(ncclP2pAllocateShareableBuffer(map->mems[NCCL_NET_MAP_DEVMEM].size, 0,
-                                                 &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
-                                                 (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr));
+        NCCLCHECK(ncclP2pAllocateShareableBuffer(
+          map->mems[NCCL_NET_MAP_DEVMEM].size, 0, &map->mems[NCCL_NET_MAP_DEVMEM].ipcDesc,
+          (void**)&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, -1, proxyState->memManager));
       } else {
         NCCLCHECK(ncclCudaCalloc(&map->mems[NCCL_NET_MAP_DEVMEM].gpuPtr, map->mems[NCCL_NET_MAP_DEVMEM].size,
                                  proxyState->memManager));

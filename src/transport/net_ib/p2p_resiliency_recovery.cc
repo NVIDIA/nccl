@@ -295,34 +295,14 @@ static inline ncclResult_t ncclIbPortRecoveryContextInit(struct ncclIbResiliency
     return res;
   }
 
+  // A reused recovery QP may still have receive WRs from the previous cycle.
+  // Leave receive posting to ncclIbPortRecoveryQpsReconfigure(), after the
+  // asynchronous Init state has reset and reconfigured the recovery QP.
   if (resCtx->baseComm->isSend) {
     recoveryCtx->send.aliveMsgPosted = false;
     recoveryCtx->send.aliveMsgCompleted = false;
-    // Required for the ACK from the receiver
-    INFO(NCCL_NET, "NET/IB: %s: Sender posting initial (%d) recv WRs for port recovery for device %d (comm=%p)",
-         __func__, 1, recoveryCtx->devIndex, recoveryCtx->resCtx->baseComm);
-    res = ncclIbPortRecoveryPostRecvWorkRequest(recoveryCtx->resCtx->portRecoveryQps[recoveryCtx->devIndex].qp);
-    if (res != ncclSuccess) {
-      INFO(NCCL_NET, "NET/IB: %s: Sender failed to post recv WR on recovery QP for device %d (comm=%p)", __func__,
-           recoveryCtx->devIndex, recoveryCtx->resCtx->baseComm);
-      free(recoveryCtx);
-      return res;
-    }
   } else {
     recoveryCtx->recv.nInOrderMsgsReceived = 0;
-    // Required for the alive messages and final ACK from the sender
-    INFO(NCCL_NET, "NET/IB: %s: Receiver posting initial (%d) recv WRs for port recovery for device %d (comm=%p)",
-         __func__, NCCL_IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_SIZE_MAX, recoveryCtx->devIndex,
-         recoveryCtx->resCtx->baseComm);
-    for (int i = 0; i < NCCL_IB_RESILIENCY_PORT_RECOVERY_ALIVE_MSG_BATCH_SIZE_MAX; i++) {
-      res = ncclIbPortRecoveryPostRecvWorkRequest(recoveryCtx->resCtx->portRecoveryQps[recoveryCtx->devIndex].qp);
-      if (res != ncclSuccess) {
-        INFO(NCCL_NET, "NET/IB: %s: Receiver failed to post recv WR on recovery QP for device %d (comm=%p)", __func__,
-             recoveryCtx->devIndex, recoveryCtx->resCtx->baseComm);
-        free(recoveryCtx);
-        return res;
-      }
-    }
   }
 
   *outRecoveryCtx = recoveryCtx;

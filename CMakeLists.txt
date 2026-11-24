@@ -330,6 +330,7 @@ if(NCCL_OS_LINUX)
   add_subdirectory(plugins/env/example)
 endif()
 
+include(cmake/NcclSharedDeviceObjects.cmake)
 add_subdirectory(src)
 
 # Add package building subdirectories

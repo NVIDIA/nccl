@@ -104,11 +104,12 @@ endif()
 target_sources(nccl PRIVATE ${LIBSRCFILES})
 if(NCCL_OS_WINDOWS)
     target_link_libraries(nccl PRIVATE nccl_device)
+elseif(NCCL_OS_LINUX)
+    # libnccl.so links copies without the pre-link relocatable cubins when possible
+    # (cmake/NcclSharedDeviceObjects.cmake); libnccl_static.a keeps the original objects.
+    nccl_add_shared_device_objects(nccl nccl_device nccl_diagnostics_device)
 else()
     target_sources(nccl PRIVATE $<TARGET_OBJECTS:nccl_device>)
-endif()
-if(NCCL_OS_LINUX)
-    target_sources(nccl PRIVATE $<TARGET_OBJECTS:nccl_diagnostics_device>)
 endif()
 
 # Include directories; add DOCA only on non-Windows (skip for Windows platform)

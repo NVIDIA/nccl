@@ -18,6 +18,7 @@ BUILDDIR ?= $(abspath ../../build)
 OBJDIR := $(BUILDDIR)/obj/device
 
 MANIFEST := $(OBJDIR)/manifest
+SHARED_MANIFEST := $(OBJDIR)/manifest.shared
 DEVGLUE_OBJ  := $(OBJDIR)/device_glue.o
 
 INCFLAGS  = -I. -I.. -I$(BUILDDIR)/include -I../include -I../include/plugin
@@ -167,6 +168,9 @@ $(DEVGLUE_OBJ): $(LIB_OBJS)
 # Manifest lists device objs for src/Makefile; they get linked into libnccl.so so tests can resolve device symbols
 $(MANIFEST): $(LIB_OBJS) $(DEVGLUE_OBJ)
 	@echo $^ > $@
+
+NVPRUNE_GLUE := $(DEVGLUE_OBJ)
+include $(NCCLDIR)/makefiles/nvprune.mk
 
 -include $(wildcard $(OBJDIR)/*.d)
 -include $(wildcard $(OBJDIR)/genobj/*.d)

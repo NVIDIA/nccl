@@ -32,7 +32,7 @@ Sendrecv
 --------
 
 In MPI terms, a sendrecv operation is when two ranks exchange data, both sending and receiving
-at the same time. This can be done by merging both ncclSend and ncclRecv calls into one:
+at the same time. This can be done by merging both :c:func:`ncclSend` and :c:func:`ncclRecv` calls into one:
 
 .. code:: C
 
@@ -132,7 +132,7 @@ distribute only large ones; the crossover size is platform-dependent.
 .. note::
 
  :c:func:`ncclSignal` and :c:func:`ncclWaitSignal` used without any prior
- :c:func:`ncclCommWindowRegister` require :c:macro:`rmaEagerInit` (or :ref:`NCCL_RMA_EAGER_INIT`)
+ :c:func:`ncclCommWindowRegister` require :c:member:`rmaEagerInit <ncclConfig_t.rmaEagerInit>` (or :ref:`NCCL_RMA_EAGER_INIT`)
  set to ``1``; otherwise they return ``ncclInvalidUsage``.
 
 Below are a few examples of classic one-sided communication patterns used by parallel applications.

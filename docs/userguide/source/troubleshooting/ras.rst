@@ -148,9 +148,9 @@ Similar effects can sometimes be observed during communicator initialization or 
 The above snapshot depicts a transitional situation as the initial, 32-GPU communicator is being replaced by eight 4-GPU
 communicators (one of which is still initializing, so it is listed separately (group ``#2``) from the already
 initialized seven (group ``#1``)).  The
-32-GPU communicator (``#0-0``) is being torn down, with two ranks in the middle of `ncclCommFinalize`, four ranks that
-have *not* called `ncclCommFinalize` yet, and the remaining 26 ranks "unknown" -- meaning that they didn't provide any
-information about that communicator when RAS was collecting data, simply because their call to `ncclCommFinalize` has
+32-GPU communicator (``#0-0``) is being torn down, with two ranks in the middle of :c:func:`ncclCommFinalize`, four ranks that
+have *not* called :c:func:`ncclCommFinalize` yet, and the remaining 26 ranks "unknown" -- meaning that they didn't provide any
+information about that communicator when RAS was collecting data, simply because their call to :c:func:`ncclCommFinalize` has
 already completed so they are in fact no longer that communicator's members (NCCL 2.26 and later print ``NOCOMM``
 instead).  Again, as long as the situation is
 resolved when the query is repeated, it can be ignored.
@@ -287,9 +287,9 @@ Most of the fields should be fairly self-explanatory, with the possible exceptio
   be unique (which ``hash`` by itself is not, although in practice collisions are highly unlikely).
 * ``nvml_dev``: normally the same as ``cuda_dev``, unless `CUDA_VISIBLE_DEVICES` is being used (in which case
   ``cuda_dev`` may not be unique among ranks on a single node, whereas ``nvml_dev`` always is).
-* ``init_state``: ``0`` (`ncclSuccess`) if a rank is fully initialized, ``7`` (`ncclInProgress`) if initialization is
+* ``init_state``: ``0`` (:c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`) if a rank is fully initialized, ``7`` (:c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`) if initialization is
   still ongoing; any other value indicates an error.
-* ``async_error``: the value that would be returned if the rank called `ncclCommGetAsyncError`.
+* ``async_error``: the value that would be returned if the rank called :c:func:`ncclCommGetAsyncError`.
 * ``unresponsive``: `true` if RAS was unable to reach the rank when collecting data -- this is the most common
   reason why a rank would be considered missing.  There are, however, corner cases during communicator initialization
   and termination when a process may be reachable but does not consider itself to be a member of a given communicator.

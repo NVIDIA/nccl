@@ -36,7 +36,9 @@ except ImportError:
 try:
     import cupy as cp
 except ImportError:
-    print("ERROR: cupy required. Install with: pip install cupy-cuda13x (or cupy-cuda12x)", flush=True)
+    print(
+        "ERROR: cupy required. Install with: pip install cupy-cuda13x (or cupy-cuda12x)", flush=True
+    )
     sys.exit(1)
 
 import cutlass
@@ -46,7 +48,6 @@ import nccl.core.device.cute as nccl_cute
 
 
 NAME = os.path.basename(__file__)
-
 
 
 THREADS = 256
@@ -69,30 +70,31 @@ def lsa_allreduce_kernel(
         recv_win: registered destination window, one per rank.
     """
     tidx, _, _ = cute.arch.thread_idx()
-    coop = nccl_cute.cta()
-    layout = cute.make_layout(NUM_ELEMS)
+    coop = nccl_cute.Coop.cta()
+    send = nccl_cute.SymmetricPointer(send_win, cutlass.Float32)
 
     # team_lsa + the devcomm's embedded handle; needs lsa_barrier_count >
     # BARRIER_INDEX in the requirements.
-    bar = nccl_cute.lsa_default(coop, dev_comm, index=BARRIER_INDEX)
+    bar = nccl_cute.LsaBarrierSession.lsa(coop, dev_comm, index=BARRIER_INDEX)
 
     # Split into its two phases, which leaves room for local work between
     # publishing this rank's stores and waiting for its peers.
-    bar.arrive(coop, nccl_cute.MemoryOrder.RELEASE)
-    bar.wait(coop, nccl_cute.MemoryOrder.ACQUIRE)
+    bar.arrive()
+    bar.wait()
 
     if 0 == tidx:
         # The ways to name memory in a window; for the local rank they all
         # resolve to the same address.
         me = dev_comm.lsa_rank
-        local = cute.make_ptr(cutlass.Int8, send_win.local_pointer(0)).toint()
-        lsa = cute.make_ptr(cutlass.Int8, send_win.lsa_pointer(0, me)).toint()
-        peer = cute.make_ptr(cutlass.Int8, send_win.peer_pointer(0, dev_comm.rank)).toint()
-        teamed = cute.make_ptr(
-            cutlass.Int8, send_win.peer_pointer(0, me, dev_comm.team_lsa)).toint()
+        local = send_win.local_pointer(cutlass.Int8).toint()
+        lsa = send_win.lsa_pointer(cutlass.Int8, me).toint()
+        peer = send_win.peer_pointer(cutlass.Int8, dev_comm.rank).toint()
+        teamed = send_win.peer_pointer(cutlass.Int8, me, team=dev_comm.team_lsa).toint()
         cute.printf(f"local={local} lsa={lsa} peer={peer} peer(team_lsa)={teamed}")
+        shifted = (send + 4).local_pointer().toint()
+        cute.printf(f"window + 4 Float32 elements={shifted}")
 
-    recv = recv_win.tensor(cutlass.Float32, layout)
+    recv = recv_win.local_pointer(cutlass.Float32)
     lsa_size = dev_comm.lsa_size
 
     # Each thread owns ELEMS_PER_THREAD strided elements, so only the peer
@@ -102,14 +104,13 @@ def lsa_allreduce_kernel(
         acc = cutlass.Float32(0.0)
         for peer in cutlass.range(lsa_size):
             # A peer's address for this window offset; the load is ordinary.
-            peer_send = cute.make_tensor(
-                cute.make_ptr(cutlass.Float32, send_win.lsa_pointer(0, peer)), layout)
+            peer_send = send.lsa_pointer(peer)
             acc += peer_send[i]
         recv[i] = acc
 
     # arrive + wait in one call; release makes the reduction visible first.
-    bar.sync(coop, nccl_cute.MemoryOrder.RELEASE)
-    bar.destroy()
+    bar.sync(order=nccl_cute.MemoryOrder.RELEASE)
+    bar.close()
 
 
 @cute.jit
@@ -165,21 +166,23 @@ def main():
 
     if nccl_comm.team_lsa.n_ranks != nranks:
         if rank == root:
-            print(f"\n[{NAME}] ERROR: all {nranks} ranks must be LSA peers "
-                  f"(lsa team has {nccl_comm.team_lsa.n_ranks}); run on one node", flush=True)
+            print(
+                f"\n[{NAME}] ERROR: all {nranks} ranks must be LSA peers "
+                f"(lsa team has {nccl_comm.team_lsa.n_ranks}); run on one node",
+                flush=True,
+            )
         nccl_comm.destroy()
         return 1
 
     # Without device API support no devcomm can be created at all.
     if not nccl_comm.device_api_support:
         if rank == root:
-            print("WARNING: this platform has no device API support; "
-                  "nothing to run", flush=True)
+            print("WARNING: this platform has no device API support; nothing to run", flush=True)
         nccl_comm.destroy()
         return 0
 
-    send_buf = nccl.cupy.empty(NUM_ELEMS, dtype='float32')
-    recv_buf = nccl.cupy.empty(NUM_ELEMS, dtype='float32')
+    send_buf = nccl.cupy.empty(NUM_ELEMS, dtype="float32")
+    recv_buf = nccl.cupy.empty(NUM_ELEMS, dtype="float32")
     send_buf[:] = float(rank + 1)
     recv_buf[:] = 0.0
     device.sync()
@@ -189,12 +192,13 @@ def main():
 
     # One LSA barrier slot for BARRIER_INDEX.
     dev_comm_resource = nccl_comm.create_dev_comm(
-        requirements=nccl.NCCLDevCommRequirements(lsa_barrier_count=1))
+        requirements=nccl.NCCLDevCommRequirements(lsa_barrier_count=1)
+    )
 
     lsa_allreduce(
-        nccl_cute.DevComm(dev_comm_resource),
-        nccl_cute.Window(send_win_resource),
-        nccl_cute.Window(recv_win_resource),
+        nccl_cute.runtime.to_cute(dev_comm_resource),
+        nccl_cute.runtime.to_cute(send_win_resource),
+        nccl_cute.runtime.to_cute(recv_win_resource),
     )
     device.sync()
 
@@ -203,9 +207,11 @@ def main():
     if mismatches == 0:
         print(f"[rank {rank}] [SUCCESS] all {NUM_ELEMS} elements == {expected}")
     else:
-        print(f"[rank {rank}] [ERROR] {mismatches} / {NUM_ELEMS} mismatches, "
-              f"recv[0]={float(recv_buf[0])} expected {expected}", flush=True)
-
+        print(
+            f"[rank {rank}] [ERROR] {mismatches} / {NUM_ELEMS} mismatches, "
+            f"recv[0]={float(recv_buf[0])} expected {expected}",
+            flush=True,
+        )
 
     dev_comm_resource.close()
     send_win_resource.close()

@@ -238,6 +238,7 @@ static ncclSymkKernelMask kernelMask_coll(ncclFunc_t coll) {
 NCCL_PARAM(SymGinKernelsEnable, "SYM_GIN_KERNELS_ENABLE", 1)
 NCCL_PARAM(SymkLLScratchSize, "SYMK_LL_SCRATCH_SIZE", 256 << 10)
 NCCL_PARAM(SymRsGinChunkSize, "SYM_RS_GIN_CHUNK_SIZE", -1)
+NCCL_PARAM(SymGinBuffMaxSize, "SYM_GINBUFF_MAX_SIZE", 0)
 NCCL_PARAM(SymTmaEnable, "SYM_TMA_ENABLE", 1)
 #ifdef SYM_GENK
 NCCL_PARAM(SymGenkEnable, "SYM_GENK_ENABLE", 0)
@@ -336,6 +337,15 @@ static void getRequirements_gin(struct ncclComm* comm, int* out_nBlocks, size_t*
     // GIN could be throttled by LSA work
     double ginBwRenorm = std::min(lsaBw / lsaMul, ginBw / ginMul) * ginMul;
     size_t bufSize = ginBwRenorm * (ginLat + smLat);
+    if (ncclParamSymGinBuffMaxSize() > 0) {
+      // NCCL_SYM_GINBUFF_MAX_SIZE caps the staging estimate in bytes. It is rounded up to a power of two
+      // per block below and kept at or above two chunks so the kernel's pipeline depth holds.
+      size_t maxBufSize = std::max((size_t)ncclParamSymGinBuffMaxSize(), 2 * ncclSymkRsGinChunkBytes());
+      bufSize = std::min(bufSize, maxBufSize);
+      if (comm->rank == 0 && pow2Up(bufSize) > (size_t)ncclParamSymGinBuffMaxSize())
+        ATTN("NCCL_SYM_GINBUFF_MAX_SIZE=%ld: rounded to the next higher power of 2, %zu bytes per block",
+             (long)ncclParamSymGinBuffMaxSize(), pow2Up(bufSize));
+    }
     int nBlocks = ncclTuningCalcSatBlocksReduceScatterRailA2A(comm, ldmc);
     if (comm->rank == 0) {
       double minLsaGinEffBw = std::min(lsaBw / lsaMul, ginBw / ginMul);

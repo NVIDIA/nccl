@@ -4,7 +4,7 @@
 Group Calls
 ***********
 
-Group functions (ncclGroupStart/ncclGroupEnd) can be used to merge multiple calls into one. This is needed for
+Group functions (:c:func:`ncclGroupStart`/:c:func:`ncclGroupEnd`) can be used to merge multiple calls into one. This is needed for
 three purposes: managing multiple GPUs from one thread (to avoid deadlocks), aggregating communication operations
 to improve performance, or merging multiple send/receive point-to-point operations (see :ref:`point-to-point`
 section). All three usages can be combined together, with one exception: calls to :c:func:`ncclCommInitRank`
@@ -25,7 +25,7 @@ This is because every NCCL call may have to block, waiting for other threads/ran
    ncclAllReduce(..., comm[i], stream[i]);
  }
 
-To define that these calls are part of the same collective operation, ncclGroupStart and ncclGroupEnd should be used:
+To define that these calls are part of the same collective operation, :c:func:`ncclGroupStart` and :c:func:`ncclGroupEnd` should be used:
 
 .. code:: C
 
@@ -35,10 +35,10 @@ To define that these calls are part of the same collective operation, ncclGroupS
   }
   ncclGroupEnd();
 
-This will tell NCCL to treat all calls between ncclGroupStart and ncclGroupEnd as a single call to many devices.
+This will tell NCCL to treat all calls between :c:func:`ncclGroupStart` and :c:func:`ncclGroupEnd` as a single call to many devices.
 
-Caution: When called inside a group, stream operations (like ncclAllReduce) can return without having enqueued the
-operation on the stream. Stream operations like cudaStreamSynchronize can therefore be called only after ncclGroupEnd
+Caution: When called inside a group, stream operations (like :c:func:`ncclAllReduce`) can return without having enqueued the
+operation on the stream. Stream operations like ``cudaStreamSynchronize`` can therefore be called only after :c:func:`ncclGroupEnd`
 returns.
 
 Group calls must also be used to create a communicator when one thread manages more than one device:
@@ -54,7 +54,7 @@ Group calls must also be used to create a communicator when one thread manages m
 
 
 Note: Contrary to NCCL 1.x, there is no need to set the CUDA device before every NCCL communication call within a group,
-but it is still needed when calling ncclCommInitRank within a group.
+but it is still needed when calling :c:func:`ncclCommInitRank` within a group.
 
 Related links:
 
@@ -66,10 +66,11 @@ Aggregated Operations (2.2 and later)
 
 The group semantics can also be used to have multiple collective operations performed within a single NCCL launch. This
 is useful for reducing the launch overhead, in other words, latency, as it only occurs once for multiple operations.
-Init functions cannot be aggregated with other init functions, nor with communication functions.
+Initialization calls for different devices can be grouped, as shown above, but cannot be aggregated
+into a communication kernel or mixed with communication calls in the same group.
 
-Aggregation of collective operations can be done simply by having multiple calls to NCCL within a ncclGroupStart /
-ncclGroupEnd section.
+Aggregation of collective operations can be done simply by having multiple calls to NCCL within a :c:func:`ncclGroupStart` /
+:c:func:`ncclGroupEnd` section.
 
 In the following example, we launch one broadcast and two allReduce operations together as a single NCCL launch.
 
@@ -77,13 +78,13 @@ In the following example, we launch one broadcast and two allReduce operations t
 
  ncclGroupStart();
  ncclBroadcast(sendbuff1, recvbuff1, count1, datatype, root, comm, stream);
- ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm, stream);
- ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm, stream);
+ ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, ncclSum, comm, stream);
+ ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, ncclSum, comm, stream);
  ncclGroupEnd();
 
 It is permitted to combine aggregation with multi-GPU launch and use different communicators in a group launch
 as shown in the Management Of Multiple GPUs From One Thread topic. When combining multi-GPU launch and aggregation,
-ncclGroupStart and ncclGroupEnd can be either used once or at each level. The following example groups the allReduce
+:c:func:`ncclGroupStart` and :c:func:`ncclGroupEnd` can be either used once or at each level. The following example groups the allReduce
 operations from different layers and on multiple CUDA devices:
 
 .. code:: C
@@ -92,14 +93,14 @@ operations from different layers and on multiple CUDA devices:
  for (int i=0; i<nlayers; i++) {
    ncclGroupStart();
    for (int g=0; g<ngpus; g++) {
-     ncclAllReduce(sendbuffs[g]+offsets[i], recvbuffs[g]+offsets[i], counts[i], datatype[i], comms[g], streams[g]);
+     ncclAllReduce(sendbuffs[g]+offsets[i], recvbuffs[g]+offsets[i], counts[i], datatype[i], ncclSum, comms[g], streams[g]);
    }
    ncclGroupEnd();
  }
  ncclGroupEnd();
 
-Note: The NCCL operation will only be started as a whole during the last call to ncclGroupEnd. The ncclGroupStart and
-ncclGroupEnd calls within the for loop are not necessary and do nothing.
+Note: The NCCL operation will only be started as a whole during the last call to :c:func:`ncclGroupEnd`. The :c:func:`ncclGroupStart` and
+:c:func:`ncclGroupEnd` calls within the for loop are not necessary and do nothing.
 
 Related links:
 
@@ -121,17 +122,17 @@ are duplicated independent communicators that include rank 0 and 1.
  RANK0/GPU0/Process0:
  ncclGroupStart();
  ncclBroadcast(sendbuff1, recvbuff1, count1, datatype, root, comm0, stream);
- ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm0, stream);
- ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm0, stream);
- ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, comm1, stream);
+ ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, ncclSum, comm0, stream);
+ ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, ncclSum, comm0, stream);
+ ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, ncclSum, comm1, stream);
  ncclGroupEnd();
 
  RANK1/GPU1/Process1:
  ncclGroupStart();
  ncclBroadcast(sendbuff1, recvbuff1, count1, datatype, root, comm0, stream);
- ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm0, stream);
- ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm0, stream);
- ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, comm1, stream);
+ ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, ncclSum, comm0, stream);
+ ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, ncclSum, comm0, stream);
+ ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, ncclSum, comm1, stream);
  ncclGroupEnd();
 
 However, changing the order of any operations will lead to incorrect results or hang as shown in the following 2 examples:
@@ -141,52 +142,52 @@ However, changing the order of any operations will lead to incorrect results or 
  RANK0/GPU0/Process0:
  ncclGroupStart();
  ncclBroadcast(sendbuff1, recvbuff1, count1, datatype, root, comm0, stream);
- ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm0, stream); // WRONG: reversed order
- ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm0, stream); // WRONG: reversed order
- ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, comm1, stream);
+ ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, ncclSum, comm0, stream); // WRONG: reversed order
+ ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, ncclSum, comm0, stream); // WRONG: reversed order
+ ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, ncclSum, comm1, stream);
  ncclGroupEnd();
 
  RANK1/GPU1/Process1:
  ncclGroupStart();
  ncclBroadcast(sendbuff1, recvbuff1, count1, datatype, root, comm0, stream);
- ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm0, stream); // WRONG: reversed order
- ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm0, stream); // WRONG: reversed order
- ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, comm1, stream);
+ ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, ncclSum, comm0, stream); // WRONG: reversed order
+ ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, ncclSum, comm0, stream); // WRONG: reversed order
+ ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, ncclSum, comm1, stream);
  ncclGroupEnd();
 
 .. code:: C
 
  RANK0/GPU0/Process0:
  ncclGroupStart();
- ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, comm1, stream); // WRONG: reversed order
+ ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, ncclSum, comm1, stream); // WRONG: reversed order
  ncclBroadcast(sendbuff1, recvbuff1, count1, datatype, root, comm0, stream);
- ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm0, stream);
- ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm0, stream);
+ ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, ncclSum, comm0, stream);
+ ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, ncclSum, comm0, stream);
  ncclGroupEnd();
 
  RANK1/GPU1/Process1:
  ncclGroupStart();
  ncclBroadcast(sendbuff1, recvbuff1, count1, datatype, root, comm0, stream);
- ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, comm0, stream);
- ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, comm0, stream);
- ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, comm1, stream); // WRONG: reversed order
+ ncclAllReduce(sendbuff2, recvbuff2, count2, datatype, ncclSum, comm0, stream);
+ ncclAllReduce(sendbuff3, recvbuff3, count3, datatype, ncclSum, comm0, stream);
+ ncclAllReduce(sendbuff4, recvbuff4, count4, datatype, ncclSum, comm1, stream); // WRONG: reversed order
  ncclGroupEnd();
 
 Nonblocking Group Operation
 -------------------------------------
 
-If a communicator is marked as nonblocking through ncclCommInitRankConfig, the group functions become asynchronous
-correspondingly. In this case, if users issue multiple NCCL operations in one group, returning from ncclGroupEnd() might
-not mean the NCCL communication kernels have been issued to CUDA streams. If ncclGroupEnd() returns ncclSuccess, it means
-NCCL kernels have been issued to streams; if it returns ncclInProgress, it means NCCL kernels are being issued to streams
-in the background. It is users' responsibility to make sure the state of the communicator changes into ncclSuccess
-before calling related CUDA calls (e.g. cudaStreamSynchronize):
+If a communicator is marked as nonblocking through :c:func:`ncclCommInitRankConfig`, the group functions become asynchronous
+correspondingly. In this case, if users issue multiple NCCL operations in one group, returning from :c:func:`ncclGroupEnd` might
+not mean the NCCL communication kernels have been issued to CUDA streams. If :c:func:`ncclGroupEnd` returns :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`, it means
+NCCL kernels have been issued to streams; if it returns :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`, it means NCCL kernels are being issued to streams
+in the background. It is users' responsibility to make sure the state of the communicator changes into :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`
+before calling related CUDA calls (e.g. ``cudaStreamSynchronize``):
 
 .. code:: C
 
  ncclGroupStart();
    for (int g=0; g<ngpus; g++) {
-     ncclAllReduce(sendbuffs[g]+offsets[i], recvbuffs[g]+offsets[i], counts[i], datatype[i], comms[g], streams[g]);
+     ncclAllReduce(sendbuffs[g]+offsets[i], recvbuffs[g]+offsets[i], counts[i], datatype[i], ncclSum, comms[g], streams[g]);
    }
  ret = ncclGroupEnd();
  if (ret == ncclInProgress) {

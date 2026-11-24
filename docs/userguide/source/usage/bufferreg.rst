@@ -115,51 +115,51 @@ IB Sharp Buffer Registration
 
 NCCL 2.21.x supports IB Sharp buffer registration, any NCCL collectives that support IB Sharp algorithm can benefit from the feature such as allreduce,
 reducescatter, and allgather. Currently, NCCL only supports IB Sharp buffer registration for the communicators which contain 1 rank per node, and the
-registration can reduce the number of NCCL SM usage down to 1.
+registration can reduce the number of SMs used by NCCL to 1.
 
 To enable IB Sharp buffer registration by CUDA graph:
 
- * Allocate send and recv buffer with any CUDA allocator (e.g., cudaMalloc/ncclMemAlloc)
+ * Allocate send and recv buffer with any CUDA allocator (e.g., ``cudaMalloc``/:c:func:`ncclMemAlloc`)
  * Launch NCCL collectives with CUDA graph
 
 To enable IB Sharp buffer registration by local registration:
 
- * Allocate send and recv buffer with any CUDA allocator (e.g., cudaMalloc/ncclMemAlloc)
- * Register send and recv buffer for each rank in the communicator with `ncclCommRegister`
+ * Allocate send and recv buffer with any CUDA allocator (e.g., ``cudaMalloc``/:c:func:`ncclMemAlloc`)
+ * Register send and recv buffer for each rank in the communicator with :c:func:`ncclCommRegister`
  * Launch NCCL collectives
 
 General Buffer Registration
 ---------------------------
 
-Since 2.23.x, NCCL supports intra-node buffer registration, which targets all peer-to-peer intra-node communications (e.g., Allgather Ring) and brings less memory pressure, better communication and computation overlap performance. Either registering buffers by `ncclCommRegister` in the beginning or applying CUDA graph can enable intra-node buffer registration for NCCL collectives and sendrecv.
+Since 2.23.x, NCCL supports intra-node buffer registration, which targets all peer-to-peer intra-node communications (e.g., Allgather Ring) and brings less memory pressure, better communication and computation overlap performance. Either registering buffers by :c:func:`ncclCommRegister` in the beginning or applying CUDA graph can enable intra-node buffer registration for NCCL collectives and sendrecv.
 
-The user buffers can be allocated through VMM API (i.e., `cuMem*`), any VMM-based allocators (:ref:`mem_allocator`) or `ncclMemAlloc` will work.
-The buffers allocated through legacy cuda API (e.g., `cudaMalloc`) can also be used for registration. However, it is not safe due to the potential hang during execution and segmentation fault during failure and abort, so using legacy buffers for registration is not recommended; currently, legacy buffer registration is disabled by default, users can set `NCCL_LEGACY_CUDA_REGISTER=1` to enable it.
+The user buffers can be allocated through VMM API (i.e., ``cuMem*``), any VMM-based allocators (:ref:`mem_allocator`) or :c:func:`ncclMemAlloc` will work.
+The buffers allocated through legacy cuda API (e.g., ``cudaMalloc``) can also be used for registration. However, it is not safe due to the potential hang during execution and segmentation fault during failure and abort, so using legacy buffers for registration is not recommended; currently, legacy buffer registration is disabled by default, users can set ``NCCL_LEGACY_CUDA_REGISTER=1`` to enable it.
 
 Buffer Registration, GPU Direct RDMA, and MPS with MLOPart
 ----------------------------------------------------------
 
-To ensure optimal performance for scale-out communications, we recommend the usage of `ncclMemAlloc`, or alternatively `cuMemCreate` with the attribute `gpuDirectRDMACapable`.
+To ensure optimal performance for scale-out communications, we recommend the usage of :c:func:`ncclMemAlloc`, or alternatively ``cuMemCreate`` with the attribute `gpuDirectRDMACapable`.
 Failing to do so might force NCCL to use an internal staging buffer and therefore offset the gain provided by the user-buffer registration.
 
-Further, mixing buffers allocated with different allocators maybe result in undefined behavior.
+Further, mixing buffers allocated with different allocators may result in undefined behavior.
 
 Buffer Registration and PXN
 ---------------------------
 
-Buffer registration for network communication (e.g., InfiniBand) and PXN are inherently incompatible. PXN is enabled by default in NCCL as long as the platform supports it, and it can be used for sendrecv-based operations and collectives. When PXN is enabled, the network buffer registration will not be enabled even if users have called `ncclCommRegister` to register the buffers. To enable network buffer registration, users can set `NCCL_PXN_DISABLE=1` to disable PXN.
+Buffer registration for network communication (e.g., InfiniBand) and PXN are inherently incompatible. PXN is enabled by default in NCCL as long as the platform supports it, and it can be used for sendrecv-based operations and collectives. When PXN is enabled, the network buffer registration will not be enabled even if users have called :c:func:`ncclCommRegister` to register the buffers. To enable network buffer registration, users can set ``NCCL_PXN_DISABLE=1`` to disable PXN.
 
 .. _mem_allocator:
 
 Memory Allocator
 ----------------
 
-For convenience, NCCL provides `ncclMemAlloc` function to help users to allocate buffers through VMM API, which can be used for NCCL registration later. It is only designed for NCCL so that it is not recommended to use `ncclMemAlloc` allocated buffers everywhere in the applications.
+For convenience, NCCL provides :c:func:`ncclMemAlloc` function to help users to allocate buffers through VMM API, which can be used for NCCL registration later. It is only designed for NCCL so that it is not recommended to use :c:func:`ncclMemAlloc` allocated buffers everywhere in the applications.
 
 For advanced users, if you want to create your own memory allocator for NVLS UB, the allocated buffer of the allocator needs to satisfy the following requirements:
 
  * Allocate buffer with shared flag `CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR` and also `CU_MEM_HANDLE_TYPE_FABRIC` on GPUs where it's supported.
- * Buffer physical memory size is multiple of CUMEM recommended granularity (i.e. cuMemGetAllocationGranularity(..., `CU_MEM_ALLOC_GRANULARITY_RECOMMENDED``))
+ * Buffer physical memory size is multiple of CUMEM recommended granularity (i.e. ``cuMemGetAllocationGranularity(..., CU_MEM_ALLOC_GRANULARITY_RECOMMENDED)``)
  * Buffer virtual head address is at least aligned to CUMEM recommended granularity and size is multiple of CUMEM recommended granularity.
 
 For general buffer registration with VMM API, the allocator needs to satisfy the same requirements as NVLS UB allocators.
@@ -169,9 +169,9 @@ For general buffer registration with VMM API, the allocator needs to satisfy the
 Window Registration
 -------------------
 
-Since 2.27, NCCL supports window registration, which allows users to register local buffers into NCCL window and enables extremely low latency and high bandwidth communication in NCCL. Currently, window registration supports input buffers only from VMM-based allocators (:ref:`mem_allocator`) and `ncclMemAlloc`; any other type of cuda buffers will fail to be registered.
+Since 2.27, NCCL supports window registration, which allows users to register local buffers into NCCL window and enables extremely low latency and high bandwidth communication in NCCL. Currently, window registration supports input buffers only from VMM-based allocators (:ref:`mem_allocator`) and :c:func:`ncclMemAlloc`; any other type of cuda buffers will fail to be registered.
 
-NCCL window registration is enabled by default. However, if users do not use window registration and need to turn it off, set `NCCL_WIN_ENABLE=0` to disable it. In addition, users can also control the behavior of window registration through flags in :ref:`win_flags`.
+NCCL window registration is enabled by default. However, if users do not use window registration and need to turn it off, set ``NCCL_WIN_ENABLE=0`` to disable it. In addition, users can also control the behavior of window registration through flags in :ref:`win_flags`.
 
 .. _device_api_lsa:
 

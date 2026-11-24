@@ -34,7 +34,7 @@ GIN has the following requirements:
 
 * CUDA 12.2 or later when compiling the GPU code
 * NVIDIA GPUs: Volta or newer. NVIDIA GPU drivers >= 510.40.3
-* Using GIN for buffers that are backed by multiple cuMem segments requires DMA-BUF
+* Using GIN for buffers that are backed by multiple ``cuMem`` segments requires DMA-BUF
 
 The GIN **CPU Proxy** backend has the following requirements:
 
@@ -160,15 +160,15 @@ The start of the buffer is specified as a (byte-based) *offset* within the previ
 :ref:`window_reg`); the buffer consists of *count* elements of type *T*.
 
 Before the kernel can start processing data, it needs to ensure that all participants are ready. It creates a memory
-barrier session *bar* (see :c:type:`ncclLsaBarrierSession`) and uses it to synchronize across all the threads of the CTA
-(*ncclCoopCta()*; see :ref:`devapi_coops`) and the ranks of the communicator (*devComm*). *ncclTeamTagLsa* indicates
+barrier session *bar* (see :cpp:class:`ncclLsaBarrierSession`) and uses it to synchronize across all the threads of the CTA
+(``ncclCoopCta()``; see :ref:`devapi_coops`) and the ranks of the communicator (*devComm*). ``ncclTeamTagLsa`` indicates
 the subset of ranks the barrier will apply to (see :ref:`devapi_teams`) -- this kernel assumes that all ranks are
 LSA-connected. *blockIdx.x* is the CTA's local index, used to select the barrier.
 
 The kernel then calculates a globally unique index for each thread as well as the overall thread count, and can finally
 start processing data, using an all-to-all communication pattern. In each iteration of the outer loop, every
 participating thread loads a single input element from each communicator rank (the first inner loop).
-:c:func:`ncclGetLsaPointer` is used to calculate the locally-accessible
+:cpp:func:`ncclGetLsaPointer` is used to calculate the locally-accessible
 address of the start of the buffer within each rank (remote device memory was previously mapped into the local address
 space -- see :ref:`window_reg`). Extracted input data is accumulated and the result is stored back at each rank (the
 second inner loop). Before the
@@ -213,7 +213,7 @@ side, ``lsaMultimem`` needs to be set in the requirements prior to creating the 
 (:c:func:`ncclDevCommCreate` will fail if the necessary hardware support is unavailable).
 
 Within the device kernel, we can switch the memory barrier to a multimem-optimized variant by adding an extra argument
-to the constructor. The processing loop is actually simpler with multimem: :c:func:`ncclGetLsaMultimemPointer` needs to
+to the constructor. The processing loop is actually simpler with multimem: :cpp:func:`ncclGetLsaMultimemPointer` needs to
 be invoked just once per kernel. The returned multicast memory pointer enables access to the device memory of all the
 ranks of the communicator without having to iterate over them, and the data can be reduced in hardware. To keep this
 example simple, the implementations of ``multimem_sum`` and ``multimem_st`` are not included; they need to be
@@ -228,8 +228,72 @@ Many functions in the device API take a thread cooperative group (*coop*) as inp
 take part in the operation. NCCL's coop types follow the same interface as
 `CUDA Cooperative Groups <https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#cooperative-groups>`_ --
 ``thread_rank()``, ``size()``, and ``sync()`` -- so a CUDA cooperative group, or any user-defined class providing that
-interface, can be passed wherever a coop is expected. NCCL additionally provides three predefined ones:
-``ncclCoopThread()``, ``ncclCoopWarp()``, and (the most commonly used) ``ncclCoopCta()``.
+interface, can be passed wherever a coop is expected. Common predefined choices are
+``ncclCoopThread()``, ``ncclCoopWarp()``, and ``ncclCoopCta()``. Other thread-group choices and helpers are
+listed below.
+
+.. cpp:struct:: template<int nThreadsPow2> ncclCoopTile
+
+   An aligned group of *nThreadsPow2* consecutive lanes within a warp. The size must be a positive power
+   of two no greater than 32. ``ncclCoopThread`` and ``ncclCoopWarp`` are aliases for sizes 1 and 32.
+
+.. cpp:struct:: ncclCoopLanes
+
+   .. cpp:function:: ncclCoopLanes(uint32_t lmask = ~0u)
+
+      Selects lanes within the calling warp using *lmask*. Only selected lanes participate, and every
+      participating lane must supply the same mask.
+
+.. cpp:struct:: ncclCoopWarpSpan
+
+   .. cpp:function:: ncclCoopWarpSpan(int warp0, int nWarps, int id)
+
+      Selects *nWarps* consecutive warps of the CTA, starting at *warp0*. The group must fit within the CTA.
+      *id* must be in ``[0, 15)``. Two distinct warp spans with the same *id* must not execute collectives
+      concurrently within the same CTA.
+
+.. cpp:function:: ncclCoopLanes ncclCoopCoalesced()
+
+   Returns the currently active lanes of the calling warp. Keep the returned group consistent across
+   all participants of an operation.
+
+.. cpp:function:: template<typename Coop> ncclCoopTile<32> ncclCoopCoalesced(Coop coop)
+.. cpp:function:: ncclCoopLanes ncclCoopCoalesced(ncclCoopLanes coop)
+.. cpp:function:: template<int nThreads> ncclCoopTile<nThreads> ncclCoopCoalesced(ncclCoopTile<nThreads> coop)
+
+   Selects a warp-sized group within *coop*. For a tile or lane-mask group, preserves that group.
+   The return type depends on the supplied group.
+
+.. cpp:function:: template<int nThreadsPow2> uint32_t ncclCoopGetLaneMask(ncclCoopTile<nThreadsPow2> coop)
+.. cpp:function:: uint32_t ncclCoopGetLaneMask(ncclCoopLanes coop)
+.. cpp:function:: uint32_t ncclCoopGetLaneMask(ncclCoopWarpSpan coop)
+.. cpp:function:: uint32_t ncclCoopGetLaneMask(ncclCoopCta coop)
+
+   Returns the participating lane mask for a tile or lane-mask group. For CTA and warp-span groups,
+   returns a mask containing all 32 lanes.
+
+.. cpp:function:: template<int nThreads> bool ncclCoopIsThread(ncclCoopTile<nThreads> coop)
+.. cpp:function:: bool ncclCoopIsThread(ncclCoopLanes coop)
+.. cpp:function:: bool ncclCoopIsThread(ncclCoopWarpSpan coop)
+.. cpp:function:: bool ncclCoopIsThread(ncclCoopCta coop)
+
+   Reports whether the group type identifies exactly one participating thread at compile time.
+
+.. cpp:function:: template<int nThreads> bool ncclCoopWithinWarp(ncclCoopTile<nThreads> coop)
+.. cpp:function:: bool ncclCoopWithinWarp(ncclCoopLanes coop)
+.. cpp:function:: bool ncclCoopWithinWarp(ncclCoopWarpSpan coop)
+.. cpp:function:: bool ncclCoopWithinWarp(ncclCoopCta coop)
+
+   Reports whether the group type is confined to a single warp.
+
+.. cpp:function:: template<int nThreads, typename T> T ncclCoopBcast(ncclCoopTile<nThreads> coop, T value, int root, bool entrySync = true)
+.. cpp:function:: template<typename T> T ncclCoopBcast(ncclCoopLanes coop, T value, int root, bool entrySync = true)
+.. cpp:function:: template<typename T> T ncclCoopBcast(ncclCoopWarpSpan coop, T value, int root, bool entrySync = true)
+.. cpp:function:: template<typename T> T ncclCoopBcast(ncclCoopCta coop, T value, int root, bool entrySync = true)
+
+   Broadcasts *value* from group rank *root*. All group members must participate with the same *root*,
+   which must be a valid group rank. For CTA and warp-span groups, ``sizeof(T)`` must be at most 16 bytes.
+   If *entrySync* is false, callers must ensure the group has already synchronized before the broadcast.
 
 **Non-collective calls.** Not every function that takes a *coop* uses all of its threads to perform the operation.
 For functions such as :cpp:func:`ncclGin::put`, :cpp:func:`ncclGin::signal`, and :cpp:func:`ncclGin::waitSignal`,
@@ -278,7 +342,7 @@ Team descriptor
 ^^^^^^^^^^^^^^^
 
 Team functions are available in host code with a :c:type:`ncclComm_t`
-argument and, where noted, in device code with a :cpp:type:`ncclDevComm`
+argument and, where noted, in device code with a :c:type:`ncclDevComm`
 argument.
 
 .. cpp:struct:: ncclTeam
@@ -295,7 +359,7 @@ argument.
 
    .. cpp:member:: int stride
 
-      Distance, in world ranks, between consecutive team ranks.
+      Stride between consecutive team members in the rank space used to define the team.
 
    ``ncclTeam_t`` is a typedef of ``ncclTeam``.
 
@@ -381,8 +445,8 @@ Segment Types
 The ``SegmentType`` template parameter of :cpp:func:`ncclGin::put` and :cpp:func:`ncclGin::get` describes the physical memory composition
 of the source and destination virtual addresses.  Three tag types are defined:
 
-* ``ncclGin_SegmentDevice`` (default) — the virtual addresses only contain cuMem segments of type ``CU_MEM_LOCATION_TYPE_DEVICE``.
-* ``ncclGin_SegmentHostNuma`` — the virtual addresses only contain cuMem segments of type ``CU_MEM_LOCATION_TYPE_HOST_NUMA``.
+* ``ncclGin_SegmentDevice`` (default) — the virtual addresses only contain ``cuMem`` segments of type ``CU_MEM_LOCATION_TYPE_DEVICE``.
+* ``ncclGin_SegmentHostNuma`` — the virtual addresses only contain ``cuMem`` segments of type ``CU_MEM_LOCATION_TYPE_HOST_NUMA``.
 * ``ncclGin_SegmentMixed`` — the virtual addresses contain a mix of ``CU_MEM_LOCATION_TYPE_DEVICE`` and ``CU_MEM_LOCATION_TYPE_HOST_NUMA`` segments.
 
 Host-Accessible Device Pointer Functions
@@ -502,8 +566,8 @@ The above code excerpt shows the GIN-related host setup for NCCL 2.30 and later 
 ``PureGinAlltoAllKernel`` kernel definition. GPU-initiated networking is available since NCCL 2.28.7. Version-specific host and
 kernel changes for older NCCL builds are summarized under :ref:`deviceapi_gin_compat` at the end of this section.
 
-In :c:type:`ncclDevCommRequirements`, :c:macro:`worldGinBarrierCount` reserves slots for :cpp:class:`ncclGinBarrierSession`
-(network-side barriers) and :c:macro:`ginSignalCount` reserves per-CTA signals for completion. Both are set to the number of CTAs
+In :c:type:`ncclDevCommRequirements`, :c:member:`ncclDevCommRequirements.worldGinBarrierCount` reserves slots for :cpp:class:`ncclGinBarrierSession`
+(network-side barriers) and :c:member:`ncclDevCommRequirements.ginSignalCount` reserves per-CTA signals for completion. Both are set to the number of CTAs
 in the launch grid (here ``NCCL_DEVICE_CTA_COUNT``), matching ``gridDim.x``, so each thread block uses
 ``blockIdx.x`` as its barrier index and signal index. GIN relies on these
 barriers and signals for cross-rank synchronization and for tracking asynchronous work. Set ``ginConnectionType`` to
@@ -512,16 +576,16 @@ barriers and signals for cross-rank synchronization and for tracking asynchronou
 
 On the device, GIN barriers synchronize across ranks over the network. Each thread block uses ``blockIdx.x`` to select its
 barrier so blocks can coordinate with corresponding blocks on other nodes. A single GIN context is used here. Construct
-:c:type:`ncclGin` with context index ``0``. Each thread block reads its own per-CTA signal slot (``signalIndex == blockIdx.x``)
-before :c:func:`bar.sync` at kernel entry. The :cpp:class:`ncclGinBarrierSession`
-uses ``ncclTeamTagWorld()`` and ``blockIdx.x``. The barrier ensures all ranks are ready before the AlltoAll exchange (:c:func:`bar.sync`
+:cpp:class:`ncclGin` with context index ``0``. Each thread block reads its own per-CTA signal slot (``signalIndex == blockIdx.x``)
+before :cpp:func:`bar.sync <ncclGinBarrierSession::sync>` at kernel entry. The :cpp:class:`ncclGinBarrierSession`
+uses ``ncclTeamTagWorld()`` and ``blockIdx.x``. The barrier ensures all ranks are ready before the AlltoAll exchange (:cpp:func:`bar.sync <ncclGinBarrierSession::sync>`
 at kernel entry).
 
 Unlike AllReduce-style kernels, for AlltoAll the per-thread index only needs to be unique *within this rank*. That index
-then selects the destination peer. The main data transfer is performed using the one-sided :c:func:`put`, launched in parallel on all
-participating threads with one :c:func:`put` per destination peer. The loop is needed whenever the communicator size
+then selects the destination peer. The main data transfer is performed using the one-sided :cpp:func:`ncclGin::put`, launched in parallel on all
+participating threads with one :cpp:func:`ncclGin::put` per destination peer. The loop is needed whenever the communicator size
 exceeds the number of threads that take part in the loop (here, ``threadIdx.x + blockIdx.x * blockDim.x`` stepping by
-``blockDim.x * gridDim.x``). :c:func:`put` takes the usual arguments: destination rank, destination and source windows and
+``blockDim.x * gridDim.x``). :cpp:func:`ncclGin::put` takes the usual arguments: destination rank, destination and source windows and
 offsets, transfer size, and optional actions. This example passes ``ncclGin_WeakSignalInc{signalIndex}`` as *remoteAction* so the
 destination rank receives one completion increment once the payload is settled. The receiver waits for the count of completed
 incoming puts for that signal slot.
@@ -530,16 +594,16 @@ Each CTA uses ``signalIndex = blockIdx.x`` on its outgoing :cpp:func:`ncclGin::p
 peer's :cpp:func:`ncclGin::put` contributes one increment to the signal slot indexed by that sender CTA's ``blockIdx.x``. All CTAs
 participate in issuing :cpp:func:`ncclGin::put`, but only the *receiving CTA*, a single thread block on this rank, must
 observe completion for that rank's signal slot. The kernel sets ``receivingCta = (devComm.rank % nthreads) / blockDim.x`` so
-that exactly that thread block runs :c:func:`waitSignal` for ``signalIndex == receivingCta``. Every other CTA skips
-:c:func:`waitSignal` and only issues :cpp:func:`ncclGin::put` and later :c:func:`flush`.
+that exactly that thread block runs :cpp:func:`ncclGin::waitSignal` for ``signalIndex == receivingCta``. Every other CTA skips
+:cpp:func:`ncclGin::waitSignal` and only issues :cpp:func:`ncclGin::put` and later :cpp:func:`ncclGin::flush`.
 
 Once the signal watched by ``receivingCta`` has been incremented ``nRanks`` times, every peer has deposited its contribution into
-this rank's receive buffer and the buffer is ready for consumption. That CTA's :c:func:`waitSignal` blocks until that threshold
+this rank's receive buffer and the buffer is ready for consumption. That CTA's :cpp:func:`ncclGin::waitSignal` blocks until that threshold
 using ``signalValue + devComm.nRanks``, because each peer issues one inbound :cpp:func:`ncclGin::put` that advances this rank's counter
-for that ``signalIndex``. Before terminating, the kernel still calls :c:func:`flush` on all CTAs to
-commit outstanding outgoing :c:func:`put` operations. While :c:func:`flush` does not guarantee full remote completion of every
-side effect, it does ensure the local send buffer is safe to reuse from this kernel's perspective. After :c:func:`waitSignal`
-and :c:func:`flush`, :c:func:`bar.sync` runs again. The barrier is added so that all ranks complete the collective before any
+for that ``signalIndex``. Before terminating, the kernel still calls :cpp:func:`ncclGin::flush` on all CTAs to
+commit outstanding outgoing :cpp:func:`ncclGin::put` operations. While :cpp:func:`ncclGin::flush` does not guarantee full remote completion of every
+side effect, it does ensure the local send buffer is safe to reuse from this kernel's perspective. After :cpp:func:`ncclGin::waitSignal`
+and :cpp:func:`ncclGin::flush`, :cpp:func:`bar.sync <ncclGinBarrierSession::sync>` runs again. The barrier is added so that all ranks complete the collective before any
 rank exits the kernel.
 
 .. _deviceapi_gin_multi_backend:
@@ -551,7 +615,7 @@ A single communicator can load more than one GIN backend at a time (for example,
 :c:enumerator:`NCCL_GIN_TYPE_PROXY <ncclGinType_t.NCCL_GIN_TYPE_PROXY>` and
 :c:enumerator:`NCCL_GIN_TYPE_GDAKI <ncclGinType_t.NCCL_GIN_TYPE_GDAKI>`).
 Each :c:type:`ncclDevComm` only supports a single backend. To use several backends concurrently,
-create one device communicator per backend and drive each with its own :c:type:`ncclGin` object.
+create one device communicator per backend and drive each with its own :cpp:class:`ncclGin` object.
 
 Call :c:func:`ncclCommQueryProperties` and inspect :c:member:`ncclCommProperties_t.ginSupport` to discover which
 backends are available before requesting one:
@@ -582,7 +646,7 @@ the communicator picks. :c:func:`ncclDevCommCreate` fails if the requested backe
   reqsGdaki.ginType = NCCL_GIN_TYPE_GDAKI;
   NCCLCHECK(ncclDevCommCreate(comm, &reqsGdaki, &devCommGdaki));
 
-On the device, construct one :c:type:`ncclGin` per device communicator. Signal and counter indices are local
+On the device, construct one :cpp:class:`ncclGin` per device communicator. Signal and counter indices are local
 to each device communicator, so ``signal 0`` on ``devCommProxy`` is independent from ``signal 0`` on
 ``devCommGdaki``:
 
@@ -616,18 +680,18 @@ The host setup, kernel, and explanation above reflect the NCCL 2.30 version and 
 the following as needed.
 
 * **GPU-initiated networking (GIN) baseline** — GIN is available since NCCL 2.28.7. :c:func:`ncclDevCommCreate` and
-  :c:type:`ncclGin` require a communicator that supports the device API and GIN.
+  :cpp:class:`ncclGin` require a communicator that supports the device API and GIN.
 
 * **Before NCCL 2.30 — no** ``worldGinBarrierCount`` — :cpp:class:`ncclGinBarrierSession` was only usable for rail
-  connectivity, with the corresponding :c:member:`railGinBarrierCount`. For world-team GIN barriers,
-  set :c:member:`barrierCount` to the number of CTAs (same as ``gridDim.x``). In the kernel, use the hybrid
-  ``ncclBarrierSession`` with ``ncclTeamTagWorld()`` together with :c:type:`ncclGin` instead of
+  connectivity, with the corresponding :c:member:`railGinBarrierCount <ncclDevCommRequirements.railGinBarrierCount>`. For world-team GIN barriers,
+  set :c:member:`barrierCount <ncclDevCommRequirements.barrierCount>` to the number of CTAs (same as ``gridDim.x``). In the kernel, use the hybrid
+  ``ncclBarrierSession`` with ``ncclTeamTagWorld()`` together with :cpp:class:`ncclGin` instead of
   :cpp:class:`ncclGinBarrierSession` with ``ncclTeamTagWorld()``.
 
-* **Before NCCL 2.29.7 — no** :c:member:`ginConnectionType` — Set :c:member:`ginForceEnable` to ``true`` to enable full GIN
-  connectivity (equivalent to :c:enumerator:`NCCL_GIN_CONNECTION_FULL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_FULL>` once :c:member:`ginConnectionType` exists). The
-  :c:member:`ginConnectionType` field is available starting with NCCL 2.29.7 (see :c:type:`ncclDevCommRequirements` in
+* **Before NCCL 2.29.7 — no** :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>` — Set :c:member:`ginForceEnable <ncclDevCommRequirements.ginForceEnable>` to ``true`` to enable full GIN
+  connectivity (equivalent to :c:enumerator:`NCCL_GIN_CONNECTION_FULL <ncclGinConnectionType_t.NCCL_GIN_CONNECTION_FULL>` once :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>` exists). The
+  :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>` field is available starting with NCCL 2.29.7 (see :c:type:`ncclDevCommRequirements` in
   :ref:`device_api_setup`).
 
-* **Deprecated** :c:member:`ginForceEnable` — Prefer :c:member:`ginConnectionType` on NCCL 2.29.7 and later. ``ginForceEnable``
+* **Deprecated** :c:member:`ginForceEnable <ncclDevCommRequirements.ginForceEnable>` — Prefer :c:member:`ginConnectionType <ncclDevCommRequirements.ginConnectionType>` on NCCL 2.29.7 and later. ``ginForceEnable``
   is deprecated since NCCL 2.29.7.

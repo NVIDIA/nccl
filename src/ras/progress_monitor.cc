@@ -11,6 +11,7 @@
 #include "debug.h"
 #include "param.h"
 #include "checks.h"
+#include "compiler.h"
 #include "utils.h"
 #include "alloc.h"
 #include "gdrwrap.h"
@@ -47,12 +48,18 @@ static struct ncclGpuProgressCounterMonitor* gpuProgressCounterMonitors[kRasMaxC
 static bool progressCounterMonitorTerminationRegistered;
 static bool progressCounterMonitorTerminating;
 
+// Query gathering and host publication share this lock; never hold it across device reads.
+// If both are needed, acquire the per-device mutex before ncclCommsMutex.
+extern std::mutex ncclCommsMutex;
+
 static int progressCounterMonitorPollIntervalMs() {
   return std::max((int)ncclParamProgressCounterMonitorPollMs(), kProgressCounterMonitorMinPollMs);
 }
 
-static int progressCounterMonitorStaleThresholdMs() {
-  return std::max((int)ncclParamProgressCounterMonitorStaleMs(), kProgressCounterMonitorMinStaleMs);
+// Consecutive samples are continuous only if they fall within the limit, so allow two poll intervals.
+int ncclProgressCounterMonitorStaleThresholdMs() {
+  return std::max({(int)ncclParamProgressCounterMonitorStaleMs(), kProgressCounterMonitorMinStaleMs,
+                   2 * progressCounterMonitorPollIntervalMs()});
 }
 
 // Rate-limit sampler errors; caller holds the per-device mutex.
@@ -63,6 +70,53 @@ static bool progressCounterMonitorErrorLogAllowed(struct ncclGpuProgressCounterM
   if (g->lastErrorWarnNs != 0 && nowNs - g->lastErrorWarnNs < intervalNs) return false;
   g->lastErrorWarnNs = nowNs;
   return true;
+}
+
+// Publish a sample read between beginNs and nowNs, updating the history against the previous sample;
+// across a sampling gap no advance is observed. The caller holds ncclCommsMutex and the device mutex.
+void ncclProgressCounterMonitorPublish(struct ncclComm* comm, const struct ncclProgressCountersBlock* sample,
+                                       uint64_t beginNs, uint64_t nowNs, uint64_t staleNs) {
+  const struct ncclProgressCountersBlock* previous = comm->hostCountersBlock;
+  bool continuous = comm->rasCounterLastRefreshNs != 0 && nowNs - comm->rasCounterLastRefreshNs < staleNs;
+
+  uint64_t activeMask = 0, previousActiveMask = 0;
+  for (int channel = 0; channel < MAXCHANNELS; channel++) {
+    activeMask |= sample->collOpActive[channel];
+    previousActiveMask |= previous->collOpActive[channel];
+  }
+  uint32_t uninstrumentedMask =
+    COMPILER_ATOMIC_LOAD(&comm->rasCounterUninstrumentedSlotMask, std::memory_order_relaxed);
+  uint32_t graphUnsafeMask = COMPILER_ATOMIC_LOAD(&comm->rasHostCountGraphUnsafeMask, std::memory_order_relaxed);
+
+  for (int slot = 0; slot < NCCL_NUM_PROGRESS_COUNTERS; slot++) {
+    uint64_t completed = sample->completedWorkCount[slot];
+    // Even with incomplete coverage, an increase proves instrumented-path progress.
+    bool completedAdvanced = continuous && completed > previous->completedWorkCount[slot];
+    // A count was reached no later than its first observation, even after a sampling gap.
+    if (slot < NCCL_NUM_FUNCTIONS && completed != previous->completedWorkCount[slot])
+      comm->rasCounterCompletedChangedNs[slot] = nowNs;
+
+    bool pending = (activeMask & (1ULL << slot)) != 0;
+    // Host counts exist only for legacy slots, and need full coverage without graph replays.
+    if (slot < NCCL_NUM_FUNCTIONS && !((uninstrumentedMask | graphUnsafeMask) & (1ULL << slot))) {
+      uint64_t launched = COMPILER_ATOMIC_LOAD(&comm->seqNumber[slot], std::memory_order_relaxed);
+      pending |= launched > completed;
+    }
+
+    uint64_t sinceNs = comm->rasCounterNoProgressSinceNs[slot];
+    if (!pending) {
+      sinceNs = 0;
+    } else if (!continuous || completedAdvanced || sinceNs == 0 ||
+               ((activeMask & ~previousActiveMask) & (1ULL << slot))) {
+      // A newly observed active bit must not inherit an earlier host-only wait.
+      sinceNs = nowNs;
+    }
+    comm->rasCounterNoProgressSinceNs[slot] = sinceNs;
+  }
+  memcpy(comm->hostCountersBlock, sample, sizeof(*sample));
+  // Freshness includes the read window; observed progress uses its end.
+  comm->rasCounterLastRefreshNs = beginNs;
+  COMPILER_ATOMIC_STORE(&comm->rasCounterMonitorState, ncclCounterRunning, std::memory_order_release);
 }
 
 // Stop host readers at exit.
@@ -87,8 +141,8 @@ static void progressCounterMonitorTerminate() {
   }
 }
 
-// Hold the registration mutex while sampling.
-// Update the host mirror only after a successful, within-budget read.
+// Hold the registration mutex while sampling. Every completed read is published; a slow one is dated by its start,
+// so the query reports it as stale.
 static void progressCounterMonitorLoop(struct ncclGpuProgressCounterMonitor* g) {
   std::unique_lock<std::mutex> lock(g->mutex);
   while (!g->shouldStop) {
@@ -103,8 +157,7 @@ static void progressCounterMonitorLoop(struct ncclGpuProgressCounterMonitor* g) 
     }
     if (g->shouldStop) break;
 
-    uint64_t staleNs = (uint64_t)progressCounterMonitorStaleThresholdMs() * 1000000ULL;
-    uint64_t readBudgetNs = std::min<uint64_t>((uint64_t)pollMs * 1000000ULL, staleNs);
+    uint64_t staleNs = (uint64_t)ncclProgressCounterMonitorStaleThresholdMs() * 1000000ULL;
     for (struct ncclComm* comm = ncclIntruQueueHead(&g->registrations); comm != nullptr;
          comm = comm->nextProgressRegistration) {
       struct ncclProgressCountersBlock sample;
@@ -118,15 +171,12 @@ static void progressCounterMonitorLoop(struct ncclGpuProgressCounterMonitor* g) 
         memcpy((char*)&sample + i * sizeof(value), &value, sizeof(value));
       }
       uint64_t nowNs = clockNano();
-      if (nowNs - beginNs >= readBudgetNs) {
-        if (progressCounterMonitorErrorLogAllowed(g, nowNs))
-          INFO(NCCL_RAS,
-               "RAS progress counter sample unavailable on cudaDev %d rank %d "
-               "(read %.3fs, limit %.3fs)",
-               g->cudaDev, comm->rank, (nowNs - beginNs) / 1e9, readBudgetNs / 1e9);
-        continue;
-      }
-      memcpy(comm->hostCountersBlock, &sample, sizeof(sample));
+      if (nowNs - beginNs >= staleNs && progressCounterMonitorErrorLogAllowed(g, nowNs))
+        INFO(NCCL_RAS,
+             "RAS progress counter read on cudaDev %d rank %d took %.3fs, longer than the %.3fs freshness limit",
+             g->cudaDev, comm->rank, (nowNs - beginNs) / 1e9, staleNs / 1e9);
+      std::lock_guard<std::mutex> commsLock(ncclCommsMutex);
+      ncclProgressCounterMonitorPublish(comm, &sample, beginNs, nowNs, staleNs);
     }
   }
 }
@@ -134,7 +184,7 @@ static void progressCounterMonitorLoop(struct ncclGpuProgressCounterMonitor* g) 
 // Register only mapped counter allocations. The sampler does not enable the
 // normal work FIFO/RMA GDRCopy paths.
 ncclResult_t ncclProgressCounterMonitorInit(struct ncclComm* comm) {
-  if (comm->mappedCountersBlock == nullptr) return ncclSuccess;
+  if (comm->mappedCountersBlock == nullptr) return comm->hostCountersBlock == nullptr ? ncclSuccess : ncclSystemError;
   if (comm->cudaDev < 0 || comm->cudaDev >= kRasMaxCudaDevices) return ncclInvalidArgument;
   if (comm->progressCounterMonitor != nullptr) return ncclInvalidUsage;
   struct ncclGpuProgressCounterMonitor* g;
@@ -168,12 +218,32 @@ ncclResult_t ncclProgressCounterMonitorInit(struct ncclComm* comm) {
   }
   comm->progressCounterMonitor = g;
   ncclIntruQueueEnqueue(&g->registrations, comm);
+  COMPILER_ATOMIC_STORE(&comm->rasCounterMonitorStartNs, clockNano(), std::memory_order_relaxed);
+  COMPILER_ATOMIC_STORE(&comm->rasCounterMonitorState, ncclCounterRunning, std::memory_order_release);
   g->cv.notify_one();
   INFO(NCCL_RAS,
        "RAS progress counter sampler registered rank %d cudaDev %d "
        "(NCCL_RAS_DEVICE_ENABLE=1)",
        comm->rank, comm->cudaDev);
   return ncclSuccess;
+}
+
+static void progressCounterSetStickyBit(uint32_t* mask, int bit) {
+  uint32_t expected = COMPILER_ATOMIC_LOAD(mask, std::memory_order_relaxed);
+  while (!(expected & (1u << bit)) &&
+         !COMPILER_ATOMIC_COMPARE_EXCHANGE(mask, &expected, expected | (1u << bit), std::memory_order_relaxed,
+                                           std::memory_order_relaxed)) {
+  }
+}
+
+void ncclProgressCounterMarkUninstrumented(struct ncclComm* comm, int func) {
+  if (comm->mappedCountersBlock == nullptr || func < 0 || func >= ncclNumFuncs) return;
+  progressCounterSetStickyBit(&comm->rasCounterUninstrumentedSlotMask, func);
+}
+
+void ncclProgressCounterMarkGraphUnsafe(struct ncclComm* comm, int func) {
+  if (comm->mappedCountersBlock == nullptr || func < 0 || func >= NCCL_NUM_FUNCTIONS) return;
+  progressCounterSetStickyBit(&comm->rasHostCountGraphUnsafeMask, func);
 }
 
 static bool progressCounterRegistrationMatches(struct ncclComm* registered, struct ncclComm* target) {

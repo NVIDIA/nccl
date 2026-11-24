@@ -18,6 +18,7 @@
 #include "enqueue/task_sched.h"
 #include "enqueue/task_pretuning.h"
 #include "enqueue/sched_profiler.h"
+#include "progress_monitor.h"
 #include "config/collconfig.h"
 #include <algorithm>
 #include <map>
@@ -391,6 +392,8 @@ static ncclResult_t symSchedBuildKernelPlan(struct ncclComm* comm, struct ncclSy
     taskInfo = ncclIntruQueueDequeue(tasks);
     count = taskInfo->raw->coll.count;
     NCCLCHECKGOTO(symSchedMakeDevWorkFromTuningInfo(comm, taskInfo, &devWork), ret, fail);
+    // Symmetric kernels do not advance the GPU progress counters that RAS compares with seqNumber.
+    ncclProgressCounterMarkUninstrumented(comm, taskInfo->raw->coll.func);
     ncclSchedProfilerLaunchAddTask(profiler, taskInfo);
     symSchedFreeTuningInfoRaw(comm, taskInfo);
     taskInfo = nullptr;

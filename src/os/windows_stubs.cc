@@ -61,6 +61,11 @@ ncclResult_t ncclProgressCounterMonitorDestroy(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+void ncclProgressCounterMarkUninstrumented(struct ncclComm* comm, int func) {
+  (void)comm;
+  (void)func;
+}
+
 /* --------------------------------------------------------------------------
  * Env plugin stubs
  * -------------------------------------------------------------------------- */

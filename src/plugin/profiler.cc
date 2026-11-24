@@ -1405,10 +1405,12 @@ ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan) {
 ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
   if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) {
     // Captured callbacks may not run on every rank.
-    if (!plan->persistent) {
-      for (struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue); ct != nullptr; ct = ct->next) {
-        // RAS also uses these counters when no profiler plugin is loaded.
+    for (struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue); ct != nullptr; ct = ct->next) {
+      // RAS also uses these counters when no profiler plugin is loaded.
+      if (!plan->persistent) {
         COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
+      } else {
+        ncclProgressCounterMarkGraphUnsafe(plan->comm, ct->func);
       }
     }
     return ncclSuccess;
@@ -1452,6 +1454,8 @@ ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
     if (!plan->persistent || ((profilerLive(&plan->groupEventHandle) || profilerLive(&ct->apiEventHandle)) &&
                               (ct->eActivationMask & ncclProfileKernelCh))) {
       COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
+    } else {
+      ncclProgressCounterMarkGraphUnsafe(plan->comm, ct->func);
     }
     ct = ct->next;
   }

@@ -2311,6 +2311,7 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
 
   // Start the NCCL progress counter monitor that refreshes host counter mirrors.
   if (ncclProgressCounterMonitorInit(comm) != ncclSuccess) {
+    COMPILER_ATOMIC_STORE(&comm->rasCounterMonitorState, ncclCounterInitFailed, std::memory_order_release);
     INFO(NCCL_RAS,
          "NCCL progress counter monitor initialization failed on cudaDev %d; "
          "continuing without progress-counter mirroring",

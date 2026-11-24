@@ -15,6 +15,7 @@
 #include "enqueue.h"
 #include "config/algorithm_registry.h"
 #include "profiler.h"
+#include "progress_monitor.h"
 #include <cuda_fp16.h>
 #if defined(__CUDA_FP8_TYPES_EXIST__)
 #include <cuda_fp8.h>
@@ -296,6 +297,7 @@ static ncclResult_t ncclSymmetricTaskSchedulerImpl(
   struct ncclComm* comm, struct ncclIntruQueue<struct ncclTaskColl, &ncclTaskColl::next>* symTaskQueue,
   struct ncclKernelPlan* plan, KernelComm const& kcomm) {
   struct ncclTaskColl* headTask = ncclIntruQueueHead(symTaskQueue);
+  ncclProgressCounterMarkUninstrumented(comm, headTask->func);
   int devFuncId = headTask->devFuncId;
   struct ncclTaskColl* task = NULL;
   ssize_t totalCount = 0;

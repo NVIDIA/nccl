@@ -18,6 +18,7 @@
 #include "register.h"
 #include "graph.h"
 #include "profiler.h"
+#include "progress_monitor.h"
 #include "allocator.h"
 #include "dev_runtime.h"
 #include "sym_kernels.h"
@@ -859,8 +860,23 @@ struct ncclComm {
   struct ncclProfilerCommState profiler;
 
   // RAS GPU-resident counters support
-  // Host mirror updated after a successful, within-budget sample.
+  // Host mirror published under ncclCommsMutex after a successful, within-budget sample.
   struct ncclProgressCountersBlock* hostCountersBlock;
+  // Sticky mask of slots with work not covered by the generic-kernel counters.
+  static_assert(NCCL_NUM_PROGRESS_COUNTERS <= 32, "Uninstrumented-slot mask is too small");
+  uint32_t rasCounterUninstrumentedSlotMask;
+  // Sticky mask of slots whose seqNumber omits graph replays.
+  static_assert(NCCL_NUM_FUNCTIONS <= 32, "Host-count graph-unsafe mask is too small");
+  uint32_t rasHostCountGraphUnsafeMask;
+  // The sampler writes the following three fields and the RAS gather reads them, both under ncclCommsMutex.
+  // Start of each slot's current no-progress episode; zero if none.
+  uint64_t rasCounterNoProgressSinceNs[NCCL_NUM_PROGRESS_COUNTERS];
+  // When each legacy slot's completed count was first observed at its current value; zero if never.
+  uint64_t rasCounterCompletedChangedNs[NCCL_NUM_FUNCTIONS];
+  // Start of the published sample's read window, so freshness includes read time; zero before the first sample.
+  uint64_t rasCounterLastRefreshNs;
+  ncclCounterMonitorState rasCounterMonitorState;
+  uint64_t rasCounterMonitorStartNs; // Successful setup; bounds first-sample waiting.
   struct ncclGpuProgressCounterMonitor* progressCounterMonitor;
   struct ncclProgressCountersBlock* mappedCountersBlock;
   // Intrusive link in the per-device progress-counter registration list.

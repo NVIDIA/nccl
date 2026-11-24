@@ -13,6 +13,7 @@
 #include "param.h"
 #include "dev_runtime.h"
 #include "rma/rma.h"
+#include "progress_monitor.h"
 
 NCCL_PARAM(RMADisable, "RMA_DISABLE", 0);
 
@@ -161,6 +162,7 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
 
   // Get the first task to determine the operation category
   struct ncclTaskRma* firstTask = ncclIntruQueueDequeue(ctxQueue);
+  ncclProgressCounterMarkUninstrumented(comm, firstTask->func);
 
   // Initialize plan
   plan->isRma = true;
@@ -281,6 +283,7 @@ ncclResult_t scheduleRmaTasksToPlan(struct ncclComm* comm, struct ncclKernelPlan
       while (!ncclIntruQueueEmpty(q)) {
         struct ncclTaskRma* task = ncclIntruQueueHead(q);
         if (!isRmaPutOrSignal(task->func)) break;        // stop at WaitSignal
+        ncclProgressCounterMarkUninstrumented(comm, task->func);
         ncclIntruQueueDequeue(q);
         if (isLsaAccessible(comm, task->peer)) {
           ncclIntruQueueEnqueue(&plan->rmaTaskQueueCe, task);

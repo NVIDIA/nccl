@@ -14,6 +14,7 @@
 #include "alloc.h"
 #include "enqueue.h"
 #include "tuning.h"
+#include "progress_monitor.h"
 
 // Graph batching remains opt-in for copy lists without an explicit preference.
 NCCL_PARAM(CeBatchCaptureEnable, "CE_BATCH_CAPTURE_ENABLE", 0);
@@ -2589,6 +2590,7 @@ fail:
 ncclResult_t scheduleCeCollTaskToPlan(struct ncclComm* comm, struct ncclKernelPlan* plan) {
   struct ncclKernelPlanner* planner = &comm->planner;
   struct ncclTaskColl* task = ncclIntruQueueHead(&planner->collCeTaskQueue);
+  ncclProgressCounterMarkUninstrumented(comm, task->func);
 
   plan->isCeColl = true;
   plan->ceCollArgs = ncclMemoryStackAlloc<struct ncclCeCollArgs>(&comm->memScoped);

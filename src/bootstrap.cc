@@ -731,7 +731,7 @@ static ncclResult_t ringAllInfo(struct ncclComm* comm, struct bootstrapState* st
 
 exit:
   free(ringData);
-  return ncclSuccess;
+  return res;
 }
 
 static ncclResult_t sendToRoot(struct ncclBootstrapHandle* handle, struct ncclComm* comm, struct extInfo* info) {

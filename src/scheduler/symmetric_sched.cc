@@ -286,6 +286,24 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     }
   }
 
+  // Fallback can reverse size order and leave the tail linked to selected symmetric work.
+  // Rebuild descending size-bin order, preserving the remaining list's within-bin order.
+  if (remainTasksTail) remainTasksTail->next = nullptr;
+  struct ncclTaskColl* reversed = nullptr;
+  task = *remainTasksHead;
+  while (task != nullptr) {
+    struct ncclTaskColl* next = task->next;
+    task->next = reversed;
+    reversed = task;
+    task = next;
+  }
+  struct ncclTaskCollSorter fallbackSorter = {};
+  while (reversed != nullptr) {
+    struct ncclTaskColl* next = reversed->next;
+    ncclTaskCollSorterInsert(&fallbackSorter, reversed, reversed->trafficBytes);
+    reversed = next;
+  }
+  *remainTasksHead = ncclTaskCollSorterDequeueAll(&fallbackSorter);
   return ret;
 }
 

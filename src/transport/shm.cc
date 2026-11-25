@@ -21,6 +21,7 @@ struct shmBuffInfo {
 
 struct shmConnectInfo {
   int rank;
+  int noLL128; // layout of the block this rank allocated
   ncclShmIpcDesc_t desc;
   struct shmBuffInfo buf;
 };
@@ -31,6 +32,7 @@ struct shmSendResources {
   ncclShmIpcDesc_t remDesc;
   struct ncclSendMem* hostMem;
   struct ncclSendMem* devHostMem;
+  int noLL128;
 };
 
 struct shmRecvResources {
@@ -39,6 +41,7 @@ struct shmRecvResources {
   ncclShmIpcDesc_t remDesc;
   struct ncclRecvMem* hostMem;
   struct ncclRecvMem* devHostMem;
+  int noLL128;
 };
 
 struct shmProxyResources {
@@ -98,8 +101,13 @@ static ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
   NCCLCHECK(ncclCalloc(&resources, 1));
   send->transportResources = resources;
 
+  // The resource family decided whether its connections carry the LL128 buffer (initLL128Buffers)
+  resources->noLL128 = comm->sharedRes->ll128IntraBuffers == 0;
   if (shmLocality == SHM_SEND_SIDE) {
-    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) shmSize += comm->buffSizes[p];
+    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+      if (resources->noLL128 && p == NCCL_PROTO_LL128) continue;
+      shmSize += comm->buffSizes[p];
+    }
   }
   req.size = shmSize;
   if (myInfo->hostHash == peerInfo->hostHash && myInfo->pidHash == peerInfo->pidHash) req.legacy = true;
@@ -110,6 +118,7 @@ static ncclResult_t shmSendSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
                                   (void*)info, sizeof(struct shmConnectInfo)));
 
   info->rank = comm->rank;
+  info->noLL128 = resources->noLL128;
   resources->hostMem = (struct ncclSendMem*)info->buf.hptr;
   resources->devHostMem = (struct ncclSendMem*)info->buf.dptr;
 
@@ -131,8 +140,12 @@ static ncclResult_t shmRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
 
   static_assert(sizeof(struct shmConnectInfo) <= sizeof(struct ncclConnect), "shm Connect Info is too big");
 
+  resources->noLL128 = comm->sharedRes->ll128IntraBuffers == 0;
   if (shmLocality == SHM_RECV_SIDE) {
-    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) shmSize += comm->buffSizes[p];
+    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+      if (resources->noLL128 && p == NCCL_PROTO_LL128) continue;
+      shmSize += comm->buffSizes[p];
+    }
   }
   req.size = shmSize;
   if (myInfo->hostHash == peerInfo->hostHash && myInfo->pidHash == peerInfo->pidHash) req.legacy = true;
@@ -143,6 +156,7 @@ static ncclResult_t shmRecvSetup(struct ncclComm* comm, struct ncclTopoGraph* gr
                                   (void*)info, sizeof(struct shmConnectInfo)));
 
   info->rank = comm->rank;
+  info->noLL128 = resources->noLL128;
   resources->hostMem = (struct ncclRecvMem*)info->buf.hptr;
   resources->devHostMem = (struct ncclRecvMem*)info->buf.dptr;
 
@@ -160,8 +174,14 @@ static ncclResult_t shmSendConnect(struct ncclComm* comm, struct ncclConnect* co
   NCCLCHECK(ncclShmImportShareableBuffer(comm, info->rank, &info->desc, (void**)&resources->remHostMem,
                                          (void**)&resources->devRemHostMem, &resources->remDesc));
 
+  // The side that allocated the block decided its layout
+  int noLL128 = shmLocality == SHM_SEND_SIDE ? resources->noLL128 : info->noLL128;
   buff = shmLocality == SHM_SEND_SIDE ? (char*)(resources->devHostMem + 1) : (char*)(resources->devRemHostMem + 1);
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+    if (noLL128 && p == NCCL_PROTO_LL128) {
+      send->conn.buffs[p] = NULL; // no LL128 buffer in this block
+      continue;
+    }
     send->conn.buffs[p] = buff;
     buff += comm->buffSizes[p];
   }
@@ -185,8 +205,13 @@ static ncclResult_t shmRecvConnect(struct ncclComm* comm, struct ncclConnect* co
   NCCLCHECK(ncclShmImportShareableBuffer(comm, info->rank, &info->desc, (void**)&resources->remHostMem,
                                          (void**)&resources->devRemHostMem, &resources->remDesc));
 
+  int noLL128 = shmLocality == SHM_RECV_SIDE ? resources->noLL128 : info->noLL128;
   buff = shmLocality == SHM_RECV_SIDE ? (char*)(resources->devHostMem + 1) : (char*)(resources->devRemHostMem + 1);
   for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+    if (noLL128 && p == NCCL_PROTO_LL128) {
+      recv->conn.buffs[p] = NULL; // no LL128 buffer in this block
+      continue;
+    }
     recv->conn.buffs[p] = buff;
     buff += comm->buffSizes[p];
   }

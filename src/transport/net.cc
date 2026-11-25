@@ -104,6 +104,7 @@ struct sendNetResources {
   int channelId;
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
+  int noLL128;     // dedicated buffers without the LL128 slice
   char* buffers[NCCL_NUM_PROTOCOLS];
   ssize_t buffSizes[NCCL_NUM_PROTOCOLS];
   void* mhandles[NCCL_NUM_PROTOCOLS];
@@ -138,6 +139,7 @@ struct recvNetResources {
   int channelId;
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
+  int noLL128;     // dedicated buffers without the LL128 slice
   char* buffers[NCCL_NUM_PROTOCOLS];
   ssize_t buffSizes[NCCL_NUM_PROTOCOLS];
   void* mhandles[NCCL_NUM_PROTOCOLS];
@@ -181,6 +183,7 @@ struct setupReq {
   int channelId;
   int connIndex;
   int sameDevice;  // proxy and kernel are on the same CUDA device
+  int noLL128;     // dedicated buffers without the LL128 slice
 };
 
 NCCL_PARAM(NetOptionalRecvCompletion, "NET_OPTIONAL_RECV_COMPLETION", 1);
@@ -303,6 +306,8 @@ static ncclResult_t sendSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
                                                                        1;
   req.channelId = channelId;
   req.connIndex = connIndex;
+  // The resource family decided whether its network connections carry the LL128 buffer (initLL128Buffers)
+  req.noLL128 = comm->sharedRes->ll128NetBuffers == 0;
 
   int proxyRank;
   int64_t netId;
@@ -363,6 +368,7 @@ static ncclResult_t recvSetup(struct ncclComm* comm, struct ncclTopoGraph* graph
                                                                        1;
   req.channelId = channelId;
   req.connIndex = connIndex;
+  req.noLL128 = comm->sharedRes->ll128NetBuffers == 0;
 
   // Use myInfo->rank for peerRank as receiver uses its own netdev
   int proxyRank;
@@ -768,6 +774,7 @@ static ncclResult_t sendProxySetup(struct ncclProxyConnection* connection, struc
   resources->channelId = req->channelId;
   resources->connIndex = req->connIndex;
   resources->sameDevice = req->sameDevice;
+  resources->noLL128 = req->noLL128;
   ncclNetProperties_t props;
   NCCLCHECK(proxyState->ncclNet->getProperties(req->netDev, &props));
   /* DMA-BUF support */
@@ -810,6 +817,7 @@ static ncclResult_t recvProxySetup(struct ncclProxyConnection* connection, struc
   resources->channelId = req->channelId;
   resources->connIndex = req->connIndex;
   resources->sameDevice = req->sameDevice;
+  resources->noLL128 = req->noLL128;
   ncclNetProperties_t props;
   NCCLCHECK(proxyState->ncclNet->getProperties(req->netDev, &props));
   /* DMA-BUF support */
@@ -934,6 +942,7 @@ static ncclResult_t sendProxyConnect(struct ncclProxyConnection* connection, str
   if (resources->shared == 0) {
     // Only allocate dedicated buffers for ring/tree, not for p2p
     for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+      if (resources->noLL128 && p == NCCL_PROTO_LL128) continue;
       NCCL_NET_MAP_ADD_POINTER(map, 0, p != NCCL_PROTO_LL && resources->useGdr ? 1 : 0, proxyState->buffSizes[p],
                                buffs[p]);
       resources->buffSizes[p] = proxyState->buffSizes[p];
@@ -1120,6 +1129,7 @@ static ncclResult_t recvProxyConnect(struct ncclProxyConnection* connection, str
   if (resources->shared == 0) {
     // Only allocate dedicated buffers for ring/tree, not for p2p
     for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+      if (resources->noLL128 && p == NCCL_PROTO_LL128) continue;
       NCCL_NET_MAP_ADD_POINTER(map, 0, resources->useGdr ? 1 : 0, proxyState->buffSizes[p], buffs[p]);
       resources->buffSizes[p] = proxyState->buffSizes[p];
     }

@@ -230,9 +230,9 @@ All ReduceSum variants reduce from N sources to one destination using sum. See :
    *basePtr* is the base pointer, *displ* is the stride in bytes; *dstPtr* and *count* are as for
    :ref:`ncclLsaReduceSum <ncclLsaReduceSum-window-team>`.
 
-**Multimem reduce (ncclMultimemReduceSum)** — Multimem reduce uses NVLink SHARP (NVLS) multicast; the NVLink
+**Multimem reduce** (:cpp:func:`ncclMultimemReduceSum`) — Multimem reduce uses NVLink SHARP (NVLS) multicast; the NVLink
 Switch performs the reduction from multimem sources. To query NVLS/multimem capability from the host, call
-:c:func:`ncclCommQueryProperties` and check the :c:member:`multimemSupport` field of :c:type:`ncclCommProperties_t`.
+:c:func:`ncclCommQueryProperties` and check the :c:member:`multimemSupport <ncclCommProperties_t.multimemSupport>` field of :c:type:`ncclCommProperties_t`.
 **Multimem restriction:** The local rank (self) must always be part of the multimem reduction or store; the multimem
 source or destination logically includes the calling rank. For multimem reduce, supported element types are
 ``float``, ``double``, ``half``; the low-precision types when available: ``__nv_bfloat16``, ``__nv_fp8_e4m3``,
@@ -249,7 +249,7 @@ and block-size combinations.
    Reduces from the multimem source *src* (one logical buffer maps to all participating ranks) into local *dstPtr*.
    Invocation as for :ref:`ncclLsaReduceSum <ncclLsaReduceSum-window-devComm>`.
    *src* is the symmetric pointer to the multimem source; *dstPtr* is the local destination; *count* is the number of
-   elements; *multimemHandle* identifies the multimem context. To obtain it, set :c:member:`lsaMultimem` to true in
+   elements; *multimemHandle* identifies the multimem context. To obtain it, set :c:member:`lsaMultimem <ncclDevCommRequirements.lsaMultimem>` to true in
    :c:type:`ncclDevCommRequirements` when calling :c:func:`ncclDevCommCreate`; the handle is then available from the
    device communicator in device code.
 
@@ -340,7 +340,7 @@ On SM 10.0 and later (Blackwell), :ref:`ncclLsaCopyTma <ncclLsaCopyTma-window-de
 
    Same as :ref:`above <ncclLsaCopy-symptr-devComm>`, except the user passes *team* explicitly instead of *devComm*.
 
-**TMA copy (ncclLsaCopyTma)** — Same LSA copy as :ref:`ncclLsaCopy <ncclLsaCopy-window-devComm>`, implemented with
+**TMA copy** (:cpp:func:`ncclLsaCopyTma`) — Same LSA copy as :ref:`ncclLsaCopy <ncclLsaCopy-window-devComm>`, implemented with
 the Tensor Memory Accelerator. Compile and launch the kernel for SM 10.0+ (``__CUDA_ARCH__ >= 1000``). Pass the
 staging-buffer size as the argument *smemBytesTotal* after the buffer pointer *smemPtr*.
 
@@ -436,8 +436,8 @@ below.
    ``basePtr + i*displ`` for
    *i* = 0…*nDst* − 1. *displ* is the stride in bytes; *count* is the number of elements copied to each destination.
 
-**Multimem copy (ncclMultimemCopy)** — Copies from one local source to one multimem destination (one logical buffer
-over all ranks). Uses NVLink SHARP (NVLS) multicast. Query :c:member:`multimemSupport` for capability; *multimemHandle*
+**Multimem copy** (:cpp:func:`ncclMultimemCopy`) — Copies from one local source to one multimem destination (one logical buffer
+over all ranks). Uses NVLink SHARP (NVLS) multicast. Query :c:member:`multimemSupport <ncclCommProperties_t.multimemSupport>` for capability; *multimemHandle*
 as for :ref:`multimem reduce <ncclMultimemReduceSum-symptr>`. All element types are supported; for types less than
 32 bits wide, the define described above (e.g. ``NCCL_DEVICE_PERMIT_EXPERIMENTAL_CODE=1``) must be set for some
 count and pointer combinations.
@@ -568,8 +568,8 @@ Multimem ReduceSumCopy (ncclMultimemReduceSumCopy)
 
 Reduces from one multimem source and copies to one multimem destination (each one logical buffer maps to all
 participating ranks) in one call. To query multimem capability from the host, call :c:func:`ncclCommQueryProperties`
-and check the :c:member:`multimemSupport` field of :c:type:`ncclCommProperties_t`. The multimem handle is obtained by
-setting :c:member:`lsaMultimem` to true in :c:type:`ncclDevCommRequirements` when calling :c:func:`ncclDevCommCreate`;
+and check the :c:member:`multimemSupport <ncclCommProperties_t.multimemSupport>` field of :c:type:`ncclCommProperties_t`. The multimem handle is obtained by
+setting :c:member:`lsaMultimem <ncclDevCommRequirements.lsaMultimem>` to true in :c:type:`ncclDevCommRequirements` when calling :c:func:`ncclDevCommCreate`;
 it is then available from the device communicator in device code.
 
 .. _ncclMultimemReduceSumCopy-window:
@@ -762,7 +762,7 @@ Use a source lambda that maps index *i* to the *i*-th *other* rank and pass *nSr
 .. _ncclLsaReduceSumLsaCopy-lambda:
 
 The following four overloads are the lambda-based forms of ReduceSumCopy. They differ by whether the **source** and
-**destination** are **:ref:`LSA <device_api_lsa>`** or **multimem**. For any **multimem** side, the common case is a
+**destination** are :ref:`LSA <device_api_lsa>` or **multimem**. For any **multimem** side, the common case is a
 single multimem pointer (one already represents multiple remote spaces). Multiple multimem pointers are also
 supported; the API then
 initiates multicast to or from all of them.
@@ -775,7 +775,7 @@ initiates multicast to or from all of them.
 
    For shared requirements (invocation model, memory, alignment), see the :ref:`introduction <device_api_reducecopy>`.
 
-   **Source: :ref:`LSA <device_api_lsa>`. Destination: LSA.** Same as
+   **Source:** :ref:`LSA <device_api_lsa>`. **Destination: LSA.** Same as
    :ref:`ncclLsaReduceSumCopy <ncclLsaReduceSumCopy-window-team>`, but the source layout is given by
    *srcLambda*(*i*) returning ``T*`` for each of *nSrc* sources (*i* = 0 to *nSrc* − 1)
    and the destination layout by *dstLambda*(*j*) for each of *nDst* destinations (*j* = 0 to *nDst* − 1). *coop* and
@@ -788,7 +788,7 @@ initiates multicast to or from all of them.
 
    For shared requirements (invocation model, memory, alignment), see the :ref:`introduction <device_api_reducecopy>`.
 
-   **Source: :ref:`LSA <device_api_lsa>`. Destination: multimem.** Same as
+   **Source:** :ref:`LSA <device_api_lsa>`. **Destination: multimem.** Same as
    :ref:`ncclLsaReduceSumMultimemCopy <ncclLsaReduceSumMultimemCopy-symptr>`, but the source layout is given by
    *srcLambda*(*i*) for *i* = 0 to *nSrc* − 1 and the destination layout by *dstLambda*(*j*) for *j* = 0 to
    *nDst* − 1. *srcLambda* returns :ref:`LSA <device_api_lsa>` pointers; *dstLambda* must return multimem pointers
@@ -802,7 +802,7 @@ initiates multicast to or from all of them.
 
    For shared requirements (invocation model, memory, alignment), see the :ref:`introduction <device_api_reducecopy>`.
 
-   **Source: multimem. Destination: :ref:`LSA <device_api_lsa>`.** Same as
+   **Source: multimem. Destination:** :ref:`LSA <device_api_lsa>`. Same as
    :ref:`ncclMultimemReduceSumLsaCopy <ncclMultimemReduceSumLsaCopy-symptr>`, but the source layout is given by
    *srcLambda*(*i*) for *i* = 0 to *nSrc* − 1 and the destination layout by *dstLambda*(*j*) for *j* = 0 to
    *nDst* − 1. *srcLambda* must return multimem pointers (e.g. from

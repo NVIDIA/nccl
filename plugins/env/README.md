@@ -76,7 +76,7 @@ Otherwise, plugins can return one of the following:
 
 NCCL will call the `init` function first during initialization, passing the NCCL version information. This allows the plugin to initialize its internal state and validate compatibility with the NCCL version.
 
-The `getEnv` function is called whenever NCCL needs to retrieve an environment variable value. This provides the plugin with the opportunity to implement custom environment variable resolution, validation, or transformation logic. The plugin should keep every variable accessible thoroughout the plugin lifetime (i.e., until NCCL calls finalize).
+The `getEnv` function is called whenever NCCL needs to retrieve an environment variable value. This provides the plugin with the opportunity to implement custom environment variable resolution, validation, or transformation logic. The plugin should keep every variable accessible throughout the plugin lifetime (i.e., until NCCL calls finalize).
 
 When NCCL is finalized, the `finalize` function is called to allow the plugin to clean up any resources and perform any necessary cleanup operations.
 

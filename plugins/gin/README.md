@@ -19,7 +19,7 @@ The complete architecture looks like this:
 The purple box is the custom implementation via GIN CPU Proxy. This implementation shares the
 same host plugin API as NCCL RMA. Refer to `plugins/rma/README.md` for details.
 
-The remainder of this document focuses on the full NCCL GIN custom implementation. There's 2 components,
+The remainder of this document focuses on the full NCCL GIN custom implementation. There are two components,
 shown as the green boxes in the diagram:
 
 * ncclGin: host-side API. Provided via a plugin loaded at runtime.
@@ -123,7 +123,7 @@ Get moves data from a (likely remote) source buffer to a local target buffer. Ge
 not required to be completed in the order they are requested.
 
 **Signal**
-Signal increments a target memory address by a fixed value. There's 2 types of visibility guarantees:
+Signal increments a target memory address by a fixed value. There are two types of visibility guarantees:
 strong and weak. The visibility of a *strong* signal guarantees the completion/visibility of all previous
 puts and signals, including the bundled put in the case of put+signal. The visibility of a *weak*
 signal guarantees the completion/visibility of the bundled put (in the case of put+signal), but makes
@@ -271,7 +271,7 @@ multiple threads to parallelize work.
 
 **Signal**
 
-A signal is a 64 bit memory location. There’s 2 kinds: indexed signal and VA signal.
+A signal is a 64 bit memory location. There are two kinds: indexed signals and VA signals.
 Indexed signals are created by the host when `createContext` is called. The plugin is
 responsible for allocating device memory accordingly. A VA signal is an arbitrary window/offset
 memory location allocated by the user and registered with NCCL.

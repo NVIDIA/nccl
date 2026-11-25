@@ -399,7 +399,7 @@ This also help avoid unnecessary reformatting when macro is changed.
 
 ### Include Order
 
-New `#include` directive should be added following the existing groupping. Do not reorder or regroup existing include directives.
+New `#include` directive should be added following the existing grouping. Do not reorder or regroup existing include directives.
 
 ---
 

@@ -118,13 +118,18 @@ Modify `pluginGetCollInfo` to implement your tuning strategy:
 __hidden ncclResult_t pluginGetCollInfo(void* context, ncclFunc_t collType, size_t nBytes,
                               int numPipeOps, float** collCostTable, int numAlgo, int numProto,
                               int regBuff, int* nChannels) {
-  // Your custom tuning logic here
+  float (*table)[NCCL_NUM_PROTOCOLS] = (float (*)[NCCL_NUM_PROTOCOLS])collCostTable;
+  // Preserve combinations that NCCL marked as unsupported.
   if (nBytes < 1024) {
     // Small message optimization
-    table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 0.0;
+    if (table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] != NCCL_ALGO_PROTO_IGNORE) {
+      table[NCCL_ALGO_TREE][NCCL_PROTO_SIMPLE] = 0.0;
+    }
   } else {
     // Large message optimization
-    table[NCCL_ALGO_RING][NCCL_PROTO_LL128] = 0.0;
+    if (table[NCCL_ALGO_RING][NCCL_PROTO_LL128] != NCCL_ALGO_PROTO_IGNORE) {
+      table[NCCL_ALGO_RING][NCCL_PROTO_LL128] = 0.0;
+    }
   }
 
   // Dynamic channel selection

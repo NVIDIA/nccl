@@ -13,6 +13,7 @@
 #include "allocator.h"
 #include "register.h"
 #include "utils.h"
+#include <mutex>
 
 #define NCCL_COMM_GROUP_INVALID 0x01
 
@@ -36,7 +37,7 @@ struct ncclGroupJob {
   struct ncclAsyncJob base;
   int groupRefCount;
   bool nonBlockingInit;
-  bool joined;
+  std::once_flag joinOnce; // joins the group thread once; later callers wait for that join
   bool hasLegacyColl;
   struct ncclComm* groupCommHead[ncclGroupTaskTypeNum];
   struct ncclComm* groupCommPreconnectHead;

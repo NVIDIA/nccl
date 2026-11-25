@@ -3588,10 +3588,6 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
         struct ncclReg* recvReg = NULL;
         bool allowUB = false;
         bool captured = false;
-        struct ncclCudaGraph graph;
-        // For cuda graph checking
-        NCCLCHECK(ncclCudaGetCapturingGraph(&graph, info->stream, comm->config.graphUsageMode));
-        captured = ncclCudaGraphValid(graph);
         bool useSymmetricAlltoAll = info->coll == ncclFuncAlltoAll && ncclSymkAlltoAllLLForced(comm);
         if (useSymmetricAlltoAll && !ncclSymkAvailable(comm, info->coll, opDev.op, info->datatype, info->count)) {
           WARN("NCCL_SYM_KERNEL requests AlltoAll_LL, but the kernel is unavailable for this operation");
@@ -3600,6 +3596,8 @@ static ncclResult_t taskAppend(struct ncclComm* comm, struct ncclInfo* info) {
         if (!useSymmetricAlltoAll &&
             (collAPI == ncclFuncAlltoAll || collAPI == ncclFuncGather || collAPI == ncclFuncScatter)) {
           ncclGroupCommJoin(comm, ncclGroupTaskTypeCollective);
+          NCCLCHECK(ncclPlannerSetCapturingGraph(comm, info));
+          captured = ncclCudaGraphValid(comm->planner.capturingGraph);
           comm->planner.p2pCollOpCount++;
         }
         if (useSymmetricAlltoAll) {

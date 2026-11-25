@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <mutex>
 #include "os.h"
+#include <atomic>
 #include <thread>
 #include <chrono>
 #include <new>
@@ -100,15 +101,15 @@ struct bootstrapRootArgs {
 /* Init functions */
 static char bootstrapNetIfName[MAX_IF_NAME_SIZE + 1];
 static union ncclSocketAddress bootstrapNetIfAddr;
-static int bootstrapNetInitDone = 0;
+static std::atomic<int> bootstrapNetInitDone{0};
 static std::mutex bootstrapNetMutex;
 
 NCCL_PARAM(BootstrapNetEnable, "OOB_NET_ENABLE", 0);
 
 ncclResult_t bootstrapNetInit() {
-  if (bootstrapNetInitDone == 0) {
+  if (bootstrapNetInitDone.load(std::memory_order_acquire) == 0) {
     std::lock_guard<std::mutex> lock(bootstrapNetMutex);
-    if (bootstrapNetInitDone == 0) {
+    if (bootstrapNetInitDone.load(std::memory_order_relaxed) == 0) {
       const char* env = ncclGetEnv("NCCL_COMM_ID");
       int nIfs = 0;
       if (env) {
@@ -134,7 +135,7 @@ ncclResult_t bootstrapNetInit() {
       snprintf(line, sizeof(line), " %s:", bootstrapNetIfName);
       ncclSocketToString(&bootstrapNetIfAddr, line + strlen(line));
       INFO(NCCL_BOOTSTRAP, "Bootstrap: Using%s", line);
-      bootstrapNetInitDone = 1;
+      bootstrapNetInitDone.store(1, std::memory_order_release);
     }
   }
   return ncclSuccess;

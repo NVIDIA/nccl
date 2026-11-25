@@ -18,7 +18,7 @@ ncclSend
 
  Send data from ``sendbuff`` to rank ``peer``.
 
- Rank ``peer`` needs to call ncclRecv with the same ``datatype`` and the same ``count`` as this rank.
+ Rank ``peer`` needs to call :c:func:`ncclRecv` with the same ``datatype`` and the same ``count`` as this rank.
 
  This operation is blocking for the GPU. If multiple :c:func:`ncclSend` and :c:func:`ncclRecv` operations
  need to progress concurrently to complete, they must be fused within a :c:func:`ncclGroupStart`/
@@ -33,7 +33,7 @@ ncclRecv
 
  Receive data from rank ``peer`` into ``recvbuff``.
 
- Rank ``peer`` needs to call ncclSend with the same ``datatype`` and the same ``count`` as this rank.
+ Rank ``peer`` needs to call :c:func:`ncclSend` with the same ``datatype`` and the same ``count`` as this rank.
 
  This operation is blocking for the GPU. If multiple :c:func:`ncclSend` and :c:func:`ncclRecv` operations
  need to progress concurrently to complete, they must be fused within a :c:func:`ncclGroupStart`/
@@ -54,7 +54,7 @@ ncclPutSignal
 .. c:function:: ncclResult_t ncclPutSignal(const void* localbuff, size_t count, ncclDataType_t datatype, int peer, ncclWindow_t peerWin, size_t peerWinOffset, int sigIdx, int ctx, unsigned int flags, ncclComm_t comm, cudaStream_t stream)
 
  Write data from ``localbuff`` to rank ``peer``'s registered memory window ``peerWin`` at offset ``peerWinOffset``
- and subsequently updating a remote signal.
+ and subsequently update a remote signal.
 
  The target memory window ``peerWin`` must be registered using :c:func:`ncclCommWindowRegister`.
 
@@ -63,10 +63,10 @@ ncclPutSignal
     This requirement may be relaxed in a future release.
 
  The ``sigIdx`` is the signal index identifier for the operation. Prior to NCCL 2.31, it must be set to 0.
- Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:macro:`numRmaSig`).
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:member:`numRmaSig <ncclConfig_t.numRmaSig>`).
 
  The ``ctx`` selects the communication context. Prior to NCCL 2.31, it must be set to 0.
- Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:macro:`numRmaCtx`).
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:member:`numRmaCtx <ncclConfig_t.numRmaCtx>`).
 
  The ``flags`` parameter is reserved for future use. It must be set to 0 for now.
 
@@ -85,10 +85,10 @@ ncclSignal
  Send a signal to rank ``peer`` without transferring data.
 
  The ``sigIdx`` is the signal index identifier for the operation. Prior to NCCL 2.31, it must be set to 0.
- Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:macro:`numRmaSig`).
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:member:`numRmaSig <ncclConfig_t.numRmaSig>`).
 
  The ``ctx`` selects the communication context. Prior to NCCL 2.31, it must be set to 0.
- Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:macro:`numRmaCtx`).
+ Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:member:`numRmaCtx <ncclConfig_t.numRmaCtx>`).
 
  The ``flags`` parameter is reserved for future use. It must be set to 0 for now.
 
@@ -116,12 +116,12 @@ ncclWaitSignal
  .. c:member:: int sigIdx
 
   Signal index identifier. Prior to NCCL 2.31, it must be set to 0.
-  Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:macro:`numRmaSig`).
+  Since NCCL 2.31, it may be set in the range ``[0, numRmaSig)`` (see :c:member:`numRmaSig <ncclConfig_t.numRmaSig>`).
 
  .. c:member:: int ctx
 
   Communication context. Prior to NCCL 2.31, it must be set to 0.
-  Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:macro:`numRmaCtx`).
+  Since NCCL 2.31, it may be set in the range ``[0, numRmaCtx)`` (see :c:member:`numRmaCtx <ncclConfig_t.numRmaCtx>`).
 
 .. c:function:: ncclResult_t ncclWaitSignal(int nDesc, ncclWaitSignalDesc_t* signalDescs, ncclComm_t comm, cudaStream_t stream)
 

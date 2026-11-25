@@ -20,11 +20,11 @@ The :c:func:`ncclGetUniqueId` function returns an ID which has to be broadcast t
 processes using any CPU communication system, for example, passing the ID pointer to multiple threads, or broadcasting
 it to other processes using MPI or another parallel environment using, for example, sockets.
 
-You can also call the ncclCommInitAll operation to create n communicator objects at once within a single process. As it
-is limited to a single process, this function does not permit inter-node communication. ncclCommInitAll is equivalent
-to calling a combination of ncclGetUniqueId and ncclCommInitRank.
+You can also call the :c:func:`ncclCommInitAll` operation to create n communicator objects at once within a single process. As it
+is limited to a single process, this function does not permit inter-node communication. :c:func:`ncclCommInitAll` is equivalent
+to calling a combination of :c:func:`ncclGetUniqueId` and :c:func:`ncclCommInitRank`.
 
-The following sample code is a simplified implementation of ncclCommInitAll.
+The following sample code is a simplified implementation of :c:func:`ncclCommInitAll`.
 
 .. code:: C
 
@@ -33,10 +33,10 @@ The following sample code is a simplified implementation of ncclCommInitAll.
    ncclGetUniqueId(&Id);
    ncclGroupStart();
    for (int i=0; i<ndev; i++) {
-     cudaSetDevice(devlist[i]);
+     cudaSetDevice(devlist ? devlist[i] : i);
      ncclCommInitRank(comm+i, ndev, Id, i);
    }
-   ncclGroupEnd();
+   return ncclGroupEnd();
  }
 
 Related links:
@@ -108,14 +108,14 @@ Related link: :c:func:`ncclCommGetAsyncError`
 Creating a communicator using multiple ncclUniqueIds
 ----------------------------------------------------
 
-The :c:func:`ncclCommInitRankScalable` function enables the creation of a NCCL communicator using many ncclUniqueIds.
-All NCCL ranks have to provide the same array of ncclUniqueIds (same ncclUniqueIds, and in the same order).
-For the best performance, we recommend distributing the ncclUniqueIds as evenly as possible amongst the NCCL ranks.
+The :c:func:`ncclCommInitRankScalable` function enables the creation of a NCCL communicator using many ``ncclUniqueIds``.
+All NCCL ranks have to provide the same array of ``ncclUniqueIds`` (same ``ncclUniqueIds``, and in the same order).
+For the best performance, we recommend distributing the ``ncclUniqueIds`` as evenly as possible amongst the NCCL ranks.
 
-Internally, NCCL ranks will mostly communicate with a single ncclUniqueId.
-Therefore, to obtain the best results, we recommend to evenly distribute ncclUniqueIds across the ranks.
+Internally, NCCL ranks will mostly communicate with a single ``ncclUniqueId``.
+Therefore, to obtain the best results, we recommend evenly distributing ``ncclUniqueIds`` across the ranks.
 
-The following function can be used to decide if a NCCL rank should create a ncclUniqueIds:
+The following function can be used to decide if a NCCL rank should create a ``ncclUniqueId``:
 
 .. code:: C
 
@@ -130,11 +130,11 @@ The following function can be used to decide if a NCCL rank should create a nccl
    }
  }
 
-For example, if 3 ncclUniqueIds are to be distributed across 7 NCCL ranks, the first ncclUniqueId will be associated to
+For example, if 3 ``ncclUniqueIds`` are to be distributed across 7 NCCL ranks, the first ``ncclUniqueId`` will be associated to
 ranks 0-2, while the others will be associated to ranks 3-4, and 5-6.
 This function will therefore return true on rank 0, 3, and 5, and false otherwise.
 
-Note: only the first ncclUniqueId will be used to create the communicator hash id, which is used to identify the
+Note: only the first ``ncclUniqueId`` will be used to create the communicator hash id, which is used to identify the
 communicator in the log file and in the replay tool.
 
 Shrinking a communicator
@@ -179,7 +179,7 @@ Note that:
 1. Only ranks that will be part of the new communicator should call :c:func:`ncclCommShrink`.
 2. Ranks listed in the exclusion list should not call this function.
 3. The new communicator will have ranks re-ordered to maintain contiguous numbering.
-4. You can use the ncclGroupStart/ncclGroupEnd mechanism to synchronize the creation of new communicators.
+4. You can use the :c:func:`ncclGroupStart`/:c:func:`ncclGroupEnd` mechanism to synchronize the creation of new communicators.
 
 Related link: :c:func:`ncclCommShrink`
 
@@ -286,15 +286,15 @@ Related links:
 Creating more communicators
 ---------------------------
 
-The ncclCommSplit function can be used to create communicators based on an existing one. This allows splitting an existing
+The :c:func:`ncclCommSplit` function can be used to create communicators based on an existing one. This allows splitting an existing
 communicator into multiple sub-partitions, duplicate an existing communicator, or even create a single communicator with
 fewer ranks.
 
-The ncclCommSplit function needs to be called by all ranks in the original communicator. If some ranks will not be part
-of any sub-group, they still need to call ncclCommSplit with color being NCCL_SPLIT_NOCOLOR.
+The :c:func:`ncclCommSplit` function needs to be called by all ranks in the original communicator. If some ranks will not be part
+of any sub-group, they still need to call :c:func:`ncclCommSplit` with color being ``NCCL_SPLIT_NOCOLOR``.
 
 Newly created communicators will inherit the parent communicator configuration (e.g. non-blocking).
-If the parent communicator operates in non-blocking mode, a ncclCommSplit operation may be stopped by calling ncclCommAbort
+If the parent communicator operates in non-blocking mode, a :c:func:`ncclCommSplit` operation may be stopped by calling :c:func:`ncclCommAbort`
 on the parent communicator, then on any new communicator returned. This is because a hang could happen during
 operations on any of the two communicators.
 
@@ -361,17 +361,17 @@ When running on CUDA 12.3 or later, the implicit ordering of the operations is c
 Finalizing a communicator
 -------------------------
 
-ncclCommFinalize will transition a communicator from the *ncclSuccess* state to the *ncclInProgress* state, start
+:c:func:`ncclCommFinalize` will transition a communicator from the :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` state to the :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>` state, start
 completing all operations in the background and synchronize with other ranks which may be using resources for their
 communications with other ranks.
 All uncompleted operations and network-related resources associated to a communicator will be flushed and freed with
-ncclCommFinalize.
-Once all NCCL operations are complete, the communicator will transition to the *ncclSuccess* state. Users can
-query that state with ncclCommGetAsyncError.
+:c:func:`ncclCommFinalize`.
+Once all NCCL operations are complete, the communicator will transition to the :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` state. Users can
+query that state with :c:func:`ncclCommGetAsyncError`.
 If a communicator is marked as nonblocking, this operation is nonblocking; otherwise, it is blocking.
 
-ncclCommFinalize is an intra-node collective call. When a single thread finalizes multiple ranks
-(multiple GPUs per thread), the calls must be grouped with ncclGroupStart/ncclGroupEnd to avoid a hang.
+:c:func:`ncclCommFinalize` is an intra-node collective call. When a single thread finalizes multiple ranks
+(multiple GPUs per thread), the calls must be grouped with :c:func:`ncclGroupStart`/:c:func:`ncclGroupEnd` to avoid a hang.
 
 Related link: :c:func:`ncclCommFinalize`
 
@@ -379,11 +379,11 @@ Destroying a communicator
 -------------------------
 
 Once a communicator has been finalized, the next step is to free all resources, including the communicator itself.
-Local resources associated to a communicator can be destroyed with ncclCommDestroy. If the state of a communicator
-is *ncclSuccess* when calling ncclCommDestroy, the call is guaranteed to be nonblocking; otherwise
-ncclCommDestroy might block.
-In all cases, ncclCommDestroy call will free the resources of the communicator and return, and
-the communicator should no longer be accessed after ncclCommDestroy returns.
+Local resources associated to a communicator can be destroyed with :c:func:`ncclCommDestroy`. If the state of a communicator
+is :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` when calling :c:func:`ncclCommDestroy`, the call is guaranteed to be nonblocking; otherwise
+:c:func:`ncclCommDestroy` might block.
+In all cases, :c:func:`ncclCommDestroy` call will free the resources of the communicator and return, and
+the communicator should no longer be accessed after :c:func:`ncclCommDestroy` returns.
 
 Related link: :c:func:`ncclCommDestroy`
 
@@ -392,7 +392,7 @@ Error handling and communicator abort
 *************************************
 
 All NCCL calls return a NCCL error code which is summarized in the table below. If a NCCL call returns an error code
-different from ncclSuccess and ncclInternalError, and if NCCL_DEBUG is set to WARN, NCCL will print a human-readable
+different from :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` and :c:enumerator:`ncclInternalError <ncclResult_t.ncclInternalError>`, and if NCCL_DEBUG is set to WARN, NCCL will print a human-readable
 message explaining what happened.
 If NCCL_DEBUG is set to INFO, NCCL will also print the call stack which led to the error.
 This message is intended to help the user fix the problem.
@@ -409,77 +409,77 @@ in the following sections.
      - Resolution
      - Error handling
      - Group behavior
-   * - ncclSuccess
+   * - :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`
      - No error
      - None
      - None
      - None
-   * - ncclUnhandledCudaError
+   * - :c:enumerator:`ncclUnhandledCudaError <ncclResult_t.ncclUnhandledCudaError>`
      - Error during a CUDA call (1)
      - CUDA configuration / usage (1)
      - Communicator abort (5)
      - Global (6)
-   * - ncclSystemError
+   * - :c:enumerator:`ncclSystemError <ncclResult_t.ncclSystemError>`
      - Error during a system call (1)
      - System configuration / usage (1)
      - Communicator abort (5)
      - Global (6)
-   * - ncclInternalError
+   * - :c:enumerator:`ncclInternalError <ncclResult_t.ncclInternalError>`
      - Error inside NCCL (2)
      - Fix in NCCL (2)
      - Communicator abort (5)
      - Global (6)
-   * - ncclInvalidArgument
+   * - :c:enumerator:`ncclInvalidArgument <ncclResult_t.ncclInvalidArgument>`
      - An argument to a NCCL call is invalid (3)
      - Fix in the application (3)
      - None (3)
      - Individual (3)
-   * - ncclInvalidUsage
+   * - :c:enumerator:`ncclInvalidUsage <ncclResult_t.ncclInvalidUsage>`
      - The usage of NCCL calls is invalid (4)
      - Fix in the application (4)
      - Communicator abort (5)
      - Global (6)
-   * - ncclInProgress
+   * - :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`
      - The NCCL call is still in progress
-     - Poll for completion using ncclCommGetAsyncError
+     - Poll for completion using :c:func:`ncclCommGetAsyncError`
      - None
      - None
 
 
-(1) ncclUnhandledCudaError and ncclSystemError indicate that a call NCCL made to an external component failed,
+(1) :c:enumerator:`ncclUnhandledCudaError <ncclResult_t.ncclUnhandledCudaError>` and :c:enumerator:`ncclSystemError <ncclResult_t.ncclSystemError>` indicate that a call NCCL made to an external component failed,
 which caused the NCCL operation to fail. The error message should explain which component the user should look
 at and try to fix, potentially with the help of the administrators of the system.
 
-(2) ncclInternalError denotes a NCCL bug. It might not report a message with NCCL_DEBUG=WARN since it requires a
+(2) :c:enumerator:`ncclInternalError <ncclResult_t.ncclInternalError>` denotes a NCCL bug. It might not report a message with NCCL_DEBUG=WARN since it requires a
 fix in the NCCL source code. NCCL_DEBUG=INFO will print the back trace which led to the error.
 
-(3) ncclInvalidArgument indicates an argument value is incorrect, like a NULL pointer or an out-of-bounds value.
+(3) :c:enumerator:`ncclInvalidArgument <ncclResult_t.ncclInvalidArgument>` indicates an argument value is incorrect, like a NULL pointer or an out-of-bounds value.
 When this error is returned, the NCCL call had no effect. The group state remains unchanged, the communicator is
-still functioning normally. The application can call ncclCommAbort or continue as if the call did not happen.
+still functioning normally. The application can call :c:func:`ncclCommAbort` or continue as if the call did not happen.
 This error will be returned immediately for a call happening within a group and applies to that specific NCCL
-call. It will not be returned by ncclGroupEnd since ncclGroupEnd takes no argument.
+call. It will not be returned by :c:func:`ncclGroupEnd` since :c:func:`ncclGroupEnd` takes no argument.
 
-(4) ncclInvalidUsage is returned when a dynamic condition causes a failure, which denotes an incorrect usage of
+(4) :c:enumerator:`ncclInvalidUsage <ncclResult_t.ncclInvalidUsage>` is returned when a dynamic condition causes a failure, which denotes an incorrect usage of
 the NCCL API.
 
-(5) These errors are fatal for the communicator. To recover, the application needs to call ncclCommAbort on the
+(5) These errors are fatal for the communicator. To recover, the application needs to call :c:func:`ncclCommAbort` on the
 communicator and re-create it.
 
-(6) Dynamic errors for operations within a group are always reported by ncclGroupEnd and apply to all operations
-within the group, which may or may not have completed. The application must call ncclCommAbort on all communicators
+(6) Dynamic errors for operations within a group are always reported by :c:func:`ncclGroupEnd` and apply to all operations
+within the group, which may or may not have completed. The application must call :c:func:`ncclCommAbort` on all communicators
 within the group.
 
 Asynchronous errors and error handling
 --------------------------------------
 
-Some communication errors, and in particular network errors, are reported through the ncclCommGetAsyncError function.
+Some communication errors, and in particular network errors, are reported through the :c:func:`ncclCommGetAsyncError` function.
 Operations experiencing an asynchronous error will usually not progress and never complete. When an asynchronous error
-happens, the operation should be aborted and the communicator destroyed using ncclCommAbort.
-When waiting for NCCL operations to complete, applications should call ncclCommGetAsyncError and destroy the
+happens, the operation should be aborted and the communicator destroyed using :c:func:`ncclCommAbort`.
+When waiting for NCCL operations to complete, applications should call :c:func:`ncclCommGetAsyncError` and destroy the
 communicator when an error happens.
 
 The following code shows how to wait on NCCL operations and poll for asynchronous errors, instead of using
-cudaStreamSynchronize.
+``cudaStreamSynchronize``.
 
 .. code:: C
 
@@ -529,21 +529,21 @@ Fault Tolerance
 ***************
 
 NCCL provides a set of features to allow applications to recover from fatal errors such as a network failure,
-a node failure, or a process failure. When such an error happens, the application should be able to call *ncclCommAbort*
+a node failure, or a process failure. When such an error happens, the application should be able to call :c:func:`ncclCommAbort`
 on the communicator to free all resources, then create a new communicator to continue.
 
-For more advanced recovery, the *ncclCommShrink* function with *NCCL_SHRINK_ABORT* can be used to create a new communicator
+For more advanced recovery, the :c:func:`ncclCommShrink` function with :c:macro:`NCCL_SHRINK_ABORT` can be used to create a new communicator
 by removing failed ranks from the existing communicator while safely handling in-progress operations. This approach is
 particularly useful in distributed environments where only some ranks have failed.
 
 In order to abort NCCL communicators safely, NCCL requires applications to set communicators as nonblocking and make sure
-no thread is calling any NCCL operations while calling *ncclCommAbort*. After nonblocking is set, all NCCL calls
-(except *ncclCommDestroy/Abort*) become nonblocking so that *ncclCommAbort* can be called at any point, during initialization,
+no thread is calling any NCCL operations while calling :c:func:`ncclCommAbort`. After nonblocking is set, all NCCL calls
+(except :c:func:`ncclCommDestroy` and :c:func:`ncclCommAbort`) become nonblocking so that :c:func:`ncclCommAbort` can be called at any point, during initialization,
 communication or finalizing the communicator. If NCCL communicators are set blocking, the thread can possibly get stuck inside
 NCCL calls due to network errors; in this case, NCCL communicators might hang forever.
 
 To correctly abort, when any rank in a communicator fails (e.g., due to a segmentation fault), all other ranks need to
-call *ncclCommAbort* to abort their own NCCL communicator.
+call :c:func:`ncclCommAbort` to abort their own NCCL communicator.
 Users can implement methods to decide when and whether to abort the communicators and restart the NCCL operation.
 Here is an example showing how to initialize and split a communicator in a non-blocking manner, allowing for an abort at any point:
 
@@ -585,7 +585,7 @@ Here is an example showing how to initialize and split a communicator in a non-b
 
   if (globalFlag) {
     ncclCommAbort(comm);
-    /* if chilComm is not NCCL_COMM_NULL, user should abort child communicator
+    /* if childComm is not NCCL_COMM_NULL, the user should abort the child communicator
      * here as well for resource reclamation. */
     if (childComm != NCCL_COMM_NULL) ncclCommAbort(childComm);
     restartNCCL(&comm);

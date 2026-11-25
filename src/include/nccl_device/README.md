@@ -1,4 +1,4 @@
-This directory has been structured to make it easy for user to read the headers to learn the API. The files adjacent
+This directory has been structured to make it easy for users to read the headers to learn the API. The files adjacent
 to this README are meant for humans. Host-side API declarations and host-only data structures are collected in "host.h".
 The other headers contain
 the essential device declarations like which types exist and function prototypes and comments indicating the contract/usage.

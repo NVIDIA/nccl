@@ -21,10 +21,13 @@
 #include <cuda/std/ranges>
 #endif
 
-#if __CUDA_ARCH__ >= 1000
+// CCCL headers declare constants referenced by host registration.
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 1000
 #include <cuda/barrier>
 #include <cuda/ptx>
+#endif
 
+#if __CUDA_ARCH__ >= 1000
 namespace ptx = cuda::ptx;
 
 template <typename Pack, int UnrollPacks, int UnrollPeers = 1>

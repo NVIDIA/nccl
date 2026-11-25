@@ -13,7 +13,7 @@ ncclGroupStart
 
  Start a group call.
 
- All subsequent calls to NCCL until ncclGroupEnd will not block due to inter-CPU synchronization.
+ All subsequent calls to NCCL until :c:func:`ncclGroupEnd` will not block due to inter-CPU synchronization.
 
 ncclGroupEnd
 ------------
@@ -22,14 +22,23 @@ ncclGroupEnd
 
  End a group call.
 
- Returns when all operations since ncclGroupStart have been processed. This means the communication primitives
+ Returns when all operations since :c:func:`ncclGroupStart` have been processed. This means the communication primitives
  have been enqueued to the provided streams, but are not necessarily complete.
 
- When used with the ncclCommInitRank call, the ncclGroupEnd call waits for all communicators to be initialized.
+ With nonblocking communicators, this function may return
+ :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>` before processing is complete.
+ In this case poll :c:func:`ncclCommGetAsyncError` on each communicator in the group until its *asyncError*
+ output is no longer :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`.
+ All communicators must report :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` before issuing further
+ NCCL calls or using the affected CUDA streams. If a query fails or a communicator reports a terminal error,
+ stop polling and follow the error-handling guidance in :c:func:`ncclCommGetAsyncError`.
+
+ With blocking communicators, a group containing :c:func:`ncclCommInitRank` calls waits for all
+ communicators to be initialized before :c:func:`ncclGroupEnd` returns.
 
 ncclGroupSimulateEnd
 --------------------
 
 .. c:function:: ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* simInfo)
 
- Simulate a ncclGroupEnd() call and return NCCL's simulation info in a structure passed as an argument.
+ Simulate a :c:func:`ncclGroupEnd` call and return NCCL's simulation info in a structure passed as an argument.

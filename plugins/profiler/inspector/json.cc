@@ -7,6 +7,7 @@
 
 #include "json.h"
 #include <assert.h>
+#include <errno.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -76,7 +77,14 @@ jsonResult_t jsonNewline(jsonFileOutput* jfo) {
 }
 
 jsonResult_t jsonFlushOutput(jsonFileOutput* jfo) {
-  fflush(jfo->fp);
+  int ret = fflush(jfo->fp);
+  if (ret != 0 || ferror(jfo->fp)) {
+    // If only the sticky error is set, an earlier fprintf failed.
+    int error = ret != 0 ? errno : EIO;
+    clearerr(jfo->fp);
+    errno = error;
+    return jsonFileError;
+  }
   return jsonSuccess;
 }
 
@@ -485,6 +493,14 @@ int main() {
   JSONCHECK(jsonDouble(jfo, 0.69423413));
   JSONCHECK(jsonFinishList(jfo));
   JSONCHECK(jsonFinishObject(jfo));
+  JSONCHECK(jsonFinalizeFileOutput(jfo));
+
+  JSONCHECK(jsonInitFileOutput(&jfo, "/dev/full"));
+  JSONCHECK(jsonNewline(jfo));
+  if (jsonFlushOutput(jfo) != jsonFileError || errno != ENOSPC) {
+    fprintf(stderr, "expected ENOSPC when flushing to /dev/full\n");
+    return 1;
+  }
   JSONCHECK(jsonFinalizeFileOutput(jfo));
 
   FILE* fp = fopen("test.json", "r");

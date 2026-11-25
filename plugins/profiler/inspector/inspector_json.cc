@@ -2,6 +2,7 @@
 #include "inspector_ring.h"
 #include "profiler.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -882,12 +883,13 @@ exit:
  *   State of all communicators is dumped to JSON output.
  *
  * Return:
- *   inspectorResult_t - success or error code.
+ *   On inspectorFileWriteError, errno identifies the output error.
  *
  */
 inspectorResult_t inspectorCommInfoListDump(jsonFileOutput* jfo,
                                             struct inspectorCommInfoList* commList) {
   bool flush = false;
+  int writeError = 0;
   INS_CHK(inspectorLockRd(&commList->guard));
   inspectorResult_t res = inspectorSuccess;
   if (commList->ncomms > 0) {
@@ -903,11 +905,15 @@ inspectorResult_t inspectorCommInfoListDump(jsonFileOutput* jfo,
     }
     if (flush) {
       JSON_CHK_GOTO(jsonLockOutput(jfo), res, exit);
-      JSON_CHK_GOTO(jsonFlushOutput(jfo), res, exit);
+      if (jsonFlushOutput(jfo) != jsonSuccess) writeError = errno;
       JSON_CHK_GOTO(jsonUnlockOutput(jfo), res, exit);
     }
   }
 exit:
   INS_CHK(inspectorUnlockRWLock(&commList->guard));
+  if (res == inspectorSuccess && writeError != 0) {
+    errno = writeError;
+    return inspectorFileWriteError;
+  }
   return res;
 }

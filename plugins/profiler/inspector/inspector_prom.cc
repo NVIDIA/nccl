@@ -419,6 +419,17 @@ static inspectorResult_t inspectorPromGetDeviceFile(inspectorPromDevice& device,
 }
 
 
+static inspectorResult_t inspectorPromWriteMetrics(FILE* file, const char* buffer, size_t size) {
+  errno = 0;
+  if (fwrite(buffer, 1, size, file) != size || ferror(file) || fflush(file) != 0) {
+    int error = errno ? errno : EIO;
+    clearerr(file);
+    errno = error;
+    return inspectorFileWriteError;
+  }
+  return inspectorSuccess;
+}
+
 /*
  * Description:
  *   Writes aggregated Prometheus metrics for a collective bucket.
@@ -470,12 +481,7 @@ static inspectorResult_t inspectorPromWriteCollBucket(FILE* file,
     return inspectorMemoryError;
   }
 
-  if (fwrite(buffer, 1, written, file) != (size_t)written) {
-    return inspectorFileOpenError;
-  }
-
-  fflush(file);
-  return inspectorSuccess;
+  return inspectorPromWriteMetrics(file, buffer, written);
 }
 
 /*
@@ -525,12 +531,7 @@ static inspectorResult_t inspectorPromWriteP2pBucket(FILE* file,
     return inspectorMemoryError;
   }
 
-  if (fwrite(buffer, 1, written, file) != (size_t)written) {
-    return inspectorFileOpenError;
-  }
-
-  fflush(file);
-  return inspectorSuccess;
+  return inspectorPromWriteMetrics(file, buffer, written);
 }
 
 /*
@@ -793,11 +794,7 @@ static inspectorResult_t inspectorPromWriteDeviceTotals(FILE* file,
   if (written < 0 || (size_t)written >= sizeof(buffer)) {
     return inspectorMemoryError;
   }
-  if (fwrite(buffer, 1, written, file) != (size_t)written) {
-    return inspectorFileOpenError;
-  }
-  fflush(file);
-  return inspectorSuccess;
+  return inspectorPromWriteMetrics(file, buffer, written);
 }
 
 static inspectorResult_t inspectorPromWriteDeviceBuckets(std::map<std::string,
@@ -805,6 +802,7 @@ static inspectorResult_t inspectorPromWriteDeviceBuckets(std::map<std::string,
                                                          const char* output_root,
                                                          uint64_t currentTime,
                                                          struct inspectorDumpThread* dumpThread) {
+  inspectorResult_t result = inspectorSuccess;
   for (auto& entry : devices) {
     inspectorPromDevice& device = entry.second;
     // Per-device stats metrics are opt-in; when enabled they are emitted for
@@ -823,23 +821,25 @@ static inspectorResult_t inspectorPromWriteDeviceBuckets(std::map<std::string,
     if (!file) {
       continue;
     }
+    inspectorResult_t res = inspectorSuccess;
     for (const auto& collEntry : device.collBuckets) {
-      INS_CHK(inspectorPromWriteCollBucket(file,
-                                           device,
-                                           collEntry.first,
-                                           collEntry.second));
+      res = inspectorPromWriteCollBucket(file, device, collEntry.first, collEntry.second);
+      if (res != inspectorSuccess) goto deviceDone;
     }
     for (const auto& p2pEntry : device.p2pBuckets) {
-      INS_CHK(inspectorPromWriteP2pBucket(file,
-                                          device,
-                                          p2pEntry.first,
-                                          p2pEntry.second));
+      res = inspectorPromWriteP2pBucket(file, device, p2pEntry.first, p2pEntry.second);
+      if (res != inspectorSuccess) goto deviceDone;
     }
-    if (writeStats) {
-      INS_CHK(inspectorPromWriteDeviceTotals(file, device));
+    if (writeStats) res = inspectorPromWriteDeviceTotals(file, device);
+
+deviceDone:
+    if (res == inspectorFileWriteError) {
+      result = dumpThread->reportWriteError(errno);
+    } else if (res != inspectorSuccess) {
+      return res;
     }
   }
-  return inspectorSuccess;
+  return result;
 }
 
 /*

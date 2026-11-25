@@ -101,6 +101,7 @@ enum inspectorResult_t : int {
   inspectorNullTally,
   inspectorGlobalInitError,
   inspectorReturn,
+  inspectorFileWriteError,
 };
 
 typedef enum {
@@ -285,6 +286,7 @@ struct deviceFlushInfo {
 struct inspectorDumpThread {
   bool run{false};
   bool threadStarted{false};
+  bool warnedWriteError{false};
   jsonFileOutput* jfo;
   char* outputRoot;
   int64_t sampleIntervalUsecs;
@@ -303,6 +305,7 @@ struct inspectorDumpThread {
                               const char* filename,
                               uint64_t currentTime);
 
+  inspectorResult_t reportWriteError(int error);
   void startThread();
   void stopThread();
   inspectorResult_t inspectorStateDump(const char* output_root);
@@ -420,10 +423,11 @@ extern ncclDebugLogger_t logFn;
 #define TRACE_INSPECTOR(...) logFn(NCCL_LOG_TRACE, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
 // Set NCCL_INSPECTOR_ENABLE_WARN=1 to enable WARN-level inspector logging (default: 0 -> INFO)
 #if NCCL_INSPECTOR_ENABLE_WARN
-#define WARN_INSPECTOR(...) logFn(NCCL_LOG_WARN, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
+#define INSPECTOR_WARN_LEVEL NCCL_LOG_WARN
 #else
-#define WARN_INSPECTOR(...) INFO_INSPECTOR(__VA_ARGS__)
+#define INSPECTOR_WARN_LEVEL NCCL_LOG_INFO
 #endif
+#define WARN_INSPECTOR(...) logFn(INSPECTOR_WARN_LEVEL, NCCL_PROFILE, __func__, __LINE__, __VA_ARGS__)
 
 inline int ncclTypeSize(ncclDataType_t type) {
   switch (type) {

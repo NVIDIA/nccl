@@ -464,7 +464,7 @@ static ncclResult_t sendConnect(struct ncclComm* comm, struct ncclConnect* conne
     send->transportResources = map;
     opId = send;
     INFO(NCCL_PROXY, "sendConnect ncclProxyCallAsync opId=%p", opId);
-    netSendConnectArgs args = {0};
+    netSendConnectArgs args = {};
     memcpy(&args.handle, connectInfo, sizeof(ncclNetHandle_t));
 
     populateCommNetAttrs(comm, send, &args.netAttr);

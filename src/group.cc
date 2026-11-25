@@ -60,7 +60,7 @@ ncclResult_t ncclAsyncLaunch(struct ncclAsyncJob* job, ncclResult_t (*func)(stru
       ncclGroupBlocking = comm->config.blocking;
     } else if (ncclGroupBlocking != comm->config.blocking) {
       WARN("Blocking and nonblocking communicators are not allowed in the same group.");
-      ret = ncclInvalidArgument;
+      return ncclInvalidArgument;
     }
     if (ret == ncclSuccess) {
       ncclIntruQueueEnqueue(&ncclAsyncJobs, job);

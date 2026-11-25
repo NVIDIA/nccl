@@ -99,7 +99,6 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
   struct ncclTaskColl* tasksSymByFnOpTy[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes * ncclNumSymRegTypes];
   int fnOpTySymIndices[ncclNumFuncs * ncclNumDevRedOps * ncclNumTypes * ncclNumSymRegTypes];
   struct ncclKernelPlanner* planner = &comm->planner;
-  struct ncclTaskColl* remainTasksTail = nullptr;
   bool foundSymm = false;
 
   memset(tasksSymByFnOpTy, 0, sizeof(tasksSymByFnOpTy));
@@ -132,17 +131,14 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       planner->nTasksColl--;
       foundSymm = true;
     } else {
-      if (*remainTasksHead) {
-        remainTasksTail->next = task;
-        remainTasksTail = task;
-      } else {
-        *remainTasksHead = remainTasksTail = task;
-      }
+      ncclTaskCollSorterInsert(&planner->collSorter, task, task->trafficBytes);
     }
     task = next;
   }
-  if (remainTasksTail) remainTasksTail->next = nullptr;
-  if (!foundSymm) return ret;
+  if (!foundSymm) {
+    *remainTasksHead = ncclTaskCollSorterDequeueAll(&planner->collSorter);
+    return ret;
+  }
 
   // make sure kernel args space can hold at least a single work
   size_t const minArgsSize = symkMaxDevWorkArgsSize(MAXCHANNELS, 1, ncclProfilerPluginLoaded());
@@ -248,12 +244,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
         while (task != nullptr) {
           struct ncclTaskColl* next = task->next;
           int isSymLast = task->isSymLast;
-          if (*remainTasksHead) {
-            remainTasksTail->next = task;
-            remainTasksTail = task;
-          } else {
-            *remainTasksHead = remainTasksTail = task;
-          }
+          ncclTaskCollSorterInsert(&planner->collSorter, task, task->trafficBytes);
           planner->nTasksColl++;
           task = next;
           if (isSymLast) break;
@@ -286,6 +277,7 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
     }
   }
 
+  *remainTasksHead = ncclTaskCollSorterDequeueAll(&planner->collSorter);
   return ret;
 }
 

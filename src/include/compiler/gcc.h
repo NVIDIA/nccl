@@ -62,4 +62,7 @@
 
 #define COMPILER_ATTRIBUTE_UNUSED __attribute__((unused))
 
+// Marks an intentional fall-through between switch labels
+#define COMPILER_FALLTHROUGH __attribute__((fallthrough))
+
 #endif // NCCL_COMPILER_GCC_H

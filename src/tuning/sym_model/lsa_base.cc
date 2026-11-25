@@ -57,7 +57,7 @@ ncclResult_t ncclSymkLsaBaseModel(struct ncclTuningInput_t* input, enum ncclSymk
     break;
   case ncclSymkKernelId_AllGather_TmaSTMC:
     busMultiplier = 0.99;
-    // fall through
+    COMPILER_FALLTHROUGH;
   case ncclSymkKernelId_AllGather_STMC:
     busBytes = (nRanks - 1) * nBytes; // Wrong. Should be nRanks*nBytes but we want to beat non-MC.
     busMultiplier *= 0.55 * nRanks;

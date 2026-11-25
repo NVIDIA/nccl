@@ -8,15 +8,21 @@
 #ifndef NCCL_COMPILER_GCC_H
 #define NCCL_COMPILER_GCC_H
 
-// Helper macros to convert C++ memory ordering to GCC atomic ordering
-#define NCCL_CONVERT_ORDER(order) \
-  ((order) == std::memory_order_relaxed ? __ATOMIC_RELAXED : \
-   (order) == std::memory_order_consume ? __ATOMIC_CONSUME : \
-   (order) == std::memory_order_acquire ? __ATOMIC_ACQUIRE : \
-   (order) == std::memory_order_release ? __ATOMIC_RELEASE : \
-   (order) == std::memory_order_acq_rel ? __ATOMIC_ACQ_REL : \
-   (order) == std::memory_order_seq_cst ? __ATOMIC_SEQ_CST : \
-                                          __ATOMIC_SEQ_CST)
+#include <type_traits>
+
+// Convert a C++ memory ordering to the matching GCC atomic ordering
+static constexpr int ncclConvertOrder(std::memory_order order) {
+  return order == std::memory_order_relaxed ? __ATOMIC_RELAXED :
+         order == std::memory_order_consume ? __ATOMIC_CONSUME :
+         order == std::memory_order_acquire ? __ATOMIC_ACQUIRE :
+         order == std::memory_order_release ? __ATOMIC_RELEASE :
+         order == std::memory_order_acq_rel ? __ATOMIC_ACQ_REL :
+                                              __ATOMIC_SEQ_CST;
+}
+
+// The __atomic builtins need a compile-time constant ordering; integral_constant
+// guarantees the conversion is folded even in unoptimized builds.
+#define NCCL_CONVERT_ORDER(order) (std::integral_constant<int, ncclConvertOrder(order)>::value)
 
 #define COMPILER_ATOMIC_LOAD(ptr, order) __atomic_load_n((ptr), NCCL_CONVERT_ORDER(order))
 #define COMPILER_ATOMIC_LOAD_DEST(ptr, dest, order) \

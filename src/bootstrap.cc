@@ -120,8 +120,16 @@ ncclResult_t bootstrapNetInit() {
         NCCLCHECK(ncclFindInterfaceMatchSubnet(bootstrapNetIfName, &bootstrapNetIfAddr, &remoteAddr, MAX_IF_NAME_SIZE,
                                                &nIfs));
         if (nIfs <= 0) {
-          WARN("NET/Socket : No usable listening interface found");
-          return ncclSystemError;
+          // No local address shares the NCCL_COMM_ID subnet. That is the common case on routed fabrics where ranks
+          // live in different subnets: the address is still reachable, so fall back to the regular interface
+          // selection (NCCL_SOCKET_IFNAME when set) instead of failing the whole job.
+          INFO(NCCL_INIT | NCCL_ENV, "NCCL_COMM_ID %s: no interface in the same subnet, using the default selection",
+               env);
+          NCCLCHECK(ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1, &nIfs));
+          if (nIfs <= 0) {
+            WARN("NET/Socket : No usable listening interface found");
+            return ncclSystemError;
+          }
         }
       } else {
         NCCLCHECK(ncclFindInterfaces(bootstrapNetIfName, &bootstrapNetIfAddr, MAX_IF_NAME_SIZE, 1, &nIfs));

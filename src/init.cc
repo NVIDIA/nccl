@@ -3662,6 +3662,7 @@ fail:
 static void childCommCleanupJob(void* job) {
   struct ncclCommInitRankAsyncJob* initJob = (struct ncclCommInitRankAsyncJob*)job;
   if (initJob->excludeRanksList) free(initJob->excludeRanksList);
+  free(initJob->commId); // allocated by ncclCommGrow, NULL for split/shrink
   delete initJob;
 }
 
@@ -3984,13 +3985,15 @@ ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqu
   job->isGrow = 1;
   job->color = 0;
   job->key = job->myrank;
+  // The launch takes ownership of job: if it is rejected, childCommCleanupJob has already freed it,
+  // so drop our reference before checking the result.
   if (ncclParamEnqueueRearchEnable()) {
-    NCCLCHECKGOTO(ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, ncclCommInitRankFunc, childCommCleanupJob, newComm),
-                  res, fail);
+    res = ncclMgmtTaskEnqueue((struct ncclAsyncJob*)job, ncclCommInitRankFunc, childCommCleanupJob, newComm);
   } else {
-    NCCLCHECKGOTO(ncclAsyncLaunch((struct ncclAsyncJob*)job, ncclCommInitRankFunc, NULL, childCommCleanupJob, newComm),
-                  res, fail);
+    res = ncclAsyncLaunch((struct ncclAsyncJob*)job, ncclCommInitRankFunc, NULL, childCommCleanupJob, newComm);
   }
+  job = NULL;
+  NCCLCHECKGOTO(res, res, fail);
 
 exit:
   if (*newcomm) {

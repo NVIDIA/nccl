@@ -80,4 +80,4 @@ See the `python/README.md` in each example directory.
 - [NCCL API
   Reference](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api.html)
 - [CUDA Programming
-  Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
+  Guide](https://docs.nvidia.com/cuda/cuda-programming-guide/)

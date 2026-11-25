@@ -2586,10 +2586,10 @@ class Communicator:
     ) -> CustomRedOp:
         """Creates a PreMulSum custom reduction operator.
 
-        Multiplies each rank's input by its local scalar before summing across
-        ranks, for example to compute an average (``scalar = 1/N``) or a weighted
-        sum. The communicator tracks the returned :py:class:`~nccl.core.CustomRedOp`.
-        It may be released explicitly via its
+        Performs ``output = scalar * sum(inputs)`` and is useful for
+        averaging (``scalar = 1/N``) or weighted reductions. The returned
+        :py:class:`~nccl.core.CustomRedOp` is tracked by the communicator
+        and may be released explicitly via its
         :py:meth:`~nccl.core.CustomRedOp.close` method, or automatically
         when the communicator is destroyed or aborted.
 

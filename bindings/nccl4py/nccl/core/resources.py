@@ -480,8 +480,8 @@ class CustomRedOp(CommResource):
     """NCCL user-defined custom reduction operator.
 
     Created by :py:meth:`Communicator.create_pre_mul_sum`. The PreMulSum
-    operator sums the locally scaled inputs across ranks, which is useful
-    for averaging or weighted reductions. It can be released explicitly via
+    operator performs ``output = scalar * sum(inputs)``, useful for averaging
+    or weighted reductions. The operator can be released explicitly via
     :py:meth:`close`, or automatically when the owning communicator is
     destroyed or aborted.
     """

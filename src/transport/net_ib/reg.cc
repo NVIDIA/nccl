@@ -64,7 +64,6 @@ ncclResult_t ncclIbRegMrDmaBufInternal2(ncclIbNetCommDevBase* base, void* data, 
       return ncclSuccess;
     }
   }
-  return ncclSuccess;
 }
 
 /* DMA-BUF support */

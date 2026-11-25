@@ -541,8 +541,10 @@ static ncclResult_t rasCollConnsInit(struct rasCollRequest** pReq, size_t* pReqL
     }
   }
 
-  *pNData = sizeof(connsData) + connsData.nNegativeMins * sizeof(*connsData.negativeMins);
-  NCCLCHECK(ncclCalloc(pData, *pNData));
+  int nData = sizeof(connsData) + connsData.nNegativeMins * sizeof(*connsData.negativeMins);
+  // *pNData must stay 0 if the allocation fails.
+  NCCLCHECK(ncclCalloc(pData, nData));
+  *pNData = nData;
   pConnsData = (struct rasCollConns*)*pData;
   memcpy(pConnsData, &connsData, sizeof(*pConnsData));
   if (connsData.nNegativeMins > 0) {
@@ -575,6 +577,13 @@ static ncclResult_t rasCollConnsMerge(struct rasCollective* coll, struct rasMsg*
   ALIGN_SIZE(dataOffset, alignof(int64_t));
 
   msgData = (struct rasCollConns*)(((char*)msg) + dataOffset);
+
+  if (coll->data == nullptr) {
+    NCCLCHECK(ncclCalloc(&coll->data, msg->collResp.nData));
+    memcpy(coll->data, msgData, msg->collResp.nData);
+    coll->nData = msg->collResp.nData;
+    return ncclSuccess;
+  }
   collData = (struct rasCollConns*)coll->data;
 
   // Merge the stats.
@@ -655,7 +664,7 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
           int newSize = *pReqLen + (nNcclComms - commIdx) * sizeof(*req->comms.skipMissingRanksComms);
           NCCLCHECKGOTO(ncclCalloc((char**)&req, newSize), ret, fail);
           memcpy(req, *pReq, *pReqLen);
-          *pReq = req;
+          // *pReq is published only at the end so it stays valid if we fail.
           firstNewSkipMissingIdx = req->comms.nSkipMissingRanksComms;
         }
         skipComm = req->comms.skipMissingRanksComms + req->comms.nSkipMissingRanksComms++;
@@ -790,17 +799,16 @@ static ncclResult_t rasCollCommsInit(struct rasCollRequest** pReq, size_t* pReqL
       rasCollDataLength(RAS_COLL_COMMS) + req->comms.nSkipMissingRanksComms * sizeof(*req->comms.skipMissingRanksComms);
     qsort(req->comms.skipMissingRanksComms, req->comms.nSkipMissingRanksComms,
           sizeof(*req->comms.skipMissingRanksComms), rasCommIdCompare);
+    *pReq = req;
   }
 ret:
   free(peersReSorted);
   return ret;
 fail:
-  if (req) {
-    free(req);
-    *pReq = nullptr;
-  }
+  free(req);
   free(*pData);
   *pData = nullptr;
+  *pNData = 0;
   goto ret;
 }
 
@@ -817,6 +825,8 @@ static ncclResult_t rasCollCommsMerge(struct rasCollective* coll, struct rasMsg*
   collData = (struct rasCollComms*)coll->data;
 
   if (msgData->nComms > 0) {
+    struct rasCollComms emptyData = {};
+    if (collData == nullptr) collData = &emptyData;
     struct rasCollComms* newData = nullptr; // Destination buffer for the merged data.
     int nNewData = coll->nData + msg->collResp.nData;
 

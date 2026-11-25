@@ -2603,7 +2603,8 @@ class Communicator:
                 ``None``, it is inferred from ``scalar``: Python ``int``
                 becomes ``int64`` and Python ``float`` becomes ``float64``
                 (NumPy's natural dtypes); a NumPy array uses the array's
-                dtype; a device buffer uses the buffer's dtype.
+                dtype; a device buffer uses the buffer's dtype. Host scalars
+                are converted to the specified datatype.
 
         Returns:
             :py:class:`~nccl.core.CustomRedOp` for the PreMulSum operator.
@@ -2643,12 +2644,9 @@ class Communicator:
                     f"NumPy array must contain exactly 1 element for scalar, got {scalar.size} elements"
                 )
 
-            # Ensure contiguous array
-            scalar_array = _np.ascontiguousarray(scalar.ravel())
+            datatype = NcclDataType(scalar.dtype if datatype is None else datatype)
+            scalar_array = _np.ascontiguousarray(scalar, dtype=datatype.numpy_dtype)
             scalar_ptr = scalar_array.ctypes.data
-
-            if datatype is None:
-                datatype = NcclDataType(scalar_array.dtype)
         else:
             # Assume it's NcclSupportedBuffer (device buffer)
             # Use NcclBuffer to handle Buffer, DLPack, CAI, etc.

@@ -76,8 +76,7 @@ jsonResult_t jsonNewline(jsonFileOutput* jfo) {
 }
 
 jsonResult_t jsonFlushOutput(jsonFileOutput* jfo) {
-  fflush(jfo->fp);
-  return jsonSuccess;
+  return fflush(jfo->fp) == 0 ? jsonSuccess : jsonFileError;
 }
 
 jsonResult_t jsonLockOutput(jsonFileOutput* jfo) {

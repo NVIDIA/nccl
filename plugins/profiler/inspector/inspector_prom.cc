@@ -474,7 +474,9 @@ static inspectorResult_t inspectorPromWriteCollBucket(FILE* file,
     return inspectorFileOpenError;
   }
 
-  fflush(file);
+  if (fflush(file) != 0) {
+    return inspectorFileOpenError;
+  }
   return inspectorSuccess;
 }
 
@@ -529,7 +531,9 @@ static inspectorResult_t inspectorPromWriteP2pBucket(FILE* file,
     return inspectorFileOpenError;
   }
 
-  fflush(file);
+  if (fflush(file) != 0) {
+    return inspectorFileOpenError;
+  }
   return inspectorSuccess;
 }
 
@@ -796,7 +800,9 @@ static inspectorResult_t inspectorPromWriteDeviceTotals(FILE* file,
   if (fwrite(buffer, 1, written, file) != (size_t)written) {
     return inspectorFileOpenError;
   }
-  fflush(file);
+  if (fflush(file) != 0) {
+    return inspectorFileOpenError;
+  }
   return inspectorSuccess;
 }
 

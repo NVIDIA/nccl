@@ -10,7 +10,7 @@ Two-sided communication
 (Since NCCL 2.7)
 Point-to-point communication can be used to express any communication pattern between ranks.
 Any point-to-point communication needs two NCCL calls: a call to :c:func:`ncclSend` on one
-rank and a corresponding :c:func:`ncclRecv` on the other rank, with the same count and data
+rank and a matching :c:func:`ncclRecv` on the other rank, with the same count and data
 type.
 
 Multiple calls to :c:func:`ncclSend` and :c:func:`ncclRecv` targeting different peers

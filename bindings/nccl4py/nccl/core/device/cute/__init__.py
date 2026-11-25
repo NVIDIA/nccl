@@ -1,4 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# See LICENSE.txt for more license information
+
 """Experimental CuTeDSL bindings for the NCCL device API.
+
+Public device types and operations are available directly from this package.
+Use ``runtime.to_cute(host_object)`` for explicit host argument conversion.
+Compile-only helpers also live in ``runtime``.
 
 .. warning::
 
@@ -19,7 +28,9 @@ See ``examples/cute/00_basic.py`` for a complete, runnable example.
 
 try:
     import cutlass.cute  # noqa: F401
-except ImportError as e:
+except ModuleNotFoundError as e:
+    if e.name not in ("cutlass", "cutlass.cute"):
+        raise
     raise ImportError(
         "nccl.core.device.cute requires the nvidia-cutlass-dsl package. "
         "Install it via the matching extra:\n"
@@ -27,32 +38,76 @@ except ImportError as e:
         "    pip install 'nccl4py[cu13]'   # for CUDA 13"
     ) from e
 
-from . import types, coop, handles, comm, window, gin, barrier, reduce_copy, runtime
-from .types import *    # MemoryOrder, ThreadScope, GinFenceLevel, GinResourceSharingMode
-from .coop import *     # Coop, cta, warp, thread, lanes, warp_span
-from .handles import *  # MultimemHandle, LsaBarrierHandle, GinBarrierHandle
-from .comm import *     # Team, DevComm
-from .window import *   # Window
-from .gin import *      # Gin
-from .barrier import *  # session classes + factories
-from .reduce_copy import *  # ReduceCopy functions
+from . import runtime
+from ._barrier import GinBarrierSession, GinFenceLevel, HybridBarrierSession, LsaBarrierSession
+from ._comm import CftTeamMode, DevComm
+from ._coop import Coop
+from ._gin import (
+    Gin,
+    GinAllContexts,
+    GinBackendMask,
+    GinCounterInc,
+    GinDescriptorSmem,
+    GinOptFlag,
+    GinRequest,
+    GinResourceSharingMode,
+    GinSegmentType,
+    GinSignalAdd,
+    GinSignalFollowResult,
+    GinSignalInc,
+    ThreadScope,
+)
+from ._handles import GinBarrierHandle, LsaBarrierHandle, MultimemHandle
+from ._reduce_copy import (
+    local_reduce_sum_copy,
+    lsa_copy,
+    lsa_copy_tma,
+    lsa_reduce_sum,
+    lsa_reduce_sum_copy,
+    multimem_copy,
+    multimem_reduce_sum,
+    multimem_reduce_sum_copy,
+)
+from ._team import Team
+from ._types import CftLeInfo, MemoryOrder
+from ._window import SymmetricPointer, Window
 
 __all__ = [
-    "types",
-    "coop",
-    "handles",
-    "comm",
-    "window",
-    "gin",
-    "barrier",
-    "reduce_copy",
+    "CftLeInfo",
+    "CftTeamMode",
+    "Coop",
+    "DevComm",
+    "Gin",
+    "GinAllContexts",
+    "GinBackendMask",
+    "GinBarrierHandle",
+    "GinBarrierSession",
+    "GinCounterInc",
+    "GinDescriptorSmem",
+    "GinFenceLevel",
+    "GinOptFlag",
+    "GinRequest",
+    "GinResourceSharingMode",
+    "GinSegmentType",
+    "GinSignalAdd",
+    "GinSignalFollowResult",
+    "GinSignalInc",
+    "HybridBarrierSession",
+    "LsaBarrierHandle",
+    "LsaBarrierSession",
+    "MemoryOrder",
+    "MultimemHandle",
+    "SymmetricPointer",
+    "Team",
+    "ThreadScope",
+    "Window",
+    "local_reduce_sum_copy",
+    "lsa_copy",
+    "lsa_copy_tma",
+    "lsa_reduce_sum",
+    "lsa_reduce_sum_copy",
+    "multimem_copy",
+    "multimem_reduce_sum",
+    "multimem_reduce_sum_copy",
     "runtime",
-    *types.__all__,
-    *coop.__all__,
-    *handles.__all__,
-    *comm.__all__,
-    *window.__all__,
-    *gin.__all__,
-    *barrier.__all__,
-    *reduce_copy.__all__,
 ]

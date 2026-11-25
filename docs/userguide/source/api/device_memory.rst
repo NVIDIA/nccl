@@ -43,9 +43,15 @@ ncclLsaBarrierSession
 
       Initializes a new memory barrier session.  *coop* represents a cooperative group (see :ref:`devapi_coops`).
       *comm* is the device communicator created using :c:func:`ncclDevCommCreate`.
-      *ncclTeamTagLsa* is here to indicate which subset of ranks the barrier will apply to.  The identifier of the underlying
+      ``ncclTeamTagLsa`` is here to indicate which subset of ranks the barrier will apply to.  The identifier of the underlying
       barrier to use is provided by *index* (it should be different for each *coop*; typically set to ``blockIdx.x`` to
       ensure uniqueness between CTAs).  *multimem* requests a hardware-accelerated implementation using memory multicast.
+
+   .. cpp:function:: ncclLsaBarrierSession(Coop coop, ncclDevComm const& comm, ncclTeam team, ncclLsaBarrierHandle handle, uint32_t index, bool multimem = false, ncclMultimemHandle mmHandle = {})
+
+      Initializes a memory barrier for an explicit *team* and barrier *handle*. The handle must have been
+      allocated for that team, and *index* must be within the allocated count. If *multimem* is true,
+      *mmHandle* must identify a multicast mapping for the same team.
 
    .. cpp:function:: void arrive(Coop, cuda::memory_order order)
 
@@ -59,6 +65,13 @@ ncclLsaBarrierSession
 
       Synchronizes all threads of all team members that participate in the barrier session (combines ``arrive`` and
       ``wait``).
+
+   .. cpp:function:: ncclResult_t wait(Coop coop, cuda::memory_order order, uint64_t timeoutCycles)
+   .. cpp:function:: ncclResult_t sync(Coop coop, cuda::memory_order order, uint64_t timeoutCycles)
+
+      Timeout-returning variants with the same participation and memory-ordering requirements as the
+      void-returning overloads. *timeoutCycles* is measured in device clock cycles. Check the returned status;
+      :c:enumerator:`ncclTimeout <ncclResult_t.ncclTimeout>` does not establish barrier completion.
 
 .. c:type:: ncclLsaBarrierHandle_t
 
@@ -185,3 +198,50 @@ ncclGetResourceBufferLsaMultimemPointer
 
    Returns a multicast pointer to a resource represented by *handle* for the
    LSA team.
+
+Low-Latency Exchange
+====================
+
+.. cpp:class:: template<typename Coop> ncclLLA2ASession
+
+   A device session for low-latency exchanges among load/store-accessible team members.
+   Allocate its resources with :c:func:`ncclLLA2ACreateRequirement` before creating the device communicator.
+   Each concurrently active session must use a distinct *block* index.
+
+   .. cpp:function:: ncclLLA2ASession(Coop coop, ncclDevComm const& comm, ncclTeam team, ncclLLA2AHandle handle, uint32_t block, int maxElts, bool multimem = false, ncclMultimemHandle mmHandle = {})
+
+      Creates a session for *team* using the resources identified by *handle*. *block* must be less than the
+      block count reserved for the handle. *maxElts* bounds the element positions used by the session;
+      reserve enough slots for the maximum element size with :c:func:`ncclLLA2ACalcSlots`.
+      If *multimem* is true, *mmHandle* must provide a multicast mapping for the team.
+      All threads in *coop* must construct and destroy the session together.
+
+   .. cpp:function:: template<typename T> void send(int peer, int slot, T data)
+
+      Sends *data* to *slot* on rank *peer* of the team. Threads may send to different peers and slots.
+      Coordinate senders so that a destination slot is not written concurrently by multiple senders.
+
+   .. cpp:function:: template<typename T> void bcast(int slot, T data)
+
+      Sends *data* to *slot* on every member of the team, including the local rank.
+
+   .. cpp:function:: template<typename T> T recv(int slot)
+
+      Waits for the current epoch's value in the local *slot* and returns it as *T*.
+      The sending and receiving element types must agree.
+
+   .. cpp:function:: template<int MinEltCount, int MaxEltCount, typename T> void recvUnrolled(int eltStart, int eltCount, int eltStride, T (&vals)[MaxEltCount])
+
+      Receives *eltCount* values into *vals*, starting at *eltStart* with a stride of *eltStride* element
+      positions. Require ``0 <= MinEltCount <= eltCount <= MaxEltCount`` and valid source positions.
+
+   .. cpp:function:: template<int Unroll, typename Elt, typename EltToAcc, typename Reduce> auto recvReduce(int eltStart, int eltCount, int eltStride, EltToAcc eltToAcc, Reduce red) -> decltype(eltToAcc(nccl::utility::declval<Elt>()))
+
+      Receives *eltCount* values of type *Elt*, converts them with *eltToAcc*, and combines them with *red*.
+      The count and *Unroll* must be positive. Positions start at *eltStart* and advance by *eltStride*.
+
+   .. cpp:function:: void endEpoch(Coop coop)
+
+      Advances to the next exchange epoch. Before calling this collectively over *coop*, each rank must
+      have sent to every team peer and received a value sent by every team peer. Different threads in
+      *coop* may satisfy these requirements. Complete these exchanges before reusing the same slots.

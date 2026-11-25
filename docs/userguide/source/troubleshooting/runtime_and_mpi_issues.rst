@@ -8,12 +8,12 @@ Runtime and MPI issues
 Errors
 ******
 
-NCCL calls may return a variety of return codes. Ensure that the return codes are always equal to ncclSuccess. If any call fails and returns a value different from ncclSuccess, setting NCCL_DEBUG to “WARN” will make NCCL print an explicit warning message before returning the error.
+NCCL calls may return a variety of return codes. Ensure that the return codes are always equal to :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`. If any call fails and returns a value different from :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`, setting NCCL_DEBUG to “WARN” will make NCCL print an explicit warning message before returning the error.
 
 Errors are grouped into different categories.
 
-* ncclUnhandledCudaError and ncclSystemError indicate that a call to an external library failed.
-* ncclInvalidArgument and ncclInvalidUsage indicate there was a programming error in the application using NCCL.
+* :c:enumerator:`ncclUnhandledCudaError <ncclResult_t.ncclUnhandledCudaError>` and :c:enumerator:`ncclSystemError <ncclResult_t.ncclSystemError>` indicate that a call to an external library failed.
+* :c:enumerator:`ncclInvalidArgument <ncclResult_t.ncclInvalidArgument>` and :c:enumerator:`ncclInvalidUsage <ncclResult_t.ncclInvalidUsage>` indicate there was a programming error in the application using NCCL.
 
 In either case, refer to the NCCL warning message to understand how to resolve the problem.
 
@@ -72,26 +72,26 @@ Once updated, the daemons should be restarted with:
 
  sudo systemctl restart systemd-logind
 
-**cuMem host allocations**
+``cuMem`` **host allocations**
 
-Starting with version 2.23, NCCL supports an alternative shared memory mechanism using cuMem host allocations. From
+Starting with version 2.23, NCCL supports an alternative shared memory mechanism using ``cuMem`` host allocations. From
 NCCL 2.24, if CUDA driver >= 12.6 and CUDA runtime >= 12.2, it is enabled by default in favor of /dev/shm.
 
-However, cuMem host allocations rely on correctly configured and working NUMA support, which may not be available in
+However, ``cuMem`` host allocations rely on correctly configured and working NUMA support, which may not be available in
 some VM and containerization scenarios. In particular, Docker by default disables NUMA support (it can be enabled by
-invoking Docker with ``--cap-add SYS_NICE``). From version 2.26.5, NCCL checks if cuMem host allocations work and, if
+invoking Docker with ``--cap-add SYS_NICE``). From version 2.26.5, NCCL checks if ``cuMem`` host allocations work and, if
 needed, automatically falls back to the /dev/shm code. In prior versions, the same outcome can be achieved by manually
-specifying ``NCCL_CUMEM_HOST_ENABLE=0``. We still recommend configuring the underlying system to ensure that cuMem host
+specifying ``NCCL_CUMEM_HOST_ENABLE=0``. We still recommend configuring the underlying system to ensure that ``cuMem`` host
 allocations work, as they provide improved reliability during communicator aborts.
 
 NUMA support is also important for memory affinity.
 For best performance, place each rank and its host memory close to the GPU and NIC it uses.
 See :ref:`cpu_memory_affinity` for details.
 
-cuMem host allocations may fail on systems without CUDA P2P connectivity if CUDA driver version prior to 13.0 is being
+``cuMem`` host allocations may fail on systems without CUDA P2P connectivity if CUDA driver version prior to 13.0 is being
 used. Furthermore, `CUDA Forward Compatibility
 <https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html>`_ feature can affect NCCL's ability to
-accurately determine the current driver version, resulting in cuMem host allocations being enabled on older drivers than
+accurately determine the current driver version, resulting in ``cuMem`` host allocations being enabled on older drivers than
 intended. We continue to investigate additional mechanisms to detect such circumstances; in the meantime, use
 ``NCCL_CUMEM_HOST_ENABLE=0`` to deactivate this feature if it causes issues.
 

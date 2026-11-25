@@ -11,7 +11,7 @@ ncclGetLastError
 
 Returns a human-readable string corresponding to the last error that occurred in NCCL.
 Note: The error is not cleared by calling this function.
-Please note that the string returned by ncclGetLastError could be unrelated to the current call
+Please note that the string returned by :c:func:`ncclGetLastError` could be unrelated to the current call
 and can be a result of previously launched asynchronous operations, if any.
 
 ncclGetErrorString
@@ -26,20 +26,20 @@ ncclGetVersion
 
 .. c:function:: ncclResult_t ncclGetVersion(int* version)
 
-The ncclGetVersion function returns the version number of the currently linked NCCL library.
+The :c:func:`ncclGetVersion` function returns the version number of the currently linked NCCL library.
 The NCCL version number is returned in *version* and encoded as an integer which includes the
-:c:macro:`NCCL_MAJOR`, :c:macro:`NCCL_MINOR` and :c:macro:`NCCL_PATCH` levels.
-The version number returned will be the same as the :c:macro:`NCCL_VERSION_CODE` defined in *nccl.h*.
-NCCL version numbers can be compared using the supplied macro :c:macro:`NCCL_VERSION` as ``NCCL_VERSION(MAJOR,MINOR,PATCH)``
+``NCCL_MAJOR``, ``NCCL_MINOR`` and ``NCCL_PATCH`` levels.
+The version number returned will be the same as the ``NCCL_VERSION_CODE`` defined in *nccl.h*.
+NCCL version numbers can be compared using the supplied macro ``NCCL_VERSION`` as ``NCCL_VERSION(MAJOR,MINOR,PATCH)``
 
 ncclGetUniqueId
 ---------------
 
 .. c:function:: ncclResult_t ncclGetUniqueId(ncclUniqueId* uniqueId)
 
-Generates an Id to be used in ncclCommInitRank. ncclGetUniqueId should be
+Generates an Id to be used in :c:func:`ncclCommInitRank`. :c:func:`ncclGetUniqueId` should be
 called once when creating a communicator and the Id should be distributed to all ranks in the
-communicator before calling ncclCommInitRank. *uniqueId* should point to a ncclUniqueId object allocated by the user.
+communicator before calling :c:func:`ncclCommInitRank`. *uniqueId* should point to a ``ncclUniqueId`` object allocated by the user.
 
 ncclSetEncryption
 -----------------
@@ -47,7 +47,7 @@ ncclSetEncryption
 .. c:function:: ncclResult_t ncclSetEncryption(const ncclEncryptionConfig_t* config)
 
 Configures process-global encryption for NCCL-owned TCP sockets. A configuration with ``mode`` set to
-:c:macro:`NCCL_ENCRYPTION_MODE_PSK` requests TLS encryption using the supplied PSK.
+:c:enumerator:`NCCL_ENCRYPTION_MODE_PSK <ncclEncryptionMode_t.NCCL_ENCRYPTION_MODE_PSK>` requests TLS encryption using the supplied PSK.
 
 Applications should call this function before :c:func:`ncclGetUniqueId` or any other NCCL operation that may create
 network connections. All processes that communicate with each other must use the same PSK and keep it unchanged for the
@@ -61,9 +61,9 @@ ncclCommInitRank
 Creates a new communicator (multi thread/process version).
 *rank* must be between 0 and *nranks*-1 and unique within a communicator clique.
 Each rank is associated to a CUDA device, which has to be set before calling
-ncclCommInitRank.
-ncclCommInitRank implicitly synchronizes with other ranks, hence it must be
-called by different threads/processes or used within ncclGroupStart/ncclGroupEnd.
+:c:func:`ncclCommInitRank`.
+:c:func:`ncclCommInitRank` implicitly synchronizes with other ranks, hence it must be
+called by different threads/processes or used within :c:func:`ncclGroupStart`/:c:func:`ncclGroupEnd`.
 
 ncclCommInitAll
 ---------------
@@ -84,8 +84,8 @@ ncclCommInitRankConfig
 
 .. c:function:: ncclResult_t ncclCommInitRankConfig(ncclComm_t* comm, int nranks, ncclUniqueId commId, int rank, ncclConfig_t* config)
 
-This function works the same way as *ncclCommInitRank* but accepts a configuration argument of extra attributes for
-the communicator. If config is passed as NULL, the communicator will have the default behavior, as if ncclCommInitRank
+This function works the same way as :c:func:`ncclCommInitRank` but accepts a configuration argument of extra attributes for
+the communicator. If config is passed as NULL, the communicator will have the default behavior, as if :c:func:`ncclCommInitRank`
 was called.
 
 See the :ref:`init-rank-config` section for details on configuration options.
@@ -96,20 +96,20 @@ ncclCommInitRankScalable
 .. c:function:: ncclResult_t ncclCommInitRankScalable(ncclComm_t* newcomm, int nranks, int myrank, int nId, ncclUniqueId* commIds, ncclConfig_t* config)
 
 
-This function works the same way as *ncclCommInitRankConfig* but accepts a list of ncclUniqueIds instead of a single one.
-If only one ncclUniqueId is passed, the communicator will be initialized as if ncclCommInitRankConfig was called.
-The provided ncclUniqueIds will all be used to initialize the single communicator given in argument.
+This function works the same way as :c:func:`ncclCommInitRankConfig` but accepts a list of ``ncclUniqueIds`` instead of a single one.
+If only one ``ncclUniqueId`` is passed, the communicator will be initialized as if :c:func:`ncclCommInitRankConfig` was called.
+The provided ``ncclUniqueIds`` will all be used to initialize the single communicator given in argument.
 
-See the :ref:`init-rank-config` section for details on how to create and distribute the list of ncclUniqueIds.
+See the :ref:`init-rank-config` section for details on how to create and distribute the list of ``ncclUniqueIds``.
 
 ncclCommSplit
 -------------
 
 .. c:function:: ncclResult_t ncclCommSplit(ncclComm_t comm, int color, int key, ncclComm_t* newcomm, ncclConfig_t* config)
 
-The *ncclCommSplit* is a collective function and creates a set of new communicators from an existing one. Ranks which
+The :c:func:`ncclCommSplit` is a collective function and creates a set of new communicators from an existing one. Ranks which
 pass the same *color* value will be part of the same group; color must be a non-negative value. If it is
-passed as *NCCL_SPLIT_NOCOLOR*, it means that the rank will not be part of any group, therefore returning NULL
+passed as ``NCCL_SPLIT_NOCOLOR``, it means that the rank will not be part of any group, therefore returning NULL
 as newcomm.
 The value of key will determine the rank order, and the smaller key means the smaller rank in new communicator.
 If keys are equal between ranks, then the rank in the original communicator will be used to order ranks.
@@ -123,27 +123,27 @@ ncclCommShrink
 
 .. c:function:: ncclResult_t ncclCommShrink(ncclComm_t comm, int* excludeRanksList, int excludeRanksCount, ncclComm_t* newcomm, ncclConfig_t* config, int shrinkFlags)
 
-The *ncclCommShrink* function creates a new communicator by removing specified ranks from an existing communicator.
+The :c:func:`ncclCommShrink` function creates a new communicator by removing specified ranks from an existing communicator.
 It is a collective function that must be called by all participating ranks in the newly created communicator.
 Ranks that are part of *excludeRanksList* should not call this function.
 The original ranks listed in *excludeRanksList* (of size *excludeRanksCount*) will be excluded from the new communicator.
 Within the new communicator, ranks will be updated to maintain a contiguous set of ids.
 If the new communicator needs a special configuration, it can be passed as *config*; otherwise, setting config to NULL will make the new communicator inherit the configuration of the parent communicator.
 
-The *shrinkFlags* parameter controls the behavior of the operation. Use *NCCL_SHRINK_DEFAULT* (or *0*) for normal operation, or *NCCL_SHRINK_ABORT* when shrinking after an error on the parent communicator.
-Specifically, when using *NCCL_SHRINK_DEFAULT*, there should not be any outstanding NCCL operations on the *comm* to avoid potential deadlocks. Further, if the parent communicator has the flag config.shrinkShare set to 1, NCCL will reuse the parent communicator resources.
-On the other hand, when using *NCCL_SHRINK_ABORT*, NCCL will automatically abort any outstanding operations on the parent communicator, and no resources will be shared between the parent and the newly created communicator.
+The *shrinkFlags* parameter controls the behavior of the operation. Use :c:macro:`NCCL_SHRINK_DEFAULT` (or *0*) for normal operation, or :c:macro:`NCCL_SHRINK_ABORT` when shrinking after an error on the parent communicator.
+Specifically, when using :c:macro:`NCCL_SHRINK_DEFAULT`, there should not be any outstanding NCCL operations on the *comm* to avoid potential deadlocks. Further, if the parent communicator has the flag config.shrinkShare set to 1, NCCL will reuse the parent communicator resources.
+On the other hand, when using :c:macro:`NCCL_SHRINK_ABORT`, NCCL will automatically abort any outstanding operations on the parent communicator, and no resources will be shared between the parent and the newly created communicator.
 
 ncclCommGetUniqueId
 -------------------
 
 .. c:function:: ncclResult_t ncclCommGetUniqueId(ncclComm_t comm, ncclUniqueId* uniqueId)
 
-The *ncclCommGetUniqueId* function generates a unique identifier for growing an
+The :c:func:`ncclCommGetUniqueId` function generates a unique identifier for growing an
 existing communicator exactly once. This function must be called by only one
 rank (the coordinator) before each grow operation on the existing communicator.
 The coordinator is responsible for distributing the *uniqueId* to all new ranks
-before they join the communicator via *ncclCommGrow*. This function should only
+before they join the communicator via :c:func:`ncclCommGrow`. This function should only
 be called when there are no outstanding NCCL operations on the communicator.
 
 ncclCommGrow
@@ -151,7 +151,7 @@ ncclCommGrow
 
 .. c:function:: ncclResult_t ncclCommGrow(ncclComm_t comm, int nRanks, const ncclUniqueId* uniqueId, int rank, ncclComm_t* newcomm, ncclConfig_t* config)
 
-The *ncclCommGrow* function creates a new communicator by adding new ranks to an existing communicator.
+The :c:func:`ncclCommGrow` function creates a new communicator by adding new ranks to an existing communicator.
 It must be called by both existing ranks (from the parent communicator) and new ranks (joining the communicator).
 
 **For existing ranks:**
@@ -165,58 +165,59 @@ It must be called by both existing ranks (from the parent communicator) and new 
 
 - *comm* should be *NULL*
 - *rank* must be set to the desired rank in the new communicator (must be >= parent communicator size)
-- *uniqueId* must be the unique identifier obtained from *ncclCommGetUniqueId* called by the coordinator
+- *uniqueId* must be the unique identifier obtained from :c:func:`ncclCommGetUniqueId` called by the coordinator
 
 The *nRanks* parameter specifies the total number of ranks in the new communicator and must be greater than the size of the parent communicator.
 If the new communicator needs a special configuration, it can be passed as *config*; otherwise, setting config to NULL will make the new communicator inherit the configuration of the parent communicator (for existing ranks) or use default configuration (for new ranks).
 
 There should not be any outstanding NCCL operations on the parent communicator when calling this function to avoid potential deadlocks.
-After the grow operation completes, the parent communicator should be destroyed using *ncclCommDestroy* to free resources.
+After the grow operation completes, the parent communicator should be destroyed using :c:func:`ncclCommDestroy` to free resources.
 
 **Example workflow:**
 
-1. Coordinator rank calls *ncclCommGetUniqueId* to generate the grow identifier
+1. Coordinator rank calls :c:func:`ncclCommGetUniqueId` to generate the grow identifier
 2. Coordinator distributes the *uniqueId* to all new ranks (out-of-band)
-3. All existing ranks call *ncclCommGrow* with *comm*\=parent, *rank*\=-1, *uniqueId*\=NULL
-4. All new ranks call *ncclCommGrow* with *comm*\=NULL, *rank*\=new_rank, *uniqueId*\=received_id
+3. All existing ranks call :c:func:`ncclCommGrow` with *comm*\=parent, *rank*\=-1, *uniqueId*\=NULL
+4. All new ranks call :c:func:`ncclCommGrow` with *comm*\=NULL, *rank*\=new_rank, *uniqueId*\=received_id
 
 ncclCommRevoke
 --------------
 
 .. c:function:: ncclResult_t ncclCommRevoke(ncclComm_t comm, int revokeFlags)
 
-Revokes in-flight operations on a communicator without destroying resources. Successful return may be *ncclInProgress* (non-blocking) while revocation completes asynchronously; applications can query *ncclCommGetAsyncError* until it returns *ncclSuccess*.
+Revokes in-flight operations on a communicator without destroying resources. Successful return may be :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>` (non-blocking) while revocation completes asynchronously; applications can query :c:func:`ncclCommGetAsyncError` until its *asyncError* output is :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`, checking the return value of each query as well.
+Stop polling if the query fails or reports a terminal error; see :c:func:`ncclCommGetAsyncError` for error handling.
 
-*revokeFlags* must be set to *NCCL_REVOKE_DEFAULT* (0). Other values are reserved for future use.
+*revokeFlags* must be set to ``NCCL_REVOKE_DEFAULT`` (0). Other values are reserved for future use.
 
-After revoke completes, the communicator is quiesced and safe for destroy, split, and shrink. Launching new collectives on a revoked communicator returns *ncclInvalidUsage*. Calling *ncclCommFinalize* after revoke is not supported. Resource sharing via *splitShare*/*shrinkShare* is disabled when the parent communicator is revoked.
+After revoke completes, the communicator is quiesced and safe for destroy, split, and shrink. Launching new collectives on a revoked communicator returns :c:enumerator:`ncclInvalidUsage <ncclResult_t.ncclInvalidUsage>`. Calling :c:func:`ncclCommFinalize` after revoke is not supported. Resource sharing via *splitShare*/*shrinkShare* is disabled when the parent communicator is revoked.
 
 ncclCommFinalize
 ----------------
 
 .. c:function:: ncclResult_t ncclCommFinalize(ncclComm_t comm)
 
-Finalize a communicator object *comm*. When the communicator is marked as nonblocking, *ncclCommFinalize* is a
-nonblocking function. Successful return from it will set communicator state as *ncclInProgress* and indicates
+Finalize a communicator object *comm*. When the communicator is marked as nonblocking, :c:func:`ncclCommFinalize` is a
+nonblocking function. Successful return from it will set communicator state as :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>` and indicates
 the communicator is under finalization where all uncompleted operations and the network-related resources are
 being flushed and freed.
-Once all NCCL operations are complete, the communicator will transition to the *ncclSuccess* state. Users
-can query that state with *ncclCommGetAsyncError*.
+Once all NCCL operations are complete, the communicator will transition to the :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` state. Users
+can query that state with :c:func:`ncclCommGetAsyncError`.
 
-This function is an intra-node collective call. When a single thread finalizes multiple ranks (multiple GPUs per thread), the calls must be grouped with *ncclGroupStart*/*ncclGroupEnd* to avoid a hang.
+This function is an intra-node collective call. When a single thread finalizes multiple ranks (multiple GPUs per thread), the calls must be grouped with :c:func:`ncclGroupStart`/:c:func:`ncclGroupEnd` to avoid a hang.
 
 ncclCommDestroy
 ---------------
 
 .. c:function:: ncclResult_t ncclCommDestroy(ncclComm_t comm)
 
-Destroy a communicator object *comm*. If *ncclCommFinalize* is called by users, users should guarantee that the state
-of the communicator becomes *ncclSuccess* before calling *ncclCommDestroy*. In all cases, the communicator should no
-longer be accessed after *ncclCommDestroy* returns. It is recommended that users call *ncclCommFinalize* and then
-*ncclCommDestroy*.
+Destroy a communicator object *comm*. If :c:func:`ncclCommFinalize` is called by users, users should guarantee that the state
+of the communicator becomes :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` before calling :c:func:`ncclCommDestroy`. In all cases, the communicator should no
+longer be accessed after :c:func:`ncclCommDestroy` returns. It is recommended that users call :c:func:`ncclCommFinalize` and then
+:c:func:`ncclCommDestroy`.
 
-*ncclCommDestroy* will call *ncclCommFinalize* internally, unless *ncclCommFinalize* was previously called on the
-communicator. If *ncclCommFinalize* was previously called on the communicator object *comm*, then *ncclCommDestroy* is a
+:c:func:`ncclCommDestroy` will call :c:func:`ncclCommFinalize` internally, unless :c:func:`ncclCommFinalize` was previously called on the
+communicator. If :c:func:`ncclCommFinalize` was previously called on the communicator object *comm*, then :c:func:`ncclCommDestroy` is a
 purely local operation.
 
 This function is an intra-node collective call, which all ranks on the same node should call to avoid a hang.
@@ -226,7 +227,7 @@ ncclCommAbort
 
 .. c:function:: ncclResult_t ncclCommAbort(ncclComm_t comm)
 
-*ncclCommAbort* frees resources that are allocated to a communicator object *comm* and aborts any uncompleted
+:c:func:`ncclCommAbort` frees resources that are allocated to a communicator object *comm* and aborts any uncompleted
 operations before destroying the communicator. All active ranks are required to call this function in order to
 abort the NCCL communicator successfully. For more use cases, please check :ref:`ft`.
 
@@ -236,14 +237,22 @@ ncclCommGetAsyncError
 .. c:function:: ncclResult_t ncclCommGetAsyncError(ncclComm_t comm, ncclResult_t* asyncError)
 
 Queries the progress and potential errors of asynchronous NCCL operations.
-Operations which do not require a stream argument (e.g. ncclCommFinalize) can be considered complete as soon
-as the function returns *ncclSuccess*; operations with a stream argument (e.g. ncclAllReduce) will return
-*ncclSuccess* as soon as the operation is posted on the stream but may also report errors through
-ncclCommGetAsyncError() until they are completed. If the return code of any NCCL function is *ncclInProgress*,
-it means the operation is in the process of being enqueued in the background, and users must query the states
-of the communicators until all the states become *ncclSuccess* before calling another NCCL function. Before the
-states change into *ncclSuccess*, users are not allowed to issue CUDA kernel to the streams being used by NCCL.
-If there has been an error on the communicator, user should destroy the communicator with :c:func:`ncclCommAbort`.
+The communicator state is written to *asyncError*; the function's return value reports whether the query itself succeeded.
+Operations which do not require a stream argument (e.g. :c:func:`ncclCommFinalize`) can be considered complete as soon
+as the function returns :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>`; operations with a stream argument (e.g. :c:func:`ncclAllReduce`) will return
+:c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` as soon as the operation is posted on the stream but may also report errors through
+:c:func:`ncclCommGetAsyncError` until they are completed. If the return code of any NCCL function is :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`,
+it means the operation is in the process of being enqueued in the background. Users must poll the communicator
+states, checking the return value of each query before using its *asyncError* output. If the query itself fails,
+stop polling and handle that error.
+
+Continue polling only while *asyncError* is :c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`.
+If the query succeeds but *asyncError* is neither :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` nor
+:c:enumerator:`ncclInProgress <ncclResult_t.ncclInProgress>`, it reports a terminal error: stop polling and
+call :c:func:`ncclCommAbort` on the affected communicator instead of waiting for it to become successful.
+
+All communicator states must become :c:enumerator:`ncclSuccess <ncclResult_t.ncclSuccess>` before issuing further
+NCCL operations or launching CUDA kernels on the streams being used by NCCL.
 If an error occurs on the communicator, nothing can be assumed about the completion or correctness of operations
 enqueued on that communicator.
 
@@ -291,9 +300,12 @@ ncclCommWindowRegister
 Collectively register local buffer *buff* with *size* under communicator *comm* into NCCL window. Since this is a collective call,
 every rank in the communicator needs to participate in the registration. Size may differ across ranks; callers are
 responsible for ensuring later operations only access ranges that are valid for the ranks participating in that operation. *win* is
-returned for future deregistration (if called within a group, the value may not be filled in until ncclGroupEnd() has completed).
+returned for future deregistration (if called within a group, the value may not be filled in until :c:func:`ncclGroupEnd` has completed).
 See *buff* requirement and more instructions in :ref:`user_buffer_reg`. User can also pass
 different win flags to control the registration behavior. For more win flags information, please refer to :ref:`win_flags`.
+The starting offset of *buff* within its underlying virtual-memory allocation must be a multiple of
+:c:macro:`NCCL_WIN_REQUIRED_ALIGNMENT` (4096 bytes). Misaligned registration returns
+:c:enumerator:`ncclInvalidArgument <ncclResult_t.ncclInvalidArgument>`.
 Host APIs do not accept buffers that are symmetrically registered more than once. Passing such buffers to host APIs results
 in undefined behavior.
 
@@ -304,6 +316,16 @@ ncclCommWindowDeregister
 
 Deregister NCCL window represented by *win* under communicator *comm*. Deregistration is local to the rank, and
 caller needs to make sure the corresponding buffer within the window is not being accessed by any NCCL operation.
+
+ncclWinGetUserPtr
+-----------------
+
+.. c:function:: ncclResult_t ncclWinGetUserPtr(ncclComm_t comm, ncclWindow_t win, void** outUserPtr)
+
+Return the original buffer pointer registered for *win* through *outUserPtr*. The caller supplies a valid
+communicator, a window registered with that communicator, and a non-NULL output pointer.
+If symmetric registration is unsupported by the communicator, the call succeeds and writes ``NULL``.
+The returned pointer remains owned by the caller; this function does not allocate or deregister memory.
 
 ncclMemAlloc
 ------------
@@ -319,7 +341,7 @@ ncclMemFree
 
 .. c:function:: ncclResult_t ncclMemFree(void *ptr)
 
-Free memory allocated by *ncclMemAlloc()*.
+Free memory allocated by :c:func:`ncclMemAlloc`.
 
 ncclCommSuspend
 ---------------
@@ -331,9 +353,9 @@ while suspended. There should be no outstanding NCCL operations on *comm* when t
 
 The *flags* parameter controls which resources are released:
 
-- *NCCL_SUSPEND_MEM* (``0x01``) -- Release dynamic GPU memory allocations held by the communicator.
+- ``NCCL_SUSPEND_MEM`` (``0x01``) -- Release dynamic GPU memory allocations held by the communicator.
 
-A suspended communicator can be restored to an active state by calling *ncclCommResume*.
+A suspended communicator can be restored to an active state by calling :c:func:`ncclCommResume`.
 
 ncclCommResume
 --------------
@@ -349,4 +371,4 @@ ncclCommMemStats
 .. c:function:: ncclResult_t ncclCommMemStats(ncclComm_t comm, ncclCommMemStat_t stat, uint64_t* value)
 
 Query communicator memory statistics. The *stat* parameter selects which statistic to retrieve, and the
-result is written to *\*value*. See :c:type:`ncclCommMemStat_t` for the list of available statistics.
+result is written to *\*value*. See :c:enum:`ncclCommMemStat_t` for the list of available statistics.

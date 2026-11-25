@@ -119,12 +119,19 @@ static ncclResult_t ncclNvlsTreeRubinTuning(struct ncclComm* comm, int* nChannel
   int nRanksPerDomain = comm->minLocalRanks;
   // TODO: Move this chunk-size policy into the pipeline cost model once it models NVLSTree pipelining and supports
   // chunk-size selection.
+  // NVLSTree chunk-size formula on Vera Rubin (capped at 512 KiB):
+  // - 32 KiB * devsPerNic: NET/IB splits each chunk across devsPerNic QPs, and per-QP writes < 32 KiB degrade
+  //   network throughput empirically.
+  // - ranksPerDomainFactor: scales chunk size up when a domain has < 32 GPUs (e.g. 2x at 16 GPUs, 4x at 8 GPUs),
+  //   since fewer GPUs per domain means fewer parallel network streams keeping the fabric busy.
+  // - multiDomainChunkFactor: doubles chunk size for > 2 domains to amortize the extra inter-domain tree hops.
   int ranksPerDomainFactor = pow2Up(DIVUP(32, nRanksPerDomain));
   int multiDomainChunkFactor = nDomains > 2 ? 2 : 1;
-  *chunkSize = std::min(512 * 1024, 64 * 1024 * ranksPerDomainFactor * multiDomainChunkFactor);
+  int devsPerNic = pow2Up(std::max(2, comm->maxDevsPerNic));
+  *chunkSize = std::min(512 * 1024, 32 * 1024 * devsPerNic * ranksPerDomainFactor * multiDomainChunkFactor);
   *nChannels = comm->nvlsChannels;
-  INFO(NCCL_INIT, "NVLSTree topology tuning: domains %d ranksPerDomain %d channels %d chunkSize %d", nDomains,
-       nRanksPerDomain, *nChannels, *chunkSize);
+  INFO(NCCL_INIT, "NVLSTree topology tuning: domains %d ranksPerDomain %d devsPerNic %d chunkSize %d", nDomains,
+       nRanksPerDomain, devsPerNic, *chunkSize);
   return ncclSuccess;
 }
 

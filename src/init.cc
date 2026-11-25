@@ -1254,6 +1254,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     int p2pnChannelsPerPeer;
     int p2pMaxPeers;
     float minNetBw;
+    int maxDevsPerNic;
     int localNetDeviceCount;
     int localNetCountByBw;
     float localNetBw;
@@ -1554,6 +1555,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     NCCLCHECKGOTO(comm->ncclNet->devices(&localNetDeviceCount), ret, fail);
     NCCLCHECKGOTO(ncclTopoRankToIndex(comm->topo, comm->rank, &gpu, false), ret, fail);
     NCCLCHECKGOTO(ncclTopoGetLocalNetCountByBw(comm->topo, gpu, &localNetCountByBw, &localNetBw), ret, fail);
+    for (int n = 0; n < comm->topo->nodes[NET].count; n++) {
+      ncclNetProperties_t props;
+      NCCLCHECKGOTO(comm->ncclNet->getProperties(comm->topo->nodes[NET].nodes[n].net.dev, &props), ret, fail);
+      allGather3Data[rank].maxDevsPerNic = std::max(allGather3Data[rank].maxDevsPerNic, props.vProps.ndevs);
+    }
   }
   if (collNetSupport(comm)) {
     NCCLCHECKGOTO(collNetDevices(comm, &localCollNetCount), ret, fail);
@@ -1742,6 +1748,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
 
   nChannelsOrig = comm->nChannels;
   comm->minNetBw = allGather3Data[rank].minNetBw;
+  comm->maxDevsPerNic = allGather3Data[rank].maxDevsPerNic;
   NCCLCHECKGOTO(ncclCalloc(&allTopoRanks, comm->nRanks), ret, fail);
   for (int i = 0; i < nranks; i++) {
     allTopoRanks[i] = &allGather3Data[i].topoRanks;
@@ -1759,6 +1766,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
     comm->p2pnChannelsPerPeer = std::min(comm->p2pnChannelsPerPeer, allGather3Data[i].p2pnChannelsPerPeer);
     comm->p2pMaxPeers = std::max(comm->p2pMaxPeers, allGather3Data[i].p2pMaxPeers);
     comm->minNetBw = std::min(comm->minNetBw, allGather3Data[i].minNetBw);
+    comm->maxDevsPerNic = std::max(comm->maxDevsPerNic, allGather3Data[i].maxDevsPerNic);
   }
   if (graphs[NCCL_ALGO_COLLNET_CHAIN]->nChannels == 0) comm->config.collnetEnable = 0;
   if (graphs[NCCL_ALGO_NVLS]->nChannels == 0) comm->nvlsSupport = comm->nvlsChannels = 0;

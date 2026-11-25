@@ -162,7 +162,7 @@ $(OBJDIR)/genobj/general/%.d: $(OBJDIR)/gensrc/general/%
 
 # Device link: combine all device .o (incl. common.cu.o with GIN symbol) into device_glue.o
 $(DEVGLUE_OBJ): $(LIB_OBJS)
-	$(NVCC) $(NVCUFLAGS) -dlink $^ -o $@
+	$(NVCC) $(NVCUFLAGS) --cudadevrt=none -dlink $^ -o $@
 
 # Manifest lists device objs for src/Makefile; they get linked into libnccl.so so tests can resolve device symbols
 $(MANIFEST): $(LIB_OBJS) $(DEVGLUE_OBJ)

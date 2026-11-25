@@ -56,7 +56,7 @@ $(OBJDIR)/%.d: %
 	$(call DEPENDS,$@,$<)
 
 $(DIAG_DEVGLUE_OBJ): $(LIB_OBJS)
-	$(NVCC) $(NVCUFLAGS) -dlink $^ -o $@
+	$(NVCC) $(NVCUFLAGS) --cudadevrt=none -dlink $^ -o $@
 
 $(MANIFEST): $(LIB_OBJS) $(DIAG_DEVGLUE_OBJ)
 	@echo $^ > $@

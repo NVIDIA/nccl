@@ -14,9 +14,9 @@ single thread that manages NCCL calls for multiple GPUs, and is ported from NCCL
 Initialization
 --------------
 
-In versions 1.x, NCCL had to be initialized using ncclCommInitAll at a single thread or having one thread per GPU
-concurrently call ncclCommInitRank. NCCL 2.x retains these two modes of initialization. It adds a new mode with the
-Group API where ncclCommInitRank can be called in a loop, like a communication call, as shown below. The loop has to be
+In versions 1.x, NCCL had to be initialized using :c:func:`ncclCommInitAll` at a single thread or having one thread per GPU
+concurrently call :c:func:`ncclCommInitRank`. NCCL 2.x retains these two modes of initialization. It adds a new mode with the
+Group API where :c:func:`ncclCommInitRank` can be called in a loop, like a communication call, as shown below. The loop has to be
 guarded by the Group start and end API.
 
 .. code:: C
@@ -82,4 +82,4 @@ New datatypes have been added in NCCL 2.x.  The ones present in NCCL 1.x did not
 Error codes
 -----------
 
-Error codes have been merged into the ncclInvalidArgument category and have been simplified. A new ncclInvalidUsage code has been created to cover new programming errors.
+Error codes have been merged into the :c:enumerator:`ncclInvalidArgument <ncclResult_t.ncclInvalidArgument>` category and have been simplified. A new :c:enumerator:`ncclInvalidUsage <ncclResult_t.ncclInvalidUsage>` code has been created to cover new programming errors.

@@ -293,7 +293,7 @@ typedef enum {
 
   // Group API States
   ncclProfilerGroupStartApiStop        = 23,// state marks the end of a ncclGroupStart() API call
-  ncclProfilerEndGroupApiStart         = 24 // state marks the start of a ncclGroupEnd() API call
+  ncclProfilerGroupEndApiStart         = 24 // state marks the start of a ncclGroupEnd() API call
 } ncclProfilerEventState_v5_t;
 ```
 

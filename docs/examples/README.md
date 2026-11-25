@@ -77,7 +77,7 @@ using User Buffer Registration with common collectives.
 ### [Symmetric Memory Registration](05_symmetric_memory/)
 
 Since 2.27, NCCL supports window registration, which allows users to register
-local buffers into NCCL window and enables extreme low latency and high
+local buffers into a NCCL window and enables extremely low latency and high
 bandwidth communication in NCCL. This folder provides sample implementation
 using Symmetric Memory Registration with common collectives.
 

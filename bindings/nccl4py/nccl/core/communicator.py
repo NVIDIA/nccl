@@ -437,7 +437,7 @@ class NCCLCommProperties:
     ``None`` when nccl4py was built against an older NCCL.
 
     See Also:
-        :c:type:`ncclCommProperties` for the description of each field.
+        :c:type:`ncclCommProperties_t` for the description of each field.
     """
 
     rank: int

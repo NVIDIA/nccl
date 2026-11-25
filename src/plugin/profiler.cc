@@ -850,6 +850,7 @@ static void profilerStampArgs(ncclProfilerEventStateArgs_t* args, uint32_t mode,
   }
 }
 
+// Callers must check that a profiler plugin is loaded before dispatching events.
 // count==1 preserves the legacy fast path: ctx is the plugin's own context,
 // including a legal NULL context, and callers already gate delivery with the
 // process-wide mask (including a RAS override). count>1 uses NCCL's own
@@ -860,7 +861,6 @@ static void profilerStartDispatch(void* ctx, struct ncclProfilerEventRef* out, n
                                   const struct ncclProfilerEventRef* parent,
                                   const struct ncclProfilerEventRef* parentGroup, profilerTimestampKind timestampKind,
                                   uint64_t tsGpu) {
-  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return;
   memset(out, 0, sizeof(*out));
   if (COMPILER_EXPECT(profilerPluginCount <= 1, 1)) {
     profilerStampDescr(descr, profilerTsModeGet(), timestampKind, tsGpu);
@@ -904,7 +904,6 @@ static void profilerStartGpu(void* ctx, struct ncclProfilerEventRef* out, ncclPr
 
 static void profilerStopDispatch(struct ncclProfilerEventRef* event, profilerTimestampKind timestampKind,
                                  uint64_t tsGpu) {
-  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return;
   if (COMPILER_EXPECT(profilerPluginCount <= 1, 1)) {
     if (event->h[0]) {
       ncclProfilerEventDescr_t descr = {};
@@ -939,7 +938,7 @@ static void profilerStopGpu(struct ncclProfilerEventRef* event, uint64_t tsGpu) 
 static void profilerRecordDispatch(struct ncclProfilerEventRef* event, ncclProfilerEventState_t eState,
                                    ncclProfilerEventStateArgs_t* args, profilerTimestampKind timestampKind,
                                    uint64_t tsGpu) {
-  if (COMPILER_EXPECT(ncclProfiler == NULL, 1) || !profilerLive(event)) return;
+  if (!profilerLive(event)) return;
   if (COMPILER_EXPECT(profilerPluginCount <= 1, 1)) {
     profilerStampArgs(args, profilerTsModeGet(), timestampKind, tsGpu);
     profilerActivate(&profilerPlugins[0])->recordEventState(event->h[0], eState, args);
@@ -1008,7 +1007,6 @@ static void profilerStopNet(void** eHandle) {
 // every loaded plugin's recordEventState as a NULL handle, as before multi-plugin support;
 // plugins are responsible for ignoring or handling NULL handles
 static void profilerRecordNet(void* eHandle, ncclProfilerEventState_t eState, ncclProfilerEventStateArgs_t* args) {
-  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return;
   if (!eHandle) {
     for (int slot = 0; slot < profilerPluginCount; slot++) {
       ncclProfilerEventStateArgs_t slotArgs = *args;
@@ -1171,16 +1169,19 @@ ncclResult_t ncclProfilerPluginFinalize(struct ncclComm* comm) {
 }
 
 ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphCaptured) {
-  ncclProfilerEventDescr_t eDescr = {0};
-  eDescr.type = ncclProfileGroupApi;
-  eDescr.rank = info->comm->rank;
-  eDescr.groupApi.graphCaptured = isGraphCaptured;
-
-  ncclProfilerApiState.eActivationMask = ncclProfilerCurrentEventMask();
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) {
+    // Keep the activation mask copied into tasks.
+    ncclProfilerApiState.eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+    return ncclSuccess;
+  }
+  ncclProfilerApiState.eActivationMask = profilerRefreshEventMask();
 
   // Only count outermost groups when emitting group API events
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-      (ncclProfilerApiState.eActivationMask & profilerEventGate(ncclProfileGroupApi))) {
+  if (ncclProfilerApiState.eActivationMask & profilerEventGate(ncclProfileGroupApi)) {
+    ncclProfilerEventDescr_t eDescr = {0};
+    eDescr.type = ncclProfileGroupApi;
+    eDescr.rank = info->comm->rank;
+    eDescr.groupApi.graphCaptured = isGraphCaptured;
     if (ncclProfilerApiState.profilerGroupDepth == 0) {
       eDescr.groupApi.groupDepth = ncclGroupDepth;
       profilerStart(info->comm->profilerContext, &ncclProfilerApiState.groupApiEventHandle, &eDescr, nullptr, nullptr);
@@ -1192,11 +1193,13 @@ ncclResult_t ncclProfilerStartGroupApiEvent(struct ncclInfo* info, bool isGraphC
 }
 
 ncclResult_t ncclProfilerStopGroupApiEvent() {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   if (ncclProfilerApiState.profilerGroupDepth == 0) profilerStop(&ncclProfilerApiState.groupApiEventHandle);
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eState) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   bool shouldRecord = false;
   if (eState == ncclProfilerGroupStartApiStop && ncclProfilerApiState.state == ncclProfilerGroupApiStartStateStarted) {
     ncclProfilerApiState.state = ncclProfilerGroupApiStartStateStopped;
@@ -1211,36 +1214,36 @@ ncclResult_t ncclProfilerRecordGroupApiEventState(ncclProfilerEventState_t eStat
 }
 
 ncclResult_t ncclProfilerStartP2pApiEvent(struct ncclInfo* info, bool isGraphCaptured) {
-  ncclProfilerEventDescr_t eDescr = {0};
-  eDescr.type = ncclProfileP2pApi;
-  eDescr.rank = info->comm->rank;
-  eDescr.p2pApi.func = ncclFuncToString(info->coll);
-  eDescr.p2pApi.count = info->count;
-  eDescr.p2pApi.datatype = ncclDatatypeToString(info->datatype);
-  eDescr.p2pApi.stream = (void*)info->stream;
-  eDescr.p2pApi.graphCaptured = isGraphCaptured;
-  eDescr.p2pApi.userTag = info->collConfig.userProfilerTag;
-  ncclProfilerApiState.eActivationMask = ncclProfilerCurrentEventMask();
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-      (ncclProfilerApiState.eActivationMask & profilerEventGate(ncclProfileP2pApi))) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
+  ncclProfilerApiState.eActivationMask = profilerRefreshEventMask();
+  if (ncclProfilerApiState.eActivationMask & profilerEventGate(ncclProfileP2pApi)) {
+    ncclProfilerEventDescr_t eDescr = {0};
+    eDescr.type = ncclProfileP2pApi;
+    eDescr.rank = info->comm->rank;
+    eDescr.p2pApi.func = ncclFuncToString(info->coll);
+    eDescr.p2pApi.count = info->count;
+    eDescr.p2pApi.datatype = ncclDatatypeToString(info->datatype);
+    eDescr.p2pApi.stream = (void*)info->stream;
+    eDescr.p2pApi.graphCaptured = isGraphCaptured;
+    eDescr.p2pApi.userTag = info->collConfig.userProfilerTag;
     profilerStart(info->comm->profilerContext, &ncclProfilerApiState.p2pApiEventHandle, &eDescr,
                   &ncclProfilerApiState.groupApiEventHandle, nullptr);
-  }
-  if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
-    INFO(NCCL_P2P | NCCL_ENV,
-         "Comm config graphUsageMode is set to %d but the user is capturing graphs on the stream. Violating "
-         "graphUsageMode semantics can lead to hangs!",
-         info->comm->config.graphUsageMode);
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStopP2pApiEvent() {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   profilerStop(&ncclProfilerApiState.p2pApiEventHandle);
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo* info, bool isGraphCaptured) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) {
+    // Keep the activation mask copied into tasks.
+    ncclProfilerApiState.eActivationMask = COMPILER_ATOMIC_LOAD(&ncclProfilerEventMask, std::memory_order_relaxed);
+    return ncclSuccess;
+  }
   ncclProfilerEventDescr_t eDescr = {0};
   eDescr.type = ncclProfileCollApi;
   eDescr.rank = info->comm->rank;
@@ -1251,99 +1254,93 @@ ncclResult_t ncclProfilerStartCollApiEvent(struct ncclInfo* info, bool isGraphCa
   eDescr.collApi.root = info->root;
   eDescr.collApi.graphCaptured = isGraphCaptured;
   eDescr.collApi.userTag = info->collConfig.userProfilerTag;
-  ncclProfilerApiState.eActivationMask = ncclProfilerCurrentEventMask();
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-      (ncclProfilerApiState.eActivationMask & profilerEventGate(ncclProfileCollApi))) {
+  ncclProfilerApiState.eActivationMask = profilerRefreshEventMask();
+  if (ncclProfilerApiState.eActivationMask & profilerEventGate(ncclProfileCollApi)) {
     profilerStart(info->comm->profilerContext, &ncclProfilerApiState.collApiEventHandle, &eDescr,
                   &ncclProfilerApiState.groupApiEventHandle, nullptr);
-  }
-  if (isGraphCaptured && info->comm->config.graphUsageMode == 0) {
-    INFO(NCCL_COLL | NCCL_ENV,
-         "Comm config graphUsageMode is set to %d but the user is capturing graphs on the stream. Violating "
-         "graphUsageMode semantics can lead to hangs!",
-         info->comm->config.graphUsageMode);
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStopCollApiEvent() {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   profilerStop(&ncclProfilerApiState.collApiEventHandle);
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStartKernelLaunchEvent(struct ncclKernelPlan* plan, cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   ncclProfilerEventDescr_t eDescr = {0};
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    const struct ncclProfilerEventRef* groupParent = nullptr;
-    struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
-    struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
-    int eActivationMask_ = 0;
-    while (ct) {
-      if (ct->eActivationMask) {
-        eActivationMask_ = ct->eActivationMask;
-        groupParent = &ct->groupApiEventHandle;
-        goto startKernelLaunchEvent;
-      }
-      ct = ct->next;
+  const struct ncclProfilerEventRef* groupParent = nullptr;
+  struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
+  struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
+  int eActivationMask_ = 0;
+  while (ct) {
+    if (ct->eActivationMask) {
+      eActivationMask_ = ct->eActivationMask;
+      groupParent = &ct->groupApiEventHandle;
+      goto startKernelLaunchEvent;
     }
-    while (pt) {
-      if (pt->eActivationMask) {
-        eActivationMask_ = pt->eActivationMask;
-        groupParent = &pt->groupApiEventHandle;
-        goto startKernelLaunchEvent;
-      }
-      pt = pt->next;
+    ct = ct->next;
+  }
+  while (pt) {
+    if (pt->eActivationMask) {
+      eActivationMask_ = pt->eActivationMask;
+      groupParent = &pt->groupApiEventHandle;
+      goto startKernelLaunchEvent;
     }
+    pt = pt->next;
+  }
 
-  startKernelLaunchEvent:
-    if (eActivationMask_ & ncclProfileKernelLaunch) {
-      eDescr.type = ncclProfileKernelLaunch;
-      eDescr.rank = plan->comm->rank;
-      eDescr.kernelLaunch.stream = (void*)stream;
-      profilerStart(plan->comm->profilerContext, &plan->kernelLaunchEventHandle, &eDescr, groupParent, nullptr);
-    }
+startKernelLaunchEvent:
+  if (eActivationMask_ & ncclProfileKernelLaunch) {
+    eDescr.type = ncclProfileKernelLaunch;
+    eDescr.rank = plan->comm->rank;
+    eDescr.kernelLaunch.stream = (void*)stream;
+    profilerStart(plan->comm->profilerContext, &plan->kernelLaunchEventHandle, &eDescr, groupParent, nullptr);
   }
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStopKernelLaunchEvent(struct ncclKernelPlan* plan) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   profilerStop(&plan->kernelLaunchEventHandle);
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStartGroupEvent(struct ncclKernelPlan* plan) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(groupStart);
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
-    struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
-    int eActivationMask_ = 0;
-    while (ct) {
-      if (ct->eActivationMask) {
-        eActivationMask_ = ct->eActivationMask;
-        goto startGroup;
-      }
-      ct = ct->next;
+  struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
+  struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
+  int eActivationMask_ = 0;
+  while (ct) {
+    if (ct->eActivationMask) {
+      eActivationMask_ = ct->eActivationMask;
+      goto startGroup;
     }
-    while (pt) {
-      if (pt->eActivationMask) {
-        eActivationMask_ = pt->eActivationMask;
-        goto startGroup;
-      }
-      pt = pt->next;
+    ct = ct->next;
+  }
+  while (pt) {
+    if (pt->eActivationMask) {
+      eActivationMask_ = pt->eActivationMask;
+      goto startGroup;
     }
+    pt = pt->next;
+  }
 
-  startGroup:
-    if (eActivationMask_ & profilerEventGate(ncclProfileGroup)) {
-      ncclProfilerEventDescr_t eDescr = {0};
-      eDescr.type = ncclProfileGroup;
-      profilerStart(plan->comm->profilerContext, &plan->groupEventHandle, &eDescr, nullptr, nullptr);
-    }
+startGroup:
+  if (eActivationMask_ & profilerEventGate(ncclProfileGroup)) {
+    ncclProfilerEventDescr_t eDescr = {0};
+    eDescr.type = ncclProfileGroup;
+    profilerStart(plan->comm->profilerContext, &plan->groupEventHandle, &eDescr, nullptr, nullptr);
   }
   TIME_STOP_EVENT(groupStart);
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(groupStop);
   profilerStop(&plan->groupEventHandle);
   TIME_STOP_EVENT(groupStop);
@@ -1351,79 +1348,85 @@ ncclResult_t ncclProfilerStopGroupEvent(struct ncclKernelPlan* plan) {
 }
 
 ncclResult_t ncclProfilerStartTaskEvents(struct ncclKernelPlan* plan) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) {
+    // Captured callbacks may not run on every rank.
+    if (!plan->persistent) {
+      for (struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue); ct != nullptr; ct = ct->next) {
+        // RAS also uses these counters when no profiler plugin is loaded.
+        COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
+      }
+    }
+    return ncclSuccess;
+  }
   TIME_START_EVENT(taskStart);
   struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
   while (ct) {
-    if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-      int enable = ct->eActivationMask & profilerEventGate(ncclProfileColl);
-      if (enable) {
-        ncclProfilerEventDescr_t eDescr = {0};
-        eDescr.type = ncclProfileColl;
-        eDescr.rank = plan->comm->rank;
-        eDescr.coll.seqNumber = plan->comm->seqNumber[ct->func];
-        eDescr.coll.func = ncclFuncToString(ct->func);
-        eDescr.coll.sendBuff = ct->sendbuff;
-        eDescr.coll.recvBuff = ct->recvbuff;
-        eDescr.coll.count = ct->count;
-        eDescr.coll.root = ct->root;
-        eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
-        eDescr.coll.nChannels = ct->nChannels;
-        eDescr.coll.nWarps = ct->nWarps;
-        eDescr.coll.isSymColl = plan->isSymColl;
-        if (plan->isSymColl) {
-          const char* variant = ncclSymkKernelIdToString(static_cast<int>(ct->devFuncId));
-          eDescr.coll.kernelVariant = variant;
-          const char* underscore = strchr(variant, '_');
-          eDescr.coll.algo = underscore ? underscore + 1 : variant;
-          eDescr.coll.proto = "";
-        } else {
-          eDescr.coll.algo = ncclAlgoToString(ct->algorithm);
-          eDescr.coll.proto = ncclProtoToString(ct->protocol);
-          eDescr.coll.kernelVariant = nullptr;
-        }
-        eDescr.coll.userTag = ct->profilerTag;
-        profilerStart(plan->comm->profilerContext, &ct->eventHandle, &eDescr, &ct->collApiEventHandle,
-                      &plan->groupEventHandle);
+    int enable = ct->eActivationMask & profilerEventGate(ncclProfileColl);
+    if (enable) {
+      ncclProfilerEventDescr_t eDescr = {0};
+      eDescr.type = ncclProfileColl;
+      eDescr.rank = plan->comm->rank;
+      eDescr.coll.seqNumber = plan->comm->seqNumber[ct->func];
+      eDescr.coll.func = ncclFuncToString(ct->func);
+      eDescr.coll.sendBuff = ct->sendbuff;
+      eDescr.coll.recvBuff = ct->recvbuff;
+      eDescr.coll.count = ct->count;
+      eDescr.coll.root = ct->root;
+      eDescr.coll.datatype = ncclDatatypeToString(ct->datatype);
+      eDescr.coll.nChannels = ct->nChannels;
+      eDescr.coll.nWarps = ct->nWarps;
+      eDescr.coll.isSymColl = plan->isSymColl;
+      if (plan->isSymColl) {
+        const char* variant = ncclSymkKernelIdToString(static_cast<int>(ct->devFuncId));
+        eDescr.coll.kernelVariant = variant;
+        const char* underscore = strchr(variant, '_');
+        eDescr.coll.algo = underscore ? underscore + 1 : variant;
+        eDescr.coll.proto = "";
+      } else {
+        eDescr.coll.algo = ncclAlgoToString(ct->algorithm);
+        eDescr.coll.proto = ncclProtoToString(ct->protocol);
+        eDescr.coll.kernelVariant = nullptr;
       }
+      eDescr.coll.userTag = ct->profilerTag;
+      profilerStart(plan->comm->profilerContext, &ct->eventHandle, &eDescr, &ct->collApiEventHandle,
+                    &plan->groupEventHandle);
     }
-    // seqNumber is updated even if the plugin is not active; RAS uses it too.
-    // Skip persistent (graph-captured) collectives: this function may not run
-    // on every rank, which would mismatch counters and false-positive in RAS.
-    // KernelCh is the exception because it forces proxy events on all ranks.
-    if (!plan->persistent || (COMPILER_EXPECT(ncclProfiler != NULL, 0) &&
-                              (profilerLive(&plan->groupEventHandle) || profilerLive(&ct->collApiEventHandle)) &&
-                              (ct->eActivationMask & ncclProfileKernelCh)))
+    // Start callbacks must see the sequence number before this increment.
+    // Captured callbacks may not run on every rank; KernelCh is the
+    // exception because it forces proxy events on all ranks.
+    if (!plan->persistent || ((profilerLive(&plan->groupEventHandle) || profilerLive(&ct->collApiEventHandle)) &&
+                              (ct->eActivationMask & ncclProfileKernelCh))) {
       COMPILER_ATOMIC_FETCH_ADD(&plan->comm->seqNumber[ct->func], 1ULL, std::memory_order_relaxed);
+    }
     ct = ct->next;
   }
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0)) {
-    struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
-    while (pt) {
-      int enable = pt->eActivationMask & profilerEventGate(ncclProfileP2p);
-      uint8_t profNChannels = pt->nChannels;
-      if (pt->eActivationMask & ncclProfileKernelCh) profNChannels = (uint8_t)countOneBits(pt->channelMask);
-      if (enable) {
-        ncclProfilerEventDescr_t eDescr = {0};
-        eDescr.type = ncclProfileP2p;
-        eDescr.rank = plan->comm->rank;
-        eDescr.p2p.func = ncclFuncToString(pt->func);
-        eDescr.p2p.buff = pt->buff;
-        eDescr.p2p.count = pt->count;
-        eDescr.p2p.datatype = ncclDatatypeToString(pt->datatype);
-        eDescr.p2p.peer = pt->root;
-        eDescr.p2p.nChannels = profNChannels;
-        eDescr.p2p.userTag = pt->profilerTag;
-        profilerStart(plan->comm->profilerContext, &pt->eventHandle, &eDescr, &pt->p2pApiEventHandle,
-                      &plan->groupEventHandle);
-      }
-      pt = pt->next;
+  struct ncclTaskP2p* pt = ncclIntruQueueHead(&plan->p2pTaskQueue);
+  while (pt) {
+    int enable = pt->eActivationMask & profilerEventGate(ncclProfileP2p);
+    uint8_t profNChannels = pt->nChannels;
+    if (pt->eActivationMask & ncclProfileKernelCh) profNChannels = (uint8_t)countOneBits(pt->channelMask);
+    if (enable) {
+      ncclProfilerEventDescr_t eDescr = {0};
+      eDescr.type = ncclProfileP2p;
+      eDescr.rank = plan->comm->rank;
+      eDescr.p2p.func = ncclFuncToString(pt->func);
+      eDescr.p2p.buff = pt->buff;
+      eDescr.p2p.count = pt->count;
+      eDescr.p2p.datatype = ncclDatatypeToString(pt->datatype);
+      eDescr.p2p.peer = pt->root;
+      eDescr.p2p.nChannels = profNChannels;
+      eDescr.p2p.userTag = pt->profilerTag;
+      profilerStart(plan->comm->profilerContext, &pt->eventHandle, &eDescr, &pt->p2pApiEventHandle,
+                    &plan->groupEventHandle);
     }
+    pt = pt->next;
   }
   TIME_STOP_EVENT(taskStart);
   return ncclSuccess;
 }
 
 ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(taskStop);
   struct ncclTaskColl* ct = ncclIntruQueueHead(&plan->collTaskQueue);
   while (ct) {
@@ -1445,9 +1448,10 @@ ncclResult_t ncclProfilerStopTaskEvents(struct ncclKernelPlan* plan) {
 // interested in whole network transfers though, so we account for this when
 // computing the actual network step number.
 ncclResult_t ncclProfilerStartProxyOpEvent(int s, struct ncclProxyArgs* args) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyOpStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (sub->eActivationMask & profilerEventGate(ncclProfileProxyOp))) {
+  if (sub->eActivationMask & profilerEventGate(ncclProfileProxyOp)) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileProxyOp;
     eDescr.rank = sub->rank;
@@ -1464,6 +1468,7 @@ ncclResult_t ncclProfilerStartProxyOpEvent(int s, struct ncclProxyArgs* args) {
 }
 
 ncclResult_t ncclProfilerStopProxyOpEvent(int s, struct ncclProxyArgs* args) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyOpStop);
   profilerStop(&args->subs[s].opEventHandle);
   TIME_STOP_EVENT(proxyOpStop);
@@ -1471,11 +1476,12 @@ ncclResult_t ncclProfilerStopProxyOpEvent(int s, struct ncclProxyArgs* args) {
 }
 
 ncclResult_t ncclProfilerStartSendProxyStepEvent(int s, struct ncclProxyArgs* args, int stepId) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   int step_ = DIVUP(stepId, args->sliceSteps);
   sub->pHandles[step_ % NCCL_STEPS].stepEventHandle = {};
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (sub->eActivationMask & profilerEventGate(ncclProfileProxyStep))) {
+  if (sub->eActivationMask & profilerEventGate(ncclProfileProxyStep)) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileProxyStep;
     eDescr.rank = sub->rank;
@@ -1489,11 +1495,12 @@ ncclResult_t ncclProfilerStartSendProxyStepEvent(int s, struct ncclProxyArgs* ar
 }
 
 ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* args, int stepId) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyStepStart);
   struct ncclProxySubArgs* sub = &args->subs[s];
   int step_ = DIVUP(stepId, args->sliceSteps);
   sub->pHandles[step_ % NCCL_STEPS].stepEventHandle = {};
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (sub->eActivationMask & profilerEventGate(ncclProfileProxyStep))) {
+  if (sub->eActivationMask & profilerEventGate(ncclProfileProxyStep)) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileProxyStep;
     eDescr.rank = sub->rank;
@@ -1507,6 +1514,7 @@ ncclResult_t ncclProfilerStartRecvProxyStepEvent(int s, struct ncclProxyArgs* ar
 }
 
 ncclResult_t ncclProfilerStopProxyStepEvent(int s, struct ncclProxyArgs* args, int stepId) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyStepStop);
   int step_ = DIVUP(stepId, args->sliceSteps);
   profilerStop(&args->subs[s].pHandles[step_ % NCCL_STEPS].stepEventHandle);
@@ -1515,9 +1523,10 @@ ncclResult_t ncclProfilerStopProxyStepEvent(int s, struct ncclProxyArgs* args, i
 }
 
 ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, struct ncclProfilerEventRef* eHandle) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyCtrlStart);
   memset(eHandle, 0, sizeof(*eHandle));
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (profilerRefreshEventMask() & ncclProfileProxyCtrl)) {
+  if (profilerRefreshEventMask() & ncclProfileProxyCtrl) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileProxyCtrl;
     profilerStart(profilerContext, eHandle, &eDescr, nullptr, nullptr);
@@ -1527,6 +1536,7 @@ ncclResult_t ncclProfilerStartProxyCtrlEvent(void* profilerContext, struct ncclP
 }
 
 ncclResult_t ncclProfilerStopProxyCtrlEvent(struct ncclProfilerEventRef* eHandle) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyCtrlStop);
   profilerStop(eHandle);
   TIME_STOP_EVENT(proxyCtrlStop);
@@ -1545,6 +1555,7 @@ ncclResult_t ncclProfilerStartKernelChEvent(struct ncclProfilerWorkOp* op, uint6
 }
 
 ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64_t stop) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   if (profilerLive(&op->kernelEventHandle)) {
     ncclProfilerEventStateArgs_t a = {};
     a.kernelCh.pTimer = stop;
@@ -1555,6 +1566,7 @@ ncclResult_t ncclProfilerStopKernelChEvent(struct ncclProfilerWorkOp* op, uint64
 }
 
 ncclResult_t ncclProfilerRecordProxyOpEventState(int s, struct ncclProxyArgs* args, ncclProfilerEventState_t eState) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyOpRecord);
   ncclProfilerEventStateArgs_t a = {};
   profilerRecord(&args->subs[s].opEventHandle, eState, &a);
@@ -1564,6 +1576,7 @@ ncclResult_t ncclProfilerRecordProxyOpEventState(int s, struct ncclProxyArgs* ar
 
 ncclResult_t ncclProfilerRecordProxyStepEventState(int s, struct ncclProxyArgs* args, int stepId,
                                                    ncclProfilerEventState_t eState) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyStepRecord);
   int step_ = DIVUP(stepId, args->sliceSteps);
   ncclProfilerEventStateArgs_t a = {};
@@ -1575,8 +1588,9 @@ ncclResult_t ncclProfilerRecordProxyStepEventState(int s, struct ncclProxyArgs* 
 
 ncclResult_t ncclProfilerRecordProxyCtrlEventState(struct ncclProfilerEventRef* eHandle, int appended,
                                                    ncclProfilerEventState_t eState) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   TIME_START_EVENT(proxyCtrlRecord);
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && (profilerRefreshEventMask() & ncclProfileProxyCtrl)) {
+  if (profilerRefreshEventMask() & ncclProfileProxyCtrl) {
     ncclProfilerEventStateArgs_t args = {};
     args.proxyCtrl.appendedProxyOps = appended;
     profilerRecord(eHandle, eState, &args);
@@ -1599,7 +1613,7 @@ static struct ncclProfilerWorkOp* profilerAllocOp(struct ncclProfilerThread* pt)
 static void profilerRecycleList(struct ncclProfilerThread* pt, struct ncclProfilerWorkOp* head) {
   while (head) {
     struct ncclProfilerWorkOp* next = head->next;
-    profilerStop(&head->kernelEventHandle);
+    if (ncclProfilerPluginLoaded()) profilerStop(&head->kernelEventHandle);
     ncclMemoryPoolFree(&pt->opPool, head);
     if (pt->inflight > 0) pt->inflight--;
     head = next;
@@ -1873,7 +1887,7 @@ static struct ncclProfilerWorkOp* profilerPurgeByContext(struct ncclProfilerThre
     if ((*link)->profilerContext == ctx) {
       struct ncclProfilerWorkOp* dead = *link;
       *link = dead->next;
-      profilerStop(&dead->kernelEventHandle);
+      if (ncclProfilerPluginLoaded()) profilerStop(&dead->kernelEventHandle);
       ncclMemoryPoolFree(&pt->opPool, dead);
       if (pt->inflight > 0) pt->inflight--;
     } else {
@@ -2173,6 +2187,7 @@ ncclResult_t ncclProfilerStartCeCollEvent(struct ncclComm* comm, struct ncclCeCo
 }
 
 ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   (void)comm;
   (void)stream;
   if (args) profilerStopNone(&args->ceCollProfHandle);
@@ -2181,10 +2196,14 @@ ncclResult_t ncclProfilerStopCeCollEvent(struct ncclComm* comm, struct ncclCeCol
 
 ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCollArgs* args, cudaStream_t stream,
                                           struct ncclProfilerEventRef* ceSyncHandle) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) {
+    // Return an empty handle when profiling is disabled.
+    memset(ceSyncHandle, 0, sizeof(*ceSyncHandle));
+    return ncclSuccess;
+  }
   (void)stream;
   memset(ceSyncHandle, 0, sizeof(*ceSyncHandle));
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && args && profilerLive(&args->ceCollProfHandle) &&
-      (profilerRefreshEventMask() & ncclProfileCeSync)) {
+  if (args && profilerLive(&args->ceCollProfHandle) && (profilerRefreshEventMask() & ncclProfileCeSync)) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileCeSync;
     eDescr.rank = comm->rank;
@@ -2197,6 +2216,7 @@ ncclResult_t ncclProfilerStartCeSyncEvent(struct ncclComm* comm, struct ncclCeCo
 
 ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, struct ncclProfilerEventRef* ceSyncHandle,
                                          cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   (void)comm;
   (void)stream;
   profilerStopNone(ceSyncHandle);
@@ -2206,10 +2226,14 @@ ncclResult_t ncclProfilerStopCeSyncEvent(struct ncclComm* comm, struct ncclProfi
 ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeCollArgs* args,
                                            struct ncclCeBatchOpsParams* params, cudaStream_t stream,
                                            struct ncclProfilerEventRef* ceBatchHandle) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) {
+    // Return an empty handle when profiling is disabled.
+    memset(ceBatchHandle, 0, sizeof(*ceBatchHandle));
+    return ncclSuccess;
+  }
   (void)stream;
   memset(ceBatchHandle, 0, sizeof(*ceBatchHandle));
-  if (COMPILER_EXPECT(ncclProfiler != NULL, 0) && args && profilerLive(&args->ceCollProfHandle) &&
-      (profilerRefreshEventMask() & ncclProfileCeBatch)) {
+  if (args && profilerLive(&args->ceCollProfHandle) && (profilerRefreshEventMask() & ncclProfileCeBatch)) {
     ncclProfilerEventDescr_t eDescr = {0};
     eDescr.type = ncclProfileCeBatch;
     eDescr.rank = comm->rank;
@@ -2225,6 +2249,7 @@ ncclResult_t ncclProfilerStartCeBatchEvent(struct ncclComm* comm, struct ncclCeC
 
 ncclResult_t ncclProfilerStopCeBatchEvent(struct ncclComm* comm, struct ncclProfilerEventRef* ceBatchHandle,
                                           cudaStream_t stream) {
+  if (COMPILER_EXPECT(ncclProfiler == NULL, 1)) return ncclSuccess;
   (void)comm;
   (void)stream;
   profilerStopNone(ceBatchHandle);

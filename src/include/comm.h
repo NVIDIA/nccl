@@ -146,6 +146,9 @@ struct ncclSharedResources {
   struct ncclComm* owner; /* comm which creates this shared res. */
   struct ncclChannelPeer* peers[MAXCHANNELS];
   struct ncclDevChannelPeer* devPeers[MAXCHANNELS];
+  /* devPeers[c < devPeersSlabChannels] are slices of devPeersSlab */
+  struct ncclDevChannelPeer* devPeersSlab;
+  int devPeersSlabChannels;
   /* P2P operation counter, one per channel */
   uint64_t p2pOpCount[MAXCHANNELS];
   /* Collective operation counter */
@@ -613,6 +616,9 @@ struct ncclComm {
   int* topParentRanks;
   int* topParentLocalRanks;
   struct ncclChannel channels[MAXCHANNELS];
+  /* devPeers and devRingUserRanks of all channels */
+  char* channelMetadata;
+  int channelMetadataChannels;
   struct ncclPeerInfo* peerInfo;
   struct ncclTopoSystem* topo;
   struct ncclProxyConnector* gproxyConn;

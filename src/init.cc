@@ -301,6 +301,7 @@ static void ncclCommPushRasCounterFree(struct ncclComm* comm, void* handle) {
 }
 
 static ncclResult_t commFree(ncclComm_t comm) {
+  ncclResult_t ret = ncclSuccess;
   int abort = 0;
   /* commFree() should not involve any sync among ranks. */
   if (comm == NULL) return ncclSuccess;
@@ -374,8 +375,11 @@ static ncclResult_t commFree(ncclComm_t comm) {
       NCCLCHECK(ncclGinFinalize(comm));
       for (int c = 0; c < MAXCHANNELS; c++) {
         if (comm->sharedRes->peers[c]) free(comm->sharedRes->peers[c]);
-        if (comm->sharedRes->devPeers[c]) ncclCudaFree(comm->sharedRes->devPeers[c], comm->memManager);
+        if (comm->sharedRes->devPeers[c] && c >= comm->sharedRes->devPeersSlabChannels)
+          NCCLCHECKIGNORE(ncclCudaFree(comm->sharedRes->devPeers[c], comm->memManager), ret);
       }
+      if (comm->sharedRes->devPeersSlab)
+        NCCLCHECKIGNORE(ncclCudaFree(comm->sharedRes->devPeersSlab, comm->memManager), ret);
       free(comm->sharedRes->tpRankToLocalRank);
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->hostStream));
       NCCLCHECK(ncclStrongStreamDestruct(&comm->sharedRes->deviceStream));
@@ -431,7 +435,7 @@ static ncclResult_t commFree(ncclComm_t comm) {
   if (comm->context) ncclCudaContextDrop(comm->context);
   free(comm);
 
-  return ncclSuccess;
+  return ret;
 }
 
 ncclResult_t ncclUncapturedStreamPoolAcquire(struct ncclUncapturedStreamPool* pool, cudaStream_t* stream) {

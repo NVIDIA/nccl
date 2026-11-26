@@ -202,6 +202,10 @@ ncclResult_t ncclStrongStreamAcquire(struct ncclCudaGraph graph, struct ncclStro
       cap = *pcap;
       if (cap->graphId == graph.graphId) {
         // Capture node already exists.
+        if (spare != nullptr) {
+          (void)cudaStreamDestroy(spare->captureStream);
+          free(spare);
+        }
         *workStream = cap->captureStream;
         cap->acquiredBy = localThreadId();
         return ncclSuccess;

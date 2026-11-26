@@ -43,7 +43,7 @@ ncclResult_t busIdToInt64(const char* busId, int64_t* id) {
     }
   }
   hexStr[hexOffset] = '\0';
-  *id = strtol(hexStr, NULL, 16);
+  *id = strtoll(hexStr, NULL, 16);
   return ncclSuccess;
 }
 

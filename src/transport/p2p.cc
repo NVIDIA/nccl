@@ -1137,9 +1137,18 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
               } else {
                 if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
                   ncclIpcFd expFd = NCCL_INVALID_IPC_FD;
-                  CUCHECKGOTO(cuMemExportToShareableHandle(&expFd, handle, ncclCuMemHandleType, 0), ret, fail);
-                  NCCLCHECKGOTO(ncclProxyClientQueryFdBlocking(comm, proxyConn, expFd, &ipcInfo->impFd), ret, fail);
-                  SYSCHECKGOTO(ncclIpcFdClose(expFd), "close", ret, fail);
+                  // Drop the reference taken by cuMemRetainAllocationHandle on every failure path, otherwise the
+                  // owner can never free the physical memory (cuMemUnmap + cuMemRelease leave it alive).
+                  if (CUPFN(cuMemExportToShareableHandle(&expFd, handle, ncclCuMemHandleType, 0)) != CUDA_SUCCESS) {
+                    CUCHECKIGNORE(cuMemRelease(handle));
+                    goto fail;
+                  }
+                  ret = ncclProxyClientQueryFdBlocking(comm, proxyConn, expFd, &ipcInfo->impFd);
+                  ncclIpcFdClose(expFd);
+                  if (ret != ncclSuccess) {
+                    CUCHECKIGNORE(cuMemRelease(handle));
+                    goto fail;
+                  }
                 } else {
                   // Allow this to silently fail for cases where the user buff cannot be registered
                   if (CUPFN(cuMemExportToShareableHandle(&ipcInfo->ipcDesc.cuDesc.handle, handle, ncclCuMemHandleType,

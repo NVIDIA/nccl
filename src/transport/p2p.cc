@@ -1135,6 +1135,20 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
               if (proxyConn->sameProcess) {
                 memcpy(&ipcInfo->ipcDesc.memHandle, &handle, sizeof(CUmemGenericAllocationHandle));
               } else {
+                // A cuMem allocation can only be exported with a handle type it was created with
+                // (CUmemAllocationProp::requestedHandleTypes). Allocations made by other VMM allocators
+                // often request none: skip registration cleanly instead of failing the export.
+                CUmemAllocationProp allocProp = {};
+                if (CUPFN(cuMemGetAllocationPropertiesFromHandle(&allocProp, handle)) != CUDA_SUCCESS ||
+                    (allocProp.requestedHandleTypes & ncclCuMemHandleType) == 0) {
+                  INFO(NCCL_REG,
+                       "rank %d - buffer %p (baseAddr %p size %zu) is a cuMem allocation without a shareable "
+                       "handle type (requestedHandleTypes 0x%x, need 0x%x); not registering it",
+                       comm->rank, userbuff, baseAddr, baseSize, (unsigned)allocProp.requestedHandleTypes,
+                       (unsigned)ncclCuMemHandleType);
+                  CUCHECKIGNORE(cuMemRelease(handle));
+                  goto fail;
+                }
                 if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
                   ncclIpcFd expFd = NCCL_INVALID_IPC_FD;
                   // Drop the reference taken by cuMemRetainAllocationHandle on every failure path, otherwise the

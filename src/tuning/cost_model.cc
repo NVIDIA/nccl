@@ -11,6 +11,7 @@
 #include "platforms/platforms.h"
 #include "comm.h"
 #include "cudawrap.h"
+#include <stdarg.h>
 
 // Parse a map of prefixes to a list of elements. The first prefix is
 // optional and, if not present, the list of elements will be applied
@@ -334,6 +335,58 @@ ncclResult_t ncclTuningCostModelPreInit(struct ncclComm* comm) {
   return ncclSuccess;
 }
 
+// Append to buf at *offset and advance *offset by the full length of the
+// output, written or not. Nothing is written once *offset reaches size, so
+// with buf NULL and size 0 the calls only measure.
+#ifdef NCCL_OS_LINUX
+static void tuningAppend(char* buf, int size, int* offset, const char* fmt, ...) __attribute__((format(printf, 4, 5)));
+#endif
+static void tuningAppend(char* buf, int size, int* offset, const char* fmt, ...) {
+  int room = *offset < size ? size - *offset : 0;
+  va_list args;
+  va_start(args, fmt);
+  int n = vsnprintf(room > 0 ? buf + *offset : NULL, room, fmt, args);
+  va_end(args);
+  if (n > 0) *offset += n;
+}
+
+// Format the enabled Func/Proto/Algo matrix into buf and return its length
+// without the terminator. With buf NULL and size 0 it only measures.
+static int tuningFormatMatrix(char* buf, int size, const char* funcStr[], const int* protoEnable, const int* algoEnable,
+                              const int* symKernelIdEnable) {
+  int offset = 0;
+  tuningAppend(buf, size, &offset, "\n     Function | ");
+  for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+    tuningAppend(buf, size, &offset, "%8s  ", ncclProtoStr[p]);
+  }
+  tuningAppend(buf, size, &offset, " | ");
+  for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
+    tuningAppend(buf, size, &offset, "%13s  ", ncclAlgoStr[a]);
+  }
+  tuningAppend(buf, size, &offset, " | ");
+  for (int k = 0; k < ncclSymkKernelId_Count; k++) {
+    tuningAppend(buf, size, &offset, "%13s  ", ncclSymkKernelIdToString(k));
+  }
+  tuningAppend(buf, size, &offset, "\n");
+
+  for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
+    tuningAppend(buf, size, &offset, "%13s | ", funcStr[f]);
+    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
+      tuningAppend(buf, size, &offset, "%8d  ", f < NCCL_NUM_FUNCTIONS ? protoEnable[f * NCCL_NUM_PROTOCOLS + p] : -1);
+    }
+    tuningAppend(buf, size, &offset, " | ");
+    for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
+      tuningAppend(buf, size, &offset, "%13d  ", f < NCCL_NUM_FUNCTIONS ? algoEnable[f * NCCL_NUM_ALGORITHMS + a] : -1);
+    }
+    tuningAppend(buf, size, &offset, " | ");
+    for (int k = 0; k < ncclSymkKernelId_Count; k++) {
+      tuningAppend(buf, size, &offset, "%13d  ", symKernelIdEnable[f * ncclSymkKernelId_Count + k]);
+    }
+    tuningAppend(buf, size, &offset, "\n");
+  }
+  return offset;
+}
+
 /*
   Initialize the cost model for a communicator.
   This will initialize the cost model for all models that are enabled.
@@ -429,48 +482,13 @@ ncclResult_t ncclTuningCostModelInit(struct ncclComm* comm) {
   }
 
   if (comm->rank == 0 && (algoStr || protoStr || symKernelIdStr)) {
-    constexpr int strLength = 4096;
-    char funcAlgoProtoSymKernelIdTuningStr[strLength];
-    int offset = 0;
-    offset +=
-      snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n     Function | ");
-    for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
-      offset +=
-        snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%8s  ", ncclProtoStr[p]);
-    }
-    offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
-    for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
-      offset +=
-        snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s  ", ncclAlgoStr[a]);
-    }
-    offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
-    for (int k = 0; k < ncclSymkKernelId_Count; k++) {
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s  ",
-                         ncclSymkKernelIdToString(k));
-    }
-    offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n");
-
-    for (int f = 0; f < NCCL_NUM_TUNING_FUNCTIONS; f++) {
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13s | ",
-                         tuningFuncStr[f]);
-      for (int p = 0; p < NCCL_NUM_PROTOCOLS; p++) {
-        offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%8d  ",
-                           f < NCCL_NUM_FUNCTIONS ? protoEnable[f * NCCL_NUM_PROTOCOLS + p] : -1);
-      }
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
-      for (int a = 0; a < NCCL_NUM_ALGORITHMS; a++) {
-        offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13d  ",
-                           f < NCCL_NUM_FUNCTIONS ? algoEnable[f * NCCL_NUM_ALGORITHMS + a] : -1);
-      }
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), " | ");
-      for (int k = 0; k < ncclSymkKernelId_Count; k++) {
-        offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "%13d  ",
-                           symKernelIdEnable[f * ncclSymkKernelId_Count + k]);
-      }
-      offset += snprintf(funcAlgoProtoSymKernelIdTuningStr + offset, std::max(0, strLength - offset), "\n");
-    }
-
+    int length = tuningFormatMatrix(NULL, 0, tuningFuncStr, protoEnable, algoEnable, symKernelIdEnable);
+    char* funcAlgoProtoSymKernelIdTuningStr = NULL;
+    NCCLCHECK(ncclCalloc(&funcAlgoProtoSymKernelIdTuningStr, length + 1));
+    tuningFormatMatrix(funcAlgoProtoSymKernelIdTuningStr, length + 1, tuningFuncStr, protoEnable, algoEnable,
+                       symKernelIdEnable);
     INFO(NCCL_ENV, "Enabled NCCL Func/Proto/Algo Matrix:%s", funcAlgoProtoSymKernelIdTuningStr);
+    free(funcAlgoProtoSymKernelIdTuningStr);
   }
 
 exit:

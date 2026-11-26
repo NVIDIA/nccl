@@ -79,6 +79,16 @@ struct ncclCollChannelLayout ncclComputeCollChannelLayout(size_t count, size_t e
   return layout;
 }
 
+// One channel's slice of comm->channelMetadata: devPeers, then devRingUserRanks.
+static void channelMetadataLayout(int nRanks, int nvlsRanks, size_t* ringOffset, size_t* stride) {
+  size_t offset = (nRanks + 1 /* Collnet */ + nvlsRanks /* NVLS */) * sizeof(struct ncclDevChannelPeer*);
+  ALIGN_SIZE(offset, alignof(int));
+  size_t size = offset + nRanks * sizeof(int);
+  ALIGN_SIZE(size, alignof(struct ncclDevChannelPeer*));
+  *ringOffset = offset;
+  *stride = size;
+}
+
 ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   struct ncclChannel* channel = &comm->channels[channelId];
   if (channel->id != -1) return ncclSuccess;
@@ -109,13 +119,38 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
   }
 
   if (channel->devPeers == NULL) {
+    // Pack the small per-channel arrays across channels. Channel counts are final here.
+    int nSlabChannels = std::max(comm->nChannels, std::max(comm->p2pnChannels, comm->nvlsChannels));
     if (sharedRes->devPeers[channelId] == NULL) {
-      NCCLCHECK(ncclCudaCallocAsync(sharedRes->devPeers + channelId, sharedRes->tpNRanks, deviceStream,
-                                    comm->memManager, ncclMemOffload));
+      if (sharedRes->owner == comm && sharedRes->devPeersSlab == NULL) {
+        NCCLCHECK(ncclCudaCallocAsync(&sharedRes->devPeersSlab, nSlabChannels * sharedRes->tpNRanks, deviceStream,
+                                      comm->memManager, ncclMemOffload));
+        sharedRes->devPeersSlabChannels = nSlabChannels;
+      }
+      if (channelId < sharedRes->devPeersSlabChannels) {
+        sharedRes->devPeers[channelId] = sharedRes->devPeersSlab + channelId * sharedRes->tpNRanks;
+      } else {
+        // A sharing comm can use more channels than the owner.
+        NCCLCHECK(ncclCudaCallocAsync(sharedRes->devPeers + channelId, sharedRes->tpNRanks, deviceStream,
+                                      comm->memManager, ncclMemOffload));
+      }
     }
-    /* channel->devPeers is not shared, so just free it when calling commFree() */
-    NCCLCHECK(ncclCudaCallocAsync(&channel->devPeers, nPeers, deviceStream, comm->memManager, ncclMemOffload));
-    ncclCommPushCudaFree(comm, channel->devPeers);
+    /* channel metadata is not shared, so just free it when calling commFree() */
+    size_t ringOffset, stride;
+    channelMetadataLayout(nRanks, nvlsRanks, &ringOffset, &stride);
+    if (comm->channelMetadata == NULL) {
+      NCCLCHECK(ncclCudaCallocAsync(&comm->channelMetadata, nSlabChannels * stride, deviceStream, comm->memManager,
+                                    ncclMemOffload));
+      ncclCommPushCudaFree(comm, comm->channelMetadata);
+      comm->channelMetadataChannels = nSlabChannels;
+    }
+    if (channelId >= comm->channelMetadataChannels) {
+      WARN("Channel %d is outside the %d channels of the channel metadata", channelId, comm->channelMetadataChannels);
+      return ncclInternalError;
+    }
+    char* slice = comm->channelMetadata + channelId * stride;
+    channel->devPeers = reinterpret_cast<struct ncclDevChannelPeer**>(slice);
+    channel->devRingUserRanks = reinterpret_cast<int*>(slice + ringOffset);
     NCCLCHECK(ncclCalloc(&channel->devPeersHostPtr, nPeers));
     for (int r = 0; r < nRanks; r++) {
       uintptr_t addr = (uintptr_t)(comm->sharedRes->devPeers[channelId] + comm->topParentRanks[r]);
@@ -126,8 +161,6 @@ ncclResult_t initChannel(struct ncclComm* comm, int channelId) {
 
   channel->ring.userRanks = ncclMemoryStackAlloc<int>(&comm->memPermanent, nRanks);
   channel->ring.rankToIndex = ncclMemoryStackAlloc<int>(&comm->memPermanent, nRanks);
-  NCCLCHECK(ncclCudaCallocAsync(&channel->devRingUserRanks, nRanks, deviceStream, comm->memManager, ncclMemOffload));
-  ncclCommPushCudaFree(comm, channel->devRingUserRanks);
 
   /* guarantee addr has been copied into channel->devPeers */
   NCCLCHECK(ncclStrongStreamRelease(ncclCudaGraphNone(comm->config.graphUsageMode), &sharedRes->deviceStream,
@@ -169,8 +202,14 @@ ncclResult_t initNvlsChannel(struct ncclComm* comm, int channelId, struct ncclCo
       ncclAtomicRefCountIncrement(&parent->channels[channelId].nvlsPeers[tr].refCount);
     }
   } else {
+    // One allocation for all NVLS channels, freed with nvlsResources.
+    struct ncclNvlsSharedRes* resources = comm->nvlsResources;
+    if (resources->devPeersSlab == NULL) {
+      NCCLCHECK(ncclCudaCallocAsync(&resources->devPeersSlab, resources->nChannels * nvlsRanks, deviceStream,
+                                    comm->memManager));
+    }
     NCCLCHECK(ncclCalloc(&channel->nvlsPeers, nvlsRanks));
-    NCCLCHECK(ncclCudaCallocAsync(&channel->nvlsDevPeers, nvlsRanks, deviceStream, comm->memManager));
+    channel->nvlsDevPeers = resources->devPeersSlab + channelId * nvlsRanks;
     for (int r = 0; r < nvlsRanks; ++r) {
       uintptr_t addr = (uintptr_t)(channel->nvlsDevPeers + r);
       channel->peers[comm->nRanks + 1 + r] = channel->nvlsPeers + r;
@@ -248,8 +287,8 @@ ncclResult_t freeChannel(struct ncclChannel* channel, int nRanks, int collnetNRa
           free(channel->collnetPeers);
           ncclCudaFree(channel->collnetDevPeers, comm->memManager);
         } else if (r == nPeers - 1) {
+          // nvlsDevPeers is freed with nvlsResources.
           free(channel->nvlsPeers);
-          ncclCudaFree(channel->nvlsDevPeers, comm->memManager);
         }
       }
     }

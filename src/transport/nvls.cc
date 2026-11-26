@@ -728,6 +728,7 @@ ncclResult_t ncclNvlsFree(struct ncclComm* comm) {
   if (resources == NULL) return ncclSuccess;
 
   if (ncclAtomicRefCountDecrement(&resources->refCount) == 0) {
+    if (resources->devPeersSlab) NCCLCHECKIGNORE(ncclCudaFree(resources->devPeersSlab, comm->memManager), ret);
     if (!comm->MNNVL && resources->nvlsShmemHandle) NCCLCHECKIGNORE(ncclShmClose(resources->nvlsShmemHandle), ret);
 
     if (resources->creditUc.ptr) {

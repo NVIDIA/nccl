@@ -67,5 +67,6 @@ ncclResult_t ncclIpcGraphRegisterBuffer(ncclComm* comm, const void* userbuff, si
                                         uintptr_t** peerRmtAddrsOut, void* cleanupQueuePtr, int* nCleanupQueueElts);
 
 ncclResult_t ncclIpcDeregBuffer(struct ncclComm* comm, struct ncclIpcRegInfo* regInfo);
+ncclResult_t ncclIpcCanRegisterBuffer(ncclComm* comm, const void* userbuff, size_t buffSize, int peerRank, bool* ok);
 
 #endif

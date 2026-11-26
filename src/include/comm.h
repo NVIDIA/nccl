@@ -783,6 +783,8 @@ struct ncclComm {
     int sendRank;
     int recvRank;
   }* p2pSchedule;
+  // Per (peer, direction) sequence numbers of graph-registration agreements, see addP2pToPlan().
+  uint64_t* p2pGraphRegSeq /*[2*nRanks]*/;
 
   struct ncclKernelPlanner planner;
   struct ncclRawTaskQueue rawTaskQueue;

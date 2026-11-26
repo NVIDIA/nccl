@@ -1860,6 +1860,7 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   // Build p2p schedule
   comm->p2pSchedule = ncclMemoryStackAlloc<ncclComm::P2pSchedulePair>(&comm->memPermanent, comm->nRanks);
   comm->planner.peers = ncclMemoryStackAlloc<ncclKernelPlanner::Peer>(&comm->memPermanent, comm->nRanks);
+  comm->p2pGraphRegSeq = ncclMemoryStackAlloc<uint64_t>(&comm->memPermanent, 2 * comm->nRanks);
   NCCLCHECK(ncclP2pSchedule(comm));
   // initialize non-zero fields.
   comm->planner.bcast_info.minBcastPeer = INT_MAX;

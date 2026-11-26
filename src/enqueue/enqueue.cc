@@ -14,6 +14,7 @@
 #include "cudawrap.h"
 #include "profiler.h"
 #include "transport.h"
+#include "p2p.h"
 #include "register_inline.h"
 #include "ce_coll.h"
 #include "nvtx.h"
@@ -969,6 +970,87 @@ static inline int p2pPayloadPerChunk(int chunkSize, int protocol) {
   return protocol == NCCL_PROTO_LL ? chunkSize / 2 : chunkSize;
 }
 
+// Graph registration of P2P (send/recv) IPC buffers is decided independently on each rank, but the
+// device protocol requires both ends of a send/recv pair to use it: a registered end becomes a direct
+// pointer provider/acceptor (setDataPtrs() in prims_simple.h) and waits on ptrExchange for a peer that,
+// when unregistered, never posts -> both GPUs spin forever. Registration of one end can fail while the
+// other succeeds (e.g. a cudaMalloc buffer with NCCL_LEGACY_CUDA_REGISTER=0 receiving from a cuMem
+// buffer). With NCCL_P2P_GRAPH_REG_AGREE=1 both ends exchange a side-effect free "can register" check
+// over the bootstrap network (phase 0) and only register when both can; they then exchange the actual
+// result (phase 1) and drop a one-sided registration. The exchange happens at graph-capture time only.
+NCCL_PARAM(P2pGraphRegAgree, "P2P_GRAPH_REG_AGREE", 1);
+#define NCCL_P2P_REG_AGREE_TAG 0x52474100 /* "RGA\0" + 2*phase + direction of the sender */
+
+struct p2pRegAgreeMsg {
+  uint64_t seq;
+  int64_t bytes;
+  int32_t phase;
+  int32_t ok;
+};
+
+static ncclResult_t p2pRegAgreePost(struct ncclComm* comm, int peer, int dir, int phase, uint64_t seq, ssize_t bytes,
+                                    bool ok) {
+  struct p2pRegAgreeMsg msg = {seq, (int64_t)bytes, phase, ok ? 1 : 0};
+  NCCLCHECK(bootstrapSend(comm->bootstrap, peer, NCCL_P2P_REG_AGREE_TAG + 2 * phase + dir, &msg, sizeof(msg)));
+  return ncclSuccess;
+}
+
+static ncclResult_t p2pRegAgreeWait(struct ncclComm* comm, int peer, int dir, int phase, uint64_t seq, ssize_t bytes,
+                                    bool* peerOk) {
+  struct p2pRegAgreeMsg msg;
+  // The peer posted with its own direction, which is the opposite of ours.
+  NCCLCHECK(bootstrapRecv(comm->bootstrap, peer, NCCL_P2P_REG_AGREE_TAG + 2 * phase + (1 - dir), &msg, sizeof(msg)));
+  if (msg.seq != seq || msg.bytes != (int64_t)bytes || msg.phase != phase) {
+    WARN("rank %d P2P graph registration agreement mismatch with peer %d (%s): seq %lu/%lu bytes %ld/%ld phase %d/%d",
+         comm->rank, peer, dir ? "send" : "recv", (unsigned long)seq, (unsigned long)msg.seq, (long)bytes,
+         (long)msg.bytes, phase, msg.phase);
+    return ncclInvalidUsage;
+  }
+  *peerOk = msg.ok != 0;
+  return ncclSuccess;
+}
+
+// Run and remove the callbacks a registration appended to a cleanup queue (i.e. a registration we
+// decided not to use). The appended range is (prevTail, last]; prevEmpty means the queue was empty before.
+struct p2pQueueMark {
+  struct ncclCommCallback* prevTail;
+  bool prevEmpty;
+  struct ncclCommCallback* last;  // tail after the registration, nullptr if nothing was appended
+};
+
+static void p2pQueueMarkBefore(struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* q,
+                               struct p2pQueueMark* m) {
+  m->prevEmpty = q->head == nullptr;
+  m->prevTail = m->prevEmpty ? nullptr : q->tail;
+  m->last = nullptr;
+}
+
+static void p2pQueueMarkAfter(struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* q,
+                              struct p2pQueueMark* m) {
+  bool added = m->prevEmpty ? q->head != nullptr : q->tail != m->prevTail;
+  m->last = added ? q->tail : nullptr;
+}
+
+static ncclResult_t p2pQueueDropRange(struct ncclComm* comm,
+                                      struct ncclIntruQueue<struct ncclCommCallback, &ncclCommCallback::next>* q,
+                                      struct p2pQueueMark* m) {
+  if (m->last == nullptr) return ncclSuccess;
+  struct ncclCommCallback* first = m->prevEmpty ? q->head : m->prevTail->next;
+  struct ncclCommCallback* after = m->last->next;
+  if (m->prevEmpty) q->head = after;
+  else m->prevTail->next = after;
+  if (q->tail == m->last) q->tail = m->prevEmpty ? nullptr : m->prevTail;
+  m->last->next = nullptr;
+  for (struct ncclCommCallback* cb = first; cb != nullptr;) {
+    struct ncclCommCallback* next = cb->next;
+    q->nElems -= 1;
+    NCCLCHECK(cb->fn(comm, cb));
+    cb = next;
+  }
+  m->last = nullptr;
+  return ncclSuccess;
+}
+
 // Put p2p op in plan assuming there is sizeof(ncclDevWorkBatch) in batch budget
 // and sizeof(ncclDevWorkP2p) in work budget. "sendRank" and "recvRank" must
 // match the corresponding values for this round of the p2p schedule (no -1's).
@@ -1019,6 +1101,12 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
   int chunkDataSize_u32fp8[2];
   bool netRegistered[2] = {false, false};
   bool ipcRegistered[2] = {false, false};
+  // Graph-registration agreement state (see NCCL_P2P_GRAPH_REG_AGREE), indexed by dir.
+  bool regAgree[2] = {false, false};
+  bool regCan[2] = {false, false};
+  uint64_t regSeq[2] = {0, 0};
+  int regConnFlags[2] = {0, 0};
+
 
   for (int dir = 0; dir < 2; dir++) {
     int llChannels = -1;
@@ -1084,7 +1172,19 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
         struct ncclConnector* conn =
           dir ? &channelPeers[peerRank]->send[connIndex] : &channelPeers[peerRank]->recv[connIndex];
         void* regAddr = NULL;
-        if (conn->conn.flags & (NCCL_P2P_WRITE | NCCL_P2P_READ)) {
+        // Peers driven by the same process are planned sequentially by one thread, so they cannot wait on
+        // each other here; they keep the original behavior.
+        bool peerOtherProcess = comm->peerInfo[peerRank].hostHash != comm->peerInfo[comm->rank].hostHash ||
+                                comm->peerInfo[peerRank].pidHash != comm->peerInfo[comm->rank].pidHash;
+        if ((conn->conn.flags & (NCCL_P2P_WRITE | NCCL_P2P_READ)) && comm->planner.persistent &&
+            ncclParamGraphRegister() && ncclParamP2pGraphRegAgree() && comm->p2pGraphRegSeq && peerOtherProcess) {
+          // Graph registration: agree with the peer first (phase 0), register after the loop.
+          regAgree[dir] = true;
+          regConnFlags[dir] = conn->conn.flags;
+          regSeq[dir] = comm->p2pGraphRegSeq[2 * peerRank + dir]++;
+          NCCLCHECKGOTO(ncclIpcCanRegisterBuffer(comm, addrs[dir], bytes[dir], peerRank, &regCan[dir]), ret, cleanup);
+          NCCLCHECKGOTO(p2pRegAgreePost(comm, peerRank, dir, 0, regSeq[dir], bytes[dir], regCan[dir]), ret, cleanup);
+        } else if (conn->conn.flags & (NCCL_P2P_WRITE | NCCL_P2P_READ)) {
           // We require users registering buffers on both sides
           NCCLCHECKGOTO(ncclRegisterP2pIpcBuffer(comm, addrs[dir], bytes[dir], peerRank, &regFlag, &regAddr,
                                                  &plan->cleanupQueue),
@@ -1108,6 +1208,59 @@ static ncclResult_t addP2pToPlan(struct ncclComm* comm, struct ncclKernelPlan* p
     }
     // Update number of channels propagated to the profiler
     if (p2pTasks[dir]) p2pTasks[dir]->nChannels = nChannels[dir];
+  }
+
+  if (regAgree[0] || regAgree[1]) {
+    // Both directions posted their phase-0 message above before we wait on either, so a ring of ranks
+    // processing the same p2p round cannot deadlock on each other.
+    bool regBoth[2] = {false, false};
+    bool regLocal[2] = {false, false};
+    void* regAddrs[2] = {NULL, NULL};
+    struct p2pQueueMark marks[2][2];  // [dir][plan cleanupQueue, comm legacyRegCleanupQueue]
+    for (int dir = 0; dir < 2; dir++) {
+      if (!regAgree[dir]) continue;
+      int peerRank = dir ? sendRank : recvRank;
+      bool peerCan = false;
+      NCCLCHECKGOTO(p2pRegAgreeWait(comm, peerRank, dir, 0, regSeq[dir], bytes[dir], &peerCan), ret, cleanup);
+      regBoth[dir] = regCan[dir] && peerCan;
+      if (!regBoth[dir]) {
+        INFO(NCCL_REG,
+             "rank %d - P2P graph registration of %s buffer %p size %zd with peer %d skipped: local %d peer %d",
+             comm->rank, dir ? "send" : "recv", addrs[dir], bytes[dir], peerRank, (int)regCan[dir], (int)peerCan);
+        continue;
+      }
+      int regFlag = 0;
+      p2pQueueMarkBefore(&plan->cleanupQueue, &marks[dir][0]);
+      p2pQueueMarkBefore(&comm->legacyRegCleanupQueue, &marks[dir][1]);
+      NCCLCHECKGOTO(ncclRegisterP2pIpcBuffer(comm, addrs[dir], bytes[dir], peerRank, &regFlag, &regAddrs[dir],
+                                             &plan->cleanupQueue),
+                    ret, cleanup);
+      p2pQueueMarkAfter(&plan->cleanupQueue, &marks[dir][0]);
+      p2pQueueMarkAfter(&comm->legacyRegCleanupQueue, &marks[dir][1]);
+      regLocal[dir] = regFlag != 0;
+      NCCLCHECKGOTO(p2pRegAgreePost(comm, peerRank, dir, 1, regSeq[dir], bytes[dir], regLocal[dir]), ret, cleanup);
+    }
+    // Reverse order: dropping dir 1's range first keeps dir 0's queue entries (its prevTail) alive.
+    for (int dir = 1; dir >= 0; dir--) {
+      if (!regBoth[dir]) continue;
+      int peerRank = dir ? sendRank : recvRank;
+      bool peerOk = false;
+      NCCLCHECKGOTO(p2pRegAgreeWait(comm, peerRank, dir, 1, regSeq[dir], bytes[dir], &peerOk), ret, cleanup);
+      if (regLocal[dir] && peerOk) {
+        ipcRegistered[dir] = true;
+        if (dir == 0 && (regConnFlags[dir] & NCCL_P2P_WRITE)) recvAddr = regAddrs[dir];
+        else if (dir == 1 && (regConnFlags[dir] & NCCL_P2P_READ)) sendAddr = regAddrs[dir];
+      } else {
+        INFO(NCCL_REG,
+             "rank %d - P2P graph registration of %s buffer %p size %zd with peer %d dropped: local %d peer %d",
+             comm->rank, dir ? "send" : "recv", addrs[dir], bytes[dir], peerRank, (int)regLocal[dir], (int)peerOk);
+        if (regLocal[dir]) {
+          // Drop the one-sided registration right away so the peer does not keep the pages mapped.
+          NCCLCHECKGOTO(p2pQueueDropRange(comm, &plan->cleanupQueue, &marks[dir][0]), ret, cleanup);
+          NCCLCHECKGOTO(p2pQueueDropRange(comm, &comm->legacyRegCleanupQueue, &marks[dir][1]), ret, cleanup);
+        }
+      }
+    }
   }
 
   struct ncclWorkList* workNode;

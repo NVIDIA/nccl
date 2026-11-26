@@ -397,8 +397,11 @@ ncclResult_t ncclNetInitFromParent(struct ncclComm* comm, struct ncclComm* paren
   comm->ncclCollNet = parent->ncclCollNet;
   comm->netPluginIndex = parent->netPluginIndex;
   comm->ncclNetVer = parent->ncclNetVer;
-  if (comm->config.netName != NCCL_CONFIG_UNDEF_PTR && strcasecmp(comm->config.netName, parent->config.netName)) {
-    WARN("Comm config netName (%s) does not match the parent (%s)", comm->config.netName, parent->config.netName);
+  // The parent's netName is NULL when it was left to NCCL's choice; compare against the network it actually uses.
+  const char* parentNetName =
+    parent->config.netName != NCCL_CONFIG_UNDEF_PTR ? parent->config.netName : parent->ncclNet->name;
+  if (comm->config.netName != NCCL_CONFIG_UNDEF_PTR && strcasecmp(comm->config.netName, parentNetName)) {
+    WARN("Comm config netName (%s) does not match the parent (%s)", comm->config.netName, parentNetName);
     ret = ncclInvalidUsage;
   }
   if (comm->config.trafficClass != NCCL_CONFIG_UNDEF_INT && comm->config.trafficClass != parent->config.trafficClass) {

@@ -1135,11 +1135,34 @@ static ncclResult_t ipcRegisterBuffer(ncclComm* comm, const void* userbuff, size
               if (proxyConn->sameProcess) {
                 memcpy(&ipcInfo->ipcDesc.memHandle, &handle, sizeof(CUmemGenericAllocationHandle));
               } else {
+                // A cuMem allocation can only be exported with a handle type it was created with
+                // (CUmemAllocationProp::requestedHandleTypes). Allocations made by other VMM allocators
+                // often request none: skip registration cleanly instead of failing the export.
+                CUmemAllocationProp allocProp = {};
+                if (CUPFN(cuMemGetAllocationPropertiesFromHandle(&allocProp, handle)) != CUDA_SUCCESS ||
+                    (allocProp.requestedHandleTypes & ncclCuMemHandleType) == 0) {
+                  INFO(NCCL_REG,
+                       "rank %d - buffer %p (baseAddr %p size %zu) is a cuMem allocation without a shareable "
+                       "handle type (requestedHandleTypes 0x%x, need 0x%x); not registering it",
+                       comm->rank, userbuff, baseAddr, baseSize, (unsigned)allocProp.requestedHandleTypes,
+                       (unsigned)ncclCuMemHandleType);
+                  CUCHECKIGNORE(cuMemRelease(handle));
+                  goto fail;
+                }
                 if (ncclCuMemHandleType == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
                   ncclIpcFd expFd = NCCL_INVALID_IPC_FD;
-                  CUCHECKGOTO(cuMemExportToShareableHandle(&expFd, handle, ncclCuMemHandleType, 0), ret, fail);
-                  NCCLCHECKGOTO(ncclProxyClientQueryFdBlocking(comm, proxyConn, expFd, &ipcInfo->impFd), ret, fail);
-                  SYSCHECKGOTO(ncclIpcFdClose(expFd), "close", ret, fail);
+                  // Drop the reference taken by cuMemRetainAllocationHandle on every failure path, otherwise the
+                  // owner can never free the physical memory (cuMemUnmap + cuMemRelease leave it alive).
+                  if (CUPFN(cuMemExportToShareableHandle(&expFd, handle, ncclCuMemHandleType, 0)) != CUDA_SUCCESS) {
+                    CUCHECKIGNORE(cuMemRelease(handle));
+                    goto fail;
+                  }
+                  ret = ncclProxyClientQueryFdBlocking(comm, proxyConn, expFd, &ipcInfo->impFd);
+                  ncclIpcFdClose(expFd);
+                  if (ret != ncclSuccess) {
+                    CUCHECKIGNORE(cuMemRelease(handle));
+                    goto fail;
+                  }
                 } else {
                   // Allow this to silently fail for cases where the user buff cannot be registered
                   if (CUPFN(cuMemExportToShareableHandle(&ipcInfo->ipcDesc.cuDesc.handle, handle, ncclCuMemHandleType,
@@ -1297,6 +1320,47 @@ static ncclResult_t cleanupIpc(struct ncclComm* comm, struct ncclCommCallback* c
   struct ncclIpcCleanupCallback* obj = (struct ncclIpcCleanupCallback*)cb;
   NCCLCHECK(ncclCommGraphDeregister(obj->comm, obj->reg));
   free(obj);
+  return ncclSuccess;
+}
+
+// Side-effect free check whether ipcRegisterBuffer() can possibly export userbuff to peerRank.
+// Mirrors the export decisions taken there (cuMem shareable handle, legacy CUDA IPC, multi-segment)
+// so that both ends of a send/recv pair can agree on registration before either side registers.
+ncclResult_t ncclIpcCanRegisterBuffer(ncclComm* comm, const void* userbuff, size_t buffSize, int peerRank, bool* ok) {
+  *ok = false;
+  if (comm == NULL || userbuff == NULL || buffSize == 0 || peerRank < 0 || peerRank >= comm->nRanks) return ncclSuccess;
+  bool sameProcess = comm->peerInfo[peerRank].hostHash == comm->peerInfo[comm->rank].hostHash &&
+                     comm->peerInfo[peerRank].pidHash == comm->peerInfo[comm->rank].pidHash;
+  CUdeviceptr cur = (CUdeviceptr)userbuff;
+  CUdeviceptr end = cur + buffSize;
+  int nSegments = 0;
+  while (cur < end) {
+    CUdeviceptr base;
+    size_t size;
+    if (CUPFN(cuMemGetAddressRange(&base, &size, cur)) != CUDA_SUCCESS) return ncclSuccess;
+    nSegments++;
+    if (nSegments > 1 && (!ncclCuMemEnable() || !ncclParamMultiSegmentRegister() ||
+                          nSegments > NCCL_P2P_MAX_PHYSICAL_SEGMENTS))
+      return ncclSuccess;
+    CUmemGenericAllocationHandle handle;
+    if (ncclCuMemEnable() && CUPFN(cuMemRetainAllocationHandle(&handle, (void*)base)) == CUDA_SUCCESS) {
+      CUmemAllocationProp prop = {};
+      CUresult err = CUPFN(cuMemGetAllocationPropertiesFromHandle(&prop, handle));
+      CUCHECKIGNORE(cuMemRelease(handle));
+      if (!sameProcess && (err != CUDA_SUCCESS || (prop.requestedHandleTypes & ncclCuMemHandleType) == 0))
+        return ncclSuccess;
+    } else {
+      // Not a cuMem allocation: only legacy CUDA IPC can export it, and only as a single segment.
+      int legacyIpcCap = 0;
+      if (nSegments > 1 || comm->directMode || !ncclParamLegacyCudaRegister()) return ncclSuccess;
+      if (CUPFN(cuPointerGetAttribute((void*)&legacyIpcCap, CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE, base)) !=
+            CUDA_SUCCESS ||
+          !legacyIpcCap)
+        return ncclSuccess;
+    }
+    cur = base + size;
+  }
+  *ok = true;
   return ncclSuccess;
 }
 

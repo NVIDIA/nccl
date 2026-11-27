@@ -14,8 +14,8 @@
 
 namespace {
 template <typename RedOp>
-__global__ __launch_bounds__(512, 1) void oneRankReduce(void* dst, void* src, size_t nElts, uint64_t redOpArg,
-                                                        bool redOpArgIsPtr) {
+__device__ __forceinline__ void oneRankReduceBody(void* dst, void* src, size_t nElts, uint64_t redOpArg,
+                                                  bool redOpArgIsPtr) {
   using T = typename RedOp::EltType;
   int tid = threadIdx.x;
   int tn = blockDim.x;
@@ -45,6 +45,24 @@ __global__ __launch_bounds__(512, 1) void oneRankReduce(void* dst, void* src, si
   reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/1>(tid, tn, redOpArg, true, 1, &src, 1, &dst,
                                                                        i1 - i0);
 }
+
+template <typename RedOp>
+__global__ __launch_bounds__(512, 1) void oneRankReduce(void* dst, void* src, size_t nElts, uint64_t redOpArg,
+                                                        bool redOpArgIsPtr) {
+  oneRankReduceBody<RedOp>(dst, src, nElts, redOpArg, redOpArgIsPtr);
+}
+
+#if defined(__CUDA_FP8_TYPES_EXIST__)
+// FuncPreMulSum<fp8> only exists when compiling for sm_90 and later, but the host pass must still see this kernel
+// so it can launch it. fp8 reductions are rejected before this point on older GPUs.
+template <typename T>
+__global__ __launch_bounds__(512, 1) void oneRankReduceFp8(void* dst, void* src, size_t nElts, uint64_t redOpArg,
+                                                           bool redOpArgIsPtr) {
+#if __CUDA_ARCH__ >= 900
+  oneRankReduceBody<FuncPreMulSum<T>>(dst, src, nElts, redOpArg, redOpArgIsPtr);
+#endif
+}
+#endif
 } // namespace
 
 ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct ncclDevRedOpFull redOp,
@@ -77,12 +95,12 @@ ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct 
   case ncclUint64:
     kernel = (void const*)&oneRankReduce<FuncPreMulSum<uint64_t>>;
     break;
-#if defined(__CUDA_FP8_TYPES_EXIST__) && __CUDA_ARCH__ >= 900
+#if defined(__CUDA_FP8_TYPES_EXIST__)
   case ncclFloat8e4m3:
-    kernel = (void const*)&oneRankReduce<FuncPreMulSum<__nv_fp8_e4m3>>;
+    kernel = (void const*)&oneRankReduceFp8<__nv_fp8_e4m3>;
     break;
   case ncclFloat8e5m2:
-    kernel = (void const*)&oneRankReduce<FuncPreMulSum<__nv_fp8_e5m2>>;
+    kernel = (void const*)&oneRankReduceFp8<__nv_fp8_e5m2>;
     break;
 #endif
   case ncclFloat16:

@@ -32,15 +32,7 @@ __global__ __launch_bounds__(512, 1) void oneRankReduce(void* dst, void* src, si
   dst = (T*)dst + i0;
 
   if (redOpArgIsPtr) {
-    if (redOpArg % 2 != 0) {
-      redOpArg = *reinterpret_cast<uint8_t*>(redOpArg);
-    } else if (redOpArg % 4 != 0) {
-      redOpArg = *reinterpret_cast<uint16_t*>(redOpArg);
-    } else if (redOpArg % 8 != 0) {
-      redOpArg = *reinterpret_cast<uint32_t*>(redOpArg);
-    } else {
-      redOpArg = *reinterpret_cast<uint64_t*>(redOpArg);
-    }
+    redOpArg = RedOpArg<RedOp>::loadArg(reinterpret_cast<void*>(redOpArg));
   }
   reduceCopy<COLL_UNROLL, RedOp, T, 0, 1, 1, 0, 1, 1, /*PreOpSrcs=*/1>(tid, tn, redOpArg, true, 1, &src, 1, &dst,
                                                                        i1 - i0);

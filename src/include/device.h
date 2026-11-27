@@ -601,18 +601,23 @@ ncclResult_t ncclLaunchOneRank(void* dst, void const* src, size_t nElts, struct 
                                ncclDataType_t type, cudaStream_t stream, cudaEvent_t launchCompletionEvent);
 
 // `ncclNvlsSupported()` needs to be in sync with "func_valid" in "src/device/generate.py"
-inline bool ncclNvlsSupported(int devRedOp, int type) {
+// PreMulSum (ncclAvg on float types) is supported for AllReduce: every rank applies the multiply when it copies its
+// input into the NVLS buffer, and the multicast load only sums. NVLS buffer registration skips that copy, so it is
+// not used for PreMulSum (coll_reg.cc). The tuning leaves it off for multi-node NVLS with CollNet (tuning/nvls.cc).
+inline bool ncclNvlsSupported(int devRedOp, int type, int func = -1) {
+  bool preMulSum = devRedOp == ncclDevPreMulSum && func == ncclFuncAllReduce;
   switch (type) {
   case ncclInt32:
   case ncclUint32:
   case ncclInt64:
   case ncclUint64:
+    return devRedOp == ncclDevSum || devRedOp == ncclDevMinMax;
   case ncclFloat16:
   case ncclBfloat16:
-    return devRedOp == ncclDevSum || devRedOp == ncclDevMinMax;
+    return devRedOp == ncclDevSum || devRedOp == ncclDevMinMax || preMulSum;
   case ncclFloat:
   case ncclDouble:
-    return devRedOp == ncclDevSum;
+    return devRedOp == ncclDevSum || preMulSum;
   default:
     return false;
   }

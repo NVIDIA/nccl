@@ -750,8 +750,9 @@ static ncclResult_t postTuneAllGatherVEnqueueBroadcastTask(struct ncclComm* comm
   task->opHost = ncclSum;
 
   NCCLCHECK(ncclGetCollNetSupport(comm, task, &collNetSupport));
-  nvlsTransportEnabled = ncclNvlsTransportEnabled(comm) &&
-                         (ncclNvlsSupported(task->opDev.op, task->datatype) || task->func == ncclFuncAllGather);
+  nvlsTransportEnabled =
+    ncclNvlsTransportEnabled(comm) &&
+    (ncclNvlsSupported(task->opDev.op, task->datatype, task->func) || task->func == ncclFuncAllGather);
   NCCLCHECK(ncclGetAlgoInfo(comm, task, collNetSupport, nvlsTransportEnabled, 1, nullptr));
   task->devFuncId = ncclDevFuncId(task->func, task->opDev.op, task->datatype, task->algorithm, task->protocol);
   switch (task->algorithm) {

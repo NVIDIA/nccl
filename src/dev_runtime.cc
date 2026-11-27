@@ -1007,6 +1007,7 @@ static void symMemoryDropRef(struct ncclComm* comm, struct ncclDevrMemory* mem) 
     for (int segment = 0; segment < mem->numSegments; segment++) {
       CUCHECKIGNORE(cuMemRelease(mem->memHandles[segment]));
     }
+    if (mem->tracksResourceBuffer) ncclMemUntrackPersist(comm->memManager, mem->primaryAddr, mem->size);
 
     struct ncclDevrMemory** ptr = &devr->memHead;
     while (*ptr != mem) ptr = &(*ptr)->next;
@@ -1810,6 +1811,14 @@ ncclResult_t ncclDevrCommCreateInternal(struct ncclComm* comm, struct ncclDevCom
 
     NCCLCHECKGOTO(symMemoryObtain(comm, &memHandle, 1, NULL, bufSizeTotal, /*winFlags=*/0, &mem), ret, fail_stream_mem);
     memHandle = 0x0; // Reference given to symMemoryObtain
+
+    // The registration now owns this device communicator's local resource allocation.
+    if (comm->memManager != nullptr) {
+      NCCLCHECKGOTO(ncclMemTrack(comm->memManager, mem->primaryAddr, mem->size, mem->memHandles[0], ncclCuMemHandleType,
+                                 ncclMemPersist),
+                    ret, fail_stream_mem);
+      mem->tracksResourceBuffer = true;
+    }
 
     NCCLCHECKGOTO(symWindowCreate( // Requires world barrier afterward.
                     comm, mem, /*memOffset=*/0, nullptr, bufSizeTotal, /*winFlags=*/0,

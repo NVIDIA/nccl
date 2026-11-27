@@ -73,6 +73,7 @@ struct ncclDevrMemory {
   // Per-rank info derived from this rank's own allocation.
   int numSegments;         // number of physical segments backing this rank's buffer
   bool hasSysmemSegment;   // true if any segment is CPU-backed (HOST_NUMA memory type)
+  bool tracksResourceBuffer; // Local resource backing charged to the communicator's memory manager.
   size_t* segmentSizes;    // size of each segment, length numSegments
   // Communicator-wide aggregates over all nRanks, populated via bootstrapAllGather.
   int maxGlobalNumSegments;    // max(numSegments) across all communicator ranks

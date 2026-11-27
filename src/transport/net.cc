@@ -225,6 +225,10 @@ void setNetAttrs(struct ncclProxyState* proxyState, ncclNetAttr_t* netAttr) {
   }
 }
 
+static const char* ncclFuncIntToString(int op) {
+  return ncclFuncToString(static_cast<ncclFunc_t>(op));
+}
+
 void printNetAttrs(ncclNetAttr_t* netAttr, const char* task) {
   const int opBufLen = ncclNumFuncs * 32;
   char opBuf[opBufLen] = "";
@@ -233,7 +237,7 @@ void printNetAttrs(ncclNetAttr_t* netAttr, const char* task) {
   const int protoBufLen = NCCL_NUM_PROTOCOLS * 32;
   char protoBuf[protoBufLen] = "";
 
-  ncclBitsToString(netAttr->op, MASK(ncclNumFuncs), (const char* (*)(int))ncclFuncToString, opBuf, opBufLen, "*");
+  ncclBitsToString(netAttr->op, MASK(ncclNumFuncs), ncclFuncIntToString, opBuf, opBufLen, "*");
   ncclBitsToString(netAttr->algo, MASK(NCCL_NUM_ALGORITHMS), ncclAlgoToString, algoBuf, algoBufLen, "*");
   ncclBitsToString(netAttr->proto, MASK(NCCL_NUM_PROTOCOLS), ncclProtoToString, protoBuf, protoBufLen, "*");
 

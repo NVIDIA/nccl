@@ -969,7 +969,7 @@ static ncclResult_t rasClientRunInit(struct rasClient* client) {
               lineBuf[0] = '\0';
               for (int j = 0; j < vc->value; j++) {
                 snprintf(lineBuf + strlen(lineBuf), sizeof(lineBuf) - strlen(lineBuf), "%s%d", (j > 0 ? "," : ""),
-                         auxRasPeers[j].peer->pid);
+                         auxRasPeers[peerIdx + j].peer->pid);
               }
               rasOutAppend("  Node %s running process%s %s\n",
                            ncclSocketToHost(&auxRasPeers[peerIdx].peer->addr, rasLine, sizeof(rasLine)),

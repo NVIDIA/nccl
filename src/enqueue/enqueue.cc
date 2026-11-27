@@ -2605,6 +2605,16 @@ static ncclResult_t calcCollChunking(struct ncclComm* comm, struct ncclTaskColl*
   return ncclSuccess;
 }
 
+// For ncclAvg on half, bf16 and fp8, FuncPreMulSum reads a more precise scalar from the upper 32 bits of the op
+// argument (a float for half and bf16, a half for fp8). The low bits keep the scalar in the data type, as before.
+template <typename T>
+static uint64_t preMulSumScalarHi(T val) {
+  static_assert(sizeof(T) <= sizeof(uint32_t), "scalar does not fit in 32 bits");
+  uint32_t bits = 0;
+  std::memcpy(&bits, &val, sizeof(T));
+  return uint64_t(bits) << 32;
+}
+
 static ncclResult_t hostToDevRedOp(ncclDevRedOpFull* opFull, ncclRedOp_t op, ncclDataType_t datatype, ncclComm* comm) {
   union {
     int8_t i8;
@@ -2669,20 +2679,24 @@ static ncclResult_t hostToDevRedOp(ncclDevRedOpFull* opFull, ncclRedOp_t op, ncc
     case ncclFloat8e4m3:
       opFull->op = ncclDevPreMulSum;
       f8 = __nv_cvt_float_to_fp8(float(1.0 / comm->nRanks), __NV_SATFINITE, __NV_E4M3);
+      u64 |= preMulSumScalarHi(__float2half(float(1.0 / comm->nRanks)));
       break;
     case ncclFloat8e5m2:
       opFull->op = ncclDevPreMulSum;
       f8 = __nv_cvt_float_to_fp8(float(1.0 / comm->nRanks), __NV_SATFINITE, __NV_E5M2);
+      u64 |= preMulSumScalarHi(__float2half(float(1.0 / comm->nRanks)));
       break;
 #endif
     case ncclFloat16:
       opFull->op = ncclDevPreMulSum;
       f16 = __float2half(float(1.0 / comm->nRanks)); // __double2half not supported pre CUDA 11.x
+      u64 |= preMulSumScalarHi(float(1.0 / comm->nRanks));
       break;
 #if defined(__CUDA_BF16_TYPES_EXIST__)
     case ncclBfloat16:
       opFull->op = ncclDevPreMulSum;
       bf16 = __float2bfloat16(float(1.0 / comm->nRanks));
+      u64 |= preMulSumScalarHi(float(1.0 / comm->nRanks));
       break;
 #endif
     case ncclFloat32:
@@ -3681,6 +3695,7 @@ ncclResult_t ncclRedOpCreatePreMulSum(ncclRedOp_t* op, void* scalar, ncclDataTyp
     int size = ncclTypeSize(datatype);
     if (size < 1) return ncclInternalError;
     user->opFull.scalarArgIsPtr = false;
+    user->opFull.scalarArg = 0; // FuncPreMulSum<half/bf16/fp8> reads the upper bits (see hostToDevRedOp)
     std::memcpy(&user->opFull.scalarArg, scalar, size);
   } else {
     user->opFull.scalarArgIsPtr = true;

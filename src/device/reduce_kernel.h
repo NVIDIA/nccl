@@ -597,6 +597,9 @@ struct FuncPreMulSum {
   }
 };
 
+// For half, bf16 and fp8, ncclAvg also passes a more precise scalar in the upper 32 bits of the op argument: a float
+// for half and bf16, a half for fp8, because 1/nRanks rounded to the data type is biased for most nRanks. The low bits
+// still hold the scalar in the data type, as they do for user PreMulSum scalars (whose upper bits are 0).
 template <>
 // Coverity recommends the users of this type to use std::move in certain cases but,
 // given that half is a scalar, a plain copy will be just as efficient.
@@ -604,15 +607,18 @@ template <>
 struct FuncPreMulSum<half> {
   using EltType = half;
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-  __half2 scalar;
+  // The scalar rounded to half, and for ncclAvg the part of 1/nRanks that this rounding drops (0 for user scalars).
+  // preOp computes fma(x, scalar, x * scalarLo), which gives x / nRanks without the bias of the rounded scalar.
+  __half2 scalar, scalarLo;
   __device__ __forceinline__ FuncPreMulSum(uint64_t opArg = 0) {
     union {
       uint64_t u64;
       __half val;
     };
     u64 = opArg;
-    scalar.x = val;
-    scalar.y = val;
+    uint32_t hi = uint32_t(opArg >> 32);
+    scalar = __half2half2(val);
+    scalarLo = __float2half2_rn(hi ? __uint_as_float(hi) - __half2float(val) : 0.0f);
   }
 #else
   float scalar;
@@ -622,7 +628,8 @@ struct FuncPreMulSum<half> {
       __half val;
     };
     u64 = opArg;
-    scalar = (float)val;
+    uint32_t hi = uint32_t(opArg >> 32);
+    scalar = hi ? __uint_as_float(hi) : __half2float(val);
   }
 #endif
 };
@@ -635,15 +642,17 @@ template <>
 struct FuncPreMulSum<__nv_bfloat16> {
   using EltType = __nv_bfloat16;
 #if __CUDA_ARCH__ >= 800
-  __nv_bfloat162 scalar;
+  // As for half: the scalar rounded to bf16, and for ncclAvg the part of 1/nRanks that this rounding drops.
+  __nv_bfloat162 scalar, scalarLo;
   __device__ __forceinline__ FuncPreMulSum(uint64_t opArg = 0) {
     union {
       uint64_t u64;
       __nv_bfloat16 val;
     };
     u64 = opArg;
-    scalar.x = val;
-    scalar.y = val;
+    uint32_t hi = uint32_t(opArg >> 32);
+    scalar = __bfloat162bfloat162(val);
+    scalarLo = __float2bfloat162_rn(hi ? __uint_as_float(hi) - __bfloat162float(val) : 0.0f);
   }
 #else
   float scalar;
@@ -653,7 +662,8 @@ struct FuncPreMulSum<__nv_bfloat16> {
       __nv_bfloat16 val;
     };
     u64 = opArg;
-    scalar = __bfloat162float(val);
+    uint32_t hi = uint32_t(opArg >> 32);
+    scalar = hi ? __uint_as_float(hi) : __bfloat162float(val);
   }
 #endif
 };
@@ -671,7 +681,8 @@ struct FuncPreMulSum<__nv_fp8_e4m3> {
       __nv_fp8_storage_t val;
     };
     u64 = opArg;
-    scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E4M3));
+    uint16_t hi = uint16_t(opArg >> 32);
+    scalar2.x = hi ? __ushort_as_half(hi) : __half(__nv_cvt_fp8_to_halfraw(val, __NV_E4M3));
     scalar2.y = scalar2.x;
   }
 };
@@ -686,7 +697,8 @@ struct FuncPreMulSum<__nv_fp8_e5m2> {
       __nv_fp8_storage_t val;
     };
     u64 = opArg;
-    scalar2.x = __half(__nv_cvt_fp8_to_halfraw(val, __NV_E5M2));
+    uint16_t hi = uint16_t(opArg >> 32);
+    scalar2.x = hi ? __ushort_as_half(hi) : __half(__nv_cvt_fp8_to_halfraw(val, __NV_E5M2));
     scalar2.y = scalar2.x;
   }
 };
@@ -719,7 +731,8 @@ struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/1> {
   static constexpr bool IsIdentity = false;
   __device__ __forceinline__ static BytePack<sizeof(half)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half)> a) {
 #if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ != 610
-    return toPack<half>(__hmul(fromPack<half>(a), fn.scalar.x));
+    half x = fromPack<half>(a);
+    return toPack<half>(__hfma(x, fn.scalar.x, __hmul(x, fn.scalarLo.x)));
 #else
     return toPack<half>(__float2half(__half2float(fromPack<half>(a)) * fn.scalar));
 #endif
@@ -730,7 +743,8 @@ template <>
 struct Apply_PreOp<FuncPreMulSum<half>, /*EltPerPack=*/2> {
   static constexpr bool IsIdentity = false;
   __device__ __forceinline__ static BytePack<sizeof(half2)> preOp(FuncPreMulSum<half> fn, BytePack<sizeof(half2)> a) {
-    return toPack<half2>(__hmul2(fromPack<half2>(a), fn.scalar));
+    half2 x = fromPack<half2>(a);
+    return toPack<half2>(__hfma2(x, fn.scalar, __hmul2(x, fn.scalarLo)));
   }
 };
 #endif
@@ -745,7 +759,8 @@ struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/1> {
   __device__ __forceinline__ static BytePack<sizeof(__nv_bfloat16)> preOp(FuncPreMulSum<__nv_bfloat16> fn,
                                                                           BytePack<sizeof(__nv_bfloat16)> a) {
 #if __CUDA_ARCH__ >= 800
-    return toPack<__nv_bfloat16>(__hmul(fromPack<__nv_bfloat16>(a), fn.scalar.x));
+    __nv_bfloat16 x = fromPack<__nv_bfloat16>(a);
+    return toPack<__nv_bfloat16>(__hfma(x, fn.scalar.x, __hmul(x, fn.scalarLo.x)));
 #else
     return toPack<__nv_bfloat16>(__float2bfloat16(__bfloat162float(fromPack<__nv_bfloat16>(a)) * fn.scalar));
 #endif
@@ -757,7 +772,8 @@ struct Apply_PreOp<FuncPreMulSum<__nv_bfloat16>, /*EltPerPack=*/2> {
   static constexpr bool IsIdentity = false;
   __device__ __forceinline__ static BytePack<sizeof(__nv_bfloat162)> preOp(FuncPreMulSum<__nv_bfloat16> fn,
                                                                            BytePack<sizeof(__nv_bfloat162)> a) {
-    return toPack<__nv_bfloat162>(__hmul2(fromPack<__nv_bfloat162>(a), fn.scalar));
+    __nv_bfloat162 x = fromPack<__nv_bfloat162>(a);
+    return toPack<__nv_bfloat162>(__hfma2(x, fn.scalar, __hmul2(x, fn.scalarLo)));
   }
 };
 #endif

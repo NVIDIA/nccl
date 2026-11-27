@@ -1305,6 +1305,14 @@ DEFINE_Apply_LoadMultimem_sum(uint32_t, u32, 4) DEFINE_Apply_LoadMultimem_minmax
     return Apply_LoadMultimem<FuncSum<T>, PackSize>::load(FuncSum<T>(), addr);
   }
 };
+// FuncPreMulSum multimem: every rank applied the multiply when it copied its input into the NVLS buffer, so the
+// multimem load only has to add.
+template <typename T, int PackSize>
+struct Apply_LoadMultimem<FuncPreMulSum<T>, PackSize> {
+  __device__ __forceinline__ static BytePack<PackSize> load(FuncPreMulSum<T> fn, uintptr_t addr) {
+    return Apply_LoadMultimem<FuncSum<T>, PackSize>::load(FuncSum<T>(), addr);
+  }
+};
 #else
 template <typename Fn>
 struct LoadMultimem_BigPackSize {

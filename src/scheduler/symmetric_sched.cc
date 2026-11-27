@@ -219,7 +219,8 @@ ncclResult_t ncclMakeSymmetricTaskList(struct ncclComm* comm, struct ncclTaskCol
       // input.nvlsSupport only gates NVLS/NVLS_TREE during general-kernel fallback tuning.
       input.nvlsSupport =
         ncclNvlsTransportEnabled(comm) &&
-        (ncclNvlsSupported(headTask->opDev.op, headTask->datatype) || headTask->func == ncclFuncAllGather);
+        (ncclNvlsSupported(headTask->opDev.op, headTask->datatype, headTask->func) ||
+         headTask->func == ncclFuncAllGather);
       NCCLCHECK(ncclGetCollNetSupport(comm, headTask, &input.collNetSupport));
       NCCLCHECK(ncclGetRegBuff(comm, headTask, &input.regBuff));
       struct ncclTuningResult_t bestTuning = NCCL_TUNING_RESULT_INIT;

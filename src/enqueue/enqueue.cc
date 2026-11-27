@@ -511,7 +511,7 @@ ncclResult_t ncclPrepareTasks(struct ncclComm* comm, bool* algoNeedConnect, bool
     NCCLCHECK(ncclGetCollNetSupport(comm, aggBeg, &collNetSupport));
     int nvlsTransportEnabled =
       ncclNvlsTransportEnabled(comm) &&
-      (ncclNvlsSupported(aggBeg->opDev.op, aggBeg->datatype) || aggBeg->func == ncclFuncAllGather);
+      (ncclNvlsSupported(aggBeg->opDev.op, aggBeg->datatype, aggBeg->func) || aggBeg->func == ncclFuncAllGather);
     // Crudely estimate number of tasks per channel. This is using the wrong number
     // of channels for NVLS algos, but knowing the algo requires having this value,
     // so either be crude our iterate until fixed point, we chose the former.

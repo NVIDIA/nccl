@@ -136,6 +136,12 @@ ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, stru
     tuning->timeUs = -1.0;
     return ret;
   }
+  // PreMulSum (ncclAvg on float types) has not been tested on multi-node NVLS (with CollNet), so it is left off there.
+  if (inputs->devRedOp == ncclDevPreMulSum && tuning->algo == NCCL_ALGO_NVLS && inputs->comm->nNodes > 1) {
+    tuning->valid = 0;
+    tuning->timeUs = -1.0;
+    return ret;
+  }
   if (inputs->func != ncclFuncAllReduce && inputs->comm->graphs[tuning->algo].nChannels > NCCL_MAX_NVLS_ARITY) {
     tuning->valid = 0;
     tuning->timeUs = -1.0;

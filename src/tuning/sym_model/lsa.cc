@@ -6,13 +6,24 @@
  *************************************************************************/
 
 #include "model.h"
+#include "selection_cache.h"
 
 #include "comm.h"
 #include "core.h"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
+
+namespace {
+struct ncclSymkLsaCtaChoice {
+  int nBlocks;
+  float timeUs;
+  float selectionTimeUs;
+};
+} // namespace
 
 static ncclResult_t evaluateLsaEstimate(struct ncclTuningInput_t* input, enum ncclSymkKernelId kernelId, size_t nBytes,
                                         int nBlocks, struct ncclSymkLsaEstimate* estimate, bool* modeled) {
@@ -87,6 +98,23 @@ ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   }
   double ctaTolerance = preferPowerOfTwoCtas ? 1.05 : 1.025;
 
+  // Tuning runs on every call and the search below evaluates every CTA count, so reuse the choice of an
+  // earlier call with the same values. The key holds every value the search and the models read.
+  using Key = std::array<uint64_t, 15>;
+  static thread_local ncclSymkSelectionCache<Key, ncclSymkLsaCtaChoice> cache;
+  const Key key{{nBytes, uint64_t(kernelId), uint64_t(input->func), uint64_t(input->datatype), uint64_t(input->redOp),
+                 uint64_t(input->devRedOp), input->count, uint64_t(input->nWorks), uint64_t(input->inPlace),
+                 uint64_t(nMinBlocks), uint64_t(nMaxBlocks), uint64_t(preferPowerOfTwoCtas), uint64_t(comm->nRanks),
+                 uint64_t(comm->minCompCap), uint64_t(comm->cudaArch)}};
+  const ncclSymkLsaCtaChoice* cached = ncclSymkSelectionCacheFind(cache, key);
+  if (cached) {
+    *nBlocks = cached->nBlocks;
+    *timeUs = cached->timeUs;
+    *selectionTimeUs = cached->selectionTimeUs;
+    if (maxBlocks) *maxBlocks = std::max(nLimitBlocks, *nBlocks);
+    return ncclSuccess;
+  }
+
   struct ncclSymkLsaEstimate candidates[ncclSymkMaxBlocks + 1];
   bool modeled = false;
   NCCLCHECK(evaluateLsaEstimate(input, kernelId, nBytes, nMaxBlocks, &candidates[nMaxBlocks], &modeled));
@@ -113,6 +141,7 @@ ncclResult_t ncclSymkLsaModel(struct ncclTuningInput_t* input, enum ncclSymkKern
   }
   *timeUs = candidates[*nBlocks].timeUs;
   *selectionTimeUs = candidates[*nBlocks].selectionTimeUs;
+  ncclSymkSelectionCacheInsert(cache, key, ncclSymkLsaCtaChoice{*nBlocks, *timeUs, *selectionTimeUs});
   if (maxBlocks) *maxBlocks = std::max(nLimitBlocks, *nBlocks);
   return ncclSuccess;
 }

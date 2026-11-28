@@ -163,6 +163,13 @@ ncclResult_t ncclTuningNvlsModelSim(struct ncclTuningInput_t* const inputs, stru
         (inputs->nBytes < 64 * 1024 * 1024 || inputs->comm->nNodes > 2 ||
          (inputs->comm->graphs[tuning->algo].typeInter == PATH_PIX && inputs->nBytes < 512 * 1024 * 1024)))))
     bw *= treeCorrectionFactor[tuning->proto][logSize];
+  // On one node of 8 Hopper GPUs, NVLS AllReduce of half, bf16 and float runs slower than modelled, and Ring is
+  // faster up to about 20 MB (8x H200). Integer types and double run faster on NVLS and keep the flat latency.
+  if (tuning->algo == NCCL_ALGO_NVLS && inputs->func == ncclFuncAllReduce && inputs->comm->nNodes == 1 &&
+      inputs->comm->localRanks == 8 && !inputs->comm->MNNVL &&
+      ncclTuningGetCompCapIndex(inputs->comm) == NCCL_HOPPER_COMPCAP_IDX &&
+      (inputs->datatype == ncclFloat16 || inputs->datatype == ncclBfloat16 || inputs->datatype == ncclFloat32))
+    lat += 50.0f;
   tuning->timeUs = ncclTuningGetTime(inputs, tuning->algo, lat, bw);
   return ret;
 }
